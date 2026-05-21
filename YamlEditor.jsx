@@ -1,79 +1,233 @@
 /* @jsx React.createElement */
-function YamlEditor({ stream }) {
+const { useState: useStateYE, useRef: useRefYE, useMemo: useMemoYE, useEffect: useEffectYE } = React;
+
+/* -------- helpers --------
+   Delegated to window.PGEEnv (envelope-loops.js) to handle both
+   standard breakpoints [t,v] and compact loop blocks. */
+const fmtNum    = (n) => window.PGEEnv.fmtNum(n);
+const envInline = (env) => window.PGEEnv.fmtEnvInline(env);
+
+/* Build the structured line model — used by both highlighted view and the textarea. */
+function buildLines(stream, sampleRec) {
+  const sampleMissing = !sampleRec;
+  const lines = [];
+  const push = (o) => lines.push(o);
+  push({ ind: 0, kind: "comment", text: `# stream "${stream.id}" — auto-rendered from project` });
+  push({ ind: 0, kind: "s", key: "stream_id", val: `"${stream.id}"` });
+  if (stream.timeMode) push({ ind: 0, kind: "r", key: "time_mode", val: stream.timeMode });
+  push({ ind: 0, kind: "v", key: "onset", val: fmtNum(stream.onset) });
+  push({ ind: 0, kind: "v", key: "duration", val: fmtNum(stream.duration) });
+  push({ ind: 0, kind: "s", key: "sample", val: `"${stream.sample}"`, err: sampleMissing ? `sample not found: ${stream.sample}` : null });
+  if (stream.mute) push({ ind: 0, kind: "flag", key: "mute" });
+  if (stream.solo) push({ ind: 0, kind: "flag", key: "solo" });
+  if (stream.distributionMode) push({ ind: 0, kind: "s", key: "distribution_mode", val: `'${stream.distributionMode}'` });
+
+  if (stream.fillFactor != null) push({ ind: 0, kind: "v", key: "fill_factor", val: fmtNum(stream.fillFactor) });
+  else if (stream.densityEnv) push({ ind: 0, kind: "raw", key: "density", val: envInline(stream.densityEnv) });
+  else if (stream.density != null) push({ ind: 0, kind: "v", key: "density", val: fmtNum(stream.density) });
+
+  if (stream.distributionEnv) push({ ind: 0, kind: "raw", key: "distribution", val: envInline(stream.distributionEnv) });
+  else if (stream.distribution != null) push({ ind: 0, kind: "v", key: "distribution", val: fmtNum(stream.distribution) });
+
+  push({ ind: 0, kind: "block", key: "pointer" });
+  if (stream.pointer.speedRatioEnv) push({ ind: 1, kind: "raw", key: "speed_ratio", val: envInline(stream.pointer.speedRatioEnv) });
+  else if (stream.pointer.speedRatio != null) push({ ind: 1, kind: "v", key: "speed_ratio", val: fmtNum(stream.pointer.speedRatio) });
+  if (stream.pointer.loopStart != null) {
+    push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
+    if (stream.pointer.loopEnd != null) {
+      push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
+        err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
+    } else if (stream.pointer.loopDur != null) {
+      push({ ind: 1, kind: "v", key: "loop_dur", val: fmtNum(stream.pointer.loopDur),
+        err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
+    }
+    if (stream.pointer.loopUnit) push({ ind: 1, kind: "r", key: "loop_unit", val: stream.pointer.loopUnit });
+  }
+  if (stream.pointer.offsetRange != null) push({ ind: 1, kind: "v", key: "offset_range", val: fmtNum(stream.pointer.offsetRange) });
+
+  push({ ind: 0, kind: "block", key: "grain" });
+  if (stream.grain.durationEnv) push({ ind: 1, kind: "raw", key: "duration", val: envInline(stream.grain.durationEnv) });
+  else if (stream.grain.duration != null) push({ ind: 1, kind: "v", key: "duration", val: fmtNum(stream.grain.duration) });
+  if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
+  push({ ind: 1, kind: "r", key: "envelope", val: stream.grain.envelope });
+
+  if (stream.pitch.semitones != null) {
+    push({ ind: 0, kind: "block", key: "pitch" });
+    push({ ind: 1, kind: "v", key: "semitones", val: fmtNum(stream.pitch.semitones) });
+    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: fmtNum(stream.pitch.range) });
+  }
+
+  if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
+    warn: stream.panEnv.some(p => Math.abs(p[1]) > 90) ? "pan values exceed conventional range [−90, 90]" : null });
+  else if (stream.pan != null) push({ ind: 0, kind: "v", key: "pan", val: fmtNum(stream.pan) });
+  if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
+
+  push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
+  if (stream.volumeRange) push({ ind: 0, kind: "v", key: "volume_range", val: fmtNum(stream.volumeRange) });
+
+  if (stream.dephase !== undefined) {
+    if (stream.dephase === false) {
+      push({ ind: 0, kind: "v", key: "dephase", val: "false" });
+    } else if (stream.dephase === null) {
+      push({ ind: 0, kind: "v", key: "dephase", val: "null" });
+    } else if (typeof stream.dephase === "number") {
+      push({ ind: 0, kind: "v", key: "dephase", val: fmtNum(stream.dephase) });
+    } else if (Array.isArray(stream.dephase)) {
+      push({ ind: 0, kind: "raw", key: "dephase", val: envInline(stream.dephase) });
+    } else if (typeof stream.dephase === "object") {
+      push({ ind: 0, kind: "block", key: "dephase" });
+      Object.entries(stream.dephase).forEach(([k, v]) => {
+        if (Array.isArray(v)) push({ ind: 1, kind: "raw", key: k, val: envInline(v) });
+        else push({ ind: 1, kind: "v", key: k, val: fmtNum(v) });
+      });
+    }
+  }
+  return lines;
+}
+
+function linesToText(lines) {
+  return lines.map(ln => {
+    const ind = "  ".repeat(ln.ind || 0);
+    if (ln.kind === "comment") return ind + ln.text;
+    if (ln.kind === "block") return ind + ln.key + ":";
+    if (ln.kind === "flag") return ind + ln.key + ":";
+    return ind + ln.key + ": " + ln.val;
+  }).join("\n");
+}
+
+/* Lightweight YAML parser — handles the schema we emit:
+   key: scalar | key: "str" | key: 'str' | key: [[..],[..]] (env) | key: (block).
+   Returns the same {streamPatch, pointerPatch, grainPatch, pitchPatch} structure as our stream model.
+   Unknown keys are ignored. */
+function parseYaml(text) {
+  const out = { patch: {}, pointer: {}, grain: {}, pitch: {} };
+  let section = null; // null | 'pointer' | 'grain' | 'pitch' | 'dephase'
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    if (!raw.trim() || raw.trim().startsWith("#")) continue;
+    const indent = raw.match(/^ */)[0].length;
+    const body = raw.trim();
+    // section header (no value after colon) — also handles bare 'mute:' / 'solo:' flags
+    const sectionMatch = body.match(/^([a-z_]+):\s*$/);
+    if (indent === 0 && sectionMatch) {
+      const sect = sectionMatch[1];
+      if (sect === "mute") { out.patch.mute = true; section = null; continue; }
+      if (sect === "solo") { out.patch.solo = true; section = null; continue; }
+      section = (sect === "pointer" || sect === "grain" || sect === "pitch" || sect === "dephase") ? sect : null;
+      continue;
+    }
+    if (indent === 0) section = null; // a top-level key clears section
+    const kv = body.match(/^([a-z_]+):\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const valStr = kv[2].trim();
+    const parsed = parseValue(valStr);
+    if (parsed === undefined) continue;
+
+    if (section === "pointer") {
+      if (key === "speed_ratio") {
+        if (Array.isArray(parsed)) { out.pointer.speedRatio = null; out.pointer.speedRatioEnv = parsed; }
+        else { out.pointer.speedRatio = parsed; out.pointer.speedRatioEnv = null; }
+      } else if (key === "loop_start") out.pointer.loopStart = parsed;
+      else if (key === "loop_dur") out.pointer.loopDur = parsed;
+    } else if (section === "grain") {
+      if (key === "duration") {
+        if (Array.isArray(parsed)) { out.grain.duration = null; out.grain.durationEnv = parsed; }
+        else { out.grain.duration = parsed; out.grain.durationEnv = null; }
+      } else if (key === "duration_range") out.grain.durationRange = parsed;
+      else if (key === "envelope") out.grain.envelope = String(parsed).replace(/^['"]|['"]$/g, "");
+    } else if (section === "pitch") {
+      if (key === "semitones") out.pitch.semitones = parsed;
+      else if (key === "range") out.pitch.range = parsed;
+    } else {
+      // top-level
+      if (key === "stream_id") out.patch.id = String(parsed).replace(/^['"]|['"]$/g, "");
+      else if (key === "time_mode") out.patch.timeMode = String(parsed);
+      else if (key === "onset") out.patch.onset = parsed;
+      else if (key === "duration") out.patch.duration = parsed;
+      else if (key === "sample") out.patch.sample = String(parsed).replace(/^['"]|['"]$/g, "");
+      else if (key === "distribution_mode") out.patch.distributionMode = String(parsed).replace(/^['"]|['"]$/g, "");
+      else if (key === "density") {
+        if (Array.isArray(parsed)) { out.patch.density = null; out.patch.densityEnv = parsed; }
+        else { out.patch.density = parsed; out.patch.densityEnv = null; }
+      } else if (key === "distribution") {
+        if (Array.isArray(parsed)) { out.patch.distribution = null; out.patch.distributionEnv = parsed; }
+        else { out.patch.distribution = parsed; out.patch.distributionEnv = null; }
+      } else if (key === "pan") {
+        if (Array.isArray(parsed)) { out.patch.pan = null; out.patch.panEnv = parsed; }
+        else { out.patch.pan = parsed; out.patch.panEnv = null; }
+      } else if (key === "pan_range") out.patch.panRange = parsed;
+      else if (key === "volume") out.patch.volume = parsed;
+      else if (key === "volume_range") out.patch.volumeRange = parsed;
+    }
+  }
+  return out;
+}
+
+function parseValue(s) {
+  if (!s) return undefined;
+  // env array [[..],[..]] / compact / typed dict {type: ..., points: [...]}
+  if (s.startsWith("[") || s.startsWith("{")) {
+    try {
+      const v = window.PGEEnv.parseEnvLiteral(s);
+      return window.PGEEnv.normalizeEnv(v); // bare compact → wrapped [compact]
+    } catch (e) { return undefined; }
+  }
+  // quoted string
+  if (/^['"]/.test(s)) return s;
+  // booleans
+  if (s === "true" || s === "True") return true;
+  if (s === "false" || s === "False") return false;
+  // number?
+  const n = Number(s);
+  if (!isNaN(n) && s.match(/^-?\d+(\.\d+)?$/)) return n;
+  return s;
+}
+
+function YamlEditor({ stream, onChange }) {
   const { Icon } = window.PGE;
   const samples = window.PGE_DATA.samples;
   const sampleRec = samples.find(s => s.name === stream.sample);
-  const sampleMissing = !sampleRec;
 
-  // Build lines: { ind, text, kind: 'comment'|'key'|'block', tokens: [...] }
-  const lines = [];
-  function fmtNum(n) { return Number.isInteger(n) ? String(n) : (Math.abs(n) < 1 ? n.toString() : n.toFixed(2).replace(/\.?0+$/, "")); }
-  function envInline(env) {
-    return "[" + env.map(p => `[${fmtNum(p[0])}, ${fmtNum(p[1])}]`).join(", ") + "]";
-  }
-  function pushKV(ind, key, kind, val, opts={}) {
-    lines.push({ ind, key, kind, val, ...opts });
-  }
-  function pushBlock(ind, key) { lines.push({ ind, key, kind: "block" }); }
-  function pushBare(ind, text, kind="comment") { lines.push({ ind, kind, text }); }
+  const lines = useMemoYE(() => buildLines(stream, sampleRec), [stream]);
+  const generated = useMemoYE(() => linesToText(lines), [lines]);
 
-  pushBare(0, `# stream "${stream.id}" — auto-rendered from project`, "comment");
-  pushKV(0, "stream_id", "s", `"${stream.id}"`);
-  if (stream.timeMode) pushKV(0, "time_mode", "r", stream.timeMode);
-  pushKV(0, "onset", "v", fmtNum(stream.onset));
-  pushKV(0, "duration", "v", fmtNum(stream.duration));
-  pushKV(0, "sample", "s", `"${stream.sample}"`, { err: sampleMissing ? `sample not found: ${stream.sample}` : null });
-  if (stream.distributionMode) pushKV(0, "distribution_mode", "s", `'${stream.distributionMode}'`);
+  const [mode, setMode] = useStateYE("view"); // 'view' | 'edit'
+  const [draft, setDraft] = useStateYE(generated);
+  const [parseErr, setParseErr] = useStateYE(null);
 
-  if (stream.densityEnv) pushKV(0, "density", "raw", envInline(stream.densityEnv));
-  else if (stream.density != null) pushKV(0, "density", "v", fmtNum(stream.density));
+  // when stream updates from outside (e.g. timeline drag) and we're not editing, refresh draft.
+  useEffectYE(() => { if (mode === "view") setDraft(generated); }, [generated, mode]);
 
-  if (stream.distributionEnv) pushKV(0, "distribution", "raw", envInline(stream.distributionEnv));
-  else if (stream.distribution != null) pushKV(0, "distribution", "v", fmtNum(stream.distribution));
-
-  pushBlock(0, "pointer");
-  if (stream.pointer.speedRatioEnv) pushKV(1, "speed_ratio", "raw", envInline(stream.pointer.speedRatioEnv));
-  else if (stream.pointer.speedRatio != null) pushKV(1, "speed_ratio", "v", fmtNum(stream.pointer.speedRatio));
-  if (stream.pointer.loopStart != null) {
-    pushKV(1, "loop_start", "v", fmtNum(stream.pointer.loopStart));
-    pushKV(1, "loop_dur", "v", fmtNum(stream.pointer.loopDur),
-      { err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
-  }
-
-  pushBlock(0, "grain");
-  if (stream.grain.durationEnv) pushKV(1, "duration", "raw", envInline(stream.grain.durationEnv));
-  else if (stream.grain.duration != null) pushKV(1, "duration", "v", fmtNum(stream.grain.duration));
-  if (stream.grain.durationRange) pushKV(1, "duration_range", "v", fmtNum(stream.grain.durationRange));
-  pushKV(1, "envelope", "r", stream.grain.envelope);
-
-  if (stream.pitch.semitones != null) {
-    pushBlock(0, "pitch");
-    pushKV(1, "semitones", "v", fmtNum(stream.pitch.semitones));
-    if (stream.pitch.range) pushKV(1, "range", "v", fmtNum(stream.pitch.range));
-  }
-
-  if (stream.panEnv) pushKV(0, "pan", "raw", envInline(stream.panEnv),
-    { warn: stream.panEnv.some(p => Math.abs(p[1]) > 90) ? "pan values exceed conventional range [−90, 90]" : null });
-  else if (stream.pan != null) pushKV(0, "pan", "v", fmtNum(stream.pan));
-  if (stream.panRange) pushKV(0, "pan_range", "v", fmtNum(stream.panRange));
-
-  pushKV(0, "volume", "v", fmtNum(stream.volume));
-  if (stream.volumeRange) pushKV(0, "volume_range", "v", fmtNum(stream.volumeRange));
-
-  if (stream.dephase) {
-    pushBlock(0, "dephase");
-    pushKV(1, "type", "s", `'${stream.dephase.type}'`);
-    pushKV(1, "points", "raw", envInline(stream.dephase.points));
-  }
-
-  // count diagnostics
   const errCount = lines.filter(l => l.err).length;
   const warnCount = lines.filter(l => l.warn).length;
   const firstErrLine = lines.findIndex(l => l.err);
+  const dirty = mode === "edit" && draft !== generated;
 
-  // render with possible inline pop after error/warn lines
-  const rendered = [];
+  function applyEdits() {
+    try {
+      const parsed = parseYaml(draft);
+      const patch = { ...parsed.patch };
+      if (Object.keys(parsed.pointer).length) patch.pointer = { ...stream.pointer, ...parsed.pointer };
+      if (Object.keys(parsed.grain).length)   patch.grain   = { ...stream.grain,   ...parsed.grain };
+      if (Object.keys(parsed.pitch).length)   patch.pitch   = { ...stream.pitch,   ...parsed.pitch };
+      onChange && onChange(patch);
+      setParseErr(null);
+      setMode("view");
+    } catch (e) {
+      setParseErr(e.message || String(e));
+    }
+  }
+
+  function discardEdits() {
+    setDraft(generated);
+    setParseErr(null);
+    setMode("view");
+  }
+
+  // render highlighted view
   let lineNo = 0;
+  const rendered = [];
   lines.forEach((ln, i) => {
     lineNo += 1;
     const ind = "  ".repeat(ln.ind || 0);
@@ -86,6 +240,7 @@ function YamlEditor({ stream }) {
           {ind}
           {ln.kind === "comment" ? <span className="c">{ln.text}</span> : null}
           {ln.kind === "block" ? <><span className="k">{ln.key}</span>:</> : null}
+          {ln.kind === "flag" ? <><span className="k">{ln.key}</span>:</> : null}
           {(ln.kind === "v" || ln.kind === "s" || ln.kind === "r" || ln.kind === "raw") ? (
             <>
               <span className="k">{ln.key}</span>
@@ -117,6 +272,9 @@ function YamlEditor({ stream }) {
     }
   });
 
+  const editLineCount = draft.split("\n").length;
+  const editLineNums = Array.from({ length: editLineCount }, (_, i) => i + 1).join("\n");
+
   return (
     <div className="pge-yaml">
       <div className="head">
@@ -124,20 +282,48 @@ function YamlEditor({ stream }) {
         <span className="t">stream "{stream.id}"</span>
         <span>·</span><span>raw yaml</span>
         <span style={{ flex: 1 }} />
-        {errCount > 0 ? <span className="err">● {errCount} error{errCount>1?"s":""}</span> :
-         warnCount > 0 ? <span className="acc">{warnCount} warning{warnCount>1?"s":""}</span> :
-         <span className="acc">valid</span>}
+        {mode === "edit" ? (
+          <>
+            {parseErr ? <span className="err" title={parseErr}>● parse error</span> : null}
+            <button className="pge-icon-btn yaml-btn" onClick={discardEdits} title="Discard">cancel</button>
+            <button className={"pge-icon-btn yaml-btn primary" + (dirty ? "" : " disabled")} onClick={applyEdits} disabled={!dirty} title="Apply changes">apply</button>
+          </>
+        ) : (
+          <>
+            {errCount > 0 ? <span className="err">● {errCount} error{errCount>1?"s":""}</span> :
+             warnCount > 0 ? <span className="acc">{warnCount} warning{warnCount>1?"s":""}</span> :
+             <span className="acc">valid</span>}
+            <button className="pge-icon-btn yaml-btn" onClick={() => { setDraft(generated); setMode("edit"); }} title="Edit YAML">
+              <Icon name="edit" size={11} /> edit
+            </button>
+          </>
+        )}
       </div>
-      <div className="body">
-        {rendered}
-      </div>
+      {mode === "view" ? (
+        <div className="body">{rendered}</div>
+      ) : (
+        <div className="body editing">
+          <pre className="edit-gutter" aria-hidden="true">{editLineNums}</pre>
+          <textarea
+            className="edit-area"
+            value={draft}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+            onScroll={(e) => {
+              const g = e.target.parentElement.querySelector(".edit-gutter");
+              if (g) g.scrollTop = e.target.scrollTop;
+            }}
+          />
+        </div>
+      )}
       <div className="footer">
         <span>YAML · UTF-8 · LF</span>
         <span style={{flex:1}} />
-        {errCount > 0 ? <span className="err-count">✕ {errCount}</span> : null}
-        {warnCount > 0 ? <span className="warn-count">⚠ {warnCount}</span> : null}
-        {errCount === 0 && warnCount === 0 ? <span style={{color:"var(--status-ok)"}}>● ready</span> : null}
-        <span>Ln {lineNo}, Col 1</span>
+        {mode === "edit" && dirty ? <span className="acc">● modified</span> : null}
+        {mode === "view" && errCount > 0 ? <span className="err-count">✕ {errCount}</span> : null}
+        {mode === "view" && warnCount > 0 ? <span className="warn-count">⚠ {warnCount}</span> : null}
+        {mode === "view" && errCount === 0 && warnCount === 0 ? <span style={{color:"var(--status-ok)"}}>● ready</span> : null}
+        <span>{mode === "edit" ? `Ln 1, Col 1 · ${editLineCount} lines` : `Ln ${lineNo}, Col 1`}</span>
       </div>
     </div>
   );

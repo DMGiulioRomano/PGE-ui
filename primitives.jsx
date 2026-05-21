@@ -20,10 +20,16 @@ function Icon({ name, size = 14, stroke = 1.5, fill = "none", style }) {
     download: <g><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></g>,
     save: <g><path d="M5 3h11l3 3v15H5z" /><path d="M8 3v6h7V3" /></g>,
     sliders: <g><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></g>,
+    settings: <g><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></g>,
     code: <g><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></g>,
     edit: <g><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z" /></g>,
     waveform: <g><line x1="2" y1="12" x2="2" y2="12" /><line x1="6" y1="8" x2="6" y2="16" /><line x1="10" y1="4" x2="10" y2="20" /><line x1="14" y1="9" x2="14" y2="15" /><line x1="18" y1="6" x2="18" y2="18" /><line x1="22" y1="11" x2="22" y2="13" /></g>,
     file: <g><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></g>,
+    undo: <g><polyline points="9 14 4 9 9 4" /><path d="M20 20v-7a4 4 0 0 0-4-4H4" /></g>,
+    redo: <g><polyline points="15 14 20 9 15 4" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></g>,
+    panelLeft: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /></g>,
+    panelLeftClose: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><polyline points="16 15 13 12 16 9" /></g>,
+    panelLeftOpen: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><polyline points="14 9 17 12 14 15" /></g>
   };
   return <svg {...props}>{paths[name] || null}</svg>;
 }
@@ -35,19 +41,19 @@ function Button({ kind = "default", icon, children, active, onClick, title, styl
     <button className={cls} onClick={onClick} title={title} style={style}>
       {icon ? <Icon name={icon} size={12} /> : null}
       {children}
-    </button>
-  );
+    </button>);
+
 }
 
 /* ---------- Segmented control ---------- */
 function Seg({ value, onChange, options, size = "md" }) {
   return (
     <div className={"pge-seg " + size}>
-      {options.map(o => (
-        <button key={o.value} className={value === o.value ? "on" : ""} onClick={() => onChange(o.value)}>{o.label}</button>
-      ))}
-    </div>
-  );
+      {options.map((o) =>
+      <button key={o.value} className={value === o.value ? "on" : ""} onClick={() => onChange(o.value)} style={{ height: "20px" }}>{o.label}</button>
+      )}
+    </div>);
+
 }
 
 /* ---------- Switch ---------- */
@@ -56,8 +62,8 @@ function Switch({ value, onChange, label }) {
     <label className="pge-switch-row" onClick={() => onChange(!value)}>
       <span className={"pge-switch " + (value ? "on" : "")}><span className="knob" /></span>
       {label ? <span>{label}</span> : null}
-    </label>
-  );
+    </label>);
+
 }
 
 /* ---------- Numeric field ---------- */
@@ -67,20 +73,20 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
   useEffect(() => setDraft(String(value)), [value]);
   return (
     <span className={"pge-field" + (focus || editing ? " focus" : "") + (accent ? " accent" : "")} style={{ width }}>
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={() => { setEditing(false); onChange && onChange(parseFloat(draft) || 0); }}
-          onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDraft(String(value)); setEditing(false); } }}
-        />
-      ) : (
-        <span className="val" onDoubleClick={() => setEditing(true)}>{value}</span>
-      )}
+      {editing ?
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {setEditing(false);onChange && onChange(parseFloat(draft) || 0);}}
+        onKeyDown={(e) => {if (e.key === "Enter") e.target.blur();if (e.key === "Escape") {setDraft(String(value));setEditing(false);}}} /> :
+
+
+      <span className="val" onDoubleClick={() => setEditing(true)}>{value}</span>
+      }
       {unit ? <span className="unit">{unit}</span> : null}
-    </span>
-  );
+    </span>);
+
 }
 
 /* ---------- Tag / Badge ---------- */
@@ -101,57 +107,128 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
         {right}
       </header>
       {open ? <div className="body">{children}</div> : null}
-    </div>
-  );
+    </div>);
+
 }
 
 /* ---------- Parameter Row ---------- */
 function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue }) {
-  // Build polyline points from envValue (array of [x, y]); auto-scale to viewBox.
+  // Build polyline points from envValue (array of [x, y] OR mixed with compact blocks).
+  // For loops, expand via PGEEnv to the actual point sequence.
   let pts = "0,12 25,9 50,4 75,7 100,11";
+  let loopCount = 0;
+  let expandedBPs = [];
   if (envValue && envValue.length) {
-    const xs = envValue.map(p => p[0]);
-    const ys = envValue.map(p => p[1]);
-    const xmin = Math.min(...xs), xmax = Math.max(...xs);
-    const ymin = Math.min(...ys), ymax = Math.max(...ys);
-    const xr = (xmax - xmin) || 1, yr = (ymax - ymin) || 1;
-    pts = envValue.map(p => `${((p[0]-xmin)/xr*100).toFixed(1)},${(14 - ((p[1]-ymin)/yr*12)).toFixed(1)}`).join(" ");
+    const hasLoop = window.PGEEnv && window.PGEEnv.envHasLoop(envValue);
+    if (hasLoop) {
+      const exp = window.PGEEnv.expandMixed(envValue);
+      expandedBPs = exp.points;
+      loopCount = exp.blocks.length;
+    } else {
+      expandedBPs = envValue;
+    }
+    if (expandedBPs.length) {
+      const xs = expandedBPs.map((p) => p[0]);
+      const ys = expandedBPs.map((p) => p[1]);
+      const xmin = Math.min(...xs),xmax = Math.max(...xs);
+      const ymin = Math.min(...ys),ymax = Math.max(...ys);
+      const xr = xmax - xmin || 1,yr = ymax - ymin || 1;
+      pts = expandedBPs.map((p) => `${((p[0] - xmin) / xr * 100).toFixed(1)},${(14 - (p[1] - ymin) / yr * 12).toFixed(1)}`).join(" ");
+    }
   }
-  const handleMode = (m) => { if (onMode) onMode(m); };
+  const handleMode = (m) => {if (onMode) onMode(m);};
   return (
     <div className={"pge-prow" + (selected ? " selected" : "")} onClick={onSelect}>
       <span className="k">{name}</span>
-      {onMode ? (
-        <Seg size="xs" value={mode} onChange={handleMode} options={[{label:"scalar", value:"scalar"}, {label:"env", value:"env"}]} />
-      ) : <span />}
-      {mode === "scalar" || !envValue ? (
-        <span className="v">
-          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} /> : <span style={{color:"var(--fg-3)"}}>{value}</span>}
+      {onMode ?
+      <Seg size="xs" value={mode} onChange={handleMode} options={[{ label: "scalar", value: "scalar" }, { label: "env", value: "env" }]} /> :
+      <span />}
+      {mode === "scalar" || !envValue ?
+      <span className="v">
+          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
           {range ? <span className="range">±{range}</span> : null}
-        </span>
-      ) : (
-        <span className="v env" onClick={onEditEnv}>
+        </span> :
+
+      <span className="v env" onClick={onEditEnv}>
           <span className="env-mini">
             <svg viewBox="0 0 100 16" preserveAspectRatio="none">
               <polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={pts} />
-              {envValue.map((p, i) => {
-                const xs = envValue.map(q => q[0]); const ys = envValue.map(q => q[1]);
-                const xmin = Math.min(...xs), xmax = Math.max(...xs);
-                const ymin = Math.min(...ys), ymax = Math.max(...ys);
-                const xr = (xmax - xmin) || 1, yr = (ymax - ymin) || 1;
-                const cx = (p[0]-xmin)/xr*100;
-                const cy = 14 - ((p[1]-ymin)/yr*12);
-                return <circle key={i} cx={cx} cy={cy} r="1" fill="#FF8C42" />;
-              })}
+              {expandedBPs.map((p, i) => {
+              const xs = expandedBPs.map((q) => q[0]);const ys = expandedBPs.map((q) => q[1]);
+              const xmin = Math.min(...xs),xmax = Math.max(...xs);
+              const ymin = Math.min(...ys),ymax = Math.max(...ys);
+              const xr = xmax - xmin || 1,yr = ymax - ymin || 1;
+              const cx = (p[0] - xmin) / xr * 100;
+              const cy = 14 - (p[1] - ymin) / yr * 12;
+              return <circle key={i} cx={cx} cy={cy} r="1" fill="#FF8C42" />;
+            })}
             </svg>
           </span>
-          <span className="env-label">{envValue.length} bp</span>
+          <span className="env-label">
+            {loopCount > 0 ? <span style={{color:"#FFB07A"}}>↻{loopCount} · </span> : null}
+            {envValue.length} {envValue.length === 1 ? "el" : (loopCount > 0 ? "el" : "bp")}
+          </span>
         </span>
+      }
+      {onEditEnv ? <button className="pge-icon-btn" onClick={(e) => {e.stopPropagation();onEditEnv && onEditEnv();}}><Icon name="edit" size={11} /></button> : <span />}
+    </div>);
+
+}
+
+/* ---------- SplitPane (horizontal or vertical) ---------- */
+function SplitPane({ initial = 240, min = 120, max = 800, dir = "horiz", side = "primary-first", persist, children, className }) {
+  const key = persist ? "pge-split-" + persist : null;
+  const init = (() => {
+    if (key) {
+      const v = +localStorage.getItem(key);
+      if (v && v > 0) return v;
+    }
+    return initial;
+  })();
+  const [size, setSize] = useState(init);
+  function onDown(e) {
+    e.preventDefault();
+    const startPos = dir === "horiz" ? e.clientX : e.clientY;
+    const orig = size;
+    document.body.style.cursor = dir === "horiz" ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+    function move(ev) {
+      const cur = dir === "horiz" ? ev.clientX : ev.clientY;
+      const d = cur - startPos;
+      const next = Math.max(min, Math.min(max, side === "primary-last" ? orig - d : orig + d));
+      setSize(next);
+      if (key) localStorage.setItem(key, next);
+    }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+  const kids = React.Children.toArray(children);
+  const a = kids[0], b = kids[1];
+  const primaryStyle = dir === "horiz" ? { width: size, flex: "0 0 auto" } : { height: size, flex: "0 0 auto" };
+  const secondaryStyle = { flex: "1 1 0", minWidth: 0, minHeight: 0, position: "relative", display: "flex" };
+  return (
+    <div className={"pge-split " + dir + (className ? " " + className : "")} style={{ display: "flex", flexDirection: dir === "horiz" ? "row" : "column", flex: 1, minWidth: 0, minHeight: 0 }}>
+      {side === "primary-last" ? (
+        <>
+          <div className="pane secondary" style={secondaryStyle}>{a}</div>
+          <div className={"pge-splitter " + dir} onPointerDown={onDown} />
+          <div className="pane primary" style={{ ...primaryStyle, display: "flex" }}>{b}</div>
+        </>
+      ) : (
+        <>
+          <div className="pane primary" style={{ ...primaryStyle, display: "flex" }}>{a}</div>
+          <div className={"pge-splitter " + dir} onPointerDown={onDown} />
+          <div className="pane secondary" style={secondaryStyle}>{b}</div>
+        </>
       )}
-      {onEditEnv ? <button className="pge-icon-btn" onClick={(e) => { e.stopPropagation(); onEditEnv && onEditEnv(); }}><Icon name="edit" size={11} /></button> : <span />}
     </div>
   );
 }
 
 window.PGE = window.PGE || {};
-Object.assign(window.PGE, { Icon, Button, Seg, Switch, NumberField, Tag, Section, ParamRow });
+Object.assign(window.PGE, { Icon, Button, Seg, Switch, NumberField, Tag, Section, ParamRow, SplitPane });

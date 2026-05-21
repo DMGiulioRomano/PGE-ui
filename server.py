@@ -40,6 +40,7 @@ Endpoints:
     POST /render                — run main.py, stream NDJSON events
     POST /render/cancel         — terminate the running render
     GET  /output/<fname>        — serve a rendered .aif for browser playback
+    GET  /audio/<fname>         — same but transcoded to WAV (Firefox-friendly)
 """
 
 import argparse
@@ -166,6 +167,64 @@ def make_app(root: Path) -> Flask:
     def health():
         return jsonify({"ok": True, "version": "0.1", **_resolved_paths()})
 
+    @app.get("/diagnose")
+    def diagnose():
+        """System-level checks. The browser surfaces these in the boot log
+        and in the Settings → diagnose panel."""
+        checks = []
+
+        def add(label, ok, detail):
+            checks.append({"label": label, "ok": bool(ok), "detail": detail})
+
+        # main.py
+        main_py = root / "src" / "main.py"
+        add("main.py", main_py.exists(), str(main_py))
+
+        # folders
+        for label, p in (("refs/", refs), ("configs/", configs),
+                         ("output/", output), ("cache/", cache)):
+            if p.exists():
+                try:
+                    n = sum(1 for _ in p.iterdir())
+                    add(label, True, f"{n} entries · {p}")
+                except Exception as e:
+                    add(label, False, f"{e}")
+            else:
+                add(label, False, f"missing: {p}")
+
+        # sox (needed for AIF→WAV transcode for Firefox playback)
+        try:
+            v = subprocess.check_output(["sox", "--version"],
+                                        stderr=subprocess.STDOUT,
+                                        timeout=2).decode().splitlines()[0]
+            add("sox", True, v)
+        except FileNotFoundError:
+            add("sox", False, "not installed — install via `brew install sox` "
+                              "(needed for Firefox/Safari playback)")
+        except Exception as e:
+            add("sox", False, str(e))
+
+        # soxi (used to read sample durations)
+        try:
+            subprocess.check_output(["soxi", "--version"],
+                                    stderr=subprocess.STDOUT, timeout=2)
+            add("soxi", True, "available — sample durations enabled")
+        except Exception:
+            add("soxi", False, "not available — sample list will lack durations")
+
+        # python deps available?
+        try:
+            __import__("yaml")
+            add("python yaml", True, "pyyaml present (engine dep)")
+        except ImportError:
+            add("python yaml", False, "pyyaml not in venv — main.py may fail")
+
+        # stems present?
+        stems = list(output.glob("*__*.aif")) + list(output.glob("*__*.wav"))
+        add("rendered stems", True, f"{len(stems)} stem files in {output.name}/")
+
+        return jsonify({"ok": all(c["ok"] for c in checks), "checks": checks})
+
     @app.get("/config")
     def config():
         return jsonify({"paths": _resolved_paths()})
@@ -235,6 +294,50 @@ def make_app(root: Path) -> Flask:
             abort(404)
         mt = "audio/aiff" if path.suffix.lower() in {".aif", ".aiff"} else None
         return send_file(str(path), mimetype=mt, conditional=True)
+
+    @app.get("/audio/<path:fname>")
+    def serve_audio_as_wav(fname):
+        """Serve a rendered stem as WAV, transcoding from .aif via sox if
+        needed. The transcoded WAV is cached next to the .aif so subsequent
+        requests are instant.
+
+        Firefox can't decode AIFF via Web Audio's decodeAudioData; this
+        endpoint exists so the editor can play stems in any browser. The
+        editor calls /audio/<basename>__<sid>.aif and gets back a WAV body
+        without renaming on disk."""
+        # Find the source file regardless of requested extension.
+        stem = Path(fname).stem
+        # Look for any of .aif/.aiff/.wav/.flac/.mp3 under output/
+        source = None
+        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
+            cand = output / (stem + ext)
+            if cand.exists():
+                source = cand
+                break
+        if source is None:
+            abort(404)
+
+        if source.suffix.lower() == ".wav":
+            return send_file(str(source), mimetype="audio/wav", conditional=True)
+
+        wav_cache = output / (stem + ".transcoded.wav")
+        needs_transcode = (
+            not wav_cache.exists()
+            or wav_cache.stat().st_mtime < source.stat().st_mtime
+        )
+        if needs_transcode:
+            try:
+                subprocess.check_call(
+                    ["sox", str(source), str(wav_cache)],
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            except FileNotFoundError:
+                abort(500, "sox not found — needed to transcode AIFF→WAV "
+                           "for browser playback")
+            except subprocess.CalledProcessError as e:
+                abort(500, f"sox failed: {e}")
+        return send_file(str(wav_cache), mimetype="audio/wav", conditional=True)
 
     @app.get("/cache_manifest/<basename>")
     def cache_manifest(basename):
@@ -400,12 +503,24 @@ def main():
         )
 
     app = make_app(root)
+
+    def _check_cmd(cmd):
+        try:
+            subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=2)
+            return True
+        except Exception:
+            return False
+    sox_ok  = _check_cmd(["sox", "--version"])
+    soxi_ok = _check_cmd(["soxi", "--version"])
+
     print(f"PGE bridge")
     print(f"  root:    {root}")
     print(f"  refs/:   {root / 'refs'}")
     print(f"  configs/:{root / 'configs'}")
     print(f"  output/: {root / 'output'}")
     print(f"  cache/:  {root / 'cache'}")
+    print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
+    print(f"  soxi:    {'ok' if soxi_ok else 'MISSING (sample durations will be blank)'}")
     print(f"  listen:  http://{args.host}:{args.port}")
     print(f"")
     print(f"In the browser:")
