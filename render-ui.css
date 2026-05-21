@@ -292,7 +292,7 @@
 .pge-terminal {
   position: fixed;
   left: 0; right: 0; bottom: 0;
-  height: 220px;
+  height: var(--terminal-h, 220px);
   background: var(--bg-elevated);
   border-top: 1px solid var(--border-default);
   display: flex; flex-direction: column;
@@ -300,8 +300,39 @@
   font-family: var(--mono, JetBrains Mono, ui-monospace, monospace);
   box-shadow: 0 -8px 24px rgba(0,0,0,0.35);
 }
-.pge-app.with-terminal { padding-bottom: 220px; }
-.pge-app.with-terminal .pge-footer { bottom: 220px; }
+.pge-app.with-terminal { padding-bottom: var(--terminal-h, 220px); }
+.pge-app.with-terminal .pge-footer { bottom: var(--terminal-h, 220px); }
+
+/* Resize handle — sits along the top edge of the terminal.
+ * Drag to resize, double-click to reset, Arrow keys when focused. */
+.pge-terminal .t-resize {
+  position: absolute;
+  top: -3px; left: 0; right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 2;
+  background: transparent;
+  touch-action: none;
+}
+.pge-terminal .t-resize:focus { outline: none; }
+.pge-terminal .t-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 36px; height: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--fg-4);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.pge-terminal .t-resize:hover::after,
+.pge-terminal .t-resize:focus-visible::after,
+.pge-terminal.is-resizing .t-resize::after { opacity: 0.7; }
+.pge-terminal.is-resizing .t-resize::after { background: var(--accent); opacity: 1; }
+.pge-terminal.is-resizing { user-select: none; }
+body.pge-resizing-terminal,
+body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !important; }
 
 .pge-terminal .t-head {
   display: flex; align-items: center; gap: 8px;

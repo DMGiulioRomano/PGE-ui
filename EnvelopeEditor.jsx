@@ -647,18 +647,147 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     commit(next);
   }
 
+  /* ============ Macro zones ============
+     A macro zone is a contiguous run of items of the same kind:
+       - one zone per consecutive run of standalone breakpoints
+       - one zone per loop block
+       - a trailing "empty" zone if the last item ends before x = 1
+     Zones partition [0,1]. Each zone has:
+       start  — previous zone's end (or 0 for the first)
+       end    — last BP's t (for "bps") / block.end_time (for "loop") / 1 (for "empty")
+       kind   — "bps" | "loop" | "empty"
+       indices — (bps only) array of rawEnv indices of contained BPs
+       index   — (loop only) rawEnv index of the loop block
+     The user can drag the boundary between adjacent zones; items in both
+     zones are remapped proportionally to the new sub-range. */
+  const macroZones = useMemoEE(() => {
+    const zones = [];
+    let cursor = 0;
+    let curBP = null;
+    for (let i = 0; i < rawEnv.length; i++) {
+      const it = rawEnv[i];
+      if (PGEEnv.isBreakpoint(it)) {
+        if (!curBP) {
+          curBP = { kind: "bps", indices: [], start: cursor };
+          zones.push(curBP);
+        }
+        curBP.indices.push(i);
+      } else if (PGEEnv.isCompactBlock(it)) {
+        if (curBP) {
+          curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+          cursor = curBP.end;
+          curBP = null;
+        }
+        zones.push({ kind: "loop", index: i, start: cursor, end: it[1] });
+        cursor = it[1];
+      }
+    }
+    if (curBP) {
+      curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+      cursor = curBP.end;
+    }
+    if (cursor < 1 - 1e-6) {
+      zones.push({ kind: "empty", start: cursor, end: 1 });
+    }
+    return zones;
+  }, [rawEnv]);
+
+  function rescaleZoneItems(env, zone, newStart, newEnd) {
+    if (zone.kind === "empty") return env;
+    const oldStart = zone.start, oldEnd = zone.end;
+    const oldLen = oldEnd - oldStart;
+    if (zone.kind === "bps") {
+      return env.map((it, i) => {
+        if (!zone.indices.includes(i)) return it;
+        const nt = oldLen <= 1e-9 ?
+          newEnd :
+          newStart + (it[0] - oldStart) * (newEnd - newStart) / oldLen;
+        return [+nt.toFixed(xPrec), it[1]];
+      });
+    }
+    if (zone.kind === "loop") {
+      return env.map((it, i) => {
+        if (i !== zone.index) return it;
+        const copy = it.slice();
+        copy[1] = +newEnd.toFixed(4);
+        return copy;
+      });
+    }
+    return env;
+  }
+
+  /* ----- zone boundary drag (rescale two adjacent zones) ----- */
+  function startZoneBoundaryDrag(e, leftZone, rightZone) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging({ kind: "zone-boundary", at: leftZone.end });
+    beginDragHistory();
+    const svg = svgRef.current;
+    const rect = svg.getBoundingClientRect();
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    const MIN = 0.005;
+    // snapshot original zone bounds so we always remap from the original env
+    const origLeft = { ...leftZone };
+    const origRight = { ...rightZone };
+
+    function move(ev) {
+      const xPx = ev.clientX - rect.left;
+      let B = bpXofXPx(xPx);
+      B = Math.max(origLeft.start + MIN, Math.min(origRight.end - MIN, B));
+
+      let next = rawEnv;
+      next = rescaleZoneItems(next, origLeft, origLeft.start, B);
+      next = rescaleZoneItems(next, origRight, B, origRight.end);
+      commit(next);
+      setDragging({ kind: "zone-boundary", at: B });
+    }
+    function up() {
+      setDragging(null);
+      endDragHistory();
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
   /* ----- add new loop block ----- */
+  /* Behavior:
+       - append at end with default block ending at 1.0
+       - if there isn't enough room (>=15% free on the right), auto-squeeze
+         all existing items proportionally so the new loop gets at least
+         MIN_LOOP_WIDTH width. The user can then fine-tune by dragging the
+         macro-zone boundaries in the zones bar. */
   function addLoop() {
-    // append at end with default block; if envelope ends before 1, start = lastT, end = 1
-    let lastT = 0,lastV = 0;
+    let lastT = 0, lastV = 0;
     for (let i = 0; i < rawEnv.length; i++) {
       if (PGEEnv.isBreakpoint(rawEnv[i])) {lastT = rawEnv[i][0];lastV = rawEnv[i][1];} else
       if (PGEEnv.isCompactBlock(rawEnv[i])) {lastT = rawEnv[i][1];lastV = rawEnv[i][0][rawEnv[i][0].length - 1][1];}
     }
-    const newEnd = Math.min(1, Math.max(lastT + 0.2, lastT + (1 - lastT)));
-    const block = PGEEnv.defaultCompactBlock(rawEnv, lastV);
-    block[1] = +newEnd.toFixed(4);
-    const next = [...rawEnv, block];
+
+    const MIN_LOOP_WIDTH = 0.15;
+    let working = rawEnv;
+    let blockStart = lastT;
+    if (lastT > 1 - MIN_LOOP_WIDTH && lastT > 0) {
+      // squeeze prior content into [0, 1 - MIN_LOOP_WIDTH]
+      const scale = (1 - MIN_LOOP_WIDTH) / lastT;
+      working = rawEnv.map((it) => {
+        if (PGEEnv.isBreakpoint(it)) return [+(it[0] * scale).toFixed(4), it[1]];
+        if (PGEEnv.isCompactBlock(it)) {
+          const copy = it.slice();
+          copy[1] = +(it[1] * scale).toFixed(4);
+          return copy;
+        }
+        return it;
+      });
+      blockStart = 1 - MIN_LOOP_WIDTH;
+    }
+    const block = PGEEnv.defaultCompactBlock(working, lastV);
+    block[1] = 1;
+    const next = [...working, block];
     commit(next);
     // select it after commit — index will be next.length - 1
     setTimeout(() => setSelectedBlock(next.length - 1), 0);
@@ -938,6 +1067,59 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
                     </g>);
 
                 })}
+              </g>
+
+              {/* ============ MACRO ZONES BAR ============
+                   Each contiguous run of standalone BPs, each loop block, and
+                   any trailing empty space, is shown as a colored band. Drag
+                   the handle between two adjacent zones to rescale them
+                   horizontally — items inside are remapped proportionally. */}
+              <g className="ee-zone-bar">
+                <rect x={PAD_L} y={8 + LOOP_BAND_H + 2} width={innerW} height={12}
+                  className="ee-zone-bar-bg" />
+                {macroZones.map((z, zi) => {
+                  const x0 = xOf(z.start);
+                  const x1 = xOf(z.end);
+                  if (x1 - x0 < 0.5) return null;
+                  const w = x1 - x0;
+                  const cls = "ee-zone ee-zone-" + z.kind;
+                  const label =
+                    z.kind === "bps" ? (z.indices.length + " bp" + (z.indices.length > 1 ? "s" : "")) :
+                    z.kind === "loop" ? "↻ loop" :
+                    "free";
+                  const showLabel = w >= 38;
+                  return (
+                    <g key={"z" + zi}>
+                      <rect x={x0} y={8 + LOOP_BAND_H + 2} width={w} height={12}
+                        className={cls} />
+                      {showLabel ?
+                      <text x={x0 + w / 2} y={8 + LOOP_BAND_H + 2 + 8}
+                        textAnchor="middle" className="ee-zone-label mono"
+                        pointerEvents="none">{label}</text> :
+                      null}
+                    </g>);
+                })}
+                {/* drag handles between adjacent zones (skip after last) */}
+                {macroZones.slice(0, -1).map((z, zi) => {
+                  const next = macroZones[zi + 1];
+                  const x = xOf(z.end);
+                  const y = 8 + LOOP_BAND_H + 2;
+                  return (
+                    <g key={"zh" + zi}>
+                      <line x1={x} x2={x} y1={y} y2={y + 12}
+                        className="ee-zone-handle-line"
+                        pointerEvents="none" />
+                      <rect x={x - 4} y={y - 1} width={8} height={14}
+                        className="ee-zone-handle"
+                        onPointerDown={(ev) => startZoneBoundaryDrag(ev, z, next)} />
+                    </g>);
+                })}
+                {/* live boundary line while dragging — extends down across the curve */}
+                {dragging && dragging.kind === "zone-boundary" ?
+                <line x1={xOf(dragging.at)} x2={xOf(dragging.at)}
+                  y1={8 + LOOP_BAND_H + 2} y2={H - PAD_B}
+                  className="ee-zone-drag-guide" pointerEvents="none" /> :
+                null}
               </g>
 
               {/* ============ CURVE ============ */}

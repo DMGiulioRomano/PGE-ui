@@ -285,16 +285,16 @@ function YamlEditor({ stream, onChange }) {
         {mode === "edit" ? (
           <>
             {parseErr ? <span className="err" title={parseErr}>● parse error</span> : null}
-            <button className="pge-icon-btn yaml-btn" onClick={discardEdits} title="Discard">cancel</button>
-            <button className={"pge-icon-btn yaml-btn primary" + (dirty ? "" : " disabled")} onClick={applyEdits} disabled={!dirty} title="Apply changes">apply</button>
+            <button className="yaml-btn" onClick={discardEdits} title="Discard">cancel</button>
+            <button className={"yaml-btn primary" + (dirty ? "" : " disabled")} onClick={applyEdits} disabled={!dirty} title="Apply changes">apply</button>
           </>
         ) : (
           <>
             {errCount > 0 ? <span className="err">● {errCount} error{errCount>1?"s":""}</span> :
              warnCount > 0 ? <span className="acc">{warnCount} warning{warnCount>1?"s":""}</span> :
              <span className="acc">valid</span>}
-            <button className="pge-icon-btn yaml-btn" onClick={() => { setDraft(generated); setMode("edit"); }} title="Edit YAML">
-              <Icon name="edit" size={11} /> edit
+            <button className="yaml-btn" onClick={() => { setDraft(generated); setMode("edit"); }} title="Edit YAML">
+              <Icon name="edit" size={12} /> edit
             </button>
           </>
         )}

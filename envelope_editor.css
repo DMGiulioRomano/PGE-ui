@@ -124,6 +124,50 @@
 }
 .pge-envedit .ee-loop-end-handle:hover { fill: rgba(255,176,122,0.40); }
 
+/* ============ MACRO ZONES BAR ============ */
+.pge-envedit .ee-zone-bar-bg {
+  fill: rgba(255,255,255,0.01);
+}
+.pge-envedit .ee-zone {
+  stroke-width: 1;
+  transition: fill 90ms linear;
+}
+.pge-envedit .ee-zone-bps {
+  fill: rgba(255,140,66,0.08);
+  stroke: rgba(255,140,66,0.32);
+}
+.pge-envedit .ee-zone-loop {
+  fill: rgba(255,176,122,0.14);
+  stroke: rgba(255,176,122,0.50);
+}
+.pge-envedit .ee-zone-empty {
+  fill: rgba(255,255,255,0.015);
+  stroke: var(--border-subtle);
+  stroke-dasharray: 2,3;
+}
+.pge-envedit .ee-zone-label {
+  font-size: 9px;
+  fill: var(--fg-3);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.pge-envedit .ee-zone-handle-line {
+  stroke: var(--fg-4);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+.pge-envedit .ee-zone-handle {
+  fill: transparent;
+  cursor: ew-resize;
+}
+.pge-envedit .ee-zone-handle:hover { fill: rgba(255,176,122,0.45); }
+.pge-envedit .ee-zone-drag-guide {
+  stroke: #FFB07A;
+  stroke-width: 1;
+  stroke-dasharray: 3,3;
+  opacity: 0.85;
+}
+
 /* Pattern points: bigger + colored when belonging to selected loop */
 .pge-envedit .ee-pat-pt {
   fill: rgba(255,176,122,0.50);

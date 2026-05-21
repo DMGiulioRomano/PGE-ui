@@ -376,11 +376,6 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
                     <path fill="rgba(255,255,255,.55)" d="M0,11 L8,5 16,17 24,8 32,15 40,4 48,18 56,9 64,16 72,3 80,18 88,11 96,15 104,7 112,17 120,5 128,19 136,10 144,16 152,8 160,17 168,4 176,18 184,11 192,15 200,7 208,17 216,5 224,18 232,11 240,11 240,11 0,11" />
                   </svg> :
               null}
-                {s.densityEnv ?
-              <svg className="env-overlay" viewBox={`0 0 ${s.densityEnv.length * 100} 30`} preserveAspectRatio="none">
-                    <polyline fill="none" stroke="rgba(255,255,255,.85)" strokeWidth="1" points={s.densityEnv.map((p, i) => `${i / (s.densityEnv.length - 1) * (s.densityEnv.length * 100)},${30 - p[1] / 60 * 28}`).join(" ")} />
-                  </svg> :
-              null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, s.id)} title="drag to resize this track" />
               </div>

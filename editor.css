@@ -302,9 +302,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 /* ---------- YAML ---------- */
 .pge-yaml { background: var(--bg-elevated); height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .pge-yaml .head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); flex: 0 0 auto; }
+.pge-yaml .head .acc { color: var(--accent); font-size: 11px; padding: 3px 6px; border: 1px solid rgba(255,140,66,0.35); border-radius: 3px; background: rgba(255,140,66,0.08); line-height: 1; }
+.pge-yaml .head .err { color: var(--status-error); font-size: 11px; padding: 3px 6px; border: 1px solid rgba(229,72,77,0.35); border-radius: 3px; background: rgba(229,72,77,0.08); line-height: 1; }ex: 0 0 auto; }
 .pge-yaml .head .t { color: var(--fg-1); }
-.pge-yaml .head .acc { color: var(--accent); }
-.pge-yaml .head .err { color: var(--status-error); }
 .pge-yaml .body { font-family: var(--font-mono); font-size: 12px; line-height: 1.65; padding: 8px 0 16px; overflow: auto; flex: 1; min-height: 0; position: relative; }
 .pge-yaml .ln { display: flex; padding: 0 10px 0 0; position: relative; }
 .pge-yaml .ln.has-err { background: rgba(229,72,77,0.05); }
@@ -330,7 +330,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-yaml .footer .warn-count { color: var(--status-warn); }
 
 /* Editable mode */
-.pge-yaml .yaml-btn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: transparent; color: var(--fg-2); border: 1px solid var(--border-default); border-radius: 3px; font: 10px var(--font-mono); cursor: pointer; height: 22px; }
+.pge-yaml .yaml-btn { display: inline-flex; align-items: center; gap: 5px; padding: 0 12px; background: transparent; color: var(--fg-2); border: 1px solid var(--border-default); border-radius: 3px; font: 500 11px/1 var(--font-mono); cursor: pointer; height: 24px; min-width: 0; width: auto; white-space: nowrap; letter-spacing: 0.2px; }
 .pge-yaml .yaml-btn:hover { color: var(--fg-1); border-color: var(--fg-3); background: rgba(255,255,255,0.03); }
 .pge-yaml .yaml-btn.primary { background: var(--accent); color: #1A1A1A; border-color: var(--accent); }
 .pge-yaml .yaml-btn.primary:hover { background: var(--accent); filter: brightness(1.1); }

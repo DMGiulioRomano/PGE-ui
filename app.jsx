@@ -28,7 +28,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "renderVisualize": false,
   "renderReaper": false,
   "renderPreclean": false,
-  "terminalOpen": false
+  "terminalOpen": false,
+  "terminalHeight": 220
 }/*EDITMODE-END*/;
 
 const PROJECTS_DB = {
@@ -48,8 +49,9 @@ function App() {
     document.documentElement.style.setProperty("--lane-h", tweaks.laneHeight + "px");
     document.documentElement.style.setProperty("--browser-w", tweaks.browserWidth + "px");
     document.documentElement.style.setProperty("--inspector-w", tweaks.inspectorWidth + "px");
+    document.documentElement.style.setProperty("--terminal-h", (tweaks.terminalHeight || 220) + "px");
     document.body.dataset.density = tweaks.density;
-  }, [tweaks.accent, tweaks.laneHeight, tweaks.browserWidth, tweaks.inspectorWidth, tweaks.density]);
+  }, [tweaks.accent, tweaks.laneHeight, tweaks.browserWidth, tweaks.inspectorWidth, tweaks.density, tweaks.terminalHeight]);
 
   /* ============ History-aware data state ============ */
   const [data, _setDataRaw] = useStateApp(window.PGE_DATA);
@@ -385,10 +387,15 @@ function App() {
 
   useEffectApp(() => {
     function onKey(e) {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      const tg = e.target;
+      if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+        e.preventDefault();
+        deleteStream(selectedId);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -407,6 +414,16 @@ function App() {
       arr.splice(dstIdx, 0, m);
       return { ...d, streams: arr };
     });
+    setDirty(true);
+  }
+  function deleteStream(id) {
+    if (!id) return;
+    setData(d => ({ ...d, streams: d.streams.filter(s => s.id !== id) }));
+    // collateral cleanup
+    setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
+    setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
+    if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
+    if (selectedId === id) { setSelectedId(null); setInspectorOpen(false); }
     setDirty(true);
   }
   function createStreamFromSample({ sample, onset = 0, laneIdx }) {
@@ -844,6 +861,8 @@ function App() {
                 onClose={() => { setTerminalOpen(false); setTweak("terminalOpen", false); }}
                 onClear={() => setLogLines([])}
                 onCopyAll={() => { navigator.clipboard?.writeText(logLines.map(l => l.text).join("\n")); pushToast({ kind: "ok", title: "Log copied", duration: 1600 }); }}
+                height={tweaks.terminalHeight || 220}
+                onHeightChange={(h) => setTweak("terminalHeight", h)}
                 status={renderStatus} />
       <Toast toasts={toasts} onDismiss={dismissToast} />
 

@@ -1,20 +1,94 @@
 /* @jsx React.createElement */
 /* Terminal — embedded log panel, collapsible. Also exposes a Toast surface
- * shown by app.jsx when the terminal is collapsed. */
+ * shown by app.jsx when the terminal is collapsed.
+ *
+ * Vertically resizable: drag the top edge to change height. Height is
+ * persisted through the `onHeightChange` callback (wired to the
+ * `terminalHeight` tweak in app.jsx). */
 
 const { useRef: useRefT, useEffect: useEffectT, useState: useStateT } = React;
 
-function Terminal({ open, lines, onClose, onClear, status, onCopyAll }) {
+const TERMINAL_MIN_H = 90;
+const TERMINAL_MAX_FRACTION = 0.85; // up to 85% of viewport height
+
+function Terminal({ open, lines, onClose, onClear, status, onCopyAll, height = 220, onHeightChange }) {
   const { Icon } = window.PGE;
   const scrollerRef = useRefT(null);
+  const dragRef = useRefT({ active: false, startY: 0, startH: 0 });
+  const [resizing, setResizing] = useStateT(false);
+
   useEffectT(() => {
     if (!scrollerRef.current) return;
     scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
   }, [lines.length, open]);
 
+  function clampH(h) {
+    const max = Math.max(TERMINAL_MIN_H + 40, Math.round(window.innerHeight * TERMINAL_MAX_FRACTION));
+    return Math.max(TERMINAL_MIN_H, Math.min(max, Math.round(h)));
+  }
+
+  function onResizeDown(e) {
+    e.preventDefault();
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    dragRef.current = { active: true, startY: y, startH: height };
+    setResizing(true);
+    document.body.classList.add("pge-resizing-terminal");
+    window.addEventListener("mousemove", onResizeMove);
+    window.addEventListener("mouseup", onResizeUp);
+    window.addEventListener("touchmove", onResizeMove, { passive: false });
+    window.addEventListener("touchend", onResizeUp);
+  }
+  function onResizeMove(e) {
+    if (!dragRef.current.active) return;
+    if (e.cancelable) e.preventDefault();
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    const dy = y - dragRef.current.startY;
+    // dragging UP (negative dy) grows the terminal
+    const next = clampH(dragRef.current.startH - dy);
+    onHeightChange && onHeightChange(next);
+  }
+  function onResizeUp() {
+    dragRef.current.active = false;
+    setResizing(false);
+    document.body.classList.remove("pge-resizing-terminal");
+    window.removeEventListener("mousemove", onResizeMove);
+    window.removeEventListener("mouseup", onResizeUp);
+    window.removeEventListener("touchmove", onResizeMove);
+    window.removeEventListener("touchend", onResizeUp);
+  }
+  function onResizeKey(e) {
+    if (!onHeightChange) return;
+    const step = e.shiftKey ? 40 : 12;
+    if (e.key === "ArrowUp")   { e.preventDefault(); onHeightChange(clampH(height + step)); }
+    if (e.key === "ArrowDown") { e.preventDefault(); onHeightChange(clampH(height - step)); }
+  }
+  function onResizeDouble() {
+    // Double-click resets to default
+    onHeightChange && onHeightChange(220);
+  }
+
+  // Cleanup on unmount
+  useEffectT(() => () => {
+    document.body.classList.remove("pge-resizing-terminal");
+    window.removeEventListener("mousemove", onResizeMove);
+    window.removeEventListener("mouseup", onResizeUp);
+    window.removeEventListener("touchmove", onResizeMove);
+    window.removeEventListener("touchend", onResizeUp);
+  }, []);
+
   if (!open) return null;
   return (
-    <div className="pge-terminal" role="region" aria-label="render log">
+    <div className={"pge-terminal" + (resizing ? " is-resizing" : "")} role="region" aria-label="render log">
+      <div className="t-resize"
+           role="separator"
+           aria-orientation="horizontal"
+           aria-label="resize terminal"
+           tabIndex={0}
+           onMouseDown={onResizeDown}
+           onTouchStart={onResizeDown}
+           onDoubleClick={onResizeDouble}
+           onKeyDown={onResizeKey}
+           title="drag to resize · double-click to reset" />
       <div className="t-head">
         <span className="t-dot" data-state={status?.running ? "run" : (status?.lastOk === false ? "err" : "idle")} />
         <span className="t-title mono">render log</span>
