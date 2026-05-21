@@ -9,6 +9,7 @@ window.PGE_DATA = {
     {
       id: "stream1", onset: 0.0, duration: 5.0, sample: "pino.wav",
       color: "#5C8868", mute: false, solo: false,
+      rangeAlwaysActive: false, timeScale: 1, clipStrategy: "overflow_margin", clipMargin: 0,
       timeMode: "normalized", distributionMode: "gaussian",
       density: null, densityEnv: [[0,10],[0.15,10],[0.40,50],[0.60,30],[1,30]],
       distribution: null, distributionEnv: [[0,0],[0.5,1],[1,0]],
@@ -24,6 +25,7 @@ window.PGE_DATA = {
     {
       id: "stream2", onset: 40.0, duration: 5.0, sample: "pino.wav",
       color: "#B89241", mute: false, solo: false,
+      rangeAlwaysActive: false, timeScale: 1, clipStrategy: "overflow_margin", clipMargin: 0,
       timeMode: "normalized", distributionMode: "uniform",
       // density: blocco compatto puro — 6 cicli con accelerando esponenziale
       density: null,
@@ -53,6 +55,7 @@ window.PGE_DATA = {
     {
       id: "stream3", onset: 30.0, duration: 5.0, sample: "pino.wav",
       color: "#3F8884", mute: false, solo: false,
+      rangeAlwaysActive: false, timeScale: 1, clipStrategy: "overflow_margin", clipMargin: 0,
       timeMode: "absolute", distributionMode: "uniform",
       density: 12, distribution: 0.0,
       volume: -6.0, volumeRange: 0,
@@ -67,6 +70,7 @@ window.PGE_DATA = {
     {
       id: "stream4", onset: 20.0, duration: 5.0, sample: "pino.wav",
       color: "#5965A8", mute: false, solo: false,
+      rangeAlwaysActive: false, timeScale: 1, clipStrategy: "overflow_margin", clipMargin: 0,
       timeMode: "normalized", distributionMode: "uniform",
       density: 12, distribution: 0.0,
       volume: -6.0, volumeRange: 0,
@@ -84,6 +88,7 @@ window.PGE_DATA = {
     {
       id: "stream5", onset: 0.0, duration: 10.0, sample: "001-0-27_9.wav",
       color: "#8E5F8E", mute: false, solo: false,
+      rangeAlwaysActive: false, timeScale: 1, clipStrategy: "overflow_margin", clipMargin: 0,
       timeMode: "normalized", distributionMode: "gaussian",
       density: 3, distribution: null, distributionEnv: [[0,0],[0.5,1],[1,0]],
       volume: -9.0, volumeRange: 0,

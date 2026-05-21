@@ -572,3 +572,19 @@
   color: var(--fg-4);
 }
 .sp-foot .fade { color: var(--fg-4); }
+
+.sp-setup-log {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.6;
+  max-height: 140px;
+  overflow-y: auto;
+  background: var(--bg-sunken, #111);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 6px 0 4px;
+  color: var(--fg-3);
+  white-space: pre-wrap;
+  word-break: break-all;
+}

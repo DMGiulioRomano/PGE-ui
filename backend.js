@@ -231,6 +231,12 @@
       stemUrl(yamlBasename, streamId) { return null; },
     };
 
+    async function setup(onEvent) {
+      onEvent?.({ type: "log", line: "[VENV] mock backend — no engine setup needed" });
+      onEvent?.({ type: "done", ok: true });
+      return { ok: true };
+    }
+
     async function diagnose() {
       const checks = [];
       const push = (label, ok, detail) => checks.push({ label, ok, detail });
@@ -262,7 +268,7 @@
       return { ok: checks.every(c => c.ok), checks };
     }
 
-    return { kind: "mock", fs, render, fingerprintStream, diagnose };
+    return { kind: "mock", fs, render, fingerprintStream, diagnose, setup };
   }
 
   /* =========================================================================
@@ -342,8 +348,16 @@
       },
     };
 
-    // local stem index — populated as renders complete, so hasStem() is sync.
-    const stemIndex = {};  // `${basename}__${streamId}` → mtime
+    // local stem index — populated as renders complete or restored from localStorage.
+    // key: `${yamlBasename}__${streamId}` (internal key, not the filename)
+    let stemIndex = {};
+    try {
+      stemIndex = JSON.parse(localStorage.getItem("pge-local-stems") || "{}");
+    } catch {}
+
+    function _persistStemIndex() {
+      try { localStorage.setItem("pge-local-stems", JSON.stringify(stemIndex)); } catch {}
+    }
 
     const render = {
       async loadCache(yamlBasename) {
@@ -352,6 +366,18 @@
         // not directly comparable). Python uses its cache.json for its own
         // skip decision during render; the UI uses this localStorage manifest
         // to color clips as fresh/stale.
+        //
+        // Also sync stem presence from disk so hasStem() works after page reload
+        // even if the stems were rendered in a previous session.
+        try {
+          const sd = await jget(`/stems/${encodeURIComponent(yamlBasename)}`);
+          if (sd && Array.isArray(sd.stems)) {
+            for (const { streamId, mtime } of sd.stems) {
+              stemIndex[`${yamlBasename}__${streamId}`] = mtime * 1000;
+            }
+            _persistStemIndex();
+          }
+        } catch {}
         try {
           const all = JSON.parse(localStorage.getItem("pge-local-fp") || "{}");
           return all[yamlBasename] || {};
@@ -372,6 +398,14 @@
       async run(opts, onEvent) {
         cancelAbort = new AbortController();
         const localFps = {};   // computed browser-side per stream as we go
+        if (opts.preclean) {
+          // wipe cached stem knowledge for this project so stale entries don't linger
+          const prefix = `${opts.yamlBasename}__`;
+          for (const k of Object.keys(stemIndex)) {
+            if (k.startsWith(prefix)) delete stemIndex[k];
+          }
+          _persistStemIndex();
+        }
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -398,9 +432,30 @@
               try {
                 const ev = JSON.parse(line);
                 onEvent && onEvent(ev);
-                if (ev.type === "done") lastResult = ev;
+                if (ev.type === "done") {
+                  lastResult = ev;
+                  // Fallback: emit synthetic stream-done for any generated stem
+                  // that didn't already get a stream-done event during streaming.
+                  // This covers the case where parse_render_line missed a line.
+                  const prefix = opts.yamlBasename + "__";
+                  for (const genPath of (ev.generated || [])) {
+                    const fname = genPath.replace(/^.*[\\/]/, "");
+                    const stem  = fname.replace(/\.[^.]+$/, "");
+                    if (!stem.startsWith(prefix)) continue;
+                    const streamId = stem.slice(prefix.length);
+                    if (!streamId) continue;
+                    const key = `${opts.yamlBasename}__${streamId}`;
+                    if (stemIndex[key]) continue;  // already handled
+                    stemIndex[key] = Date.now();
+                    const s = (opts.streams || []).find(x => x.id === streamId);
+                    if (s) localFps[s.id] = fingerprintStream(s);
+                    onEvent && onEvent({ type: "stream-done", streamId, cached: false });
+                  }
+                  _persistStemIndex();
+                }
                 if (ev.type === "stream-done") {
                   stemIndex[`${opts.yamlBasename}__${ev.streamId}`] = Date.now();
+                  _persistStemIndex();
                   // freeze the browser-side fingerprint for this stream so the
                   // UI can mark it fresh (and detect later edits as stale).
                   const s = (opts.streams || []).find(x => x.id === ev.streamId);
@@ -437,6 +492,37 @@
         return `${baseUrl}/audio/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
       },
     };
+
+    async function setup(onEvent) {
+      try {
+        const res = await fetch(baseUrl + "/setup", { method: "POST" });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let lastResult = { ok: true };
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+            if (!line) continue;
+            try {
+              const ev = JSON.parse(line);
+              onEvent && onEvent(ev);
+              if (ev.type === "done") lastResult = ev;
+            } catch {}
+          }
+        }
+        return lastResult;
+      } catch (e) {
+        onEvent && onEvent({ type: "log", line: `[ERROR] ${e.message}` });
+        onEvent && onEvent({ type: "done", ok: false, error: e.message });
+        return { ok: false, error: e.message };
+      }
+    }
 
     async function diagnose() {
       const checks = [];
@@ -487,7 +573,7 @@
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, fingerprintStream, baseUrl, diagnose };
+    return { kind: "local", fs, render, fingerprintStream, baseUrl, diagnose, setup };
   }
 
   window.PGEBackend = {

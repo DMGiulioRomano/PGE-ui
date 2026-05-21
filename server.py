@@ -53,7 +53,7 @@ import threading
 from pathlib import Path
 
 try:
-    from flask import Flask, jsonify, request, send_file, Response, abort
+    from flask import Flask, jsonify, request, send_file, send_from_directory, Response, abort
     from flask_cors import CORS
 except ImportError:
     sys.exit("Missing deps. Run:\n    pip install flask flask-cors")
@@ -79,46 +79,57 @@ def soxi_duration(path: Path) -> "float | None":
 
 
 # Regexes for parsing main.py's stdout into structured UI events.
-# main.py prints lines like:
-#   "  [3/5] stream3    rendering..."
-#   "  [3/5] stream3    cached — skip"
-#   "      → output/PGE_test__stream3.aif"
-#   " Generazione completata! 5 file generati"
-_RE_STREAM_LINE = re.compile(r"^\s*\[(\d+)/(\d+)\]\s+(\S+)\s+(.*)$")
-_RE_GENERATED  = re.compile(r"^\s*[→\-]+>?\s+(output/\S+)")
+#
+# Actual main.py output format (numpy renderer):
+#   "[CACHE] stream1: clean"   → stream is cached, will be skipped
+#   "[CACHE] stream1: DIRTY"   → stream will be rendered
+#   " Generazione completata! 5 file generati:"
+#   "    /abs/path/to/output/PGE_test__stream1.aif"
+#
+# Note: [CACHE] lines appear one per stream as each starts.
+# The absolute path lines appear all together at the end (summary block).
+_RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
+# Matches absolute path ending in __<streamId>.aif
+_RE_STEM_PATH  = re.compile(r"^\s+.+__(\w+)\.aif\s*$", re.IGNORECASE)
 
 
 def parse_render_line(line: str, state: dict) -> list:
-    """Turn a single stdout line into one or more browser-bound events.
-
-    `state` is a mutable dict tracking which stream is "currently rendering"
-    so we can emit stream-done when we see the corresponding output line."""
+    """Turn a single stdout line into one or more browser-bound events."""
     events = [{"type": "log", "line": line}]
-    m = _RE_STREAM_LINE.match(line)
+
+    # [CACHE] stream1: clean  → cached, emit start+done immediately
+    # [CACHE] stream1: DIRTY  → about to render, emit start only
+    m = _RE_CACHE_LINE.match(line)
     if m:
-        idx = int(m.group(1)) - 1
-        total = int(m.group(2))
-        sid = m.group(3)
-        rest = m.group(4).lower()
-        if "cached" in rest or "skip" in rest:
-            events.append({"type": "stream-start",
-                           "streamId": sid, "index": idx, "total": total})
-            events.append({"type": "stream-done",
-                           "streamId": sid, "cached": True})
+        sid   = m.group(1)
+        dirty = m.group(2).strip().upper() == "DIRTY"
+        total = state.get("total", 0)
+        idx   = state.get("index", 0)
+        state["index"] = idx + 1
+        # Previous DIRTY stream is done now that we're starting the next one
+        prev = state.get("streamId")
+        if prev:
+            events.append({"type": "stream-done", "streamId": prev, "cached": False})
             state["streamId"] = None
-        elif "rendering" in rest:
-            state["streamId"] = sid
-            state["streamTotal"] = total
-            events.append({"type": "stream-start",
-                           "streamId": sid, "index": idx, "total": total})
+        events.append({"type": "stream-start",
+                        "streamId": sid, "index": idx, "total": total})
+        if not dirty:
+            events.append({"type": "stream-done", "streamId": sid, "cached": True})
+        else:
+            state["streamId"] = sid  # track: this stream is being rendered
         return events
 
-    m2 = _RE_GENERATED.match(line)
-    if m2 and state.get("streamId"):
-        events.append({"type": "stream-done",
-                       "streamId": state["streamId"], "cached": False,
-                       "output": m2.group(1)})
-        state["streamId"] = None
+    # Summary path lines: "    /abs/path/output/PGE_test__stream1.aif"
+    # Extract stream_id from filename to emit stream-done for the last DIRTY stream.
+    m2 = _RE_STEM_PATH.match(line)
+    if m2:
+        prev = state.get("streamId")
+        if prev:
+            sid = m2.group(1)
+            if sid == prev:
+                events.append({"type": "stream-done",
+                                "streamId": prev, "cached": False})
+                state["streamId"] = None
     return events
 
 
@@ -129,6 +140,93 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     if name.startswith("."):
         return None
     return base / name
+
+
+def _ensure_venv_events(root: Path):
+    """Generator: yields NDJSON event dicts while creating the engine venv.
+
+    Creates {root}/.venv and runs pip install -r requirements.txt if the venv
+    is missing. Safe to call when venv already exists (emits a skip line).
+    Last event is always {"type": "venv-done", "ok": bool}."""
+    venv_py = root / ".venv" / "bin" / "python"
+    if venv_py.exists():
+        yield {"type": "log", "line": "[VENV] engine venv already present — skipping"}
+        yield {"type": "venv-done", "ok": True}
+        return
+
+    venv_dir = root / ".venv"
+    req_file = root / "requirements.txt"
+
+    # Find a suitable python to create the venv with.
+    py_cmd = None
+    for candidate in ["python3.12", "python3.11", "python3.10", "python3"]:
+        try:
+            subprocess.check_output([candidate, "--version"],
+                                    stderr=subprocess.DEVNULL, timeout=2)
+            py_cmd = candidate
+            break
+        except Exception:
+            continue
+
+    if not py_cmd:
+        yield {"type": "log", "line": "[ERROR] no python3 found — install python3.12"}
+        yield {"type": "venv-done", "ok": False}
+        return
+
+    yield {"type": "log", "line": f"[VENV] creating .venv with {py_cmd} …"}
+    try:
+        result = subprocess.run(
+            [py_cmd, "-m", "venv", str(venv_dir)],
+            capture_output=True, text=True, timeout=120,
+        )
+        for line in (result.stdout or "").splitlines():
+            if line.strip():
+                yield {"type": "log", "line": line}
+        if result.returncode != 0:
+            for line in (result.stderr or "").splitlines():
+                yield {"type": "log", "line": line}
+            yield {"type": "log",
+                   "line": f"[ERROR] venv creation failed (exit {result.returncode})"}
+            yield {"type": "venv-done", "ok": False}
+            return
+    except Exception as e:
+        yield {"type": "log", "line": f"[ERROR] venv creation failed: {e}"}
+        yield {"type": "venv-done", "ok": False}
+        return
+
+    yield {"type": "log", "line": "[VENV] venv created"}
+
+    if not req_file.exists():
+        yield {"type": "log",
+               "line": f"[ERROR] requirements.txt not found at {req_file}"}
+        yield {"type": "venv-done", "ok": False}
+        return
+
+    pip = venv_dir / "bin" / "pip"
+    yield {"type": "log", "line": f"[VENV] pip install -r requirements.txt …"}
+    try:
+        proc = subprocess.Popen(
+            [str(pip), "install", "-r", str(req_file)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        for raw in iter(proc.stdout.readline, ""):
+            line = raw.rstrip()
+            if line:
+                yield {"type": "log", "line": line}
+        proc.wait()
+        if proc.returncode != 0:
+            yield {"type": "log",
+                   "line": f"[ERROR] pip install failed (exit {proc.returncode})"}
+            yield {"type": "venv-done", "ok": False}
+            return
+    except Exception as e:
+        yield {"type": "log", "line": f"[ERROR] pip install failed: {e}"}
+        yield {"type": "venv-done", "ok": False}
+        return
+
+    yield {"type": "log", "line": "[VENV] engine venv ready ✓"}
+    yield {"type": "venv-done", "ok": True}
 
 
 # -------------------------------------------------------------------------
@@ -211,6 +309,14 @@ def make_app(root: Path) -> Flask:
             add("soxi", True, "available — sample durations enabled")
         except Exception:
             add("soxi", False, "not available — sample list will lack durations")
+
+        # engine venv
+        venv_py = root / ".venv" / "bin" / "python"
+        if venv_py.exists():
+            add("engine venv", True, str(venv_py))
+        else:
+            add("engine venv", False,
+                "not found — click 'Setup engine' in Settings ⚙ or POST /setup")
 
         # python deps available?
         try:
@@ -350,6 +456,36 @@ def make_app(root: Path) -> Flask:
         except Exception:
             return jsonify({})
 
+    @app.get("/stems/<basename>")
+    def list_stems(basename):
+        """Return stream IDs that have a rendered stem file on disk.
+        The browser uses this to populate its stem index on page load
+        so hasStem() works without requiring a render in the current session."""
+        if "/" in basename or ".." in basename: abort(400)
+        stream_ids = []
+        prefix = basename + "__"
+        for p in sorted(output.glob(f"{basename}__*.aif")):
+            sid = p.stem[len(prefix):]
+            if sid:
+                stream_ids.append({"streamId": sid, "mtime": p.stat().st_mtime})
+        return jsonify({"basename": basename, "stems": stream_ids})
+
+    # --------- engine setup ---------
+
+    @app.post("/setup")
+    def setup_engine():
+        """Create the engine venv and install requirements.txt if not present.
+        Streams the same NDJSON format as /render so the UI can show it in the
+        terminal. Safe to call repeatedly — skips if venv already exists."""
+        def event_stream():
+            overall_ok = True
+            for ev in _ensure_venv_events(root):
+                yield json.dumps(ev) + "\n"
+                if ev.get("type") == "venv-done":
+                    overall_ok = ev.get("ok", False)
+            yield json.dumps({"type": "done", "ok": overall_ok}) + "\n"
+        return Response(event_stream(), mimetype="application/x-ndjson")
+
     # --------- render ---------
 
     @app.post("/render/cancel")
@@ -389,31 +525,46 @@ def make_app(root: Path) -> Flask:
                 try: p.unlink()
                 except Exception: pass
 
-        # Build the python invocation. We call main.py directly rather than
-        # going through `make` so we get clean stdout and don't depend on the
-        # user's make targets.
-        cmd = [
-            sys.executable, str(root / "src" / "main.py"),
-            str(yml), str(aif),
-            "--renderer", renderer,
-            "--per-stream",
-            "--show-static",
-        ]
-        if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
-        if visualize:  cmd += ["--visualize"]
-        if reaper:     cmd += ["--reaper",
-                                "--reaper-path", str(output / f"{basename}.rpp")]
-        if renderer == "csound":
-            cmd += [
-                "--orc-path", str(root / "csound" / "main.orc"),
-                "--incdir",   str(root / "src"),
-                "--ssdir",    str(refs),
-                "--sfdir",    str(output),
-                "--log-dir",  str(root / "logs"),
-            ]
-
         def event_stream():
             """Generator: yields one NDJSON line per UI event."""
+            # Ensure engine venv exists before running main.py.
+            venv_py = root / ".venv" / "bin" / "python"
+            if not venv_py.exists():
+                yield json.dumps({"type": "log",
+                                  "line": "[VENV] engine venv missing — setting up…"}) + "\n"
+                setup_ok = True
+                for ev in _ensure_venv_events(root):
+                    yield json.dumps(ev) + "\n"
+                    if ev.get("type") == "venv-done":
+                        setup_ok = ev.get("ok", False)
+                if not setup_ok or not venv_py.exists():
+                    yield json.dumps({"type": "log",
+                                      "line": "[ERROR] venv setup failed — render aborted"}) + "\n"
+                    yield json.dumps({"type": "done", "ok": False,
+                                      "error": "venv setup failed"}) + "\n"
+                    return
+
+            # Build the command using the engine venv python.
+            cmd = [
+                str(venv_py), str(root / "src" / "main.py"),
+                str(yml), str(aif),
+                "--renderer", renderer,
+                "--per-stream",
+                "--show-static",
+            ]
+            if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
+            if visualize:  cmd += ["--visualize"]
+            if reaper:     cmd += ["--reaper",
+                                    "--reaper-path", str(output / f"{basename}.rpp")]
+            if renderer == "csound":
+                cmd += [
+                    "--orc-path", str(root / "csound" / "main.orc"),
+                    "--incdir",   str(root / "src"),
+                    "--ssdir",    str(refs),
+                    "--sfdir",    str(output),
+                    "--log-dir",  str(root / "logs"),
+                ]
+
             yield json.dumps({"type": "log",
                               "line": "$ " + " ".join(cmd)}) + "\n"
             try:
@@ -425,7 +576,8 @@ def make_app(root: Path) -> Flask:
                         stderr=subprocess.STDOUT,
                         text=True, bufsize=1,
                     )
-                state = {"streamId": None}
+                n_streams = len(opts.get("streams") or [])
+                state = {"streamId": None, "total": n_streams, "index": 0}
                 proc = rs["proc"]
                 # Read line-by-line and stream to client.
                 for raw in iter(proc.stdout.readline, ""):
@@ -465,6 +617,19 @@ def make_app(root: Path) -> Flask:
 
         # mimetype "application/x-ndjson" is what the browser LocalBackend reads.
         return Response(event_stream(), mimetype="application/x-ndjson")
+
+    # --------- static UI file serving ---------
+    # Serves the PGE-ui directory so no separate http.server is needed.
+    # API routes above take priority over this catch-all.
+    ui_dir = str(Path(__file__).parent)
+
+    @app.get("/")
+    def ui_index():
+        return send_from_directory(ui_dir, "PGE Editor.html")
+
+    @app.get("/<path:filename>")
+    def ui_static(filename):
+        return send_from_directory(ui_dir, filename)
 
     return app
 
@@ -523,10 +688,8 @@ def main():
     print(f"  soxi:    {'ok' if soxi_ok else 'MISSING (sample durations will be blank)'}")
     print(f"  listen:  http://{args.host}:{args.port}")
     print(f"")
-    print(f"In the browser:")
-    print(f"  1) open PGE Editor.html")
-    print(f"  2) gear → Backend → local")
-    print(f"  3) Backend → server URL → http://{args.host}:{args.port}")
+    print(f"Open in browser:  http://{args.host}:{args.port}/")
+    print(f"  (gear → Backend → local → server URL http://{args.host}:{args.port})")
     print(f"")
     app.run(host=args.host, port=args.port, threaded=True)
 

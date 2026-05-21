@@ -8,6 +8,9 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
   const { Icon } = window.PGE;
   const ref = useRefSP(null);
   const [serverStatus, setServerStatus] = useStateSP({ state: "idle", message: "" });
+  const [setupLog, setSetupLog] = useStateSP([]);
+  const [setupRunning, setSetupRunning] = useStateSP(false);
+  const setupLogRef = useRefSP(null);
 
   useEffectSP(() => {
     if (!open) return;
@@ -20,7 +23,26 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open, onClose]);
 
+  useEffectSP(() => {
+    if (setupLogRef.current) {
+      setupLogRef.current.scrollTop = setupLogRef.current.scrollHeight;
+    }
+  }, [setupLog]);
+
   if (!open) return null;
+
+  async function runSetup() {
+    const backend = window.PGEBackend?.current;
+    if (!backend?.setup) return;
+    setSetupLog([]);
+    setSetupRunning(true);
+    await backend.setup(ev => {
+      if (ev.type === "log" && ev.line !== undefined) {
+        setSetupLog(l => [...l, ev.line]);
+      }
+    });
+    setSetupRunning(false);
+  }
 
   async function pingServer() {
     setServerStatus({ state: "testing", message: "pinging…" });
@@ -86,6 +108,30 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
             </>
           ) : null}
         </div>
+
+        {currentBackendKind === "local" ? (
+          <div className="sp-section">
+            <div className="sp-sec-head">Engine</div>
+            <div className="sp-row">
+              <span className="sp-k">python venv</span>
+              <button className="sp-btn" onClick={runSetup} disabled={setupRunning}>
+                {setupRunning ? "setting up…" : "setup engine"}
+              </button>
+            </div>
+            {setupLog.length > 0 ? (
+              <div className="sp-setup-log" ref={setupLogRef}>
+                {setupLog.map((line, i) => (
+                  <div key={i}>{line || " "}</div>
+                ))}
+              </div>
+            ) : null}
+            <div className="sp-hint">
+              Creates <span className="mono">.venv</span> inside the engine repo and installs{" "}
+              <span className="mono">requirements.txt</span>. Run once on a new machine.
+              Safe to re-run — skips if venv already present.
+            </div>
+          </div>
+        ) : null}
 
         <div className="sp-section">
           <div className="sp-sec-head">Paths</div>

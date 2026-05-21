@@ -21,8 +21,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "envelopeHeight": 240,
   "activeProject": "PGE_test.yml",
   "backendKind": "mock",
-  "mediaPath": "/Users/giulio/PGE/refs",
-  "projectsPath": "/Users/giulio/PGE/configs",
+  "mediaPath": "",
+  "projectsPath": "",
   "outputPath": "output",
   "renderUseCache": true,
   "renderVisualize": false,
@@ -169,11 +169,31 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
   const [backendKind, setBackendKind] = useStateApp(tweaks.backendKind || "mock");
 
+  async function _syncPathsFromServer(baseUrl, currentTweaks) {
+    try {
+      const res = await fetch(baseUrl + "/health");
+      if (!res.ok) return;
+      const h = await res.json();
+      if (!currentTweaks.mediaPath)    setTweak("mediaPath",    h.refs);
+      if (!currentTweaks.projectsPath) setTweak("projectsPath", h.configs);
+      if (!currentTweaks.outputPath || currentTweaks.outputPath === "output") setTweak("outputPath", h.output);
+    } catch {}
+  }
+
+  useEffectApp(() => {
+    if ((tweaks.backendKind || "mock") === "local") {
+      _syncPathsFromServer(tweaks.serverUrl || "http://localhost:7878", tweaks);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function switchBackend(kind) {
     setBackendKind(kind);
     setTweak("backendKind", kind);
-    window.PGEBackend.current = window.PGEBackend.create(kind, { baseUrl: tweaks.serverUrl || "http://localhost:7878" });
+    const baseUrl = tweaks.serverUrl || "http://localhost:7878";
+    window.PGEBackend.current = window.PGEBackend.create(kind, { baseUrl });
     pushToast({ kind: "info", title: `backend → ${kind}`, message: kind === "local" ? "needs server.py running" : "in-browser simulation", duration: 2400 });
+    if (kind === "local") _syncPathsFromServer(baseUrl, tweaks);
     refreshMedia(); refreshProjects();
     // audio: invalidate cached buffers since urls change
     if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
