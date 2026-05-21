@@ -1,0 +1,59 @@
+{
+  "description": "Python Granular Synthesis Engine",
+  "model": "claude-sonnet-4-6",
+  "effortLevel": "medium",
+  "autocompact_percentage_override": 75,
+  "env": {
+    "BASH_MAX_OUTPUT_LENGTH": "150000"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null); if [ \"$branch\" = \"main\" ]; then input=$(cat 2>/dev/null); file_path=$(printf '%s' \"$input\" | python3 -c \"import sys,json\\ntry:\\n    d=json.load(sys.stdin)\\n    print(d.get('file_path') or d.get('tool_input',{}).get('file_path',''))\\nexcept:\\n    print('')\" 2>/dev/null); if echo \"$file_path\" | grep -q '/docs/plans/'; then exit 0; fi; echo 'BLOCCATO: sei sul branch main. Modifiche permesse solo in docs/plans/. Apri un feature branch.'; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "if": "Edit(*.py)|Write(*.py)|MultiEdit(*.py)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '--- Test suite automatica ---' && cd $(git rev-parse --show-toplevel 2>/dev/null || pwd) && make tests 2>&1 | tail -30",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '=== easy - Granular Synthesis Engine ===' && echo \"Branch: $(git branch --show-current 2>/dev/null)\" && echo \"Ultimo tag: $(git describe --tags --abbrev=0 2>/dev/null || echo 'nessun tag')\" && echo \"Test: $(cd $(git rev-parse --show-toplevel 2>/dev/null || pwd) && python -m pytest --co -q 2>/dev/null | tail -1)\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git reset --hard HEAD~*)",
+      "Bash(rm -rf *)",
+      "Read(.venv/**)",
+      "Read(**/__pycache__/**)",
+      "Read(output/**)",
+      "Read(cache/**)"
+    ]
+  }
+}
