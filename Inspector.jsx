@@ -167,7 +167,38 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
 
-  if (!stream) return null;
+  // Empty state — inspector opened via shortcut with no stream selected.
+  // Keep the panel chrome so the layout doesn't jump, but show a hint.
+  if (!stream) {
+    return (
+      <aside className="pge-inspector" data-screen-label="02 Inspector · Empty">
+        <header className="ihead">
+          <span className="title">Inspector</span>
+          <span style={{ flex: 1 }} />
+          <button className="pge-icon-btn" onClick={onClose} title="Close inspector"><Icon name="x" size={14} /></button>
+        </header>
+        <div className="inspector-empty">
+          <div className="inspector-empty-glyph" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="6" y="14" width="10" height="20" rx="1.5" />
+              <rect x="20" y="10" width="10" height="28" rx="1.5" />
+              <rect x="34" y="18" width="8" height="12" rx="1.5" />
+            </svg>
+          </div>
+          <div className="inspector-empty-title">Scegli uno stream</div>
+          <div className="inspector-empty-hint">
+            clicca una clip in timeline per ispezionarne i parametri
+          </div>
+          {window.prettyShortcut ? (
+            <div className="inspector-empty-kbd mono">
+              <kbd>{window.prettyShortcut((window.PGE_TWEAKS && window.PGE_TWEAKS.shortcutInspector) || "cmd+i")}</kbd>
+              <span>per nascondere</span>
+            </div>
+          ) : null}
+        </div>
+      </aside>
+    );
+  }
 
   const setMode = (k, v) => setParamModes({ ...paramModes, [k]: v });
   const getMode = (k, fallback) => {

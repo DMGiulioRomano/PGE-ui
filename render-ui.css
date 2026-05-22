@@ -619,3 +619,33 @@ body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* Click-to-record shortcut field */
+.sp-kbd {
+  appearance: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 96px; height: 28px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--fg-1);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 100ms, background 100ms;
+}
+.sp-kbd:hover { border-color: var(--fg-3); }
+.sp-kbd:focus { outline: none; border-color: var(--accent); }
+.sp-kbd.recording {
+  border-color: var(--accent);
+  background: var(--accent-soft, rgba(255,140,66,0.10));
+  animation: sp-kbd-pulse 1.2s ease-in-out infinite;
+}
+.sp-kbd .sp-kbd-glyphs { letter-spacing: 0.04em; }
+.sp-kbd .sp-kbd-hint { color: var(--accent); font-family: var(--font-ui); font-size: 10px; }
+@keyframes sp-kbd-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft, rgba(255,140,66,0.18)); }
+  50%      { box-shadow: 0 0 0 4px rgba(255,140,66,0); }
+}

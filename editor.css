@@ -191,6 +191,36 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-inspector .ibody { padding: 10px; overflow-y: auto; overflow-x: hidden; min-height: 0; min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .pge-inspector .ibody.raw { padding: 0; gap: 0; }
 
+/* Inspector — empty state (no stream selected, opened via shortcut) */
+.pge-inspector .inspector-empty {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px; padding: 32px 24px;
+  text-align: center; color: var(--fg-3);
+}
+.pge-inspector .inspector-empty-glyph { color: var(--fg-4); opacity: 0.75; margin-bottom: 4px; }
+.pge-inspector .inspector-empty-title {
+  font-family: var(--font-ui); font-size: 13px; font-weight: 500; color: var(--fg-2);
+  letter-spacing: 0.01em;
+}
+.pge-inspector .inspector-empty-hint {
+  font-family: var(--font-ui); font-size: 11px; color: var(--fg-3);
+  max-width: 22ch; line-height: 1.5;
+}
+.pge-inspector .inspector-empty-kbd {
+  margin-top: 10px; display: inline-flex; align-items: center; gap: 8px;
+  font-size: 10px; color: var(--fg-4);
+}
+.pge-inspector .inspector-empty-kbd kbd {
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 2px 6px; border-radius: 3px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+  color: var(--fg-2);
+  box-shadow: inset 0 -1px 0 var(--border-default);
+}
+
 /* ---------- Inspector Section ---------- */
 .pge-section { background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 6px; min-width: 0; }
 .pge-section > header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); cursor: default; user-select: none; min-width: 0; flex-wrap: wrap; row-gap: 2px; }

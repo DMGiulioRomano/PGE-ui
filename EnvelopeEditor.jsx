@@ -686,8 +686,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
       curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
       cursor = curBP.end;
     }
+    // Always append a trailing "empty" zone — even degenerate ([1,1]) — so
+    // the last real zone has a boundary handle on its right edge. Without
+    // this, an envelope of only BPs whose last BP sits at t≈1 has just one
+    // zone and no draggable boundaries (you'd be unable to rescale the BPs
+    // proportionally). The degenerate zone has zero visual width but still
+    // exposes its left boundary as a handle at x=1.
     if (cursor < 1 - 1e-6) {
       zones.push({ kind: "empty", start: cursor, end: 1 });
+    } else if (zones.length > 0) {
+      zones.push({ kind: "empty", start: 1, end: 1 });
     }
     return zones;
   }, [rawEnv]);

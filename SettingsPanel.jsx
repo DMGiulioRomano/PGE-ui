@@ -175,6 +175,20 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
         </div>
 
         <div className="sp-section">
+          <div className="sp-sec-head">Shortcuts</div>
+          <div className="sp-row">
+            <span className="sp-k" title="apre/chiude l'inspector da tastiera">inspector toggle</span>
+            <ShortcutInput value={tweaks.shortcutInspector || "cmd+i"}
+                           onChange={(v) => setTweak("shortcutInspector", v)} />
+          </div>
+          <div className="sp-hint">
+            Click sul campo e premi la combinazione desiderata. Funziona anche cliccando
+            di nuovo sullo stesso stream in timeline. Se nessuno stream è selezionato,
+            l'inspector mostra uno stato vuoto.
+          </div>
+        </div>
+
+        <div className="sp-section">
           <div className="sp-sec-head">Appearance</div>
           <div className="sp-row">
             <span className="sp-k">accent</span>
@@ -212,6 +226,51 @@ function SpToggle({ v, onChange }) {
     <button className={"sp-tog" + (v ? " on" : "")} role="switch" aria-checked={v}
             onClick={() => onChange(!v)}>
       <span className="sp-tog-knob" />
+    </button>
+  );
+}
+
+/* ShortcutInput — click to record, then press the combo. Esc cancels, Backspace
+ * (without modifiers) clears. The stored format is "cmd+i", "shift+cmd+p", etc.
+ * cmd matches metaKey on mac and ctrlKey elsewhere, mirroring matchShortcut(). */
+function ShortcutInput({ value, onChange }) {
+  const [recording, setRecording] = useStateSP(false);
+  const inputRef = useRefSP(null);
+
+  function startRecording() {
+    setRecording(true);
+    setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
+  }
+
+  function onKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") { setRecording(false); return; }
+    // Pressing a bare modifier shouldn't commit — wait for the actual key.
+    if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") return;
+    const parts = [];
+    if (e.metaKey || e.ctrlKey) parts.push("cmd");
+    if (e.shiftKey) parts.push("shift");
+    if (e.altKey) parts.push("alt");
+    let k = (e.key || "").toLowerCase();
+    if (k === " ") k = "space";
+    parts.push(k);
+    onChange(parts.join("+"));
+    setRecording(false);
+  }
+
+  const display = window.prettyShortcut ? window.prettyShortcut(value) : value;
+  return (
+    <button
+      ref={inputRef}
+      type="button"
+      className={"sp-kbd" + (recording ? " recording" : "")}
+      onClick={startRecording}
+      onKeyDown={recording ? onKey : undefined}
+      onBlur={() => setRecording(false)}
+      title={recording ? "Press the key combination… (Esc to cancel)" : "Click to change"}
+    >
+      {recording ? <span className="sp-kbd-hint">press keys…</span> : <span className="sp-kbd-glyphs mono">{display}</span>}
     </button>
   );
 }

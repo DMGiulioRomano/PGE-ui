@@ -29,7 +29,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "renderReaper": false,
   "renderPreclean": false,
   "terminalOpen": false,
-  "terminalHeight": 220
+  "terminalHeight": 220,
+  "shortcutInspector": "cmd+i"
 }/*EDITMODE-END*/;
 
 const PROJECTS_DB = {
@@ -43,6 +44,8 @@ function App() {
   const t = window.useTweaks ? window.useTweaks(TWEAK_DEFAULTS) : [TWEAK_DEFAULTS, () => {}];
   const tweaks = Array.isArray(t) ? t[0] : t.tweaks;
   const setTweak = Array.isArray(t) ? t[1] : t.setTweak;
+
+  useEffectApp(() => { window.PGE_TWEAKS = tweaks; }, [tweaks]);
 
   useEffectApp(() => {
     document.documentElement.style.setProperty("--accent", tweaks.accent);
@@ -389,6 +392,11 @@ function App() {
     function onKey(e) {
       const tg = e.target;
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
+      if (matchShortcut(e, tweaks.shortcutInspector || "cmd+i")) {
+        e.preventDefault();
+        toggleInspector();
+        return;
+      }
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
@@ -452,8 +460,22 @@ function App() {
     });
     setDirty(true);
   }
-  function selectClip(id) { setSelectedId(id); setInspectorOpen(true); }
+  function selectClip(id) {
+    // Re-clicking the already-selected stream while the inspector is open closes it.
+    // Clicking a different stream switches selection and (re)opens the inspector.
+    if (id === selectedId && inspectorOpen) {
+      setInspectorOpen(false);
+      return;
+    }
+    setSelectedId(id);
+    setInspectorOpen(true);
+  }
   function closeInspector() { setInspectorOpen(false); }
+  function toggleInspector() {
+    // Shortcut entrypoint: opens the inspector even without a selected stream
+    // (shows an empty "choose a stream" state). If already open, closes it.
+    setInspectorOpen(o => !o);
+  }
   function selected() { return data.streams.find(s => s.id === selectedId); }
 
   /* ============ Save / SaveAs ============ */
@@ -811,9 +833,9 @@ function App() {
       )}
     </div>
   );
-  const inspectorEl = inspectorOpen && selected() ? (
-    <Inspector stream={selected()}
-               onChange={(p) => updateStream(selectedId, p)}
+  const inspectorEl = inspectorOpen ? (
+    <Inspector stream={selected() || null}
+               onChange={(p) => selectedId && updateStream(selectedId, p)}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab} />
   ) : null;
@@ -982,5 +1004,42 @@ function prettyGesture(g) {
   if (!g) return "wheel";
   return g.replace("cmd", "⌘").replace("alt", "⌥").replace("shift", "⇧").replace("ctrl", "⌃").replace("+wheel", "·wheel");
 }
+
+// Match a keyboard event against a shortcut spec like "cmd+i", "shift+cmd+p",
+// "ctrl+alt+e", or a bare key like "f1". cmd matches metaKey on mac and ctrlKey
+// elsewhere (so the same spec works cross-platform).
+function matchShortcut(e, spec) {
+  if (!spec) return false;
+  const parts = spec.toLowerCase().split("+").map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return false;
+  const key = parts.pop();
+  const needsCmd   = parts.includes("cmd") || parts.includes("meta");
+  const needsCtrl  = parts.includes("ctrl") && !needsCmd;
+  const needsShift = parts.includes("shift");
+  const needsAlt   = parts.includes("alt") || parts.includes("opt") || parts.includes("option");
+  const evKey = (e.key || "").toLowerCase();
+  if (evKey !== key) return false;
+  const cmdLike = e.metaKey || e.ctrlKey;
+  if (needsCmd && !cmdLike) return false;
+  if (!needsCmd && !needsCtrl && cmdLike) return false;
+  if (needsCtrl && !e.ctrlKey) return false;
+  if (needsShift !== e.shiftKey) return false;
+  if (needsAlt !== e.altKey) return false;
+  return true;
+}
+window.matchShortcut = matchShortcut;
+
+// Render a shortcut spec as glyphs for display (e.g. "cmd+i" → "⌘ I").
+function prettyShortcut(spec) {
+  if (!spec) return "";
+  return spec.toLowerCase().split("+").map(p => {
+    if (p === "cmd" || p === "meta") return "⌘";
+    if (p === "ctrl") return "⌃";
+    if (p === "shift") return "⇧";
+    if (p === "alt" || p === "opt" || p === "option") return "⌥";
+    return p.length === 1 ? p.toUpperCase() : p;
+  }).join(" ");
+}
+window.prettyShortcut = prettyShortcut;
 
 ReactDOM.createRoot(document.getElementById("app")).render(<App />);
