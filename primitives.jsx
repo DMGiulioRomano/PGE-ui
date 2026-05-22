@@ -97,12 +97,28 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
   function stepLeave() {
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
     setHoveredStep(null);
-    setActiveStep(null);
-    activeStepRef.current = null;
+    // activeStep stays locked after activation — cleared only on mouseup
+  }
+
+  function matchesTrigger(e) {
+    const t = (window.PGE_TWEAKS && window.PGE_TWEAKS.stepMenuTrigger) || "rightClick";
+    switch (t) {
+      case "rightClick":  return e.button === 2 && !e.shiftKey && !e.ctrlKey && !e.altKey;
+      case "middleClick": return e.button === 1;
+      case "shiftLeft":   return e.button === 0 && e.shiftKey && !e.ctrlKey && !e.altKey;
+      case "ctrlLeft":    return e.button === 0 && e.ctrlKey && !e.shiftKey && !e.altKey;
+      case "altLeft":     return e.button === 0 && e.altKey && !e.shiftKey && !e.ctrlKey;
+      default:            return e.button === 2;
+    }
+  }
+
+  function triggerButton() {
+    const t = (window.PGE_TWEAKS && window.PGE_TWEAKS.stepMenuTrigger) || "rightClick";
+    return t === "rightClick" ? 2 : t === "middleClick" ? 1 : 0;
   }
 
   function onRightDown(e) {
-    if (e.button !== 2) return;
+    if (!matchesTrigger(e)) return;
     e.preventDefault();
     setStepMenu({ x: e.clientX, y: e.clientY });
     setHoveredStep(null);
@@ -131,7 +147,7 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
     }
 
     function onUp(ev) {
-      if (ev.button !== 2) return;
+      if (ev.button !== triggerButton()) return;
       setStepMenu(null);
       setHoveredStep(null);
       setActiveStep(null);
@@ -160,7 +176,13 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {setEditing(false);onChange && onChange(parseFloat(draft) || 0);}}
         onKeyDown={(e) => {if (e.key === "Enter") e.target.blur();if (e.key === "Escape") {setDraft(String(value));setEditing(false);}}} /> :
-      <span className="val" onClick={() => setEditing(true)}>{value}</span>
+      <span className="val" onClick={(e) => {
+        const t = (window.PGE_TWEAKS && window.PGE_TWEAKS.stepMenuTrigger) || "rightClick";
+        if (t === "shiftLeft" && e.shiftKey) return;
+        if (t === "ctrlLeft" && e.ctrlKey) return;
+        if (t === "altLeft" && e.altKey) return;
+        setEditing(true);
+      }}>{value}</span>
       }
       {unit ? <span className="unit">{unit}</span> : null}
       {stepMenu ? (

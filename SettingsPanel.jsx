@@ -189,6 +189,27 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
         </div>
 
         <div className="sp-section">
+          <div className="sp-sec-head">Interaction</div>
+          <div className="sp-row">
+            <span className="sp-k" title="tasto/combinazione per aprire il menu step sui campi numerici">step menu trigger</span>
+            <select className="sp-select mono"
+                    value={tweaks.stepMenuTrigger || "rightClick"}
+                    onChange={(e) => setTweak("stepMenuTrigger", e.target.value)}>
+              <option value="rightClick">right click</option>
+              <option value="middleClick">middle click</option>
+              <option value="shiftLeft">shift + click</option>
+              <option value="ctrlLeft">ctrl + click</option>
+              <option value="altLeft">alt + click</option>
+            </select>
+          </div>
+          <div className="sp-hint">
+            Tieni premuto per aprire il menu step sui valori scalari (0.01 / 0.1 / 1 / 10).
+            Passa su un rettangolo e aspetta 0.5s → si attiva. Poi muovi su/giù per cambiare il valore.
+            Una volta attivato, il passo rimane selezionato anche uscendo dal rettangolino.
+          </div>
+        </div>
+
+        <div className="sp-section">
           <div className="sp-sec-head">Appearance</div>
           <div className="sp-row">
             <span className="sp-k">accent</span>
