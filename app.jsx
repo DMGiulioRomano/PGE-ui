@@ -245,6 +245,37 @@ function App() {
     })();
   }, [backendKind]);
 
+  // Auto-detect local server on startup: if currently on mock and server responds,
+  // switch to local, then run setup silently so the venv is ready.
+  useEffectApp(() => {
+    (async () => {
+      const url = (tweaks.serverUrl || "http://localhost:7878") + "/health";
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 1500);
+        const r = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        if (backendKind === "mock") {
+          switchBackend("local");
+          pushToast({ kind: "ok", title: "Server rilevato", message: "backend → local", duration: 2500 });
+        }
+        // Run setup in background after a tick so the backend switch has settled.
+        setTimeout(async () => {
+          const backend = window.PGEBackend.current;
+          if (backend.setup) {
+            logToTerminal("[auto-setup] checking engine venv…", "");
+            await backend.setup(ev => {
+              if (ev.type === "log" && ev.line != null) logToTerminal(ev.line, "");
+            });
+            logToTerminal("[auto-setup] done", "ok");
+          }
+        }, 100);
+      } catch {}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Boot diagnostic — once per session, log a summary to console + terminal
   // so the first thing visible during a smoke test is a clear picture of
   // what's working. Runs after a tick so the engines have time to attach.

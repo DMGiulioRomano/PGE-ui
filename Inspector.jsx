@@ -163,6 +163,53 @@ function DephaseSection({ stream, onChange }) {
   );
 }
 
+function SamplePickerMenu({ current, onPick }) {
+  const { Icon } = window.PGE;
+  const [open, setOpen] = React.useState(false);
+  const [files, setFiles] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  async function handleOpen() {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    if (files !== null) return;
+    setLoading(true);
+    try {
+      const result = await window.PGEBackend.current.fs.listDir("media");
+      setFiles(result.files || []);
+    } catch (e) {
+      console.error("[SamplePickerMenu] listDir failed:", e);
+      setFiles([]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{position:"relative", display:"inline-block"}}>
+      <button className="pge-icon-btn" title="change sample" onClick={handleOpen}>
+        <Icon name="chevronDown" size={11} />
+      </button>
+      {open ? (
+        <div className="add-param-menu" style={{right:0, left:"auto", minWidth:180, maxHeight:220, overflowY:"auto"}}
+             onMouseLeave={() => setOpen(false)}>
+          {loading ? (
+            <div className="add-param-item" style={{color:"var(--fg-4)"}}>loading…</div>
+          ) : files && files.length === 0 ? (
+            <div className="add-param-item" style={{color:"var(--fg-4)"}}>no media files found</div>
+          ) : (files || []).map(f => (
+            <button key={f.name} className="add-param-item"
+                    style={f.name === current ? {color:"var(--accent)"} : {}}
+                    onClick={() => { onPick(f.name); setOpen(false); }}>
+              <span className="k" style={{fontFamily:"var(--mono)", fontSize:10}}>{f.name}</span>
+              {f.duration ? <span className="desc">{f.duration.toFixed(2)}s</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Inspector({ stream, onChange, onClose, tab, onTab }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
@@ -295,7 +342,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
               <div className="pge-prow">
                 <span className="k">sample</span><span />
                 <span className="v" style={{color:"var(--accent)"}}>{stream.sample}</span>
-                <button className="pge-icon-btn" title="change sample"><Icon name="chevronDown" size={11} /></button>
+                <SamplePickerMenu current={stream.sample} onPick={(name) => onChange({sample: name})} />
               </div>
             </Section>
 
