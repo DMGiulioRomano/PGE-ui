@@ -121,6 +121,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .lanes-body { overflow: auto; min-width: 0; min-height: 0; position: relative; background: var(--bg-grid); }
 .ruler { height: 28px; position: sticky; top: 0; background: var(--bg-grid); border-bottom: 1px solid var(--border-default); z-index: 2; }
 .lanes-area { padding-top: 0; }
+.lanes-area.sample-drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; background: rgba(255,140,66,.06); }
 .lanes-grid { position: absolute; inset: 0 0 0 0; pointer-events: none; z-index: 0; }
 .lanes-grid .gline { position: absolute; top: 0; bottom: 0; width: 1px; background: #1A1C20; }
 .lanes-grid .gline.major { background: #23262C; }

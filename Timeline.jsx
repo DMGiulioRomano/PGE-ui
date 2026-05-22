@@ -57,6 +57,8 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
   const [hoverX, setHoverX] = useStateTL(null);
   const [hint, setHint] = useStateTL(null);
   const [dragOver, setDragOver] = useStateTL(null);
+  const [sampleDragOver, setSampleDragOver] = useStateTL(false);
+  const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
 
@@ -214,11 +216,30 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
 
   function onEmptyDrop(e) {
     e.preventDefault();
+    dragEnterCount.current = 0;
+    setSampleDragOver(false);
     const sample = e.dataTransfer.getData("text/sample");
     if (!sample) return;
     const rect = bodyRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left + bodyRef.current.scrollLeft;
     onCreateStream && onCreateStream({ sample, onset: +(x / PX_PER_S).toFixed(2) });
+  }
+
+  function onSampleDragEnter(e) {
+    if (!e.dataTransfer.types.includes("text/sample")) return;
+    dragEnterCount.current++;
+    setSampleDragOver(true);
+  }
+
+  function onSampleDragLeave(e) {
+    dragEnterCount.current--;
+    if (dragEnterCount.current <= 0) { dragEnterCount.current = 0; setSampleDragOver(false); }
+  }
+
+  function onSampleDragOver(e) {
+    if (!e.dataTransfer.types.includes("text/sample")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
   }
 
   // Lock track-heads to lanes via transform — body owns vertical scroll,
@@ -354,8 +375,11 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
             <div className="head-flag" />
           </div>
         </div>
-        <div className="lanes-area" style={{ width: renderSec * PX_PER_S }}
-             onDragOver={(e) => e.preventDefault()}
+        <div className={"lanes-area" + (sampleDragOver ? " sample-drag-over" : "")}
+             style={{ width: renderSec * PX_PER_S }}
+             onDragEnter={onSampleDragEnter}
+             onDragLeave={onSampleDragLeave}
+             onDragOver={onSampleDragOver}
              onDrop={onEmptyDrop}>
           <div className="lanes-grid" aria-hidden="true">
             {ticks.map((t) => (
@@ -363,7 +387,7 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
             ))}
           </div>
           {streams.map((s, i) =>
-          <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onLaneDrop(e, i)}
+          <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
           onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}>
               <div className={"clip" + (s.id === selected ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
