@@ -691,7 +691,29 @@ def main():
     print(f"Open in browser:  http://{args.host}:{args.port}/")
     print(f"  (gear → Backend → local → server URL http://{args.host}:{args.port})")
     print(f"")
-    app.run(host=args.host, port=args.port, threaded=True)
+    from gunicorn.app.base import BaseApplication
+
+    class _StandaloneApp(BaseApplication):
+        def __init__(self, wsgi_app, options=None):
+            self.options = options or {}
+            self.application = wsgi_app
+            super().__init__()
+
+        def load_config(self):
+            for key, value in self.options.items():
+                self.cfg.set(key, value)
+
+        def load(self):
+            return self.application
+
+    _StandaloneApp(app, {
+        "bind": f"{args.host}:{args.port}",
+        "workers": 1,
+        "worker_class": "gthread",
+        "threads": 4,
+        "accesslog": "-",
+        "loglevel": "warning",
+    }).run()
 
 
 if __name__ == "__main__":

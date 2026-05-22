@@ -869,7 +869,8 @@ function App() {
     <Inspector stream={selected() || null}
                onChange={(p) => selectedId && updateStream(selectedId, p)}
                onClose={closeInspector}
-               tab={inspectorTab} onTab={setInspectorTab} />
+               tab={inspectorTab} onTab={setInspectorTab}
+               samples={mediaList.files} />
   ) : null;
 
   return (
