@@ -70,9 +70,89 @@ function Switch({ value, onChange, label }) {
 function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
+  const [stepMenu, setStepMenu] = useState(null);
+  const [hoveredStep, setHoveredStep] = useState(null);
+  const [activeStep, setActiveStep] = useState(null);
+  const hoverTimerRef = useRef(null);
+  const activeStepRef = useRef(null);
+  const valueRef = useRef(value);
+  const lastYRef = useRef(null);
+  const accPxRef = useRef(0);
+  const STEPS = [0.01, 0.1, 1, 10];
+  const PX_PER_STEP = 3;
+
+  useEffect(() => { setDraft(String(value)); valueRef.current = value; }, [value]);
+
+  function stepEnter(s) {
+    setHoveredStep(s);
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      setActiveStep(s);
+      activeStepRef.current = s;
+      accPxRef.current = 0;
+      hoverTimerRef.current = null;
+    }, 500);
+  }
+
+  function stepLeave() {
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+    setHoveredStep(null);
+    setActiveStep(null);
+    activeStepRef.current = null;
+  }
+
+  function onRightDown(e) {
+    if (e.button !== 2) return;
+    e.preventDefault();
+    setStepMenu({ x: e.clientX, y: e.clientY });
+    setHoveredStep(null);
+    setActiveStep(null);
+    activeStepRef.current = null;
+    lastYRef.current = e.clientY;
+    accPxRef.current = 0;
+    window.PGEHistory && window.PGEHistory.beginGesture();
+
+    function onMove(ev) {
+      const step = activeStepRef.current;
+      if (step !== null) {
+        const dy = lastYRef.current - ev.clientY;
+        accPxRef.current += dy;
+        const steps = Math.trunc(accPxRef.current / PX_PER_STEP);
+        if (steps !== 0) {
+          accPxRef.current -= steps * PX_PER_STEP;
+          const raw = valueRef.current + steps * step;
+          const dec = step < 1 ? (step.toString().split('.')[1] || '').length : 0;
+          const rounded = parseFloat(raw.toFixed(Math.min(dec, 10)));
+          valueRef.current = rounded;
+          onChange && onChange(rounded);
+        }
+      }
+      lastYRef.current = ev.clientY;
+    }
+
+    function onUp(ev) {
+      if (ev.button !== 2) return;
+      setStepMenu(null);
+      setHoveredStep(null);
+      setActiveStep(null);
+      activeStepRef.current = null;
+      if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+      window.PGEHistory && window.PGEHistory.endGesture();
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   return (
-    <span className={"pge-field" + (focus || editing ? " focus" : "") + (accent ? " accent" : "")} style={{ width }}>
+    <span
+      className={"pge-field" + (focus || editing ? " focus" : "") + (accent ? " accent" : "")}
+      style={{ width }}
+      onContextMenu={(e) => e.preventDefault()}
+      onMouseDown={onRightDown}
+    >
       {editing ?
       <input
         autoFocus
@@ -80,11 +160,21 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {setEditing(false);onChange && onChange(parseFloat(draft) || 0);}}
         onKeyDown={(e) => {if (e.key === "Enter") e.target.blur();if (e.key === "Escape") {setDraft(String(value));setEditing(false);}}} /> :
-
-
-      <span className="val" onDoubleClick={() => setEditing(true)}>{value}</span>
+      <span className="val" onClick={() => setEditing(true)}>{value}</span>
       }
       {unit ? <span className="unit">{unit}</span> : null}
+      {stepMenu ? (
+        <span className="pge-step-menu" style={{ left: stepMenu.x - 88, top: stepMenu.y + 8 }}>
+          {STEPS.map((s) => (
+            <span
+              key={s}
+              className={"pge-step-cell" + (hoveredStep === s ? " hovered" : "") + (activeStep === s ? " active" : "")}
+              onMouseEnter={() => stepEnter(s)}
+              onMouseLeave={stepLeave}
+            >{s}</span>
+          ))}
+        </span>
+      ) : null}
     </span>);
 
 }
@@ -112,7 +202,7 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
 }
 
 /* ---------- Parameter Row ---------- */
-function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue }) {
+function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue }) {
   // Build polyline points from envValue (array of [x, y] OR mixed with compact blocks).
   // For loops, expand via PGEEnv to the actual point sequence.
   let pts = "0,12 25,9 50,4 75,7 100,11";
@@ -145,7 +235,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
       <span />}
       {mode === "scalar" || !envValue ?
       <span className="v">
-          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
+          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
           {range ? <span className="range">±{range}</span> : null}
         </span> :
 

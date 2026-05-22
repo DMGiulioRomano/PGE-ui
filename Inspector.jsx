@@ -118,7 +118,8 @@ function DephaseSection({ stream, onChange }) {
                   value={Array.isArray(d) ? "—" : d}
                   unit={Array.isArray(d) ? "" : "%"}
                   accent={Array.isArray(d)}
-                  envValue={Array.isArray(d) ? d : null} />
+                  envValue={Array.isArray(d) ? d : null}
+                  onValue={(v) => onChange({dephase: v})} />
       ) : null}
 
       {mode === "perParam" ? (
@@ -286,9 +287,11 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
                 <span />
               </div>
               <ParamRow name="onset" mode="scalar" value={stream.onset} unit="s"
-                onSelect={() => setSelRow("onset")} selected={selRow==="onset"} />
+                onSelect={() => setSelRow("onset")} selected={selRow==="onset"}
+                onValue={(v) => onChange({onset: v})} />
               <ParamRow name="duration" mode="scalar" value={stream.duration} unit="s"
-                onSelect={() => setSelRow("duration")} selected={selRow==="duration"} />
+                onSelect={() => setSelRow("duration")} selected={selRow==="duration"}
+                onValue={(v) => onChange({duration: v})} />
               <div className="pge-prow">
                 <span className="k">sample</span><span />
                 <span className="v" style={{color:"var(--accent)"}}>{stream.sample}</span>
@@ -381,21 +384,24 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
               </div>
               {stream.fillFactor != null ? (
                 <ParamRow name="fill_factor" mode="scalar" value={stream.fillFactor} unit="×"
-                  onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"} />
+                  onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"}
+                  onValue={(v) => onChange({fillFactor: v})} />
               ) : (
                 <ParamRow name="density"
                           mode={getMode("density")} onMode={(m) => toggleMode("density", m)}
                           value={stream.density != null ? stream.density : "—"} unit={stream.densityEnv ? "" : "g/s"}
                           accent={stream.densityEnv != null}
                           envValue={stream.densityEnv}
-                          onSelect={() => setSelRow("density")} selected={selRow==="density"} />
+                          onSelect={() => setSelRow("density")} selected={selRow==="density"}
+                          onValue={(v) => onChange({density: v})} />
               )}
               <ParamRow name="distribution"
                         mode={getMode("distribution")} onMode={(m) => toggleMode("distribution", m)}
                         value={stream.distribution != null ? stream.distribution : "—"}
                         accent={stream.distributionEnv != null}
                         envValue={stream.distributionEnv}
-                        onSelect={() => setSelRow("distribution")} selected={selRow==="distribution"} />
+                        onSelect={() => setSelRow("distribution")} selected={selRow==="distribution"}
+                        onValue={(v) => onChange({distribution: v})} />
               <div className="pge-prow hint" style={{paddingTop:0}}>
                 <span className="k" />
                 <span />
@@ -412,14 +418,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
                         value={stream.pointer.speedRatio != null ? stream.pointer.speedRatio : "—"} unit="×"
                         accent={stream.pointer.speedRatioEnv != null}
                         envValue={stream.pointer.speedRatioEnv}
-                        onSelect={() => setSelRow("speed")} selected={selRow==="speed"} />
+                        onSelect={() => setSelRow("speed")} selected={selRow==="speed"}
+                        onValue={(v) => onChange({pointer: {...stream.pointer, speedRatio: v}})} />
               <ParamRow name="start" mode="scalar"
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
-                        onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"} />
+                        onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
+                        onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
               {(stream.pointer.loopStart != null || stream.pointer.loopEnd != null || stream.pointer.loopDur != null || stream.pointer.loopUnit != null) ? (
                 <>
                   <ParamRow name="loop_start" mode="scalar"
-                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : 0} unit="s" />
+                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : 0} unit="s"
+                            onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: v}})} />
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
@@ -501,7 +510,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
                         range={stream.grain.durationRange}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
-                        onSelect={() => setSelRow("grain.dur")} selected={selRow==="grain.dur"} />
+                        onSelect={() => setSelRow("grain.dur")} selected={selRow==="grain.dur"}
+                        onValue={(v) => onChange({grain: {...stream.grain, duration: v}})} />
               <window.PGE.EnvelopeSelectorRow
                 value={stream.grain.envelope}
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}
@@ -551,27 +561,34 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
               </div>
               {stream.pitch.ratio != null && stream.pitch.semitones == null ? (
                 <ParamRow name="ratio" mode="scalar" value={stream.pitch.ratio} unit="×" range={stream.pitch.range}
-                  onSelect={() => setSelRow("pitch.ratio")} selected={selRow==="pitch.ratio"} />
+                  onSelect={() => setSelRow("pitch.ratio")} selected={selRow==="pitch.ratio"}
+                  onValue={(v) => onChange({pitch: {...stream.pitch, ratio: v}})} />
               ) : (
                 <ParamRow name="semitones" mode="scalar" value={stream.pitch.semitones != null ? stream.pitch.semitones : 0} unit="st" range={stream.pitch.range}
-                  onSelect={() => setSelRow("pitch.semi")} selected={selRow==="pitch.semi"} />
+                  onSelect={() => setSelRow("pitch.semi")} selected={selRow==="pitch.semi"}
+                  onValue={(v) => onChange({pitch: {...stream.pitch, semitones: v}})} />
               )}
               <ParamRow name="range" mode="scalar" value={stream.pitch.range != null ? stream.pitch.range : 0}
-                        unit={stream.pitch.ratio != null && stream.pitch.semitones == null ? "" : "st"} />
+                        unit={stream.pitch.ratio != null && stream.pitch.semitones == null ? "" : "st"}
+                        onValue={(v) => onChange({pitch: {...stream.pitch, range: v}})} />
             </Section>
 
             <Section title="Volume & Pan">
               <ParamRow name="volume" mode="scalar" value={stream.volume} unit="dB" range={stream.volumeRange}
-                onSelect={() => setSelRow("vol")} selected={selRow==="vol"} />
-              <ParamRow name="volume_range" mode="scalar" value={stream.volumeRange != null ? stream.volumeRange : 0} unit="dB" />
+                onSelect={() => setSelRow("vol")} selected={selRow==="vol"}
+                onValue={(v) => onChange({volume: v})} />
+              <ParamRow name="volume_range" mode="scalar" value={stream.volumeRange != null ? stream.volumeRange : 0} unit="dB"
+                onValue={(v) => onChange({volumeRange: v})} />
               <ParamRow name="pan"
                         mode={getMode("pan")} onMode={(m) => toggleMode("pan", m)}
                         value={stream.pan != null ? stream.pan : "—"} unit={stream.panEnv ? "" : "°"}
                         range={stream.panRange}
                         accent={stream.panEnv != null}
                         envValue={stream.panEnv}
-                        onSelect={() => setSelRow("pan")} selected={selRow==="pan"} />
-              <ParamRow name="pan_range" mode="scalar" value={stream.panRange != null ? stream.panRange : 0} unit="°" />
+                        onSelect={() => setSelRow("pan")} selected={selRow==="pan"}
+                        onValue={(v) => onChange({pan: v})} />
+              <ParamRow name="pan_range" mode="scalar" value={stream.panRange != null ? stream.panRange : 0} unit="°"
+                onValue={(v) => onChange({panRange: v})} />
             </Section>
 
             <DephaseSection stream={stream} onChange={onChange} />

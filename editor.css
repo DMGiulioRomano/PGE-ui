@@ -322,6 +322,14 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-field.focus { border-color: var(--accent); }
 .pge-field.accent { color: var(--accent); }
 .pge-field input { background: transparent; border: 0; color: inherit; font: inherit; width: 100%; padding: 0; outline: 0; }
+.pge-field .val { cursor: text; }
+
+/* ---------- Step menu (right-click drag on NumberField) ---------- */
+.pge-step-menu { position: fixed; display: flex; flex-direction: row; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 3px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 9999; user-select: none; pointer-events: all; }
+.pge-step-cell { width: 44px; height: 30px; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); border-right: 1px solid var(--border-subtle); cursor: ns-resize; transition: background 0.1s, color 0.1s; }
+.pge-step-cell:last-child { border-right: 0; }
+.pge-step-cell.hovered { background: var(--bg-panel); color: var(--fg-1); }
+.pge-step-cell.active { background: var(--accent); color: #000; }
 
 /* ---------- Tag ---------- */
 .pge-tag { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); padding: 1px 6px; border: 1px solid var(--border-default); border-radius: 2px; }
