@@ -162,12 +162,22 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
     window.addEventListener('mouseup', onUp);
   }
 
+  function onFieldClick(e) {
+    if (editing) return;
+    const t = (window.PGE_TWEAKS && window.PGE_TWEAKS.stepMenuTrigger) || "rightClick";
+    if (t === "shiftLeft" && e.shiftKey) return;
+    if (t === "ctrlLeft" && e.ctrlKey) return;
+    if (t === "altLeft" && e.altKey) return;
+    setEditing(true);
+  }
+
   return (
     <span
       className={"pge-field" + (focus || editing ? " focus" : "") + (accent ? " accent" : "")}
       style={{ width }}
       onContextMenu={(e) => e.preventDefault()}
       onMouseDown={onRightDown}
+      onClick={onFieldClick}
     >
       {editing ?
       <input
@@ -176,13 +186,7 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {setEditing(false);onChange && onChange(parseFloat(draft) || 0);}}
         onKeyDown={(e) => {if (e.key === "Enter") e.target.blur();if (e.key === "Escape") {setDraft(String(value));setEditing(false);}}} /> :
-      <span className="val" onClick={(e) => {
-        const t = (window.PGE_TWEAKS && window.PGE_TWEAKS.stepMenuTrigger) || "rightClick";
-        if (t === "shiftLeft" && e.shiftKey) return;
-        if (t === "ctrlLeft" && e.ctrlKey) return;
-        if (t === "altLeft" && e.altKey) return;
-        setEditing(true);
-      }}>{value}</span>
+      <span className="val">{value}</span>
       }
       {unit ? <span className="unit">{unit}</span> : null}
       {stepMenu ? (

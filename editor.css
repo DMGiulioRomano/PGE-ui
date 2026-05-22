@@ -323,7 +323,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-field.focus { border-color: var(--accent); }
 .pge-field.accent { color: var(--accent); }
 .pge-field input { background: transparent; border: 0; color: inherit; font: inherit; width: 100%; padding: 0; outline: 0; }
-.pge-field .val { cursor: text; }
+.pge-field { cursor: text; }
+.pge-field .val { cursor: inherit; }
 
 /* ---------- Step menu (right-click drag on NumberField) ---------- */
 .pge-step-menu { position: fixed; display: flex; flex-direction: row; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 3px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 9999; user-select: none; pointer-events: all; }
