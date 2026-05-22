@@ -541,6 +541,8 @@ body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !
   box-sizing: border-box;
 }
 .sp-input:focus { outline: none; border-color: var(--accent); }
+.sp-select { background: var(--bg-panel); border: 1px solid var(--border-default); border-radius: 2px; padding: 4px 8px; color: var(--fg-1); font-size: 11px; font-family: var(--mono, JetBrains Mono, ui-monospace, monospace); width: 100%; box-sizing: border-box; }
+.sp-select:focus { outline: none; border-color: var(--accent); }
 
 .sp-btn {
   appearance: none;

@@ -30,7 +30,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "renderPreclean": false,
   "terminalOpen": false,
   "terminalHeight": 220,
-  "shortcutInspector": "cmd+i"
+  "shortcutInspector": "cmd+i",
+  "stepMenuTrigger": "rightClick"
 }/*EDITMODE-END*/;
 
 const PROJECTS_DB = {

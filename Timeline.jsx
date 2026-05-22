@@ -57,6 +57,8 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
   const [hoverX, setHoverX] = useStateTL(null);
   const [hint, setHint] = useStateTL(null);
   const [dragOver, setDragOver] = useStateTL(null);
+  const [sampleDragOver, setSampleDragOver] = useStateTL(false);
+  const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
 
@@ -214,11 +216,30 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
 
   function onEmptyDrop(e) {
     e.preventDefault();
+    dragEnterCount.current = 0;
+    setSampleDragOver(false);
     const sample = e.dataTransfer.getData("text/sample");
     if (!sample) return;
     const rect = bodyRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left + bodyRef.current.scrollLeft;
     onCreateStream && onCreateStream({ sample, onset: +(x / PX_PER_S).toFixed(2) });
+  }
+
+  function onSampleDragEnter(e) {
+    if (!e.dataTransfer.types.includes("text/sample")) return;
+    dragEnterCount.current++;
+    setSampleDragOver(true);
+  }
+
+  function onSampleDragLeave(e) {
+    dragEnterCount.current--;
+    if (dragEnterCount.current <= 0) { dragEnterCount.current = 0; setSampleDragOver(false); }
+  }
+
+  function onSampleDragOver(e) {
+    if (!e.dataTransfer.types.includes("text/sample")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
   }
 
   // Lock track-heads to lanes via transform — body owns vertical scroll,
@@ -354,8 +375,11 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
             <div className="head-flag" />
           </div>
         </div>
-        <div className="lanes-area" style={{ width: renderSec * PX_PER_S }}
-             onDragOver={(e) => e.preventDefault()}
+        <div className={"lanes-area" + (sampleDragOver ? " sample-drag-over" : "")}
+             style={{ width: renderSec * PX_PER_S }}
+             onDragEnter={onSampleDragEnter}
+             onDragLeave={onSampleDragLeave}
+             onDragOver={onSampleDragOver}
              onDrop={onEmptyDrop}>
           <div className="lanes-grid" aria-hidden="true">
             {ticks.map((t) => (
@@ -363,14 +387,14 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
             ))}
           </div>
           {streams.map((s, i) =>
-          <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onLaneDrop(e, i)}
+          <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
           onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}>
               <div className={"clip" + (s.id === selected ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
                 <div className="lbl">{s.id} · {s.sample}</div>
-                <div className="metaline">d:{s.density ?? "ff " + s.fillFactor} · {s.voices.num}v</div>
+                <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 {showWaveforms !== false ?
               <svg className="wave" viewBox="0 0 240 22" preserveAspectRatio="none">
                     <path fill="rgba(255,255,255,.55)" d="M0,11 L8,5 16,17 24,8 32,15 40,4 48,18 56,9 64,16 72,3 80,18 88,11 96,15 104,7 112,17 120,5 128,19 136,10 144,16 152,8 160,17 168,4 176,18 184,11 192,15 200,7 208,17 216,5 224,18 232,11 240,11 240,11 0,11" />

@@ -88,8 +88,8 @@ function VoicesSection({ stream, onChange }) {
     <Section title="Voices"
              badge={<span className="mono">{N} voice{N>1?"s":""}</span>}
              defaultOpen={true}>
-      <ParamRow name="num_voices" mode="scalar" value={N} />
-      <ParamRow name="scatter" mode="scalar" value={v.scatter != null ? v.scatter : 0} unit="" />
+      <ParamRow name="num_voices" mode="scalar" value={N} onValue={x => update({ num: Math.max(1, Math.round(x)) })} />
+      <ParamRow name="scatter" mode="scalar" value={v.scatter != null ? v.scatter : 0} unit="" onValue={x => update({ scatter: x })} />
       <div className="voice-help">voice 0 is reference (all offsets = 0). additional voices receive offsets from each strategy below. scatter ∈ [0,1] randomizes per-voice timing.</div>
 
       <div className="voice-substack">

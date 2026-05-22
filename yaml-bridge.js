@@ -45,10 +45,18 @@
 
   /* ---------- envelope helpers ---------- */
 
+  function isEnvObject(v) {
+    // Object-form envelope: { points: [...], time_unit?, type?, … }
+    // See envelope-loops.js isTypedEnv and engine YAMLs that use
+    // `{time_unit: ..., points: [...]}` syntax.
+    return v && typeof v === "object" && !Array.isArray(v) && Array.isArray(v.points);
+  }
+
   function pickValueOrEnv(scalar, env) {
     // Editor stores either a scalar OR an envelope (the other is null).
     // YAML expects a single field. Prefer the envelope when it has content.
     if (Array.isArray(env) && env.length) return env;
+    if (isEnvObject(env)) return env;
     if (scalar != null) return scalar;
     return undefined;
   }
@@ -58,7 +66,11 @@
     // Returns { scalar, env } with exactly one of them set.
     // Loop entries (5-tuples with nested breakpoints) and plain breakpoint
     // arrays both arrive here as Arrays — they are routed to `env`.
+    // Object-form envelopes ({time_unit, points} / {type, points}) also go to env.
     if (Array.isArray(yamlVal)) {
+      return { scalar: null, env: yamlVal };
+    }
+    if (isEnvObject(yamlVal)) {
       return { scalar: null, env: yamlVal };
     }
     if (typeof yamlVal === "number" || typeof yamlVal === "string" || yamlVal == null) {
@@ -147,15 +159,18 @@
     if (nonZero(s.volumeRange)) y.volume_range = s.volumeRange;
 
     const v = s.voices || {};
+    const numOut = pickValueOrEnv(v.num, v.numEnv);
     const hasVoiceCfg =
-      (v.num != null && v.num !== 1) ||
-      v.pitch || v.onsetOffset || v.pointer || v.pan;
+      (numOut !== undefined && numOut !== 1) ||
+      v.scatter != null ||
+      v.pitch || v.onset_offset || v.pointer || v.pan;
     if (hasVoiceCfg) {
-      const vy = { num_voices: v.num || 1 };
-      if (v.pitch)        vy.pitch        = v.pitch;
-      if (v.onsetOffset)  vy.onset_offset = v.onsetOffset;
-      if (v.pointer)      vy.pointer      = v.pointer;
-      if (v.pan)          vy.pan          = v.pan;
+      const vy = { num_voices: numOut !== undefined ? numOut : 1 };
+      if (v.scatter != null)  vy.scatter      = v.scatter;
+      if (v.pitch)            vy.pitch        = v.pitch;
+      if (v.onset_offset)     vy.onset_offset = v.onset_offset;
+      if (v.pointer)          vy.pointer      = v.pointer;
+      if (v.pan)              vy.pan          = v.pan;
       y.voices = vy;
     }
 
@@ -261,13 +276,18 @@
         semitones: y.pitch?.semitones ?? 0,
         range:     y.pitch?.range || 0,
       },
-      voices: {
-        num: y.voices?.num_voices || 1,
-        pitch:       y.voices?.pitch,
-        onsetOffset: y.voices?.onset_offset,
-        pointer:     y.voices?.pointer,
-        pan:         y.voices?.pan,
-      },
+      voices: (() => {
+        const nv = unpackValueOrEnv(y.voices?.num_voices);
+        return {
+          num:          nv.scalar != null ? nv.scalar : (nv.env ? null : 1),
+          numEnv:       nv.env,
+          scatter:      y.voices?.scatter ?? null,
+          pitch:        y.voices?.pitch,
+          onset_offset: y.voices?.onset_offset,
+          pointer:      y.voices?.pointer,
+          pan:          y.voices?.pan,
+        };
+      })(),
       dephase: y.dephase ?? undefined,
     };
     if (Object.keys(extras).length) out._extra = extras;
@@ -280,6 +300,17 @@
     if (!window.jsyaml) throw new Error("js-yaml not loaded");
     const y = window.jsyaml.load(text) || {};
     const streams = Array.isArray(y.streams) ? y.streams.map((s, i) => streamFromYaml(s, i)) : [];
+    // Dedupe stream ids — some engine configs have duplicate stream_id values,
+    // which would break React keys + selection. Suffix collisions with #2, #3…
+    {
+      const seen = new Map();
+      for (const s of streams) {
+        const base = s.id;
+        const n = (seen.get(base) || 0) + 1;
+        seen.set(base, n);
+        if (n > 1) s.id = base + "#" + n;
+      }
+    }
 
     const extras = {};
     for (const k of Object.keys(y)) {

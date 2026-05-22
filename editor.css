@@ -121,6 +121,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .lanes-body { overflow: auto; min-width: 0; min-height: 0; position: relative; background: var(--bg-grid); }
 .ruler { height: 28px; position: sticky; top: 0; background: var(--bg-grid); border-bottom: 1px solid var(--border-default); z-index: 2; }
 .lanes-area { padding-top: 0; }
+.lanes-area.sample-drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; background: rgba(255,140,66,.06); }
 .lanes-grid { position: absolute; inset: 0 0 0 0; pointer-events: none; z-index: 0; }
 .lanes-grid .gline { position: absolute; top: 0; bottom: 0; width: 1px; background: #1A1C20; }
 .lanes-grid .gline.major { background: #23262C; }
@@ -322,6 +323,15 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-field.focus { border-color: var(--accent); }
 .pge-field.accent { color: var(--accent); }
 .pge-field input { background: transparent; border: 0; color: inherit; font: inherit; width: 100%; padding: 0; outline: 0; }
+.pge-field { cursor: text; }
+.pge-field .val { cursor: inherit; }
+
+/* ---------- Step menu (right-click drag on NumberField) ---------- */
+.pge-step-menu { position: fixed; display: flex; flex-direction: row; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 3px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.5); z-index: 9999; user-select: none; pointer-events: all; }
+.pge-step-cell { width: 44px; height: 30px; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); border-right: 1px solid var(--border-subtle); cursor: ns-resize; transition: background 0.1s, color 0.1s; }
+.pge-step-cell:last-child { border-right: 0; }
+.pge-step-cell.hovered { background: var(--bg-panel); color: var(--fg-1); }
+.pge-step-cell.active { background: var(--accent); color: #000; }
 
 /* ---------- Tag ---------- */
 .pge-tag { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); padding: 1px 6px; border: 1px solid var(--border-default); border-radius: 2px; }
