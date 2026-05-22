@@ -82,6 +82,31 @@ function buildLines(stream, sampleRec) {
       });
     }
   }
+
+  const vo = stream.voices || {};
+  const voNum = vo.num_voices || vo.num || 1;
+  const hasVoices = voNum > 1 || vo.scatter != null || vo.pitch || vo.onset_offset || vo.pointer || vo.pan;
+  if (hasVoices) {
+    push({ ind: 0, kind: "block", key: "voices" });
+    push({ ind: 1, kind: "v", key: "num_voices", val: String(voNum) });
+    if (vo.scatter != null) push({ ind: 1, kind: "v", key: "scatter", val: fmtNum(vo.scatter) });
+    const vDims = [
+      { key: "pitch",        data: vo.pitch },
+      { key: "onset_offset", data: vo.onset_offset },
+      { key: "pointer",      data: vo.pointer },
+      { key: "pan",          data: vo.pan },
+    ];
+    for (const { key, data } of vDims) {
+      if (!data || typeof data !== "object") continue;
+      push({ ind: 1, kind: "block", key });
+      for (const [k, val] of Object.entries(data)) {
+        if (val == null) continue;
+        push({ ind: 2, kind: typeof val === "string" ? "r" : "v", key: k,
+               val: typeof val === "number" ? fmtNum(val) : String(val) });
+      }
+    }
+  }
+
   return lines;
 }
 

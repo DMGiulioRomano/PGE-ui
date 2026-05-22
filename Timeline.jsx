@@ -394,7 +394,7 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
             onPointerDown={(e) => onPointerDown(e, s, "drag")}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
                 <div className="lbl">{s.id} · {s.sample}</div>
-                <div className="metaline">d:{s.density ?? "ff " + s.fillFactor} · {s.voices.num}v</div>
+                <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 {showWaveforms !== false ?
               <svg className="wave" viewBox="0 0 240 22" preserveAspectRatio="none">
                     <path fill="rgba(255,255,255,.55)" d="M0,11 L8,5 16,17 24,8 32,15 40,4 48,18 56,9 64,16 72,3 80,18 88,11 96,15 104,7 112,17 120,5 128,19 136,10 144,16 152,8 160,17 168,4 176,18 184,11 192,15 200,7 208,17 216,5 224,18 232,11 240,11 240,11 0,11" />
