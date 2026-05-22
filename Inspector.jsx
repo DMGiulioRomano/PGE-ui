@@ -210,7 +210,7 @@ function SamplePickerMenu({ current, onPick }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, tab, onTab }) {
+function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
@@ -301,7 +301,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab }) {
     }
   }
 
-  const sampleDur = (window.PGE_DATA.samples.find(s => s.name === stream.sample) || {}).duration;
+  const _sampleList = samples && samples.length ? samples : window.PGE_DATA.samples;
+  const sampleDur = (_sampleList.find(s => s.name === stream.sample) || {}).duration;
   const sampleMissing = !sampleDur;
 
   return (
