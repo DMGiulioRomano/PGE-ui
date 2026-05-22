@@ -168,11 +168,13 @@ function SamplePickerMenu({ current, onPick }) {
   const [open, setOpen] = React.useState(false);
   const [files, setFiles] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const inputRef = React.useRef(null);
 
   async function handleOpen() {
-    if (open) { setOpen(false); return; }
+    if (open) { setOpen(false); setQuery(""); return; }
     setOpen(true);
-    if (files !== null) return;
+    if (files !== null) { setTimeout(() => inputRef.current && inputRef.current.focus(), 0); return; }
     setLoading(true);
     try {
       const result = await window.PGEBackend.current.fs.listDir("media");
@@ -182,7 +184,12 @@ function SamplePickerMenu({ current, onPick }) {
       setFiles([]);
     }
     setLoading(false);
+    setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
   }
+
+  const filtered = (files || []).filter(f =>
+    f.name.toLowerCase().includes(query.toLowerCase())
+  );
 
   return (
     <div style={{position:"relative", display:"inline-block"}}>
@@ -190,20 +197,40 @@ function SamplePickerMenu({ current, onPick }) {
         <Icon name="chevronDown" size={11} />
       </button>
       {open ? (
-        <div className="add-param-menu" style={{right:0, left:"auto", minWidth:180, maxHeight:220, overflowY:"auto"}}
-             onMouseLeave={() => setOpen(false)}>
-          {loading ? (
-            <div className="add-param-item" style={{color:"var(--fg-4)"}}>loading…</div>
-          ) : files && files.length === 0 ? (
-            <div className="add-param-item" style={{color:"var(--fg-4)"}}>no media files found</div>
-          ) : (files || []).map(f => (
-            <button key={f.name} className="add-param-item"
-                    style={f.name === current ? {color:"var(--accent)"} : {}}
-                    onClick={() => { onPick(f.name); setOpen(false); }}>
-              <span className="k" style={{fontFamily:"var(--mono)", fontSize:10}}>{f.name}</span>
-              {f.duration ? <span className="desc">{f.duration.toFixed(2)}s</span> : null}
-            </button>
-          ))}
+        <div className="add-param-menu" style={{right:0, left:"auto", minWidth:200}}
+             onMouseLeave={() => { setOpen(false); setQuery(""); }}>
+          <div style={{padding:"4px 6px", borderBottom:"1px solid var(--border)"}}>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === "Escape") { setOpen(false); setQuery(""); } }}
+              placeholder="cerca…"
+              style={{
+                width:"100%", boxSizing:"border-box",
+                background:"var(--bg-2)", color:"var(--fg-1)",
+                border:"1px solid var(--border)", borderRadius:3,
+                padding:"2px 5px", fontSize:10, fontFamily:"var(--mono)",
+                outline:"none",
+              }}
+            />
+          </div>
+          <div style={{maxHeight:200, overflowY:"auto"}}>
+            {loading ? (
+              <div className="add-param-item" style={{color:"var(--fg-4)"}}>loading…</div>
+            ) : filtered.length === 0 ? (
+              <div className="add-param-item" style={{color:"var(--fg-4)"}}>
+                {files && files.length === 0 ? "no media files found" : "nessun risultato"}
+              </div>
+            ) : filtered.map(f => (
+              <button key={f.name} className="add-param-item"
+                      style={f.name === current ? {color:"var(--accent)"} : {}}
+                      onClick={() => { onPick(f.name); setOpen(false); setQuery(""); }}>
+                <span className="k" style={{fontFamily:"var(--mono)", fontSize:10}}>{f.name}</span>
+                {f.duration ? <span className="desc">{f.duration.toFixed(2)}s</span> : null}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
