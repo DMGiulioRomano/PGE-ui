@@ -43,7 +43,7 @@ function gestureMatches(rule, e) {
   !!e.ctrlKey === wantCtrl;
 }
 
-function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
+function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor }) {
   const { Icon, SplitPane } = window.PGE;
@@ -196,7 +196,7 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
-      // Click (no significant movement) → open inspector. Drag → don't.
+      // Click (no significant movement) → select. Double-click handled separately.
       if (!moved) onSelect(stream.id);
     }
     window.addEventListener("pointermove", move);
@@ -346,7 +346,8 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
               height={getH(s.id)} index={i} dragOver={dragOver === i}
               onResizeStart={(e) => startResizeLane(e, s.id)}
               onReorderStart={(e) => startReorder(e, i)}
-              onSelect={() => onSelect(s.id)} onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
+              onSelect={() => onSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
+              onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
               effMuted={isEffMuted(s)} anySolo={anySolo} />
             )}
           </div>
@@ -391,7 +392,8 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
           onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}>
               <div className={"clip" + (s.id === selected ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
-            onPointerDown={(e) => onPointerDown(e, s, "drag")}>
+            onPointerDown={(e) => onPointerDown(e, s, "drag")}
+            onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
                 <div className="lbl">{s.id} · {s.sample}</div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
@@ -416,10 +418,10 @@ function Timeline({ streams, selected, onSelect, onUpdate, onReorder, playhead, 
 
 }
 
-function TrackHeader({ stream, selected, onSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
+function TrackHeader({ stream, selected, onSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
-    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }} onClick={onSelect}>
+    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }} onClick={onSelect} onDoubleClick={onDoubleSelect}>
       <div className="grip" onPointerDown={onReorderStart} onClick={(e) => e.stopPropagation()} title="drag to reorder track">
         <span /><span /><span /><span /><span /><span />
       </div>
