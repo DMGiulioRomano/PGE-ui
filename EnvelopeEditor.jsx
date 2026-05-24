@@ -304,6 +304,54 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [stream, selectedKey, selectedBP, selectedBlock]);
 
+  /* ============ Envelope model — computed before early returns so hook count is stable ============ */
+  const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
+  const isNormalized = stream ? stream.timeMode === "normalized" : false;
+  const PGEEnv = window.PGEEnv;
+  const rawEnvRaw = (stream && env) ? getNested(stream, env.path) : null;
+  const _wrap = rawEnvRaw ? PGEEnv.unwrapEnv(rawEnvRaw) : { items: [], interp: null };
+  const rawEnv = _wrap.items;
+  const globalInterp = _wrap.interp;
+  const exp = useMemoEE(() => rawEnvRaw ? PGEEnv.expandMixed(rawEnvRaw) : { blocks: [], bps: [] }, [rawEnvRaw]);
+  const blockByOrig = useMemoEE(() => {
+    const m = new Map();
+    exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
+    return m;
+  }, [exp, rawEnv]);
+  const macroZones = useMemoEE(() => {
+    const zones = [];
+    let cursor = 0;
+    let curBP = null;
+    for (let i = 0; i < rawEnv.length; i++) {
+      const it = rawEnv[i];
+      if (PGEEnv.isBreakpoint(it)) {
+        if (!curBP) {
+          curBP = { kind: "bps", indices: [], start: cursor };
+          zones.push(curBP);
+        }
+        curBP.indices.push(i);
+      } else if (PGEEnv.isCompactBlock(it)) {
+        if (curBP) {
+          curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+          cursor = curBP.end;
+          curBP = null;
+        }
+        zones.push({ kind: "loop", index: i, start: cursor, end: it[1] });
+        cursor = it[1];
+      }
+    }
+    if (curBP) {
+      curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+      cursor = curBP.end;
+    }
+    if (cursor < 1 - 1e-6) {
+      zones.push({ kind: "empty", start: cursor, end: 1 });
+    } else if (zones.length > 0) {
+      zones.push({ kind: "empty", start: 1, end: 1 });
+    }
+    return zones;
+  }, [rawEnv]);
+
   /* ============ Empty states ============ */
   if (!stream) {
     return (
@@ -325,9 +373,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
       </div>);
 
   }
-
-  const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
-  const isNormalized = stream.timeMode === "normalized";
 
   if (!env) {
     return (
@@ -357,20 +402,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
       </div>);
 
   }
-
-  /* ============ Mixed envelope model ============ */
-  const rawEnvRaw = getNested(stream, env.path);
-  const PGEEnv = window.PGEEnv;
-  const _wrap = PGEEnv.unwrapEnv(rawEnvRaw);
-  const rawEnv = _wrap.items;
-  const globalInterp = _wrap.interp;
-  const exp = useMemoEE(() => PGEEnv.expandMixed(rawEnvRaw), [rawEnvRaw]);
-  // Tag blocks with originalIdx for fast lookup
-  const blockByOrig = useMemoEE(() => {
-    const m = new Map();
-    exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
-    return m;
-  }, [exp, rawEnv]);
   const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
 
   /* ============ Layout ============ */
@@ -646,59 +677,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     next.splice(insertAt, 0, newBP);
     commit(next);
   }
-
-  /* ============ Macro zones ============
-     A macro zone is a contiguous run of items of the same kind:
-       - one zone per consecutive run of standalone breakpoints
-       - one zone per loop block
-       - a trailing "empty" zone if the last item ends before x = 1
-     Zones partition [0,1]. Each zone has:
-       start  — previous zone's end (or 0 for the first)
-       end    — last BP's t (for "bps") / block.end_time (for "loop") / 1 (for "empty")
-       kind   — "bps" | "loop" | "empty"
-       indices — (bps only) array of rawEnv indices of contained BPs
-       index   — (loop only) rawEnv index of the loop block
-     The user can drag the boundary between adjacent zones; items in both
-     zones are remapped proportionally to the new sub-range. */
-  const macroZones = useMemoEE(() => {
-    const zones = [];
-    let cursor = 0;
-    let curBP = null;
-    for (let i = 0; i < rawEnv.length; i++) {
-      const it = rawEnv[i];
-      if (PGEEnv.isBreakpoint(it)) {
-        if (!curBP) {
-          curBP = { kind: "bps", indices: [], start: cursor };
-          zones.push(curBP);
-        }
-        curBP.indices.push(i);
-      } else if (PGEEnv.isCompactBlock(it)) {
-        if (curBP) {
-          curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
-          cursor = curBP.end;
-          curBP = null;
-        }
-        zones.push({ kind: "loop", index: i, start: cursor, end: it[1] });
-        cursor = it[1];
-      }
-    }
-    if (curBP) {
-      curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
-      cursor = curBP.end;
-    }
-    // Always append a trailing "empty" zone — even degenerate ([1,1]) — so
-    // the last real zone has a boundary handle on its right edge. Without
-    // this, an envelope of only BPs whose last BP sits at t≈1 has just one
-    // zone and no draggable boundaries (you'd be unable to rescale the BPs
-    // proportionally). The degenerate zone has zero visual width but still
-    // exposes its left boundary as a handle at x=1.
-    if (cursor < 1 - 1e-6) {
-      zones.push({ kind: "empty", start: cursor, end: 1 });
-    } else if (zones.length > 0) {
-      zones.push({ kind: "empty", start: 1, end: 1 });
-    }
-    return zones;
-  }, [rawEnv]);
 
   function rescaleZoneItems(env, zone, newStart, newEnd) {
     if (zone.kind === "empty") return env;

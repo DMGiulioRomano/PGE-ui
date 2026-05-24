@@ -163,7 +163,7 @@ function DephaseSection({ stream, onChange }) {
   );
 }
 
-function SamplePickerMenu({ current, onPick }) {
+function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = React.useState(false);
   const [files, setFiles] = React.useState(null);
@@ -204,13 +204,19 @@ function SamplePickerMenu({ current, onPick }) {
     }
     setOpen(true);
   }
+  if (triggerRef) triggerRef.current = handleOpen;
 
   const filtered = (files || []).filter(f =>
     f.name.toLowerCase().includes(query.toLowerCase())
   );
 
   return (
-    <div ref={rootRef} style={{position:"relative", display:"inline-block"}}>
+    <div ref={rootRef} style={{position:"relative", display:"inline-flex", alignItems:"center", gap:4}}>
+      {showLabel && (
+        <span className="v" style={{color:"var(--accent)", cursor:"pointer", fontFamily:"var(--mono)", fontSize:10}} onClick={handleOpen} title="change sample">
+          {current}
+        </span>
+      )}
       <button className="pge-icon-btn" title="change sample" onClick={handleOpen}>
         <Icon name="chevronDown" size={11} />
       </button>
@@ -258,6 +264,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
+  const samplePickerTrigger = React.useRef(null);
 
   // Empty state — inspector opened via shortcut with no stream selected.
   // Keep the panel chrome so the layout doesn't jump, but show a hint.
@@ -385,9 +392,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
                 onSelect={() => setSelRow("duration")} selected={selRow==="duration"}
                 onValue={(v) => onChange({duration: v})} />
               <div className="pge-prow">
-                <span className="k">sample</span><span />
-                <span className="v" style={{color:"var(--accent)"}}>{stream.sample}</span>
-                <SamplePickerMenu current={stream.sample} onPick={(name) => onChange({sample: name})} />
+                <span className="k">sample</span>
+                <span />
+                <span className="v" style={{color:"var(--accent)", cursor:"pointer"}} onClick={() => samplePickerTrigger.current && samplePickerTrigger.current()}>{stream.sample}</span>
+                <SamplePickerMenu current={stream.sample} onPick={(name) => onChange({sample: name})} showLabel={false} triggerRef={samplePickerTrigger} />
               </div>
             </Section>
 
