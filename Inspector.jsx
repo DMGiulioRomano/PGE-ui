@@ -402,11 +402,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
             <Section title="Identity"
                      right={<span className="mono" style={{fontSize:9, color:"var(--fg-4)"}}>stream context</span>}>
               <div className="pge-prow">
-                <span className="k" title="absolute = onset in seconds; normalized = onset ∈ [0,1] of total duration">time_mode</span>
+                <span className="k" title="onset ∈ [0,1] of total duration">time_mode</span>
                 <span />
                 <span className="v">
-                  <Seg size="xs" value={stream.timeMode || "absolute"} onChange={v => onChange({timeMode: v})}
-                       options={[{label:"absolute",value:"absolute"},{label:"normalized",value:"normalized"}]} />
+                  <span className="mono" style={{fontSize:10, color:"var(--fg-3)"}}>normalized</span>
                 </span>
                 <span />
               </div>
