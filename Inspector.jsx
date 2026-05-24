@@ -169,22 +169,40 @@ function SamplePickerMenu({ current, onPick }) {
   const [files, setFiles] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const rootRef = React.useRef(null);
   const inputRef = React.useRef(null);
+
+  // close on click outside
+  React.useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) {
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        setOpen(false); setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  // autofocus input when menu opens
+  React.useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
 
   async function handleOpen() {
     if (open) { setOpen(false); setQuery(""); return; }
-    setOpen(true);
-    if (files !== null) { setTimeout(() => inputRef.current && inputRef.current.focus(), 0); return; }
-    setLoading(true);
-    try {
-      const result = await window.PGEBackend.current.fs.listDir("media");
-      setFiles(result.files || []);
-    } catch (e) {
-      console.error("[SamplePickerMenu] listDir failed:", e);
-      setFiles([]);
+    if (files === null) {
+      setLoading(true);
+      try {
+        const result = await window.PGEBackend.current.fs.listDir("media");
+        setFiles(result.files || []);
+      } catch (e) {
+        console.error("[SamplePickerMenu] listDir failed:", e);
+        setFiles([]);
+      }
+      setLoading(false);
     }
-    setLoading(false);
-    setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
+    setOpen(true);
   }
 
   const filtered = (files || []).filter(f =>
@@ -192,13 +210,12 @@ function SamplePickerMenu({ current, onPick }) {
   );
 
   return (
-    <div style={{position:"relative", display:"inline-block"}}>
+    <div ref={rootRef} style={{position:"relative", display:"inline-block"}}>
       <button className="pge-icon-btn" title="change sample" onClick={handleOpen}>
         <Icon name="chevronDown" size={11} />
       </button>
       {open ? (
-        <div className="add-param-menu" style={{right:0, left:"auto", minWidth:200}}
-             onMouseLeave={() => { setOpen(false); setQuery(""); }}>
+        <div className="add-param-menu" style={{right:0, left:"auto", minWidth:200}}>
           <div style={{padding:"4px 6px", borderBottom:"1px solid var(--border)"}}>
             <input
               ref={inputRef}
