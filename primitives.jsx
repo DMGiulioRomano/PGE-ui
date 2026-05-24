@@ -292,7 +292,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
 }
 
 /* ---------- SplitPane (horizontal or vertical) ---------- */
-function SplitPane({ initial = 240, min = 120, max = 800, dir = "horiz", side = "primary-first", persist, children, className }) {
+function SplitPane({ initial = 240, min = 120, max = 800, dir = "horiz", side = "primary-first", persist, children, className, extraSize = 0 }) {
   const key = persist ? "pge-split-" + persist : null;
   const init = (() => {
     if (key) {
@@ -325,7 +325,8 @@ function SplitPane({ initial = 240, min = 120, max = 800, dir = "horiz", side = 
   }
   const kids = React.Children.toArray(children);
   const a = kids[0], b = kids[1];
-  const primaryStyle = dir === "horiz" ? { width: size, flex: "0 0 auto" } : { height: size, flex: "0 0 auto" };
+  const displaySize = Math.max(min, Math.min(max, size + extraSize));
+  const primaryStyle = dir === "horiz" ? { width: displaySize, flex: "0 0 auto" } : { height: displaySize, flex: "0 0 auto" };
   const secondaryStyle = { flex: "1 1 0", minWidth: 0, minHeight: 0, position: "relative", display: "flex" };
   return (
     <div className={"pge-split " + dir + (className ? " " + className : "")} style={{ display: "flex", flexDirection: dir === "horiz" ? "row" : "column", flex: 1, minWidth: 0, minHeight: 0 }}>

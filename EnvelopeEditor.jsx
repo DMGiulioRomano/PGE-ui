@@ -213,7 +213,7 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
 
 }
 
-function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
+function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange }) {
   const { Icon } = window.PGE;
   const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
   const [selectedKey, setSelectedKey] = useStateEE(null);
@@ -224,6 +224,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
+  const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
 
   /* undo/redo handled globally (TopBar + ⌘Z) — gestures bracket via window.PGEHistory */
 
@@ -403,6 +404,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
 
   }
   const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
+
+  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
 
   /* ============ Layout ============ */
   const totalW = Math.max(40, vp.w);
@@ -740,6 +743,100 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     window.addEventListener("pointerup", up);
   }
 
+  /* ----- zone reorder drag ----- */
+  function startZoneDrag(e, fromZoneIdx) {
+    const zone = macroZones[fromZoneIdx];
+    if (!zone || zone.kind === "empty") return;
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedBlock(null);
+    setSelectedBP(null);
+    beginDragHistory();
+    zoneReorderRef.current = fromZoneIdx;
+    setDragging({ kind: "zone-reorder", fromIdx: fromZoneIdx, toIdx: fromZoneIdx });
+    const svg = svgRef.current;
+    const rect = svg.getBoundingClientRect();
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+
+    function move(ev) {
+      const xNorm = bpXofXPx(ev.clientX - rect.left);
+      let toIdx = fromZoneIdx;
+      for (let i = 0; i < macroZones.length; i++) {
+        const z = macroZones[i];
+        if (z.kind === "empty") continue;
+        if (xNorm >= z.start && xNorm <= z.end) { toIdx = i; break; }
+      }
+      zoneReorderRef.current = toIdx;
+      setDragging({ kind: "zone-reorder", fromIdx: fromZoneIdx, toIdx });
+    }
+    function up() {
+      const toIdx = zoneReorderRef.current;
+      if (toIdx != null && toIdx !== fromZoneIdx) doZoneReorder(fromZoneIdx, toIdx);
+      zoneReorderRef.current = null;
+      setDragging(null);
+      endDragHistory();
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function doZoneReorder(fromIdx, toIdx) {
+    if (fromIdx === toIdx) return;
+    const nonEmpty = macroZones.filter((z) => z.kind !== "empty");
+    const fromZone = macroZones[fromIdx];
+    const toZone = macroZones[toIdx];
+    if (!fromZone || !toZone || fromZone.kind === "empty" || toZone.kind === "empty") return;
+    const fi = nonEmpty.indexOf(fromZone);
+    const ti = nonEmpty.indexOf(toZone);
+    if (fi < 0 || ti < 0) return;
+
+    const newOrder = nonEmpty.slice();
+    [newOrder[fi], newOrder[ti]] = [newOrder[ti], newOrder[fi]];
+
+    // compute new time slots — each zone keeps its original duration
+    let cursor = 0;
+    const slots = newOrder.map((z) => {
+      const dur = z.end - z.start;
+      const ns = cursor, ne = cursor + dur;
+      cursor = ne;
+      return { zone: z, ns, ne };
+    });
+
+    // remap items to new time range
+    const remapped = new Map();
+    slots.forEach(({ zone, ns, ne }) => {
+      const os = zone.start, oe = zone.end, od = oe - os;
+      if (zone.kind === "bps") {
+        zone.indices.forEach((i) => {
+          const it = rawEnv[i];
+          const nt = od <= 1e-9 ? ne : ns + (it[0] - os) * (ne - ns) / od;
+          remapped.set(i, [+nt.toFixed(xPrec), it[1]]);
+        });
+      } else if (zone.kind === "loop") {
+        const copy = rawEnv[zone.index].slice();
+        copy[1] = +ne.toFixed(4);
+        remapped.set(zone.index, copy);
+      }
+    });
+
+    const next = [];
+    slots.forEach(({ zone }) => {
+      if (zone.kind === "bps") {
+        const bps = zone.indices.map((i) => remapped.get(i));
+        bps.sort((a, b) => a[0] - b[0]);
+        next.push(...bps);
+      } else if (zone.kind === "loop") {
+        next.push(remapped.get(zone.index));
+      }
+    });
+    commit(next);
+  }
+
   /* ----- add new loop block ----- */
   /* Behavior:
        - append at end with default block ending at 1.0
@@ -969,7 +1066,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
             <span className="mono" style={{ color: "var(--fg-3)" }}>@ {playhead.toFixed(2)}s</span>
           </span> :
         null}
-        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
+        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
       </header>
 
       {/* ============ optional: selected loop control panel ============ */}
@@ -1068,7 +1165,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
                   const x1 = xOf(z.end);
                   if (x1 - x0 < 0.5) return null;
                   const w = x1 - x0;
-                  const cls = "ee-zone ee-zone-" + z.kind;
+                  const isZoneReorder = dragging && dragging.kind === "zone-reorder";
+                  const isFrom = isZoneReorder && dragging.fromIdx === zi;
+                  const isTo = isZoneReorder && dragging.toIdx === zi && dragging.toIdx !== dragging.fromIdx;
+                  const cls = "ee-zone ee-zone-" + z.kind +
+                    (isFrom ? " ee-zone-drag-from" : "") +
+                    (isTo ? " ee-zone-drag-to" : "");
                   const label =
                     z.kind === "bps" ? (z.indices.length + " bp" + (z.indices.length > 1 ? "s" : "")) :
                     z.kind === "loop" ? "↻ loop" :
@@ -1077,7 +1179,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
                   return (
                     <g key={"z" + zi}>
                       <rect x={x0} y={8 + LOOP_BAND_H + 2} width={w} height={12}
-                        className={cls} />
+                        className={cls}
+                        style={z.kind !== "empty" ? { cursor: isFrom ? "grabbing" : "grab" } : {}}
+                        onPointerDown={z.kind !== "empty" ? (ev) => startZoneDrag(ev, zi) : undefined} />
                       {showLabel ?
                       <text x={x0 + w / 2} y={8 + LOOP_BAND_H + 2 + 8}
                         textAnchor="middle" className="ee-zone-label mono"
