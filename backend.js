@@ -43,7 +43,7 @@
   function fingerprintStream(stream) {
     // Mirror python's stable hash: stringify with sorted keys, ignore UI-only
     // fields (color, mute, solo — those don't affect audio).
-    const ignore = new Set(["color", "mute", "solo"]);
+    const ignore = new Set(["color", "mute", "solo", "onset"]);
     const json = JSON.stringify(stream, (k, v) => (ignore.has(k) ? undefined : v));
     return fnv1a(json);
   }

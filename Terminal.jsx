@@ -120,7 +120,7 @@ function Toast({ toasts, onDismiss }) {
   return (
     <div className="pge-toasts">
       {toasts.map((t) => (
-        <div key={t.id} className={"pge-toast " + (t.kind || "info")} onClick={() => onDismiss(t.id)}>
+        <div key={t.id} className={"pge-toast " + (t.kind || "info")} style={t.action ? {cursor:"pointer"} : {}} onClick={() => { if (t.action) { t.action.onClick(); } onDismiss(t.id); }}>
           <span className="tt-dot" />
           <div className="tt-body">
             <div className="tt-title">{t.title}</div>
