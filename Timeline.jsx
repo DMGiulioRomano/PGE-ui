@@ -177,7 +177,9 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
   function onPointerDown(e, stream, mode) {
     e.preventDefault();e.stopPropagation();
     const startX = e.clientX;
-    const orig = { onset: stream.onset, duration: stream.duration };
+    const isInSelection = selected.includes(stream.id);
+    const targets = isInSelection ? streams.filter(s => selected.includes(s.id)) : [stream];
+    const origs = Object.fromEntries(targets.map(s => [s.id, { onset: s.onset, duration: s.duration }]));
     let moved = false;
     const THRESHOLD = 4;
     function move(ev) {
@@ -186,18 +188,16 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
       if (!moved) { window.PGEHistory && window.PGEHistory.beginGesture(); }
       moved = true;
       const dt = dx / PX_PER_S;
-      if (mode === "drag") {
-        onUpdate(stream.id, { onset: Math.max(0, +(orig.onset + dt).toFixed(3)) });
-      } else if (mode === "resize") {
-        onUpdate(stream.id, { duration: Math.max(0.5, +(orig.duration + dt).toFixed(3)) });
+      for (const s of targets) {
+        if (mode === "drag")   onUpdate(s.id, { onset:    Math.max(0,   +(origs[s.id].onset    + dt).toFixed(3)) });
+        if (mode === "resize") onUpdate(s.id, { duration: Math.max(0.5, +(origs[s.id].duration + dt).toFixed(3)) });
       }
     }
     function up() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
-      // Click (no significant movement) → select. Double-click handled separately.
-      if (!moved) onSelect(stream.id);
+      if (!moved) onSelect(stream.id, e.ctrlKey || e.metaKey);
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -342,11 +342,11 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
         <div className="lanes-head-clip">
           <div className="track-heads" ref={headRef}>
             {streams.map((s, i) =>
-            <TrackHeader key={s.id} stream={s} selected={selected === s.id}
+            <TrackHeader key={s.id} stream={s} selected={selected.includes(s.id)}
               height={getH(s.id)} index={i} dragOver={dragOver === i}
               onResizeStart={(e) => startResizeLane(e, s.id)}
               onReorderStart={(e) => startReorder(e, i)}
-              onSelect={() => onSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
+              onSelect={(multi) => onSelect(s.id, multi)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
               onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
               effMuted={isEffMuted(s)} anySolo={anySolo} />
             )}
@@ -390,7 +390,7 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
           {streams.map((s, i) =>
           <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
           onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}>
-              <div className={"clip" + (s.id === selected ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
+              <div className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
             onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
@@ -421,7 +421,7 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
 function TrackHeader({ stream, selected, onSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
-    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }} onClick={onSelect} onDoubleClick={onDoubleSelect}>
+    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }} onClick={(e) => onSelect(e.ctrlKey || e.metaKey)} onDoubleClick={onDoubleSelect}>
       <div className="grip" onPointerDown={onReorderStart} onClick={(e) => e.stopPropagation()} title="drag to reorder track">
         <span /><span /><span /><span /><span /><span />
       </div>

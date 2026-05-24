@@ -181,6 +181,21 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
             <ShortcutInput value={tweaks.shortcutInspector || "cmd+i"}
                            onChange={(v) => setTweak("shortcutInspector", v)} />
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="torna all'inizio (back to start)">back to start</span>
+            <ShortcutInput value={tweaks.shortcutBackToStart || "z"}
+                           onChange={(v) => setTweak("shortcutBackToStart", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="avvia / metti in pausa la riproduzione">play / pause</span>
+            <ShortcutInput value={tweaks.shortcutPlay || "x"}
+                           onChange={(v) => setTweak("shortcutPlay", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="ferma la riproduzione e torna all'inizio">stop</span>
+            <ShortcutInput value={tweaks.shortcutStop || "c"}
+                           onChange={(v) => setTweak("shortcutStop", v)} />
+          </div>
           <div className="sp-hint">
             Click sul campo e premi la combinazione desiderata. Funziona anche cliccando
             di nuovo sullo stesso stream in timeline. Se nessuno stream è selezionato,
