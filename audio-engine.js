@@ -260,6 +260,36 @@
       }
     }
 
+    // Reschedule a single stream without touching others.
+    rescheduleStream(stream) {
+      if (!this.ctx || !this.playing) return;
+      const node = this.activeNodes.get(stream.id);
+      if (node) { try { node.source.stop(0); } catch {} }
+      this.activeNodes.delete(stream.id);
+
+      const buf = this.buffers.get(stream.id);
+      if (!buf) return;
+
+      const fromTime = this.currentTime;
+      const onset = +stream.onset || 0;
+      const dur = +stream.duration || buf.duration;
+      if (onset + dur <= fromTime) return;  // already past
+
+      const source = this.ctx.createBufferSource();
+      source.buffer = buf;
+      const gainNode = this.ctx.createGain();
+      const dbToLin = (db) => Math.pow(10, db / 20);
+      const gainBase = dbToLin(typeof stream.volume === "number" ? stream.volume : -6);
+      gainNode.gain.value = gainBase * this._effectiveMuteSoloGain(stream, this.anySolo);
+      source.connect(gainNode).connect(this.master);
+
+      const nowCtx = this.ctx.currentTime;
+      const whenCtx = nowCtx + Math.max(0, onset - fromTime);
+      const offset = Math.max(0, fromTime - onset);
+      try { source.start(whenCtx, offset, Math.max(0.01, dur - offset)); } catch {}
+      this.activeNodes.set(stream.id, { source, gainNode, gainBase });
+    }
+
     get currentTime() {
       if (!this.ctx) return this.lastTickTimelinePos;
       if (!this.playing) return this.lastTickTimelinePos;

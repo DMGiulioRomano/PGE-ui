@@ -393,6 +393,20 @@ function App() {
     engine.syncMuteSoloFromStreams(data.streams);
   }, [data.streams.map(s => `${s.id}:${s.mute ? 1 : 0}:${s.solo ? 1 : 0}`).join("|")]);
 
+  const prevStreamSchedulingRef = useRefApp({});
+  useEffectApp(() => {
+    const engine = window.PGEAudio?.engine;
+    if (!engine || !playing) return;
+    const prev = prevStreamSchedulingRef.current;
+    for (const s of data.streams) {
+      const key = `${s.onset}:${s.duration}`;
+      if (prev[s.id] !== key) engine.rescheduleStream(s);
+    }
+    prevStreamSchedulingRef.current = Object.fromEntries(
+      data.streams.map(s => [s.id, `${s.onset}:${s.duration}`])
+    );
+  }, [data.streams.map(s => `${s.id}:${s.onset}:${s.duration}`).join("|"), playing]);
+
   // Drop cached audio buffers only when a fresh render produced a file with
   // a different fingerprint than what we have buffered. Editing the YAML
   // (which moves `currentFps` but not `lastRenderedFps`) is NOT a reason to
