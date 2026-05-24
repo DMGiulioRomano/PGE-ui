@@ -213,7 +213,7 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
 
 }
 
-function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
+function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange }) {
   const { Icon } = window.PGE;
   const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
   const [selectedKey, setSelectedKey] = useStateEE(null);
@@ -224,6 +224,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
+  const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
 
   /* undo/redo handled globally (TopBar + ⌘Z) — gestures bracket via window.PGEHistory */
 
@@ -304,6 +305,54 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [stream, selectedKey, selectedBP, selectedBlock]);
 
+  /* ============ Envelope model — computed before early returns so hook count is stable ============ */
+  const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
+  const isNormalized = stream ? stream.timeMode === "normalized" : false;
+  const PGEEnv = window.PGEEnv;
+  const rawEnvRaw = (stream && env) ? getNested(stream, env.path) : null;
+  const _wrap = rawEnvRaw ? PGEEnv.unwrapEnv(rawEnvRaw) : { items: [], interp: null };
+  const rawEnv = _wrap.items;
+  const globalInterp = _wrap.interp;
+  const exp = useMemoEE(() => rawEnvRaw ? PGEEnv.expandMixed(rawEnvRaw) : { blocks: [], bps: [] }, [rawEnvRaw]);
+  const blockByOrig = useMemoEE(() => {
+    const m = new Map();
+    exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
+    return m;
+  }, [exp, rawEnv]);
+  const macroZones = useMemoEE(() => {
+    const zones = [];
+    let cursor = 0;
+    let curBP = null;
+    for (let i = 0; i < rawEnv.length; i++) {
+      const it = rawEnv[i];
+      if (PGEEnv.isBreakpoint(it)) {
+        if (!curBP) {
+          curBP = { kind: "bps", indices: [], start: cursor };
+          zones.push(curBP);
+        }
+        curBP.indices.push(i);
+      } else if (PGEEnv.isCompactBlock(it)) {
+        if (curBP) {
+          curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+          cursor = curBP.end;
+          curBP = null;
+        }
+        zones.push({ kind: "loop", index: i, start: cursor, end: it[1] });
+        cursor = it[1];
+      }
+    }
+    if (curBP) {
+      curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
+      cursor = curBP.end;
+    }
+    if (cursor < 1 - 1e-6) {
+      zones.push({ kind: "empty", start: cursor, end: 1 });
+    } else if (zones.length > 0) {
+      zones.push({ kind: "empty", start: 1, end: 1 });
+    }
+    return zones;
+  }, [rawEnv]);
+
   /* ============ Empty states ============ */
   if (!stream) {
     return (
@@ -325,9 +374,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
       </div>);
 
   }
-
-  const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
-  const isNormalized = stream.timeMode === "normalized";
 
   if (!env) {
     return (
@@ -357,21 +403,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
       </div>);
 
   }
-
-  /* ============ Mixed envelope model ============ */
-  const rawEnvRaw = getNested(stream, env.path);
-  const PGEEnv = window.PGEEnv;
-  const _wrap = PGEEnv.unwrapEnv(rawEnvRaw);
-  const rawEnv = _wrap.items;
-  const globalInterp = _wrap.interp;
-  const exp = useMemoEE(() => PGEEnv.expandMixed(rawEnvRaw), [rawEnvRaw]);
-  // Tag blocks with originalIdx for fast lookup
-  const blockByOrig = useMemoEE(() => {
-    const m = new Map();
-    exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
-    return m;
-  }, [exp, rawEnv]);
   const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
+
+  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
 
   /* ============ Layout ============ */
   const totalW = Math.max(40, vp.w);
@@ -647,59 +681,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     commit(next);
   }
 
-  /* ============ Macro zones ============
-     A macro zone is a contiguous run of items of the same kind:
-       - one zone per consecutive run of standalone breakpoints
-       - one zone per loop block
-       - a trailing "empty" zone if the last item ends before x = 1
-     Zones partition [0,1]. Each zone has:
-       start  — previous zone's end (or 0 for the first)
-       end    — last BP's t (for "bps") / block.end_time (for "loop") / 1 (for "empty")
-       kind   — "bps" | "loop" | "empty"
-       indices — (bps only) array of rawEnv indices of contained BPs
-       index   — (loop only) rawEnv index of the loop block
-     The user can drag the boundary between adjacent zones; items in both
-     zones are remapped proportionally to the new sub-range. */
-  const macroZones = useMemoEE(() => {
-    const zones = [];
-    let cursor = 0;
-    let curBP = null;
-    for (let i = 0; i < rawEnv.length; i++) {
-      const it = rawEnv[i];
-      if (PGEEnv.isBreakpoint(it)) {
-        if (!curBP) {
-          curBP = { kind: "bps", indices: [], start: cursor };
-          zones.push(curBP);
-        }
-        curBP.indices.push(i);
-      } else if (PGEEnv.isCompactBlock(it)) {
-        if (curBP) {
-          curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
-          cursor = curBP.end;
-          curBP = null;
-        }
-        zones.push({ kind: "loop", index: i, start: cursor, end: it[1] });
-        cursor = it[1];
-      }
-    }
-    if (curBP) {
-      curBP.end = rawEnv[curBP.indices[curBP.indices.length - 1]][0];
-      cursor = curBP.end;
-    }
-    // Always append a trailing "empty" zone — even degenerate ([1,1]) — so
-    // the last real zone has a boundary handle on its right edge. Without
-    // this, an envelope of only BPs whose last BP sits at t≈1 has just one
-    // zone and no draggable boundaries (you'd be unable to rescale the BPs
-    // proportionally). The degenerate zone has zero visual width but still
-    // exposes its left boundary as a handle at x=1.
-    if (cursor < 1 - 1e-6) {
-      zones.push({ kind: "empty", start: cursor, end: 1 });
-    } else if (zones.length > 0) {
-      zones.push({ kind: "empty", start: 1, end: 1 });
-    }
-    return zones;
-  }, [rawEnv]);
-
   function rescaleZoneItems(env, zone, newStart, newEnd) {
     if (zone.kind === "empty") return env;
     const oldStart = zone.start, oldEnd = zone.end;
@@ -760,6 +741,100 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  }
+
+  /* ----- zone reorder drag ----- */
+  function startZoneDrag(e, fromZoneIdx) {
+    const zone = macroZones[fromZoneIdx];
+    if (!zone || zone.kind === "empty") return;
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedBlock(null);
+    setSelectedBP(null);
+    beginDragHistory();
+    zoneReorderRef.current = fromZoneIdx;
+    setDragging({ kind: "zone-reorder", fromIdx: fromZoneIdx, toIdx: fromZoneIdx });
+    const svg = svgRef.current;
+    const rect = svg.getBoundingClientRect();
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+
+    function move(ev) {
+      const xNorm = bpXofXPx(ev.clientX - rect.left);
+      let toIdx = fromZoneIdx;
+      for (let i = 0; i < macroZones.length; i++) {
+        const z = macroZones[i];
+        if (z.kind === "empty") continue;
+        if (xNorm >= z.start && xNorm <= z.end) { toIdx = i; break; }
+      }
+      zoneReorderRef.current = toIdx;
+      setDragging({ kind: "zone-reorder", fromIdx: fromZoneIdx, toIdx });
+    }
+    function up() {
+      const toIdx = zoneReorderRef.current;
+      if (toIdx != null && toIdx !== fromZoneIdx) doZoneReorder(fromZoneIdx, toIdx);
+      zoneReorderRef.current = null;
+      setDragging(null);
+      endDragHistory();
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function doZoneReorder(fromIdx, toIdx) {
+    if (fromIdx === toIdx) return;
+    const nonEmpty = macroZones.filter((z) => z.kind !== "empty");
+    const fromZone = macroZones[fromIdx];
+    const toZone = macroZones[toIdx];
+    if (!fromZone || !toZone || fromZone.kind === "empty" || toZone.kind === "empty") return;
+    const fi = nonEmpty.indexOf(fromZone);
+    const ti = nonEmpty.indexOf(toZone);
+    if (fi < 0 || ti < 0) return;
+
+    const newOrder = nonEmpty.slice();
+    [newOrder[fi], newOrder[ti]] = [newOrder[ti], newOrder[fi]];
+
+    // compute new time slots — each zone keeps its original duration
+    let cursor = 0;
+    const slots = newOrder.map((z) => {
+      const dur = z.end - z.start;
+      const ns = cursor, ne = cursor + dur;
+      cursor = ne;
+      return { zone: z, ns, ne };
+    });
+
+    // remap items to new time range
+    const remapped = new Map();
+    slots.forEach(({ zone, ns, ne }) => {
+      const os = zone.start, oe = zone.end, od = oe - os;
+      if (zone.kind === "bps") {
+        zone.indices.forEach((i) => {
+          const it = rawEnv[i];
+          const nt = od <= 1e-9 ? ne : ns + (it[0] - os) * (ne - ns) / od;
+          remapped.set(i, [+nt.toFixed(xPrec), it[1]]);
+        });
+      } else if (zone.kind === "loop") {
+        const copy = rawEnv[zone.index].slice();
+        copy[1] = +ne.toFixed(4);
+        remapped.set(zone.index, copy);
+      }
+    });
+
+    const next = [];
+    slots.forEach(({ zone }) => {
+      if (zone.kind === "bps") {
+        const bps = zone.indices.map((i) => remapped.get(i));
+        bps.sort((a, b) => a[0] - b[0]);
+        next.push(...bps);
+      } else if (zone.kind === "loop") {
+        next.push(remapped.get(zone.index));
+      }
+    });
+    commit(next);
   }
 
   /* ----- add new loop block ----- */
@@ -991,7 +1066,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
             <span className="mono" style={{ color: "var(--fg-3)" }}>@ {playhead.toFixed(2)}s</span>
           </span> :
         null}
-        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
+        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
       </header>
 
       {/* ============ optional: selected loop control panel ============ */}
@@ -1090,7 +1165,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
                   const x1 = xOf(z.end);
                   if (x1 - x0 < 0.5) return null;
                   const w = x1 - x0;
-                  const cls = "ee-zone ee-zone-" + z.kind;
+                  const isZoneReorder = dragging && dragging.kind === "zone-reorder";
+                  const isFrom = isZoneReorder && dragging.fromIdx === zi;
+                  const isTo = isZoneReorder && dragging.toIdx === zi && dragging.toIdx !== dragging.fromIdx;
+                  const cls = "ee-zone ee-zone-" + z.kind +
+                    (isFrom ? " ee-zone-drag-from" : "") +
+                    (isTo ? " ee-zone-drag-to" : "");
                   const label =
                     z.kind === "bps" ? (z.indices.length + " bp" + (z.indices.length > 1 ? "s" : "")) :
                     z.kind === "loop" ? "↻ loop" :
@@ -1099,7 +1179,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange }) {
                   return (
                     <g key={"z" + zi}>
                       <rect x={x0} y={8 + LOOP_BAND_H + 2} width={w} height={12}
-                        className={cls} />
+                        className={cls}
+                        style={z.kind !== "empty" ? { cursor: isFrom ? "grabbing" : "grab" } : {}}
+                        onPointerDown={z.kind !== "empty" ? (ev) => startZoneDrag(ev, zi) : undefined} />
                       {showLabel ?
                       <text x={x0 + w / 2} y={8 + LOOP_BAND_H + 2 + 8}
                         textAnchor="middle" className="ee-zone-label mono"

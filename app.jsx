@@ -148,6 +148,7 @@ function App() {
   });
 
   const [selectedId, setSelectedId] = useStateApp(null);
+  const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
   const [inspectorOpen, setInspectorOpen] = useStateApp(false);
   const [browserOpen, setBrowserOpen] = useStateApp(true);
   const [inspectorTab, setInspectorTab] = useStateApp("preview");
@@ -853,12 +854,13 @@ function App() {
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
                     playhead={time}
-                    onChange={(p) => selectedId && updateStream(selectedId, p)} />
+                    onChange={(p) => selectedId && updateStream(selectedId, p)}
+                    onLoopPanelChange={setLoopPanelOpen} />
   );
   const center = (
     <div className="pge-center" data-screen-label="01 Main · Timeline + Envelopes">
       {tweaks.showEnvelopeEditor === false ? timelineEl : (
-        <SplitPane dir="vert" persist="env-editor" initial={tweaks.envelopeHeight || 240} min={120} max={600} side="primary-last">
+        <SplitPane dir="vert" persist="env-editor" initial={tweaks.envelopeHeight || 240} min={120} max={600} side="primary-last" extraSize={loopPanelOpen ? 110 : 0}>
           {timelineEl}
           {envelopeEl}
         </SplitPane>

@@ -167,6 +167,14 @@
   stroke-dasharray: 3,3;
   opacity: 0.85;
 }
+.pge-envedit .ee-zone-drag-from {
+  opacity: 0.35;
+}
+.pge-envedit .ee-zone-drag-to {
+  stroke: #FFB07A !important;
+  stroke-width: 1.5 !important;
+  fill-opacity: 0.25;
+}
 
 /* Pattern points: bigger + colored when belonging to selected loop */
 .pge-envedit .ee-pat-pt {
