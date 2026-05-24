@@ -25,6 +25,29 @@ const PAN_STRATEGIES = [
 ];
 const CHORDS = ["maj","min","dom7","maj7","min7","dim","aug","sus2","sus4","dim7","minmaj7"];
 
+const STRATEGY_DEFAULTS = {
+  pitch: {
+    step:       { step: 3.0 },
+    range:      { semitone_range: 12.0 },
+    chord:      { chord: "dom7" },
+    stochastic: { semitone_range: 0.5 },
+  },
+  onset_offset: {
+    linear:     { step: 0.05 },
+    geometric:  { step: 0.05, base: 2.0 },
+    stochastic: { max_offset: 0.1 },
+  },
+  pointer: {
+    linear:     { step: 0.1 },
+    stochastic: { pointer_range: 0.02 },
+  },
+  pan: {
+    linear:     { spread: 60.0 },
+    random:     { spread: 60.0 },
+    additive:   { spread: 60.0 },
+  },
+};
+
 function StrategySelect({ value, options, onChange }) {
   const cur = options.find(o => o.value === value) || options[0];
   return (
@@ -39,7 +62,7 @@ function StrategySelect({ value, options, onChange }) {
 
 function VoiceParamRow({ name, value, unit, onChange }) {
   const { ParamRow } = window.PGE;
-  return <ParamRow name={name} mode="scalar" value={value != null ? value : "—"} unit={unit} />;
+  return <ParamRow name={name} mode="scalar" value={value != null ? value : "—"} unit={unit} onValue={onChange} />;
 }
 
 function VoiceGroup({ title, strategies, voices, dim, onChange, children, extraTopRow }) {
@@ -60,7 +83,11 @@ function VoiceGroup({ title, strategies, voices, dim, onChange, children, extraT
           <StrategySelect
             value={enabled ? cur : "off"}
             options={optsWithOff}
-            onChange={v => onChange({ [dim]: v === "off" ? null : { ...(voices[dim] || {}), strategy: v } })} />
+            onChange={v => {
+            if (v === "off") { onChange({ [dim]: null }); return; }
+            const defaults = (STRATEGY_DEFAULTS[dim] || {})[v] || {};
+            onChange({ [dim]: { ...defaults, strategy: v } });
+          }} />
         </span>
         <span />
       </div>
@@ -103,7 +130,7 @@ function VoicesSection({ stream, onChange }) {
               <VoiceParamRow name="step" value={(v.pitch||{}).step ?? 3.0} unit="st" onChange={x => updateDim("pitch", { step: x })} />
             ) : null}
             {strat === "range" ? (
-              <VoiceParamRow name="semitone_range" value={(v.pitch||{}).semitone_range ?? 12.0} unit="st" />
+              <VoiceParamRow name="semitone_range" value={(v.pitch||{}).semitone_range ?? 12.0} unit="st" onChange={x => updateDim("pitch", { semitone_range: x })} />
             ) : null}
             {strat === "chord" ? (
               <div className="pge-prow">
@@ -120,7 +147,7 @@ function VoicesSection({ stream, onChange }) {
             ) : null}
             {strat === "stochastic" ? (
               <>
-                <VoiceParamRow name="semitone_range" value={(v.pitch||{}).semitone_range ?? 0.5} unit="st" />
+                <VoiceParamRow name="semitone_range" value={(v.pitch||{}).semitone_range ?? 0.5} unit="st" onChange={x => updateDim("pitch", { semitone_range: x })} />
                 <div className="voice-meta">seed = hash(stream_id + voice_idx) · direction cached</div>
               </>
             ) : null}
@@ -134,17 +161,17 @@ function VoicesSection({ stream, onChange }) {
         {(strat) => (
           <>
             {strat === "linear" ? (
-              <VoiceParamRow name="step" value={(v.onset_offset||{}).step ?? 0.05} unit="s" />
+              <VoiceParamRow name="step" value={(v.onset_offset||{}).step ?? 0.05} unit="s" onChange={x => updateDim("onset_offset", { step: x })} />
             ) : null}
             {strat === "geometric" ? (
               <>
-                <VoiceParamRow name="step" value={(v.onset_offset||{}).step ?? 0.05} unit="s" />
-                <VoiceParamRow name="base" value={(v.onset_offset||{}).base ?? 2.0} />
+                <VoiceParamRow name="step" value={(v.onset_offset||{}).step ?? 0.05} unit="s" onChange={x => updateDim("onset_offset", { step: x })} />
+                <VoiceParamRow name="base" value={(v.onset_offset||{}).base ?? 2.0} onChange={x => updateDim("onset_offset", { base: x })} />
               </>
             ) : null}
             {strat === "stochastic" ? (
               <>
-                <VoiceParamRow name="max_offset" value={(v.onset_offset||{}).max_offset ?? 0.1} unit="s" />
+                <VoiceParamRow name="max_offset" value={(v.onset_offset||{}).max_offset ?? 0.1} unit="s" onChange={x => updateDim("onset_offset", { max_offset: x })} />
                 <div className="voice-meta">unidirectional [0, max] · voices never precede voice 0</div>
               </>
             ) : null}
@@ -158,10 +185,10 @@ function VoicesSection({ stream, onChange }) {
         {(strat) => (
           <>
             {strat === "linear" ? (
-              <VoiceParamRow name="step" value={(v.pointer||{}).step ?? 0.1} unit="" />
+              <VoiceParamRow name="step" value={(v.pointer||{}).step ?? 0.1} unit="" onChange={x => updateDim("pointer", { step: x })} />
             ) : null}
             {strat === "stochastic" ? (
-              <VoiceParamRow name="pointer_range" value={(v.pointer||{}).pointer_range ?? 0.02} unit="" />
+              <VoiceParamRow name="pointer_range" value={(v.pointer||{}).pointer_range ?? 0.02} unit="" onChange={x => updateDim("pointer", { pointer_range: x })} />
             ) : null}
             <div className="voice-meta">offset normalized 0–1 · sums onto base pointer + grain jitter</div>
           </>
@@ -173,7 +200,7 @@ function VoicesSection({ stream, onChange }) {
                   voices={v} dim="pan" onChange={update}>
         {(strat) => (
           <>
-            <VoiceParamRow name="spread" value={(v.pan||{}).spread ?? 60.0} unit="°" />
+            <VoiceParamRow name="spread" value={(v.pan||{}).spread ?? 60.0} unit="°" onChange={x => updateDim("pan", { spread: x })} />
             {strat === "linear" ? (
               <div className="voice-meta">symmetric · voice 0 = -spread/2 → voice N = +spread/2</div>
             ) : null}

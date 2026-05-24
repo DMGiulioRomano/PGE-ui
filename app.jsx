@@ -494,19 +494,17 @@ function App() {
     setDirty(true);
   }
   function selectClip(id) {
-    // Re-clicking the already-selected stream while the inspector is open closes it.
-    // Clicking a different stream switches selection and (re)opens the inspector.
-    if (id === selectedId && inspectorOpen) {
-      setInspectorOpen(false);
-      return;
-    }
+    // Single click: only changes selection, never opens/closes the inspector.
     setSelectedId(id);
+  }
+  function openInspector(id) {
+    // Double-click entrypoint: selects stream and opens inspector.
+    if (id != null) setSelectedId(id);
     setInspectorOpen(true);
   }
   function closeInspector() { setInspectorOpen(false); }
   function toggleInspector() {
-    // Shortcut entrypoint: opens the inspector even without a selected stream
-    // (shows an empty "choose a stream" state). If already open, closes it.
+    // Ctrl+I: toggles inspector (opens even without a selected stream).
     setInspectorOpen(o => !o);
   }
   function selected() { return data.streams.find(s => s.id === selectedId); }
@@ -842,7 +840,7 @@ function App() {
   );
   const timelineEl = (
     <Timeline streams={data.streams} selected={selectedId}
-              onSelect={selectClip} onUpdate={updateStream} onReorder={reorderStreams}
+              onSelect={selectClip} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={data.duration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms}

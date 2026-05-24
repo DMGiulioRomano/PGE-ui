@@ -353,6 +353,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     return zones;
   }, [rawEnv]);
 
+  /* selectedBlockObj and its side-effect must live before any early return
+     so that hook call count stays stable across renders. */
+  const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
+  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
+
   /* ============ Empty states ============ */
   if (!stream) {
     return (
@@ -403,10 +408,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       </div>);
 
   }
-  const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
-
-  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
-
   /* ============ Layout ============ */
   const totalW = Math.max(40, vp.w);
   const H = vp.h;
