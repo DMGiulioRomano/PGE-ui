@@ -491,7 +491,7 @@ function App() {
         duration: Math.min(d.duration - onset, Math.max(2, sampleRec.duration)),
         sample, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
-        timeMode: "absolute", distributionMode: "uniform",
+        timeMode: "normalized", distributionMode: "uniform",
         density: 8, distribution: 0,
         volume: -6, volumeRange: 0,
         pan: 0, panRange: 0,

@@ -241,7 +241,7 @@
       sample: y.sample || "",
       color: colorForStream(id, idx),
       mute: false, solo: false,
-      timeMode: y.time_mode || "absolute",
+      timeMode: y.time_mode || "normalized",
       distributionMode: y.distribution_mode || "uniform",
       rangeAlwaysActive: !!y.range_always_active,
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
