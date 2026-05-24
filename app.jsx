@@ -275,6 +275,7 @@ function App() {
 
   const [selectedIds, setSelectedIds] = useStateApp([]);
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
+  const anchorIdRef = React.useRef(null);
   const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
   const [inspectorOpen, setInspectorOpen] = useStateApp(false);
   const [browserOpen, setBrowserOpen] = useStateApp(true);
@@ -720,8 +721,25 @@ function App() {
     setDirty(true);
   }
   function selectClip(id, multi) {
-    if (multi) setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
-    else setSelectedIds([id]);
+    if (multi) {
+      setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+    } else {
+      anchorIdRef.current = id;
+      setSelectedIds([id]);
+    }
+  }
+  function rangeSelectClip(id) {
+    const anchor = anchorIdRef.current;
+    const ss = data.streams;
+    const anchorIdx = anchor ? ss.findIndex(s => s.id === anchor) : -1;
+    const targetIdx = ss.findIndex(s => s.id === id);
+    if (anchorIdx === -1 || targetIdx === -1) { setSelectedIds([id]); return; }
+    const lo = Math.min(anchorIdx, targetIdx);
+    const hi = Math.max(anchorIdx, targetIdx);
+    setSelectedIds(ss.slice(lo, hi + 1).map(s => s.id));
+  }
+  function marqueeSelectClips(ids) {
+    setSelectedIds(ids);
   }
   function openInspector(id) {
     if (id != null) setSelectedIds([id]);
@@ -1065,7 +1083,7 @@ function App() {
   );
   const timelineEl = (
     <Timeline streams={data.streams} selected={selectedIds}
-              onSelect={selectClip} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
+              onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={data.duration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms}

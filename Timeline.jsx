@@ -43,7 +43,8 @@ function gestureMatches(rule, e) {
   !!e.ctrlKey === wantCtrl;
 }
 
-function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
+function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
+  onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor }) {
   const { Icon, SplitPane } = window.PGE;
@@ -58,6 +59,8 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
   const [hint, setHint] = useStateTL(null);
   const [dragOver, setDragOver] = useStateTL(null);
   const [sampleDragOver, setSampleDragOver] = useStateTL(false);
+  const [marquee, setMarquee] = useStateTL(null);
+  const lanesAreaRef = useRefTL(null);
   const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
@@ -197,7 +200,56 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
-      if (!moved) onSelect(stream.id, e.ctrlKey || e.metaKey);
+      if (!moved) {
+        if (e.shiftKey) onRangeSelect && onRangeSelect(stream.id);
+        else onSelect(stream.id, e.ctrlKey || e.metaKey);
+      }
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function onMarqueeStart(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const getCoords = (ev) => {
+      const r = lanesAreaRef.current.getBoundingClientRect();
+      return {
+        x: ev.clientX - r.left + bodyRef.current.scrollLeft,
+        y: ev.clientY - r.top + bodyRef.current.scrollTop,
+      };
+    };
+    const { x: x0, y: y0 } = getCoords(e);
+    setMarquee({ x0, y0, x1: x0, y1: y0 });
+    function move(ev) {
+      const { x, y } = getCoords(ev);
+      setMarquee({ x0, y0, x1: x, y1: y });
+    }
+    function up(ev) {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const { x: x1, y: y1 } = getCoords(ev);
+      const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+      const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+      if (maxX - minX > 4 || maxY - minY > 4) {
+        let cumY = 0;
+        const ids = [];
+        for (const s of streams) {
+          const h = getH(s.id);
+          const laneTop = cumY, laneBot = cumY + h;
+          cumY += h;
+          if (laneBot <= minY || laneTop >= maxY) continue;
+          const clipL = s.onset * PX_PER_S;
+          const clipR = (s.onset + s.duration) * PX_PER_S;
+          if (clipR <= minX || clipL >= maxX) continue;
+          ids.push(s.id);
+        }
+        if (ids.length > 0) onMarqueeSelect && onMarqueeSelect(ids);
+        else onDeselect && onDeselect();
+      } else {
+        onDeselect && onDeselect();
+      }
+      setMarquee(null);
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -346,7 +398,7 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
               height={getH(s.id)} index={i} dragOver={dragOver === i}
               onResizeStart={(e) => startResizeLane(e, s.id)}
               onReorderStart={(e) => startReorder(e, i)}
-              onSelect={(multi) => onSelect(s.id, multi)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
+              onSelect={(multi) => onSelect(s.id, multi)} onRangeSelect={() => onRangeSelect && onRangeSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
               onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
               effMuted={isEffMuted(s)} anySolo={anySolo} />
             )}
@@ -377,7 +429,9 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
           </div>
         </div>
         <div className={"lanes-area" + (sampleDragOver ? " sample-drag-over" : "")}
+             ref={lanesAreaRef}
              style={{ width: renderSec * PX_PER_S }}
+             onPointerDown={onMarqueeStart}
              onDragEnter={onSampleDragEnter}
              onDragLeave={onSampleDragLeave}
              onDragOver={onSampleDragOver}
@@ -389,7 +443,8 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
           </div>
           {streams.map((s, i) =>
           <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
-          onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}>
+          onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
+          onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
               <div className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
@@ -410,6 +465,13 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
           <div className="comp-end-line" style={{ left: duration * PX_PER_S }} />
           <div className="playhead-line" style={{ left: playhead * PX_PER_S }} />
           <div className="playhead-glow" style={{ left: playhead * PX_PER_S - 7 }} />
+          {marquee && (() => {
+            const x = Math.min(marquee.x0, marquee.x1);
+            const y = Math.min(marquee.y0, marquee.y1);
+            const w = Math.abs(marquee.x1 - marquee.x0);
+            const h = Math.abs(marquee.y1 - marquee.y0);
+            return <div className="marquee-rect" style={{ left: x, top: y, width: w, height: h }} />;
+          })()}
         </div>
         {hint ? <div className="zoom-hint">{hint}</div> : null}
       </div>
@@ -418,10 +480,12 @@ function Timeline({ streams, selected, onSelect, onDoubleSelect, onUpdate, onReo
 
 }
 
-function TrackHeader({ stream, selected, onSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
+function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
-    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }} onClick={(e) => onSelect(e.ctrlKey || e.metaKey)} onDoubleClick={onDoubleSelect}>
+    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }}
+    onClick={(e) => { if (e.shiftKey) onRangeSelect && onRangeSelect(); else onSelect(e.ctrlKey || e.metaKey); }}
+    onDoubleClick={onDoubleSelect}>
       <div className="grip" onPointerDown={onReorderStart} onClick={(e) => e.stopPropagation()} title="drag to reorder track">
         <span /><span /><span /><span /><span /><span />
       </div>
