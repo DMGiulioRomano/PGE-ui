@@ -150,8 +150,6 @@ function App() {
   const [selectedId, setSelectedId] = useStateApp(null);
   const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
   const [inspectorOpen, setInspectorOpen] = useStateApp(false);
-  // true after an intentional Ctrl+I dismiss — single-click won't reopen
-  const inspectorManuallyClosed = React.useRef(false);
   const [browserOpen, setBrowserOpen] = useStateApp(true);
   const [inspectorTab, setInspectorTab] = useStateApp("preview");
   const [playing, setPlaying] = useStateApp(false);
@@ -496,35 +494,18 @@ function App() {
     setDirty(true);
   }
   function selectClip(id) {
-    // Re-clicking the already-selected stream while the inspector is open closes it.
-    if (id === selectedId && inspectorOpen) {
-      inspectorManuallyClosed.current = false;
-      setInspectorOpen(false);
-      return;
-    }
+    // Single click: only changes selection, never opens/closes the inspector.
     setSelectedId(id);
-    // If the user intentionally dismissed the inspector via Ctrl+I, single-click
-    // only changes selection — it does NOT reopen the panel.
-    if (!inspectorManuallyClosed.current) {
-      setInspectorOpen(true);
-    }
   }
   function openInspector(id) {
-    // Double-click entrypoint: always opens inspector and clears intentional-close flag.
-    inspectorManuallyClosed.current = false;
+    // Double-click entrypoint: selects stream and opens inspector.
     if (id != null) setSelectedId(id);
     setInspectorOpen(true);
   }
   function closeInspector() { setInspectorOpen(false); }
   function toggleInspector() {
-    // Shortcut entrypoint: opens the inspector even without a selected stream
-    // (shows an empty "choose a stream" state). If already open, closes it.
-    setInspectorOpen(o => {
-      const next = !o;
-      // Mark as intentionally closed only when the shortcut dismisses the panel.
-      inspectorManuallyClosed.current = !next;
-      return next;
-    });
+    // Ctrl+I: toggles inspector (opens even without a selected stream).
+    setInspectorOpen(o => !o);
   }
   function selected() { return data.streams.find(s => s.id === selectedId); }
 
