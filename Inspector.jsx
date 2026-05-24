@@ -260,7 +260,7 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
+function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
@@ -390,7 +390,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples }) {
                 onValue={(v) => onChange({onset: v})} />
               <ParamRow name="duration" mode="scalar" value={stream.duration} unit="s"
                 onSelect={() => setSelRow("duration")} selected={selRow==="duration"}
-                onValue={(v) => onChange({duration: v})} />
+                onValue={(v) => onChange({duration: v})}
+                right={
+                  <button
+                    className={"pge-icon-btn" + (freezeEnvOnResize ? " active" : "")}
+                    title={freezeEnvOnResize ? "envelopes: freeze (BPs keep absolute positions)" : "envelopes: stretch (BPs scale with duration)"}
+                    onClick={(e) => { e.stopPropagation(); onFreezeEnvToggle && onFreezeEnvToggle(!freezeEnvOnResize); }}
+                    style={{opacity: freezeEnvOnResize ? 1 : 0.4}}
+                  >
+                    <Icon name={freezeEnvOnResize ? "lock" : "lockOpen"} size={11} />
+                  </button>
+                } />
               <div className="pge-prow">
                 <span className="k">sample</span>
                 <span />

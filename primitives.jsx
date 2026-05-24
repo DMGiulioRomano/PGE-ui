@@ -29,7 +29,9 @@ function Icon({ name, size = 14, stroke = 1.5, fill = "none", style }) {
     redo: <g><polyline points="15 14 20 9 15 4" /><path d="M4 20v-7a4 4 0 0 1 4-4h12" /></g>,
     panelLeft: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /></g>,
     panelLeftClose: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><polyline points="16 15 13 12 16 9" /></g>,
-    panelLeftOpen: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><polyline points="14 9 17 12 14 15" /></g>
+    panelLeftOpen: <g><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><polyline points="14 9 17 12 14 15" /></g>,
+    lock: <g><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></g>,
+    lockOpen: <g><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></g>
   };
   return <svg {...props}>{paths[name] || null}</svg>;
 }
@@ -228,7 +230,7 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
 }
 
 /* ---------- Parameter Row ---------- */
-function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue }) {
+function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, right }) {
   // Build polyline points from envValue (array of [x, y] OR mixed with compact blocks).
   // For loops, expand via PGEEnv to the actual point sequence.
   let pts = "0,12 25,9 50,4 75,7 100,11";
@@ -286,7 +288,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
           </span>
         </span>
       }
-      {onEditEnv ? <button className="pge-icon-btn" onClick={(e) => {e.stopPropagation();onEditEnv && onEditEnv();}}><Icon name="edit" size={11} /></button> : <span />}
+      {onEditEnv ? <button className="pge-icon-btn" onClick={(e) => {e.stopPropagation();onEditEnv && onEditEnv();}}><Icon name="edit" size={11} /></button> : right || <span />}
     </div>);
 
 }

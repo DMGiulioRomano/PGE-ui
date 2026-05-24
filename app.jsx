@@ -31,8 +31,116 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "terminalOpen": false,
   "terminalHeight": 220,
   "shortcutInspector": "cmd+i",
+  "shortcutBackToStart": "z",
+  "shortcutPlay": "x",
+  "shortcutStop": "c",
   "stepMenuTrigger": "rightClick"
 }/*EDITMODE-END*/;
+
+/* ---- Envelope rescale + truncate utilities (freeze-on-resize feature) ---- */
+function rescaleEnvArray(arr, ratio) {
+  // object-form {type, points} envelope
+  if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+    return { ...arr, points: arr.points.map(p => [Math.min(1, +(p[0] * ratio).toFixed(5)), p[1]]) };
+  }
+  if (!Array.isArray(arr)) return arr;
+  return arr.map(item => {
+    if (PGEEnv.isBreakpoint(item)) {
+      const c = [...item]; c[0] = Math.min(1, +(c[0] * ratio).toFixed(5)); return c;
+    }
+    if (PGEEnv.isCompactBlock(item)) {
+      const c = [...item]; c[1] = Math.min(1, +(c[1] * ratio).toFixed(5)); return c;
+    }
+    return item;
+  });
+}
+
+function truncateEnvArray(arr) {
+  // object-form {type, points}: clip points beyond x=1.0, add closing BP
+  if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+    return { ...arr, points: truncateEnvArray(arr.points) };
+  }
+  if (!Array.isArray(arr) || !arr.length) return arr;
+  const result = [];
+  let prevX = 0, prevY = null;
+
+  for (const item of arr) {
+    if (PGEEnv.isBreakpoint(item)) {
+      const [x, y] = item;
+      if (x <= 1.0) {
+        result.push(item);
+        prevX = x; prevY = y;
+      } else {
+        // first BP past boundary — interpolate closing BP at x=1.0
+        if (prevY !== null && prevX < x) {
+          const t = (1.0 - prevX) / (x - prevX);
+          result.push([1.0, +(prevY + (y - prevY) * t).toFixed(4)]);
+        } else {
+          result.push([1.0, +y.toFixed(4)]);
+        }
+        break;
+      }
+    } else if (PGEEnv.isCompactBlock(item)) {
+      if (prevX >= 1.0) break; // block starts beyond boundary — drop
+      if (item[1] > 1.0) {
+        // clamp end_time to 1.0; cycles compress, nReps unchanged
+        const clamped = [...item]; clamped[1] = 1.0;
+        result.push(clamped);
+        break;
+      }
+      result.push(item);
+      prevX = item[1];
+      prevY = item[0][item[0].length - 1][1]; // last pattern point y
+    } else {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+function envArrayWouldTruncate(arr, ratio) {
+  if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+    return arr.points.some(p => p[0] * ratio > 1.0);
+  }
+  if (!Array.isArray(arr)) return false;
+  return arr.some(item => {
+    if (PGEEnv.isBreakpoint(item)) return item[0] * ratio > 1.0;
+    if (PGEEnv.isCompactBlock(item)) return item[1] * ratio > 1.0;
+    return false;
+  });
+}
+
+function _applyEnvFields(stream, fn) {
+  const wf = (obj, key) => obj[key] != null ? { [key]: fn(obj[key]) } : {};
+  return {
+    ...stream,
+    ...wf(stream, "densityEnv"),
+    ...wf(stream, "distributionEnv"),
+    ...wf(stream, "panEnv"),
+    grain:  stream.grain   ? { ...stream.grain,   ...wf(stream.grain,   "durationEnv")  } : stream.grain,
+    ptr:    stream.ptr     ? { ...stream.ptr,      ...wf(stream.ptr,     "speedRatioEnv")} : stream.ptr,
+    voices: stream.voices  ? { ...stream.voices,   ...wf(stream.voices,  "numEnv")       } : stream.voices,
+  };
+}
+
+function rescaleStreamEnvelopes(stream, oldDur, newDur) {
+  const ratio = oldDur / newDur;
+  return _applyEnvFields(stream, arr => rescaleEnvArray(arr, ratio));
+}
+
+function truncateStreamEnvelopes(stream) {
+  return _applyEnvFields(stream, truncateEnvArray);
+}
+
+function streamWouldTruncate(stream, ratio) {
+  const fields = [
+    stream.densityEnv, stream.distributionEnv, stream.panEnv,
+    stream.grain && stream.grain.durationEnv,
+    stream.ptr   && stream.ptr.speedRatioEnv,
+    stream.voices && stream.voices.numEnv,
+  ];
+  return fields.some(f => f && envArrayWouldTruncate(f, ratio));
+}
 
 const PROJECTS_DB = {
   "PGE_test.yml": { project: "PGE_test", title: "il mondo dorme", duration: 60 },
@@ -61,6 +169,8 @@ function App() {
   const [data, _setDataRaw] = useStateApp(window.PGE_DATA);
   const historyRef = useRefApp({ past: [], future: [], snapshotBeforeGesture: null, inGesture: false });
   const [, setHistVer] = useStateApp(0);
+  const freezeOriginRef = useRefApp(null);   // {id, stream} captured at gesture start when freeze ON
+  const pendingTruncateRef = useRefApp(null); // {id} set during gesture if shrink would truncate
 
   function setData(updater) {
     _setDataRaw(prev => {
@@ -92,6 +202,22 @@ function App() {
     }
     h.inGesture = false;
     h.snapshotBeforeGesture = null;
+    freezeOriginRef.current = null;
+
+    const pending = pendingTruncateRef.current;
+    pendingTruncateRef.current = null;
+    if (pending) {
+      if (window.confirm(
+        "Reducing duration with freeze ON truncated breakpoints beyond the new end.\n\nBreakpoint data will be lost. (Cancel to undo)"
+      )) {
+        setData(d => ({
+          ...d,
+          streams: d.streams.map(s => s.id === pending.id ? truncateStreamEnvelopes(s) : s),
+        }));
+      } else {
+        undo();
+      }
+    }
   }
   function undo() {
     _setDataRaw(cur => {
@@ -147,7 +273,8 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const [selectedId, setSelectedId] = useStateApp(null);
+  const [selectedIds, setSelectedIds] = useStateApp([]);
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
   const [inspectorOpen, setInspectorOpen] = useStateApp(false);
   const [browserOpen, setBrowserOpen] = useStateApp(true);
@@ -158,6 +285,7 @@ function App() {
   const [activeProject, setActiveProject] = useStateApp(tweaks.activeProject || "PGE_test.yml");
   const [activeSample, setActiveSample] = useStateApp(null);
   const tickRef = useRefApp();
+  const arrowGestureRef = useRefApp(false);
   const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: data.samples || [], error: null });
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: Object.keys(PROJECTS_DB).map(p => ({ name: p })), error: null });
 
@@ -175,6 +303,7 @@ function App() {
   const toastIdRef = useRefApp(0);
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
   const [backendKind, setBackendKind] = useStateApp(tweaks.backendKind || "mock");
+  const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
 
   async function _syncPathsFromServer(baseUrl, currentTweaks) {
     try {
@@ -444,6 +573,29 @@ function App() {
         toggleInspector();
         return;
       }
+      if (matchShortcut(e, tweaks.shortcutBackToStart || "z")) { e.preventDefault(); doSeekZero(); return; }
+      if (matchShortcut(e, tweaks.shortcutPlay || "x"))        { e.preventDefault(); doPlay();    return; }
+      if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selectedIds.length > 0) {
+        const targets = data.streams.filter(s => selectedIds.includes(s.id));
+        if (targets.length) {
+          e.preventDefault();
+          if (!e.repeat && !arrowGestureRef.current) {
+            arrowGestureRef.current = true;
+            window.PGEHistory && window.PGEHistory.beginGesture();
+          }
+          const step = e.shiftKey ? 1 : e.altKey ? 0.01 : 0.1;
+          const delta = e.key === "ArrowLeft" ? -step : step;
+          for (const stream of targets) {
+            if (e.metaKey || e.ctrlKey) {
+              updateStream(stream.id, { duration: Math.max(0.5, +(stream.duration + delta).toFixed(3)) });
+            } else {
+              updateStream(stream.id, { onset: Math.max(0, +(stream.onset + delta).toFixed(3)) });
+            }
+          }
+        }
+        return;
+      }
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
@@ -452,12 +604,71 @@ function App() {
         deleteStream(selectedId);
       }
     }
+    function onKeyUp(e) {
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && arrowGestureRef.current) {
+        arrowGestureRef.current = false;
+        window.PGEHistory && window.PGEHistory.endGesture();
+      }
+    }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   });
 
   /* ============ Stream mutations ============ */
   function updateStream(id, patch) {
+    if (freezeEnvOnResize && patch.duration != null) {
+      const cur = data.streams.find(s => s.id === id);
+      if (cur && patch.duration !== cur.duration) {
+        const inGesture = historyRef.current.inGesture;
+
+        if (inGesture) {
+          // Capture origin once per gesture (first frame that changes duration)
+          if (!freezeOriginRef.current || freezeOriginRef.current.id !== id) {
+            freezeOriginRef.current = { id, stream: cur };
+          }
+          const origin = freezeOriginRef.current.stream;
+          const ratio = origin.duration / patch.duration;
+
+          // Flag for post-gesture confirm if this gesture shrinks past existing BPs
+          if (ratio > 1 && streamWouldTruncate(origin, ratio)) {
+            pendingTruncateRef.current = { id };
+          } else {
+            pendingTruncateRef.current = null;
+          }
+
+          // Rescale from origin (not from current s.duration) — no accumulation
+          setData(d => ({
+            ...d,
+            streams: d.streams.map(s => {
+              if (s.id !== id) return s;
+              return { ...rescaleStreamEnvelopes(origin, origin.duration, patch.duration), ...patch };
+            }),
+          }));
+        } else {
+          // Discrete (non-drag) edit: confirm + truncate immediately
+          const ratio = cur.duration / patch.duration;
+          if (ratio > 1 && streamWouldTruncate(cur, ratio)) {
+            if (!window.confirm(
+              "Reducing duration with freeze ON will truncate envelope breakpoints beyond the new end.\n\nBreakpoint data will be lost. (Ctrl+Z to undo)\n\nProceed?"
+            )) return;
+          }
+          setData(d => ({
+            ...d,
+            streams: d.streams.map(s => {
+              if (s.id !== id) return s;
+              const rescaled = rescaleStreamEnvelopes(s, cur.duration, patch.duration);
+              return { ...(ratio > 1 ? truncateStreamEnvelopes(rescaled) : rescaled), ...patch };
+            }),
+          }));
+        }
+        setDirty(true);
+        return;
+      }
+    }
     setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? { ...s, ...patch } : s) }));
     setDirty(true);
   }
@@ -478,7 +689,8 @@ function App() {
     setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
     setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
-    if (selectedId === id) { setSelectedId(null); setInspectorOpen(false); }
+    if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
+    setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
   }
   function createStreamFromSample({ sample, onset = 0, laneIdx }) {
@@ -507,13 +719,12 @@ function App() {
     });
     setDirty(true);
   }
-  function selectClip(id) {
-    // Single click: only changes selection, never opens/closes the inspector.
-    setSelectedId(id);
+  function selectClip(id, multi) {
+    if (multi) setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+    else setSelectedIds([id]);
   }
   function openInspector(id) {
-    // Double-click entrypoint: selects stream and opens inspector.
-    if (id != null) setSelectedId(id);
+    if (id != null) setSelectedIds([id]);
     setInspectorOpen(true);
   }
   function closeInspector() { setInspectorOpen(false); }
@@ -853,7 +1064,7 @@ function App() {
                    onChooseProjectsFolder={onChooseProjectsFolder} />
   );
   const timelineEl = (
-    <Timeline streams={data.streams} selected={selectedId}
+    <Timeline streams={data.streams} selected={selectedIds}
               onSelect={selectClip} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={data.duration}
@@ -884,7 +1095,9 @@ function App() {
                onChange={(p) => selectedId && updateStream(selectedId, p)}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab}
-               samples={mediaList.files} />
+               samples={mediaList.files}
+               freezeEnvOnResize={freezeEnvOnResize}
+               onFreezeEnvToggle={setFreezeEnvOnResize} />
   ) : null;
 
   return (
