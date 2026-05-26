@@ -20,6 +20,16 @@ function listEnvelopes(stream) {
       path: ["pointer", "speedRatioEnv"], unit: "×",
       visMin: -1, visMax: 1, hardMin: -100, hardMax: 100 });
   }
+  if (stream.pointer && stream.pointer.loopStartEnv) {
+    list.push({ key: "loopStart", label: "loop_start", group: "Pointer",
+      path: ["pointer", "loopStartEnv"], unit: "s",
+      visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
+  }
+  if (stream.pointer && stream.pointer.loopDurEnv) {
+    list.push({ key: "loopDur", label: "loop_duration", group: "Pointer",
+      path: ["pointer", "loopDurEnv"], unit: "s",
+      visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
+  }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
       path: ["grain", "durationEnv"], unit: "s",
@@ -30,6 +40,58 @@ function listEnvelopes(stream) {
       path: ["panEnv"], unit: "°",
       visMin: -360, visMax: 360, hardMin: -3600, hardMax: 3600 });
   }
+  if (stream.volumeEnv) {
+    list.push({ key: "volume", label: "volume", group: "Volume & Pan",
+      path: ["volumeEnv"], unit: "dB",
+      visMin: -40, visMax: 0, hardMin: -120, hardMax: 12 });
+  }
+  if (stream.pitch && stream.pitch.semitonesEnv) {
+    list.push({ key: "pitch", label: "semitones", group: "Pitch",
+      path: ["pitch", "semitonesEnv"], unit: "st",
+      visMin: -12, visMax: 12, hardMin: -36, hardMax: 36 });
+  }
+  if (stream.voices && stream.voices.numEnv) {
+    list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
+      path: ["voices", "numEnv"], unit: "",
+      visMin: 1, visMax: 16, hardMin: 1, hardMax: 64 });
+  }
+  if (stream.voices && stream.voices.scatterEnv) {
+    list.push({ key: "scatter", label: "scatter", group: "Voices",
+      path: ["voices", "scatterEnv"], unit: "",
+      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+  }
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv)
+    list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
+      path: ["voices", "pitch", "stepEnv"], unit: "st",
+      visMin: -12, visMax: 12, hardMin: -48, hardMax: 48 });
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.semitone_rangeEnv)
+    list.push({ key: "voicesPitchRange", label: "pitch · semitone_range", group: "Voices",
+      path: ["voices", "pitch", "semitone_rangeEnv"], unit: "st",
+      visMin: 0, visMax: 24, hardMin: 0, hardMax: 96 });
+  if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
+    list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
+      path: ["voices", "onset_offset", "stepEnv"], unit: "s",
+      visMin: 0, visMax: 1, hardMin: 0, hardMax: 60 });
+  if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.baseEnv)
+    list.push({ key: "voicesOnsetBase", label: "onset · base", group: "Voices",
+      path: ["voices", "onset_offset", "baseEnv"], unit: "",
+      visMin: 1, visMax: 4, hardMin: 0.01, hardMax: 100 });
+  if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.max_offsetEnv)
+    list.push({ key: "voicesOnsetMaxOffset", label: "onset · max_offset", group: "Voices",
+      path: ["voices", "onset_offset", "max_offsetEnv"], unit: "s",
+      visMin: 0, visMax: 2, hardMin: 0, hardMax: 60 });
+  if (stream.voices && stream.voices.pointer && stream.voices.pointer.stepEnv)
+    list.push({ key: "voicesPointerStep", label: "pointer · step", group: "Voices",
+      path: ["voices", "pointer", "stepEnv"], unit: "",
+      visMin: -1, visMax: 1, hardMin: -1, hardMax: 1 });
+  if (stream.voices && stream.voices.pointer && stream.voices.pointer.pointer_rangeEnv)
+    list.push({ key: "voicesPointerRange", label: "pointer · range", group: "Voices",
+      path: ["voices", "pointer", "pointer_rangeEnv"], unit: "",
+      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+  if (stream.voices && stream.voices.pan && stream.voices.pan.spreadEnv)
+    list.push({ key: "voicesPanSpread", label: "pan · spread", group: "Voices",
+      path: ["voices", "pan", "spreadEnv"], unit: "°",
+      visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
   if (Array.isArray(stream.dephase)) {
     list.push({ key: "dephase", label: "probability", group: "Dephase",
       path: ["dephase"], unit: "%",
@@ -41,7 +103,9 @@ function listEnvelopes(stream) {
 function getNested(obj, path) {return path.reduce((o, k) => o == null ? o : o[k], obj);}
 function patchForPath(stream, path, value) {
   if (path.length === 1) return { [path[0]]: value };
-  return { [path[0]]: { ...(stream[path[0]] || {}), [path[1]]: value } };
+  if (path.length === 2) return { [path[0]]: { ...(stream[path[0]] || {}), [path[1]]: value } };
+  const top = stream[path[0]] || {};
+  return { [path[0]]: { ...top, [path[1]]: { ...(top[path[1]] || {}), [path[2]]: value } } };
 }
 
 function fmtY(v, env) {
@@ -57,25 +121,56 @@ function fmtY(v, env) {
 function EnvParamSelect({ envelopes, value, onChange, compact }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = useStateEE(false);
+  const [menuPos, setMenuPos] = useStateEE({ top: 0, left: 0, width: 0 });
   const ref = useRefEE(null);
+  const btnRef = useRefEE(null);
+  useEffectEE(() => {
+    if (open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const MARGIN = 6;
+      const spaceBelow = window.innerHeight - r.bottom - MARGIN;
+      const spaceAbove = r.top - MARGIN;
+      const flipUp = spaceBelow < 120 && spaceAbove > spaceBelow;
+      setMenuPos({
+        top: r.bottom + 2,
+        bottom: window.innerHeight - r.top + 2,
+        left: r.left,
+        width: r.width,
+        flipUp,
+        maxH: Math.min(320, flipUp ? spaceAbove : spaceBelow),
+      });
+    }
+  }, [open]);
   useEffectEE(() => {
     function onDoc(e) {if (ref.current && !ref.current.contains(e.target)) setOpen(false);}
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  useEffectEE(() => {
+    function onResize() { setOpen(false); }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
   const cur = envelopes.find((e) => e.key === value) || envelopes[0];
   const groups = {};
   envelopes.forEach((e) => {(groups[e.group] = groups[e.group] || []).push(e);});
   return (
     <div className={"ee-psel-wrap" + (compact ? " compact" : "")} ref={ref}>
-      <button className="ee-psel-btn" onClick={() => setOpen((o) => !o)}>
+      <button className="ee-psel-btn" ref={btnRef} onClick={() => setOpen((o) => !o)}>
         {compact ? null : <span className="ee-psel-grp">{cur.group}</span>}
         {compact ? null : <span className="ee-psel-sep">/</span>}
         <span className="ee-psel-lbl">{cur.label}</span>
         <Icon name="chevronDown" size={11} />
       </button>
       {open ?
-      <div className="ee-psel-menu">
+      <div className="ee-psel-menu"
+        style={{
+          position: "fixed",
+          ...(menuPos.flipUp ? { bottom: menuPos.bottom } : { top: menuPos.top }),
+          left: menuPos.left,
+          minWidth: compact ? menuPos.width : 240,
+          maxHeight: menuPos.maxH || 320,
+        }}>
           {Object.entries(groups).map(([g, items]) =>
         <div key={g} className="ee-psel-group">
               <div className="ee-psel-group-lbl">{g}</div>
@@ -213,7 +308,7 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
 
 }
 
-function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange }) {
+function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey }) {
   const { Icon } = window.PGE;
   const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
   const [selectedKey, setSelectedKey] = useStateEE(null);
@@ -222,6 +317,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const [hoverBlock, setHoverBlock] = useStateEE(null);
   const [selectedBlock, setSelectedBlock] = useStateEE(null); // originalIdx of selected loop
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
+  const [selectedPattern, setSelectedPattern] = useStateEE(null); // {blockIdx, patIdx} of selected pattern point inside a loop
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
@@ -229,7 +325,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   /* undo/redo handled globally (TopBar + ⌘Z) — gestures bracket via window.PGEHistory */
 
   /* ---- side column width sync with timeline ---- */
-  const [headW, setHeadW] = useStateEE(220);
+  const [headW, setHeadW] = useStateEE(() => {
+    const stored = parseFloat(localStorage.getItem("pge-split-tl-heads"));
+    return (stored > 0) ? stored : 220;
+  });
   useEffectEE(() => {
     function pickHead() {return document.querySelector(".lanes-head");}
     let head = pickHead();
@@ -257,8 +356,15 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envelopes.find((e) => e.key === selectedKey)) setSelectedKey(envelopes[0].key);
   }, [stream && stream.id, envelopes.map((e) => e.key).join(",")]);
 
+  /* ---- external focus request from Inspector ---- */
+  useEffectEE(() => {
+    if (!focusKey) return;
+    const key = focusKey.split(":")[0];
+    if (envelopes.find((e) => e.key === key)) setSelectedKey(key);
+  }, [focusKey]);
+
   /* clear selected block/bp on stream/env switch */
-  useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);}, [stream && stream.id, selectedKey]);
+  useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}, [stream && stream.id, selectedKey]);
 
   /* ---- viewport size ---- */
   const [vp, setVp] = useStateEE({ w: 1200, h: 200 });
@@ -269,7 +375,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const ro = new ResizeObserver(upd);
     ro.observe(body);
     return () => ro.disconnect();
-  }, []);
+  }, [stream?.id]);
 
   /* ---- keyboard: Backspace/Delete removes selected breakpoint or loop ---- */
   useEffectEE(() => {
@@ -277,33 +383,47 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       if (e.key !== "Backspace" && e.key !== "Delete") return;
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
-      if (selectedBP == null && selectedBlock == null) return;
+      if (selectedBP == null && selectedBlock == null && selectedPattern == null) return;
       if (!stream) return;
       const envs = listEnvelopes(stream);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
       const cur = (getNested(stream, e2.path) || []).slice();
       const PGEEnv = window.PGEEnv;
-      if (selectedBP != null) {
+      e.preventDefault();
+      if (selectedPattern != null) {
+        // Delete a single pattern point inside a loop block. Refuse to drop
+        // endpoints (xPct 0 / 100) or to leave fewer than 2 points.
+        const { blockIdx, patIdx } = selectedPattern;
+        const block = cur[blockIdx];
+        if (!block || !PGEEnv.isCompactBlock(block)) {setSelectedPattern(null);return;}
+        const pattern = block[0];
+        if (patIdx === 0 || patIdx === pattern.length - 1) return;
+        if (pattern.length <= 2) return;
+        const newPattern = pattern.filter((_, i) => i !== patIdx);
+        const newBlock = block.slice();
+        newBlock[0] = newPattern;
+        const next = cur.map((it, i) => i === blockIdx ? newBlock : it);
+        onChange(patchForPath(stream, e2.path, next));
+        setSelectedPattern(null);
+      } else if (selectedBP != null) {
         // Allow deletion unless it would leave the envelope without any
         // standalone BP AND without any loop block (i.e. truly empty).
         const next = cur.filter((_, i) => i !== selectedBP);
         const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
         const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
         if (remainingBPs + remainingLoops < 1) {setSelectedBP(null);return;}
-        e.preventDefault();
         onChange(patchForPath(stream, e2.path, next));
         setSelectedBP(null);
       } else if (selectedBlock != null) {
         const next = cur.filter((_, i) => i !== selectedBlock);
-        e.preventDefault();
         onChange(patchForPath(stream, e2.path, next));
         setSelectedBlock(null);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [stream, selectedKey, selectedBP, selectedBlock]);
+  }, [stream, selectedKey, selectedBP, selectedBlock, selectedPattern]);
 
   /* ============ Envelope model — computed before early returns so hook count is stable ============ */
   const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
@@ -474,6 +594,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     setDragging({ kind: "bp", idx });
     setSelectedBP(idx);
     setSelectedBlock(null);
+    setSelectedPattern(null);
     beginDragHistory();
     const svg = svgRef.current;
     const rect = svg.getBoundingClientRect();
@@ -522,7 +643,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function startPatternDrag(e, blockOrigIdx, patIdx) {
     e.preventDefault();e.stopPropagation();
     setDragging({ kind: "pat", blockOrigIdx, patIdx });
-    setSelectedBlock(blockOrigIdx);
+    setSelectedPattern({ blockIdx: blockOrigIdx, patIdx });
+    setSelectedBlock(null);
     setSelectedBP(null);
     beginDragHistory();
     const svg = svgRef.current;
@@ -571,6 +693,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     setDragging({ kind: "end", blockOrigIdx });
     setSelectedBlock(blockOrigIdx);
     setSelectedBP(null);
+    setSelectedPattern(null);
     beginDragHistory();
     const svg = svgRef.current;
     const rect = svg.getBoundingClientRect();
@@ -664,7 +787,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       newBlock[0] = newPattern;
       const next = rawEnv.map((it, i) => i === hostBlock.originalIdx ? newBlock : it);
       commit(next);
-      setSelectedBlock(hostBlock.originalIdx);
+      const newPatIdx = newPattern.findIndex((p) => p === newPt);
+      setSelectedPattern({ blockIdx: hostBlock.originalIdx, patIdx: newPatIdx });
+      setSelectedBlock(null);
       setSelectedBP(null);
       return;
     }
@@ -752,6 +877,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     e.stopPropagation();
     setSelectedBlock(null);
     setSelectedBP(null);
+    setSelectedPattern(null);
     beginDragHistory();
     zoneReorderRef.current = fromZoneIdx;
     setDragging({ kind: "zone-reorder", fromIdx: fromZoneIdx, toIdx: fromZoneIdx });
@@ -874,6 +1000,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const next = [...working, block];
     commit(next);
     // select it after commit — index will be next.length - 1
+    setSelectedPattern(null);
+    setSelectedBP(null);
     setTimeout(() => setSelectedBlock(next.length - 1), 0);
   }
 
@@ -883,6 +1011,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const next = rawEnv.filter((_, i) => i !== selectedBlock);
     commit(next);
     setSelectedBlock(null);
+    setSelectedPattern(null);
   }
 
   /* ----- update loop block ----- */
@@ -1093,10 +1222,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         </div>
 
         <div className="ee-body" ref={bodyRef}>
-          <div className="ee-canvas" style={{ width: totalW, height: "100%" }}>
-            <svg ref={svgRef} className="ee-layer" width={totalW} height={H}
+          <div className="ee-canvas" style={{ height: "100%" }}>
+            <svg ref={svgRef} className="ee-layer" width="100%" height={H}
             onDoubleClick={onCanvasDblClick}
-            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);}}}>
+            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}}}>
 
               {/* vertical x grid */}
               <g className="ee-grid">
@@ -1131,7 +1260,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                       className={"ee-loop-region" + (sel ? " sel" : "") + (hov ? " hov" : "")}
                       onMouseEnter={() => setHoverBlock(b.originalIdx)}
                       onMouseLeave={() => setHoverBlock(null)}
-                      onClick={(e) => {e.stopPropagation();setSelectedBlock(b.originalIdx);setSelectedBP(null);}} />
+                      onClick={(e) => {e.stopPropagation();setSelectedBlock(b.originalIdx);setSelectedBP(null);setSelectedPattern(null);}} />
                       {/* cycle dividers */}
                       {b.cycles.slice(1).map((c, ci) =>
                       <line key={"d" + ci} x1={xOf(c.start)} x2={xOf(c.start)}
@@ -1228,7 +1357,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                       the previous cycle's last dot in confusing ways).
                       The curve path already shows each cycle's full shape. */}
                   {b.cycles[0].points.map((p, pi) => {
-                  const isSelected = selectedBlock === b.originalIdx;
+                  const isSelected = selectedPattern != null && selectedPattern.blockIdx === b.originalIdx && selectedPattern.patIdx === pi;
                   const cx = xOf(p[0]),cy = yOf(p[1]);
                   const r = isSelected ? 4 : 2.5;
                   const cls = "ee-pat-pt first" + (isSelected ? " sel" : "");

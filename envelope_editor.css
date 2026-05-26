@@ -38,7 +38,7 @@
 .ee-psel-btn .ee-psel-grp { color: var(--fg-3); }
 .ee-psel-btn .ee-psel-sep { color: var(--fg-4); }
 .ee-psel-btn .ee-psel-lbl { color: var(--accent); }
-.ee-psel-menu { position: absolute; left: 0; top: 28px; z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 4px; box-shadow: var(--shadow-popover); min-width: 240px; padding: 4px 0; max-height: 320px; overflow: auto; }
+.ee-psel-menu { z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 4px; box-shadow: var(--shadow-popover); min-width: 240px; padding: 4px 0; max-height: 320px; overflow: auto; }
 .ee-psel-group { padding: 2px 0; border-bottom: 1px solid var(--border-subtle); }
 .ee-psel-group:last-child { border-bottom: 0; }
 .ee-psel-group-lbl { padding: 4px 10px 2px; font: 9px var(--font-mono); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -51,7 +51,7 @@
 
 /* Canvas — fills body width; x ∈ [0,1] always (decoupled from timeline) */
 .pge-envedit .ee-body { flex: 1; min-height: 0; min-width: 0; overflow: hidden; background: var(--bg-grid); position: relative; }
-.pge-envedit .ee-canvas { position: relative; height: 100%; }
+.pge-envedit .ee-canvas { position: relative; height: 100%; width: 100%; }
 .pge-envedit .ee-layer { position: absolute; left: 0; top: 0; display: block; }
 .pge-envedit .ee-grid line.v { stroke: #1A1C20; stroke-width: 1; }
 .pge-envedit .ee-grid line.v.major { stroke: #23262C; }

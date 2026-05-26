@@ -31,6 +31,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "terminalOpen": false,
   "terminalHeight": 220,
   "shortcutInspector": "cmd+i",
+  "shortcutEnvelopeEditor": "ctrl+o",
   "shortcutBackToStart": "z",
   "shortcutPlay": "x",
   "shortcutStop": "c",
@@ -117,9 +118,19 @@ function _applyEnvFields(stream, fn) {
     ...wf(stream, "densityEnv"),
     ...wf(stream, "distributionEnv"),
     ...wf(stream, "panEnv"),
-    grain:  stream.grain   ? { ...stream.grain,   ...wf(stream.grain,   "durationEnv")  } : stream.grain,
-    ptr:    stream.ptr     ? { ...stream.ptr,      ...wf(stream.ptr,     "speedRatioEnv")} : stream.ptr,
-    voices: stream.voices  ? { ...stream.voices,   ...wf(stream.voices,  "numEnv")       } : stream.voices,
+    ...wf(stream, "volumeEnv"),
+    grain:   stream.grain   ? { ...stream.grain,   ...wf(stream.grain,   "durationEnv")   } : stream.grain,
+    pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv") } : stream.pointer,
+    pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "semitonesEnv")  } : stream.pitch,
+    voices:  stream.voices  ? {
+      ...stream.voices,
+      ...wf(stream.voices, "numEnv"),
+      ...wf(stream.voices, "scatterEnv"),
+      pitch:        stream.voices.pitch        ? { ...stream.voices.pitch,        ...wf(stream.voices.pitch,        "stepEnv"), ...wf(stream.voices.pitch,        "semitone_rangeEnv") } : stream.voices.pitch,
+      onset_offset: stream.voices.onset_offset ? { ...stream.voices.onset_offset, ...wf(stream.voices.onset_offset, "stepEnv"), ...wf(stream.voices.onset_offset, "baseEnv"), ...wf(stream.voices.onset_offset, "max_offsetEnv") } : stream.voices.onset_offset,
+      pointer:      stream.voices.pointer      ? { ...stream.voices.pointer,      ...wf(stream.voices.pointer,      "stepEnv"), ...wf(stream.voices.pointer,      "pointer_rangeEnv") } : stream.voices.pointer,
+      pan:          stream.voices.pan          ? { ...stream.voices.pan,          ...wf(stream.voices.pan,          "spreadEnv") } : stream.voices.pan,
+    } : stream.voices,
   };
 }
 
@@ -134,10 +145,22 @@ function truncateStreamEnvelopes(stream) {
 
 function streamWouldTruncate(stream, ratio) {
   const fields = [
-    stream.densityEnv, stream.distributionEnv, stream.panEnv,
-    stream.grain && stream.grain.durationEnv,
-    stream.ptr   && stream.ptr.speedRatioEnv,
-    stream.voices && stream.voices.numEnv,
+    stream.densityEnv, stream.distributionEnv, stream.panEnv, stream.volumeEnv,
+    stream.grain    && stream.grain.durationEnv,
+    stream.pointer  && stream.pointer.speedRatioEnv,
+    stream.pointer  && stream.pointer.loopStartEnv,
+    stream.pointer  && stream.pointer.loopDurEnv,
+    stream.pitch    && stream.pitch.semitonesEnv,
+    stream.voices   && stream.voices.numEnv,
+    stream.voices   && stream.voices.scatterEnv,
+    stream.voices && stream.voices.pitch        && stream.voices.pitch.stepEnv,
+    stream.voices && stream.voices.pitch        && stream.voices.pitch.semitone_rangeEnv,
+    stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv,
+    stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.baseEnv,
+    stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.max_offsetEnv,
+    stream.voices && stream.voices.pointer      && stream.voices.pointer.stepEnv,
+    stream.voices && stream.voices.pointer      && stream.voices.pointer.pointer_rangeEnv,
+    stream.voices && stream.voices.pan          && stream.voices.pan.spreadEnv,
   ];
   return fields.some(f => f && envArrayWouldTruncate(f, ratio));
 }
@@ -268,6 +291,8 @@ function App() {
       else if (k === "s" && !e.shiftKey) { e.preventDefault(); onSave(); }
       else if (k === "s" && e.shiftKey)  { e.preventDefault(); onSaveAs(); }
       else if (k === "r") { e.preventDefault(); onRender(); }
+      else if (k === "c" && selectedIds.length > 0) { e.preventDefault(); copySelectedStreams(); }
+      else if (k === "v" && clipboardRef.current.length > 0) { e.preventDefault(); pasteStreams(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -287,6 +312,7 @@ function App() {
   const [activeSample, setActiveSample] = useStateApp(null);
   const tickRef = useRefApp();
   const arrowGestureRef = useRefApp(false);
+  const clipboardRef = React.useRef([]);
   const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: data.samples || [], error: null });
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: Object.keys(PROJECTS_DB).map(p => ({ name: p })), error: null });
 
@@ -305,6 +331,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
   const [backendKind, setBackendKind] = useStateApp(tweaks.backendKind || "mock");
   const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
+  const [envFocusKey, setEnvFocusKey] = useStateApp(null);
 
   async function _syncPathsFromServer(baseUrl, currentTweaks) {
     try {
@@ -574,6 +601,11 @@ function App() {
         toggleInspector();
         return;
       }
+      if (matchShortcut(e, tweaks.shortcutEnvelopeEditor || "ctrl+o")) {
+        e.preventDefault();
+        setTweak("showEnvelopeEditor", tweaks.showEnvelopeEditor === false ? true : false);
+        return;
+      }
       if (matchShortcut(e, tweaks.shortcutBackToStart || "z")) { e.preventDefault(); doSeekZero(); return; }
       if (matchShortcut(e, tweaks.shortcutPlay || "x"))        { e.preventDefault(); doPlay();    return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
@@ -600,7 +632,9 @@ function App() {
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
-      else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+      else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && !e.defaultPrevented) {
+        // Envelope editor is visible and showing this stream — let it handle Delete (BP deletion)
+        if (tweaks.showEnvelopeEditor !== false && selected()) return;
         e.preventDefault();
         deleteStream(selectedId);
       }
@@ -620,6 +654,36 @@ function App() {
   });
 
   /* ============ Stream mutations ============ */
+  function copySelectedStreams() {
+    const toCopy = data.streams.filter(s => selectedIds.includes(s.id));
+    if (!toCopy.length) return;
+    clipboardRef.current = JSON.parse(JSON.stringify(toCopy));
+  }
+  function pasteStreams() {
+    const copied = clipboardRef.current;
+    if (!copied.length) return;
+    const minOnset = Math.min(...copied.map(s => s.onset));
+    const shift = Math.max(0, time) - minOnset;
+    const newIds = [];
+    setData(d => {
+      const usedIds = new Set(d.streams.map(s => s.id));
+      let counter = d.streams.length + 1;
+      function freshId() {
+        while (usedIds.has("stream" + counter)) counter++;
+        const id = "stream" + counter++;
+        usedIds.add(id);
+        return id;
+      }
+      const pasted = copied.map(s => {
+        const id = freshId();
+        newIds.push(id);
+        return { ...JSON.parse(JSON.stringify(s)), id, onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+      });
+      return { ...d, streams: [...d.streams, ...pasted] };
+    });
+    setSelectedIds(newIds);
+    setDirty(true);
+  }
   function updateStream(id, patch) {
     if (freezeEnvOnResize && patch.duration != null) {
       const cur = data.streams.find(s => s.id === id);
@@ -744,6 +808,7 @@ function App() {
   function openInspector(id) {
     if (id != null) setSelectedIds([id]);
     setInspectorOpen(true);
+    setTweak("showEnvelopeEditor", true);
   }
   function closeInspector() { setInspectorOpen(false); }
   function toggleInspector() {
@@ -1096,7 +1161,8 @@ function App() {
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
                     playhead={time}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
-                    onLoopPanelChange={setLoopPanelOpen} />
+                    onLoopPanelChange={setLoopPanelOpen}
+                    focusKey={envFocusKey} />
   );
   const center = (
     <div className="pge-center" data-screen-label="01 Main · Timeline + Envelopes">
@@ -1115,7 +1181,11 @@ function App() {
                tab={inspectorTab} onTab={setInspectorTab}
                samples={mediaList.files}
                freezeEnvOnResize={freezeEnvOnResize}
-               onFreezeEnvToggle={setFreezeEnvOnResize} />
+               onFreezeEnvToggle={setFreezeEnvOnResize}
+               onFocusEnvParam={(key) => {
+                 if (tweaks.showEnvelopeEditor === false) setTweak("showEnvelopeEditor", true);
+                 setEnvFocusKey(key + ":" + Date.now());
+               }} />
   ) : null;
 
   return (

@@ -119,6 +119,7 @@ function DephaseSection({ stream, onChange }) {
                   unit={Array.isArray(d) ? "" : "%"}
                   accent={Array.isArray(d)}
                   envValue={Array.isArray(d) ? d : null}
+                  onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("dephase") : undefined}
                   onValue={(v) => onChange({dephase: v})} />
       ) : null}
 
@@ -260,11 +261,12 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle }) {
+function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
   const samplePickerTrigger = React.useRef(null);
+  const focusEnv = onFocusEnvParam ? (key) => () => onFocusEnvParam(key) : () => undefined;
 
   // Empty state — inspector opened via shortcut with no stream selected.
   // Keep the panel chrome so the layout doesn't jump, but show a hint.
@@ -305,8 +307,14 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "density" && stream.densityEnv) return "env";
     if (k === "distribution" && stream.distributionEnv) return "env";
     if (k === "speedRatio" && stream.pointer && stream.pointer.speedRatioEnv) return "env";
+    if (k === "loopStart"  && stream.pointer && stream.pointer.loopStartEnv)  return "env";
+    if (k === "loopDur"    && stream.pointer && stream.pointer.loopDurEnv)    return "env";
     if (k === "grainDur" && stream.grain && stream.grain.durationEnv) return "env";
     if (k === "pan" && stream.panEnv) return "env";
+    if (k === "volume" && stream.volumeEnv) return "env";
+    if (k === "pitch" && stream.pitch && stream.pitch.semitonesEnv) return "env";
+    if (k === "voicesNum" && stream.voices && stream.voices.numEnv) return "env";
+    if (k === "scatter" && stream.voices && stream.voices.scatterEnv) return "env";
     return fallback || "scalar";
   };
 
@@ -314,11 +322,12 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0 };
+    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: -6 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
       distribution: { sk: "distribution",ek: "distributionEnv" },
       pan:          { sk: "pan",         ek: "panEnv" },
+      volume:       { sk: "volume",      ek: "volumeEnv" },
     };
     if (k === "speedRatio") {
       const cur = stream.pointer || {};
@@ -339,6 +348,61 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
       } else {
         const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || 0.05;
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
+      }
+      return;
+    }
+    if (k === "loopStart") {
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = cur.loopStart != null ? cur.loopStart : 0;
+        onChange({ pointer: { ...cur, loopStart: null, loopStartEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.loopStartEnv && cur.loopStartEnv[0] && cur.loopStartEnv[0][1]) || 0;
+        onChange({ pointer: { ...cur, loopStart: v, loopStartEnv: null } });
+      }
+      return;
+    }
+    if (k === "loopDur") {
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = cur.loopDur != null ? cur.loopDur : 1;
+        onChange({ pointer: { ...cur, loopDur: null, loopDurEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.loopDurEnv && cur.loopDurEnv[0] && cur.loopDurEnv[0][1]) || 1;
+        onChange({ pointer: { ...cur, loopDur: v, loopDurEnv: null } });
+      }
+      return;
+    }
+    if (k === "pitch") {
+      const cur = stream.pitch || {};
+      if (newMode === "env") {
+        const v = cur.semitones != null ? cur.semitones : 0;
+        onChange({ pitch: { ...cur, semitones: null, semitonesEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.semitonesEnv && cur.semitonesEnv[0] && cur.semitonesEnv[0][1]) || 0;
+        onChange({ pitch: { ...cur, semitones: v, semitonesEnv: null } });
+      }
+      return;
+    }
+    if (k === "voicesNum") {
+      const cur = stream.voices || {};
+      if (newMode === "env") {
+        const v = cur.num != null ? cur.num : 1;
+        onChange({ voices: { ...cur, num: null, numEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.numEnv && cur.numEnv[0] && cur.numEnv[0][1]) || 1;
+        onChange({ voices: { ...cur, num: v, numEnv: null } });
+      }
+      return;
+    }
+    if (k === "scatter") {
+      const cur = stream.voices || {};
+      if (newMode === "env") {
+        const v = cur.scatter != null ? cur.scatter : 0;
+        onChange({ voices: { ...cur, scatter: null, scatterEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.scatterEnv && cur.scatterEnv[0] && cur.scatterEnv[0][1]) || 0;
+        onChange({ voices: { ...cur, scatter: v, scatterEnv: null } });
       }
       return;
     }
@@ -501,6 +565,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                           value={stream.density != null ? stream.density : "—"} unit={stream.densityEnv ? "" : "g/s"}
                           accent={stream.densityEnv != null}
                           envValue={stream.densityEnv}
+                          onEditEnv={focusEnv("density")}
                           onSelect={() => setSelRow("density")} selected={selRow==="density"}
                           onValue={(v) => onChange({density: v})} />
               )}
@@ -509,6 +574,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         value={stream.distribution != null ? stream.distribution : "—"}
                         accent={stream.distributionEnv != null}
                         envValue={stream.distributionEnv}
+                        onEditEnv={focusEnv("distribution")}
                         onSelect={() => setSelRow("distribution")} selected={selRow==="distribution"}
                         onValue={(v) => onChange({distribution: v})} />
               <div className="pge-prow hint" style={{paddingTop:0}}>
@@ -527,16 +593,21 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         value={stream.pointer.speedRatio != null ? stream.pointer.speedRatio : "—"} unit="×"
                         accent={stream.pointer.speedRatioEnv != null}
                         envValue={stream.pointer.speedRatioEnv}
+                        onEditEnv={focusEnv("speedRatio")}
                         onSelect={() => setSelRow("speed")} selected={selRow==="speed"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, speedRatio: v}})} />
               <ParamRow name="start" mode="scalar"
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {(stream.pointer.loopStart != null || stream.pointer.loopEnd != null || stream.pointer.loopDur != null || stream.pointer.loopUnit != null) ? (
+              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
                 <>
-                  <ParamRow name="loop_start" mode="scalar"
-                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : 0} unit="s"
+                  <ParamRow name="loop_start"
+                            mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
+                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : (stream.pointer.loopStartEnv ? "—" : 0)} unit={stream.pointer.loopStartEnv ? "" : "s"}
+                            accent={stream.pointer.loopStartEnv != null}
+                            envValue={stream.pointer.loopStartEnv}
+                            onEditEnv={focusEnv("loopStart")}
                             onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: v}})} />
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
@@ -546,7 +617,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                            if (u === "loop_end") {
                              const le = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
                                : (stream.pointer.loopStart || 0) + (stream.pointer.loopDur != null ? stream.pointer.loopDur : 1);
-                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopDur: null } });
+                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopDur: null, loopDurEnv: null } });
                            } else {
                              const ld = stream.pointer.loopDur != null ? stream.pointer.loopDur
                                : Math.max(0.01, (stream.pointer.loopEnd || 0) - (stream.pointer.loopStart || 0));
@@ -554,13 +625,26 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                            }
                          }}
                          options={[{label:"loop_dur",value:"loop_dur"},{label:"loop_end",value:"loop_end"}]} />
-                    <span className="v">
-                      <NumberField
-                        value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopDur != null ? stream.pointer.loopDur : 0)}
-                        unit="s" width={70} />
-                    </span>
+                    {stream.pointer.loopEnd != null ? (
+                      <span className="v">
+                        <NumberField value={stream.pointer.loopEnd} unit="s" width={70} />
+                      </span>
+                    ) : (
+                      <span className="v">
+                        <NumberField value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? null : 0)} unit={stream.pointer.loopDurEnv ? "" : "s"} width={70} />
+                      </span>
+                    )}
                     <span />
                   </div>
+                  {stream.pointer.loopEnd == null ? (
+                    <ParamRow name="loop_duration"
+                              mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
+                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
+                              accent={stream.pointer.loopDurEnv != null}
+                              envValue={stream.pointer.loopDurEnv}
+                              onEditEnv={focusEnv("loopDur")}
+                              onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: v}})} />
+                  ) : null}
                   {stream.pointer.loopUnit ? (
                     <div className="pge-prow">
                       <span className="k">loop_unit</span><span />
@@ -619,6 +703,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         range={stream.grain.durationRange}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
+                        onEditEnv={focusEnv("grainDur")}
                         onSelect={() => setSelRow("grain.dur")} selected={selRow==="grain.dur"}
                         onValue={(v) => onChange({grain: {...stream.grain, duration: v}})} />
               <window.PGE.EnvelopeSelectorRow
@@ -673,9 +758,15 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   onSelect={() => setSelRow("pitch.ratio")} selected={selRow==="pitch.ratio"}
                   onValue={(v) => onChange({pitch: {...stream.pitch, ratio: v}})} />
               ) : (
-                <ParamRow name="semitones" mode="scalar" value={stream.pitch.semitones != null ? stream.pitch.semitones : 0} unit="st" range={stream.pitch.range}
-                  onSelect={() => setSelRow("pitch.semi")} selected={selRow==="pitch.semi"}
-                  onValue={(v) => onChange({pitch: {...stream.pitch, semitones: v}})} />
+                <ParamRow name="semitones"
+                          mode={getMode("pitch")} onMode={(m) => toggleMode("pitch", m)}
+                          value={stream.pitch.semitones != null ? stream.pitch.semitones : "—"} unit={stream.pitch.semitonesEnv ? "" : "st"}
+                          range={stream.pitch.range}
+                          accent={stream.pitch.semitonesEnv != null}
+                          envValue={stream.pitch.semitonesEnv}
+                          onEditEnv={focusEnv("pitch")}
+                          onSelect={() => setSelRow("pitch.semi")} selected={selRow==="pitch.semi"}
+                          onValue={(v) => onChange({pitch: {...stream.pitch, semitones: v}})} />
               )}
               <ParamRow name="range" mode="scalar" value={stream.pitch.range != null ? stream.pitch.range : 0}
                         unit={stream.pitch.ratio != null && stream.pitch.semitones == null ? "" : "st"}
@@ -683,9 +774,15 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             </Section>
 
             <Section title="Volume & Pan">
-              <ParamRow name="volume" mode="scalar" value={stream.volume} unit="dB" range={stream.volumeRange}
-                onSelect={() => setSelRow("vol")} selected={selRow==="vol"}
-                onValue={(v) => onChange({volume: v})} />
+              <ParamRow name="volume"
+                        mode={getMode("volume")} onMode={(m) => toggleMode("volume", m)}
+                        value={stream.volume != null ? stream.volume : "—"} unit={stream.volumeEnv ? "" : "dB"}
+                        range={stream.volumeRange}
+                        accent={stream.volumeEnv != null}
+                        envValue={stream.volumeEnv}
+                        onEditEnv={focusEnv("volume")}
+                        onSelect={() => setSelRow("vol")} selected={selRow==="vol"}
+                        onValue={(v) => onChange({volume: v})} />
               <ParamRow name="volume_range" mode="scalar" value={stream.volumeRange != null ? stream.volumeRange : 0} unit="dB"
                 onValue={(v) => onChange({volumeRange: v})} />
               <ParamRow name="pan"
@@ -694,6 +791,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         range={stream.panRange}
                         accent={stream.panEnv != null}
                         envValue={stream.panEnv}
+                        onEditEnv={focusEnv("pan")}
                         onSelect={() => setSelRow("pan")} selected={selRow==="pan"}
                         onValue={(v) => onChange({pan: v})} />
               <ParamRow name="pan_range" mode="scalar" value={stream.panRange != null ? stream.panRange : 0} unit="°"
@@ -702,7 +800,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
 
             <DephaseSection stream={stream} onChange={onChange} />
 
-            {window.PGE.VoicesSection ? <window.PGE.VoicesSection stream={stream} onChange={onChange} /> : null}
+            {window.PGE.VoicesSection ? <window.PGE.VoicesSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} /> : null}
 
           </div>
         </>
