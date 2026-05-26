@@ -30,8 +30,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "renderPreclean": false,
   "terminalOpen": false,
   "terminalHeight": 220,
-  "shortcutInspector": "cmd+i",
-  "shortcutEnvelopeEditor": "ctrl+o",
+  "shortcutRender": "r",
+  "shortcutSettings": ",",
+  "shortcutInspector": "i",
+  "shortcutEnvelopeEditor": "o",
   "shortcutBackToStart": "z",
   "shortcutPlay": "x",
   "shortcutStop": "c",
@@ -290,7 +292,6 @@ function App() {
       else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); }
       else if (k === "s" && !e.shiftKey) { e.preventDefault(); onSave(); }
       else if (k === "s" && e.shiftKey)  { e.preventDefault(); onSaveAs(); }
-      else if (k === "r") { e.preventDefault(); onRender(); }
       else if (k === "c" && selectedIds.length > 0) { e.preventDefault(); copySelectedStreams(); }
       else if (k === "v" && clipboardRef.current.length > 0) { e.preventDefault(); pasteStreams(); }
     }
@@ -596,16 +597,18 @@ function App() {
     function onKey(e) {
       const tg = e.target;
       if (tg && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.tagName === "SELECT" || tg.isContentEditable)) return;
-      if (matchShortcut(e, tweaks.shortcutInspector || "cmd+i")) {
+      if (matchShortcut(e, tweaks.shortcutInspector || "i")) {
         e.preventDefault();
         toggleInspector();
         return;
       }
-      if (matchShortcut(e, tweaks.shortcutEnvelopeEditor || "ctrl+o")) {
+      if (matchShortcut(e, tweaks.shortcutEnvelopeEditor || "o")) {
         e.preventDefault();
         setTweak("showEnvelopeEditor", tweaks.showEnvelopeEditor === false ? true : false);
         return;
       }
+      if (matchShortcut(e, tweaks.shortcutSettings || ",")) { e.preventDefault(); setSettingsOpen(o => !o); return; }
+      if (matchShortcut(e, tweaks.shortcutRender || "r"))    { e.preventDefault(); onRender();  return; }
       if (matchShortcut(e, tweaks.shortcutBackToStart || "z")) { e.preventDefault(); doSeekZero(); return; }
       if (matchShortcut(e, tweaks.shortcutPlay || "x"))        { e.preventDefault(); doPlay();    return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }

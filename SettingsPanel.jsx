@@ -177,13 +177,23 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
         <div className="sp-section">
           <div className="sp-sec-head">Shortcuts</div>
           <div className="sp-row">
+            <span className="sp-k" title="apre/chiude il pannello impostazioni">settings</span>
+            <ShortcutInput value={tweaks.shortcutSettings || ","}
+                           onChange={(v) => setTweak("shortcutSettings", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="avvia il render del progetto corrente">render</span>
+            <ShortcutInput value={tweaks.shortcutRender || "r"}
+                           onChange={(v) => setTweak("shortcutRender", v)} />
+          </div>
+          <div className="sp-row">
             <span className="sp-k" title="apre/chiude l'inspector da tastiera">inspector toggle</span>
-            <ShortcutInput value={tweaks.shortcutInspector || "cmd+i"}
+            <ShortcutInput value={tweaks.shortcutInspector || "i"}
                            onChange={(v) => setTweak("shortcutInspector", v)} />
           </div>
           <div className="sp-row">
             <span className="sp-k" title="apre/chiude il pannello envelope editor">envelope editor toggle</span>
-            <ShortcutInput value={tweaks.shortcutEnvelopeEditor || "ctrl+o"}
+            <ShortcutInput value={tweaks.shortcutEnvelopeEditor || "o"}
                            onChange={(v) => setTweak("shortcutEnvelopeEditor", v)} />
           </div>
           <div className="sp-row">

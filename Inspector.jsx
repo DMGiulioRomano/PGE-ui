@@ -53,7 +53,7 @@ function detectDephaseMode(d) {
   return "implicit";
 }
 
-function DephaseSection({ stream, onChange }) {
+function DephaseSection({ stream, onChange, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Icon, Tag } = window.PGE;
   const d = stream.dephase;
   const mode = detectDephaseMode(d);
@@ -292,7 +292,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
           </div>
           {window.prettyShortcut ? (
             <div className="inspector-empty-kbd mono">
-              <kbd>{window.prettyShortcut((window.PGE_TWEAKS && window.PGE_TWEAKS.shortcutInspector) || "cmd+i")}</kbd>
+              <kbd>{window.prettyShortcut((window.PGE_TWEAKS && window.PGE_TWEAKS.shortcutInspector) || "i")}</kbd>
               <span>per nascondere</span>
             </div>
           ) : null}
@@ -798,7 +798,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 onValue={(v) => onChange({panRange: v})} />
             </Section>
 
-            <DephaseSection stream={stream} onChange={onChange} />
+            <DephaseSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} />
 
             {window.PGE.VoicesSection ? <window.PGE.VoicesSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} /> : null}
 
