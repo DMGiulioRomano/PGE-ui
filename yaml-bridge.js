@@ -80,6 +80,38 @@
     return { scalar: yamlVal, env: null };
   }
 
+  const VOICE_STRAT_ENV_PARAMS = ["step", "semitone_range", "max_offset", "base", "pointer_range", "spread"];
+
+  function unpackStrategy(raw) {
+    if (!raw || typeof raw !== "object") return raw;
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (VOICE_STRAT_ENV_PARAMS.includes(k)) {
+        const u = unpackValueOrEnv(v);
+        out[k] = u.scalar;
+        if (u.env) out[k + "Env"] = u.env;
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  function packStrategy(obj) {
+    if (!obj || typeof obj !== "object") return obj;
+    const out = {};
+    for (const k of Object.keys(obj)) {
+      if (k.endsWith("Env")) continue;
+      if (VOICE_STRAT_ENV_PARAMS.includes(k)) {
+        const packed = pickValueOrEnv(obj[k], obj[k + "Env"]);
+        if (packed !== undefined) out[k] = packed;
+      } else {
+        if (obj[k] !== undefined && obj[k] !== null) out[k] = obj[k];
+      }
+    }
+    return out;
+  }
+
   function stripUndef(obj) {
     if (Array.isArray(obj)) return obj.map(stripUndef);
     if (obj && typeof obj === "object") {
@@ -136,18 +168,19 @@
     const ptrY = {
       start:         ptr.start ?? undefined,
       speed_ratio:   ptrSp,
-      loop_start:    ptr.loopStart ?? undefined,
-      loop_duration: ptr.loopDur ?? undefined,
+      loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
+      loop_duration: pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
     };
     if (Object.values(ptrY).some(v => v !== undefined)) {
       y.pointer = stripUndef(ptrY);
     }
 
     const pi = s.pitch || {};
-    if (nonZero(pi.semitones) || nonZero(pi.range)) {
+    const pitchSemi = pickValueOrEnv(pi.semitones, pi.semitonesEnv);
+    if (pitchSemi !== undefined || nonZero(pi.range)) {
       y.pitch = stripUndef({
-        semitones: nonZero(pi.semitones) ? pi.semitones : undefined,
-        range:     nonZero(pi.range)     ? pi.range     : undefined,
+        semitones: pitchSemi !== undefined ? pitchSemi : undefined,
+        range:     nonZero(pi.range) ? pi.range : undefined,
       });
     }
 
@@ -155,22 +188,24 @@
     if (pan !== undefined) y.pan = pan;
     if (nonZero(s.panRange)) y.pan_range = s.panRange;
 
-    if (s.volume != null) y.volume = s.volume;
+    const vol = pickValueOrEnv(s.volume, s.volumeEnv);
+    if (vol !== undefined) y.volume = vol;
     if (nonZero(s.volumeRange)) y.volume_range = s.volumeRange;
 
     const v = s.voices || {};
     const numOut = pickValueOrEnv(v.num, v.numEnv);
+    const scatterOut = pickValueOrEnv(v.scatter, v.scatterEnv);
     const hasVoiceCfg =
       (numOut !== undefined && numOut !== 1) ||
-      v.scatter != null ||
+      scatterOut != null ||
       v.pitch || v.onset_offset || v.pointer || v.pan;
     if (hasVoiceCfg) {
       const vy = { num_voices: numOut !== undefined ? numOut : 1 };
-      if (v.scatter != null)  vy.scatter      = v.scatter;
-      if (v.pitch)            vy.pitch        = v.pitch;
-      if (v.onset_offset)     vy.onset_offset = v.onset_offset;
-      if (v.pointer)          vy.pointer      = v.pointer;
-      if (v.pan)              vy.pan          = v.pan;
+      if (scatterOut != null) vy.scatter      = scatterOut;
+      if (v.pitch)            vy.pitch        = packStrategy(v.pitch);
+      if (v.onset_offset)     vy.onset_offset = packStrategy(v.onset_offset);
+      if (v.pointer)          vy.pointer      = packStrategy(v.pointer);
+      if (v.pan)              vy.pan          = packStrategy(v.pan);
       y.voices = vy;
     }
 
@@ -253,7 +288,7 @@
       distribution:    dist.scalar,
       distributionEnv: dist.env,
 
-      volume: y.volume ?? -6,
+      ...(() => { const v = unpackValueOrEnv(y.volume ?? -6); return { volume: v.scalar, volumeEnv: v.env }; })(),
       volumeRange: y.volume_range || 0,
       pan:    pan.scalar,
       panEnv: pan.env,
@@ -269,23 +304,25 @@
         start:         ptr.start ?? 0,
         speedRatio:    ptrSp.scalar,
         speedRatioEnv: ptrSp.env,
-        loopStart:     ptr.loop_start ?? null,
-        loopDur:       ptr.loop_duration ?? null,
+        ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),
+        ...(() => { const ld = unpackValueOrEnv(ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
       },
-      pitch: {
-        semitones: y.pitch?.semitones ?? 0,
-        range:     y.pitch?.range || 0,
-      },
+      pitch: (() => {
+        const ps = unpackValueOrEnv(y.pitch?.semitones ?? 0);
+        return { semitones: ps.scalar, semitonesEnv: ps.env, range: y.pitch?.range || 0 };
+      })(),
       voices: (() => {
         const nv = unpackValueOrEnv(y.voices?.num_voices);
+        const sc = unpackValueOrEnv(y.voices?.scatter ?? null);
         return {
           num:          nv.scalar != null ? nv.scalar : (nv.env ? null : 1),
           numEnv:       nv.env,
-          scatter:      y.voices?.scatter ?? null,
-          pitch:        y.voices?.pitch,
-          onset_offset: y.voices?.onset_offset,
-          pointer:      y.voices?.pointer,
-          pan:          y.voices?.pan,
+          scatter:      sc.scalar,
+          scatterEnv:   sc.env,
+          pitch:        unpackStrategy(y.voices?.pitch),
+          onset_offset: unpackStrategy(y.voices?.onset_offset),
+          pointer:      unpackStrategy(y.voices?.pointer),
+          pan:          unpackStrategy(y.voices?.pan),
         };
       })(),
       dephase: y.dephase ?? undefined,

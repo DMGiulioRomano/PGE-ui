@@ -182,6 +182,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
                            onChange={(v) => setTweak("shortcutInspector", v)} />
           </div>
           <div className="sp-row">
+            <span className="sp-k" title="apre/chiude il pannello envelope editor">envelope editor toggle</span>
+            <ShortcutInput value={tweaks.shortcutEnvelopeEditor || "ctrl+o"}
+                           onChange={(v) => setTweak("shortcutEnvelopeEditor", v)} />
+          </div>
+          <div className="sp-row">
             <span className="sp-k" title="torna all'inizio (back to start)">back to start</span>
             <ShortcutInput value={tweaks.shortcutBackToStart || "z"}
                            onChange={(v) => setTweak("shortcutBackToStart", v)} />

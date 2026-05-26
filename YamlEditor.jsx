@@ -32,11 +32,14 @@ function buildLines(stream, sampleRec) {
   push({ ind: 0, kind: "block", key: "pointer" });
   if (stream.pointer.speedRatioEnv) push({ ind: 1, kind: "raw", key: "speed_ratio", val: envInline(stream.pointer.speedRatioEnv) });
   else if (stream.pointer.speedRatio != null) push({ ind: 1, kind: "v", key: "speed_ratio", val: fmtNum(stream.pointer.speedRatio) });
-  if (stream.pointer.loopStart != null) {
-    push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
+  if (stream.pointer.loopStart != null || stream.pointer.loopStartEnv) {
+    if (stream.pointer.loopStartEnv) push({ ind: 1, kind: "raw", key: "loop_start", val: envInline(stream.pointer.loopStartEnv) });
+    else push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
     if (stream.pointer.loopEnd != null) {
       push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
         err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
+    } else if (stream.pointer.loopDurEnv) {
+      push({ ind: 1, kind: "raw", key: "loop_duration", val: envInline(stream.pointer.loopDurEnv) });
     } else if (stream.pointer.loopDur != null) {
       push({ ind: 1, kind: "v", key: "loop_dur", val: fmtNum(stream.pointer.loopDur),
         err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
@@ -51,9 +54,10 @@ function buildLines(stream, sampleRec) {
   if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
   push({ ind: 1, kind: "r", key: "envelope", val: stream.grain.envelope });
 
-  if (stream.pitch.semitones != null) {
+  if (stream.pitch.semitonesEnv || stream.pitch.semitones != null) {
     push({ ind: 0, kind: "block", key: "pitch" });
-    push({ ind: 1, kind: "v", key: "semitones", val: fmtNum(stream.pitch.semitones) });
+    if (stream.pitch.semitonesEnv) push({ ind: 1, kind: "raw", key: "semitones", val: envInline(stream.pitch.semitonesEnv) });
+    else push({ ind: 1, kind: "v", key: "semitones", val: fmtNum(stream.pitch.semitones) });
     if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: fmtNum(stream.pitch.range) });
   }
 
@@ -62,7 +66,8 @@ function buildLines(stream, sampleRec) {
   else if (stream.pan != null) push({ ind: 0, kind: "v", key: "pan", val: fmtNum(stream.pan) });
   if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
 
-  push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
+  if (stream.volumeEnv) push({ ind: 0, kind: "raw", key: "volume", val: envInline(stream.volumeEnv) });
+  else push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
   if (stream.volumeRange) push({ ind: 0, kind: "v", key: "volume_range", val: fmtNum(stream.volumeRange) });
 
   if (stream.dephase !== undefined) {
@@ -84,12 +89,14 @@ function buildLines(stream, sampleRec) {
   }
 
   const vo = stream.voices || {};
-  const voNum = vo.num_voices || vo.num || 1;
-  const hasVoices = voNum > 1 || vo.scatter != null || vo.pitch || vo.onset_offset || vo.pointer || vo.pan;
+  const voNum = vo.num != null ? vo.num : (vo.numEnv ? null : 1);
+  const hasVoices = (voNum != null && voNum > 1) || vo.numEnv || vo.scatterEnv || vo.scatter != null || vo.pitch || vo.onset_offset || vo.pointer || vo.pan;
   if (hasVoices) {
     push({ ind: 0, kind: "block", key: "voices" });
-    push({ ind: 1, kind: "v", key: "num_voices", val: String(voNum) });
-    if (vo.scatter != null) push({ ind: 1, kind: "v", key: "scatter", val: fmtNum(vo.scatter) });
+    if (vo.numEnv) push({ ind: 1, kind: "raw", key: "num_voices", val: envInline(vo.numEnv) });
+    else push({ ind: 1, kind: "v", key: "num_voices", val: String(voNum ?? 1) });
+    if (vo.scatterEnv) push({ ind: 1, kind: "raw", key: "scatter", val: envInline(vo.scatterEnv) });
+    else if (vo.scatter != null) push({ ind: 1, kind: "v", key: "scatter", val: fmtNum(vo.scatter) });
     const vDims = [
       { key: "pitch",        data: vo.pitch },
       { key: "onset_offset", data: vo.onset_offset },
@@ -100,9 +107,15 @@ function buildLines(stream, sampleRec) {
       if (!data || typeof data !== "object") continue;
       push({ ind: 1, kind: "block", key });
       for (const [k, val] of Object.entries(data)) {
-        if (val == null) continue;
-        push({ ind: 2, kind: typeof val === "string" ? "r" : "v", key: k,
-               val: typeof val === "number" ? fmtNum(val) : String(val) });
+        if (k.endsWith("Env")) continue;        // handled via base key below
+        const envVal = data[k + "Env"];
+        if (envVal != null) {
+          push({ ind: 2, kind: "raw", key: k, val: envInline(envVal) });
+        } else {
+          if (val == null) continue;
+          push({ ind: 2, kind: typeof val === "string" ? "r" : "v", key: k,
+                 val: typeof val === "number" ? fmtNum(val) : String(val) });
+        }
       }
     }
   }
