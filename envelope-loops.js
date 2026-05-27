@@ -56,7 +56,7 @@
   function isCompactBlock(item) {
     return Array.isArray(item) && item.length >= 3 &&
            Array.isArray(item[0]) && item[0].length > 0 &&
-           Array.isArray(item[0][0]) && item[0][0].length === 2 &&
+           Array.isArray(item[0][0]) && item[0][0].length >= 2 &&
            typeof item[1] === "number" && typeof item[2] === "number";
   }
 
@@ -308,12 +308,18 @@
   };
 
   /* ---------- factory: blocco compatto di default ---------- */
-  function defaultCompactBlock(env, fallbackY) {
+  function defaultCompactBlock(env, fallbackY, bounds) {
     // pattern triangolare di default; end_time = 1; n_reps = 4; linear/linear
     const y0 = fallbackY != null ? fallbackY :
                (Array.isArray(env) && env.length && isBreakpoint(env[env.length - 1])
                 ? env[env.length - 1][1] : 0);
-    const peak = +(y0 * 1.5 + 1).toFixed(3);
+    let peak;
+    if (bounds) {
+      const amplitude = (bounds.visMax - bounds.visMin) * 0.3;
+      peak = +Math.min(bounds.hardMax, y0 + amplitude).toFixed(3);
+    } else {
+      peak = +(y0 * 1.5 + 1).toFixed(3);
+    }
     return [
       [[0, +y0.toFixed(3)], [50, peak], [100, +y0.toFixed(3)]],
       1, 4, "linear", "linear"

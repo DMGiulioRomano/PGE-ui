@@ -224,7 +224,10 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
     const nn = Math.max(1, Math.min(64, Math.round(v)));
     onUpdate([pat, end, nn, interp || "linear", dist || "linear"]);
   }
-  function setInterp(v) {onUpdate([pat, end, n, v, dist || "linear"]);}
+  function setInterp(v) {
+    const cleanPat = pat.map(p => [p[0], p[1]]);
+    onUpdate([cleanPat, end, n, v, dist || "linear"]);
+  }
   function setDistType(v) {
     if (v === "linear") onUpdate([pat, end, n, interp || "linear", "linear"]);else
     {
@@ -319,6 +322,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
   const [selectedPattern, setSelectedPattern] = useStateEE(null); // {blockIdx, patIdx} of selected pattern point inside a loop
   const [ctxMenu, setCtxMenu] = useStateEE(null); // { bpOrigIdx, x, y, curInterp } | null
+  const [shiftHeld, setShiftHeld] = useStateEE(false);
+  const [hoverSeg, setHoverSeg] = useStateEE(null); // index into segHitPaths
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
@@ -425,6 +430,14 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [stream, selectedKey, selectedBP, selectedBlock, selectedPattern]);
+
+  useEffectEE(() => {
+    function onDown(e) { if (e.key === "Shift") setShiftHeld(true); }
+    function onUp(e)   { if (e.key === "Shift") setShiftHeld(false); }
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
+  }, []);
 
   /* ============ Envelope model — computed before early returns so hook count is stable ============ */
   const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
@@ -591,11 +604,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
 
   /* ----- segment interpolation context menu ----- */
   function openSegCtxMenu(e, seg) {
+    if (!e.shiftKey) return;
     e.preventDefault();
     e.stopPropagation();
     const svgRect = svgRef.current ? svgRef.current.getBoundingClientRect() : { left: 0, top: 0, height: 9999, width: 9999 };
-    const x = e.clientX - svgRect.left;
-    const y = e.clientY - svgRect.top;
+    const x = seg.midX;
+    const y = seg.midY;
     const MENU_W = 110, MENU_H = 96;
     const flipX = x + MENU_W > svgRect.width;
     const flipY = y + MENU_H > svgRect.height;
@@ -718,7 +732,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       let newVal = valOfY(yPx);
       newVal = Math.max(env.hardMin, Math.min(env.hardMax, newVal));
       const newPattern = pattern.map((p, i) => i === patIdx ?
-      [+xPct.toFixed(2), +newVal.toFixed(yPrec)] : p);
+      (p.length >= 3 ? [+xPct.toFixed(2), +newVal.toFixed(yPrec), p[2]] : [+xPct.toFixed(2), +newVal.toFixed(yPrec)]) : p);
       const newBlock = [newPattern, block.raw[1], block.raw[2], block.raw[3], block.raw[4]].filter((x) => x !== undefined);
       const updated = rawEnv.map((it, i) => i === blockOrigIdx ? newBlock : it);
       commit(updated);
@@ -1051,7 +1065,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       });
       blockStart = 1 - MIN_LOOP_WIDTH;
     }
-    const block = PGEEnv.defaultCompactBlock(working, lastV);
+    const block = PGEEnv.defaultCompactBlock(working, lastV, {
+      hardMin: env.hardMin,
+      hardMax: env.hardMax,
+      visMin: env.visMin,
+      visMax: env.visMax,
+    });
     block[1] = 1;
     const next = [...working, block];
     commit(next);
@@ -1192,6 +1211,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     return { lineD: d, firstX, lastX };
   }
   const { lineD, firstX, lastX } = buildEnvelopeD();
+  const segHitPaths = buildSegmentHitPaths();
 
   // Returns fat-transparent hit paths per segment: standalone BP pairs + loop cycle segments + post-loop connections.
   function buildSegmentHitPaths() {
@@ -1212,6 +1232,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b[0]).toFixed(2)} ${yOf(b[1]).toFixed(2)}`,
         bpOrigIdx: iA,
         curInterp: segInterp(a, globalInterp || "linear"),
+        midX: (xOf(a[0]) + xOf(b[0])) / 2,
+        midY: (yOf(a[1]) + yOf(b[1])) / 2,
+        rx: xOf(a[0]), rw: xOf(b[0]) - xOf(a[0]),
       });
     }
 
@@ -1235,6 +1258,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           patIdx: pi,
           d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b2[0]).toFixed(2)} ${yOf(b2[1]).toFixed(2)}`,
           curInterp,
+          midX: (xOf(a[0]) + xOf(b2[0])) / 2,
+          midY: (yOf(a[1]) + yOf(b2[1])) / 2,
+          rx: xOf(a[0]), rw: xOf(b2[0]) - xOf(a[0]),
         });
       }
 
@@ -1255,6 +1281,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           patIdx: lastPatIdx,
           d: `M ${xOf(lastPt[0]).toFixed(2)} ${yOf(lastPt[1]).toFixed(2)} L ${xOf(nextBPItem[0]).toFixed(2)} ${yOf(nextBPItem[1]).toFixed(2)}`,
           curInterp,
+          midX: (xOf(lastPt[0]) + xOf(nextBPItem[0])) / 2,
+          midY: (yOf(lastPt[1]) + yOf(nextBPItem[1])) / 2,
+          rx: xOf(lastPt[0]), rw: xOf(nextBPItem[0]) - xOf(lastPt[0]),
         });
       }
     }
@@ -1326,7 +1355,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
             <span className="mono" style={{ color: "var(--fg-3)" }}>@ {playhead.toFixed(2)}s</span>
           </span> :
         null}
-        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
+        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · shift+click segmento ▸ interp · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
       </header>
 
       {/* ============ optional: selected loop control panel ============ */}
@@ -1477,6 +1506,20 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
               {fillD ? <path className="ee-fill" d={fillD} /> : null}
               {lineD ? <path className="ee-line" d={lineD} /> : null}
 
+              {/* ============ SEGMENT HIT TARGETS (shift+click → interp menu) ============ */}
+              {/* Rendered before pattern points so pattern circles sit on top in z-order
+                  and receive pointer events first. */}
+              {segHitPaths.map((seg, k) => (
+                <rect key={"seg-hit-" + k}
+                  x={seg.rx} y={PAD_T} width={seg.rw} height={innerH}
+                  fill="transparent"
+                  pointerEvents="all"
+                  style={{ cursor: shiftHeld && hoverSeg === k ? "context-menu" : "default" }}
+                  onMouseEnter={() => setHoverSeg(k)}
+                  onMouseLeave={() => setHoverSeg(null)}
+                  onClick={(e) => openSegCtxMenu(e, seg)} />
+              ))}
+
               {/* ============ EXPANDED PATTERN POINTS (loops) ============ */}
               {exp.blocks.map((b) =>
               <g key={"pp" + b.originalIdx}>
@@ -1504,18 +1547,6 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                 })}
                 </g>
               )}
-
-              {/* ============ SEGMENT HIT TARGETS (context menu) ============ */}
-              {buildSegmentHitPaths().map((seg, k) => (
-                <path key={"seg-hit-" + k}
-                  d={seg.d}
-                  stroke="transparent"
-                  strokeWidth="12"
-                  fill="none"
-                  pointerEvents="all"
-                  style={{ cursor: "context-menu" }}
-                  onContextMenu={(e) => openSegCtxMenu(e, seg)} />
-              ))}
 
               {/* ============ STANDARD BREAKPOINTS ============ */}
               {bpIndices.map((origIdx) => {
