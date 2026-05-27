@@ -318,6 +318,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const [selectedBlock, setSelectedBlock] = useStateEE(null); // originalIdx of selected loop
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
   const [selectedPattern, setSelectedPattern] = useStateEE(null); // {blockIdx, patIdx} of selected pattern point inside a loop
+  const [ctxMenu, setCtxMenu] = useStateEE(null); // { bpOrigIdx, x, y, curInterp } | null
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
@@ -588,6 +589,49 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function beginDragHistory() {if (window.PGEHistory) window.PGEHistory.beginGesture();}
   function endDragHistory() {if (window.PGEHistory) window.PGEHistory.endGesture();}
 
+  /* ----- segment interpolation context menu ----- */
+  function openSegCtxMenu(e, seg) {
+    e.preventDefault();
+    e.stopPropagation();
+    const svgRect = svgRef.current ? svgRef.current.getBoundingClientRect() : { left: 0, top: 0, height: 9999, width: 9999 };
+    const x = e.clientX - svgRect.left;
+    const y = e.clientY - svgRect.top;
+    const MENU_W = 110, MENU_H = 96;
+    const flipX = x + MENU_W > svgRect.width;
+    const flipY = y + MENU_H > svgRect.height;
+    setCtxMenu({ ...seg, x, y, flipX, flipY });
+  }
+  function applySegInterp(type) {
+    if (!ctxMenu) return;
+    if (ctxMenu.kind === "loop") {
+      const { blockOrigIdx, patIdx } = ctxMenu;
+      const newItems = rawEnv.map((it, i) => {
+        if (i !== blockOrigIdx || !PGEEnv.isCompactBlock(it)) return it;
+        const blockInterp = it[3] || "linear";
+        const newPattern = it[0].map((pt, pi) => {
+          if (pi !== patIdx) return pt;
+          if (type === blockInterp) return [pt[0], pt[1]];
+          return [pt[0], pt[1], type];
+        });
+        const result = [newPattern, it[1], it[2]];
+        if (it[3] != null) result.push(it[3]);
+        if (it[4] != null) result.push(it[4]);
+        return result;
+      });
+      commit(newItems);
+    } else {
+      const { bpOrigIdx } = ctxMenu;
+      const effectiveDefault = globalInterp || "linear";
+      const newItems = rawEnv.map((it, i) => {
+        if (i !== bpOrigIdx || !PGEEnv.isBreakpoint(it)) return it;
+        if (type === effectiveDefault) return [it[0], it[1]];
+        return [it[0], it[1], type];
+      });
+      commit(newItems);
+    }
+    setCtxMenu(null);
+  }
+
   /* ----- standard breakpoint drag ----- */
   function startBPDrag(e, idx) {
     e.preventDefault();e.stopPropagation();
@@ -623,8 +667,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         for (const n of niceY) {if (n * 10 >= ymax - ymin) {s = n;break;}}
         newVal = Math.round(newVal / s) * s;
       }
-      const updated = rawEnv.map((it, i) => i === idx ?
-      [+newX.toFixed(xPrec), +newVal.toFixed(yPrec)] : it);
+      const updated = rawEnv.map((it, i) => {
+        if (i !== idx) return it;
+        const bp = [+newX.toFixed(xPrec), +newVal.toFixed(yPrec)];
+        if (it.length >= 3) bp.push(it[2]);
+        return bp;
+      });
       commit(updated);
     }
     function up() {
@@ -817,7 +865,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         const nt = oldLen <= 1e-9 ?
           newEnd :
           newStart + (it[0] - oldStart) * (newEnd - newStart) / oldLen;
-        return [+nt.toFixed(xPrec), it[1]];
+        const bp = [+nt.toFixed(xPrec), it[1]];
+        if (it.length >= 3) bp.push(it[2]);
+        return bp;
       });
     }
     if (zone.kind === "loop") {
@@ -942,7 +992,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         zone.indices.forEach((i) => {
           const it = rawEnv[i];
           const nt = od <= 1e-9 ? ne : ns + (it[0] - os) * (ne - ns) / od;
-          remapped.set(i, [+nt.toFixed(xPrec), it[1]]);
+          const bpR = [+nt.toFixed(xPrec), it[1]];
+          if (it.length >= 3) bpR.push(it[2]);
+          remapped.set(i, bpR);
         });
       } else if (zone.kind === "loop") {
         const copy = rawEnv[zone.index].slice();
@@ -985,7 +1037,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       // squeeze prior content into [0, 1 - MIN_LOOP_WIDTH]
       const scale = (1 - MIN_LOOP_WIDTH) / lastT;
       working = rawEnv.map((it) => {
-        if (PGEEnv.isBreakpoint(it)) return [+(it[0] * scale).toFixed(4), it[1]];
+        if (PGEEnv.isBreakpoint(it)) {
+          const bpS = [+(it[0] * scale).toFixed(4), it[1]];
+          if (it.length >= 3) bpS.push(it[2]);
+          return bpS;
+        }
         if (PGEEnv.isCompactBlock(it)) {
           const copy = it.slice();
           copy[1] = +(it[1] * scale).toFixed(4);
@@ -1035,6 +1091,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
        cp1 = (tᵢ + h/3,   vᵢ   + h·mᵢ/3)
        cp2 = (tᵢ₊₁ − h/3, vᵢ₊₁ − h·mᵢ₊₁/3)
      Reference: Fritsch & Carlson, SIAM J. Numer. Anal. 17 (1980).         */
+  // bp[2] (optional string) overrides the group-level interp for the segment starting at bp
+  function segInterp(bp, fallback) {
+    return (Array.isArray(bp) && typeof bp[2] === "string") ? bp[2] : (fallback || "linear");
+  }
+
   function emitGroup(bps, interp, started) {
     if (!bps.length) return { d: "", firstX: 0, lastX: 0 };
     const head = bps[0];
@@ -1044,44 +1105,43 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const n = bps.length;
     if (n === 1) return { d, firstX: x0, lastX: x0 };
 
-    if (interp === "step") {
-      for (let k = 1; k < n; k++) {
-        const px  = xOf(bps[k][0]).toFixed(2);
-        const ppy = yOf(bps[k - 1][1]).toFixed(2);
-        const py  = yOf(bps[k][1]).toFixed(2);
+    // Pre-compute PCHIP tangents globally (needed for any cubic segment in the group).
+    // Tangents are computed over all points so boundaries between strategy types stay smooth.
+    const h = new Array(n - 1);
+    const delta = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      h[i] = bps[i + 1][0] - bps[i][0];
+      delta[i] = h[i] !== 0 ? (bps[i + 1][1] - bps[i][1]) / h[i] : 0;
+    }
+    const m = new Array(n);
+    if (n === 2) { m[0] = delta[0]; m[1] = delta[0]; }
+    else {
+      m[0]     = delta[0];
+      m[n - 1] = delta[n - 2];
+      for (let i = 1; i < n - 1; i++) {
+        const dl = delta[i - 1], dr = delta[i];
+        if (dl * dr <= 0) m[i] = 0;
+        else m[i] = 2 / (1 / dl + 1 / dr);
+      }
+    }
+
+    for (let i = 0; i < n - 1; i++) {
+      const si = segInterp(bps[i], interp);
+      const t0 = bps[i][0],     v0 = bps[i][1];
+      const t1 = bps[i + 1][0], v1 = bps[i + 1][1];
+      if (si === "step") {
+        const px  = xOf(t1).toFixed(2);
+        const ppy = yOf(v0).toFixed(2);
+        const py  = yOf(v1).toFixed(2);
         d += ` L ${px} ${ppy} L ${px} ${py}`;
-      }
-    } else if (interp === "cubic" && n >= 2) {
-      // PCHIP — slopes & tangents in domain coords
-      const h = new Array(n - 1);
-      const delta = new Array(n - 1);
-      for (let i = 0; i < n - 1; i++) {
-        h[i] = bps[i + 1][0] - bps[i][0];
-        delta[i] = h[i] !== 0 ? (bps[i + 1][1] - bps[i][1]) / h[i] : 0;
-      }
-      const m = new Array(n);
-      if (n === 2) { m[0] = delta[0]; m[1] = delta[0]; }
-      else {
-        m[0]     = delta[0];
-        m[n - 1] = delta[n - 2];
-        for (let i = 1; i < n - 1; i++) {
-          const dl = delta[i - 1], dr = delta[i];
-          if (dl * dr <= 0) m[i] = 0;
-          else m[i] = 2 / (1 / dl + 1 / dr);
-        }
-      }
-      for (let i = 0; i < n - 1; i++) {
-        const t0 = bps[i][0],     v0 = bps[i][1];
-        const t1 = bps[i + 1][0], v1 = bps[i + 1][1];
-        const cp1t = t0 + h[i] / 3,        cp1v = v0 + h[i] * m[i]     / 3;
-        const cp2t = t1 - h[i] / 3,        cp2v = v1 - h[i] * m[i + 1] / 3;
+      } else if (si === "cubic") {
+        const cp1t = t0 + h[i] / 3, cp1v = v0 + h[i] * m[i]     / 3;
+        const cp2t = t1 - h[i] / 3, cp2v = v1 - h[i] * m[i + 1] / 3;
         d += ` C ${xOf(cp1t).toFixed(2)} ${yOf(cp1v).toFixed(2)}` +
              ` ${xOf(cp2t).toFixed(2)} ${yOf(cp2v).toFixed(2)}` +
              ` ${xOf(t1).toFixed(2)} ${yOf(v1).toFixed(2)}`;
-      }
-    } else {
-      for (let k = 1; k < n; k++) {
-        d += ` L ${xOf(bps[k][0]).toFixed(2)} ${yOf(bps[k][1]).toFixed(2)}`;
+      } else {
+        d += ` L ${xOf(t1).toFixed(2)} ${yOf(v1).toFixed(2)}`;
       }
     }
     const last = bps[n - 1];
@@ -1132,6 +1192,76 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     return { lineD: d, firstX, lastX };
   }
   const { lineD, firstX, lastX } = buildEnvelopeD();
+
+  // Returns fat-transparent hit paths per segment: standalone BP pairs + loop cycle segments + post-loop connections.
+  function buildSegmentHitPaths() {
+    const segs = [];
+
+    // 1. Standalone BP→BP segments (skip pairs with a compact block between them)
+    const bpIdxs = rawEnv.map((it, i) => PGEEnv.isBreakpoint(it) ? i : -1).filter((i) => i >= 0);
+    for (let k = 0; k < bpIdxs.length - 1; k++) {
+      const iA = bpIdxs[k], iB = bpIdxs[k + 1];
+      let hasBlock = false;
+      for (let j = iA + 1; j < iB; j++) {
+        if (PGEEnv.isCompactBlock(rawEnv[j])) { hasBlock = true; break; }
+      }
+      if (hasBlock) continue;
+      const a = rawEnv[iA], b = rawEnv[iB];
+      segs.push({
+        kind: "bp",
+        d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b[0]).toFixed(2)} ${yOf(b[1]).toFixed(2)}`,
+        bpOrigIdx: iA,
+        curInterp: segInterp(a, globalInterp || "linear"),
+      });
+    }
+
+    // 2. Loop cycle segments (first cycle only) + post-loop connecting segment
+    for (let bi = 0; bi < rawEnv.length; bi++) {
+      const item = rawEnv[bi];
+      if (!PGEEnv.isCompactBlock(item)) continue;
+      const block = exp.blocks.find((b) => b.originalIdx === bi);
+      if (!block || !block.cycles.length) continue;
+      const pattern = item[0];
+      const blockInterp = item[3] || "linear";
+
+      // hit paths on first cycle (one per pattern segment)
+      const c0 = block.cycles[0];
+      for (let pi = 0; pi < c0.points.length - 1; pi++) {
+        const a = c0.points[pi], b2 = c0.points[pi + 1];
+        const curInterp = pattern[pi] && pattern[pi].length >= 3 ? pattern[pi][2] : blockInterp;
+        segs.push({
+          kind: "loop",
+          blockOrigIdx: bi,
+          patIdx: pi,
+          d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b2[0]).toFixed(2)} ${yOf(b2[1]).toFixed(2)}`,
+          curInterp,
+        });
+      }
+
+      // post-loop: last cycle's last point → first BP after this block
+      const lastCycle = block.cycles[block.cycles.length - 1];
+      const lastPt = lastCycle.points[lastCycle.points.length - 1];
+      let nextBPItem = null;
+      for (let j = bi + 1; j < rawEnv.length; j++) {
+        if (PGEEnv.isBreakpoint(rawEnv[j])) { nextBPItem = rawEnv[j]; break; }
+      }
+      if (nextBPItem && lastPt) {
+        const lastPatIdx = pattern.length - 1;
+        const curInterp = pattern[lastPatIdx] && pattern[lastPatIdx].length >= 3
+          ? pattern[lastPatIdx][2] : blockInterp;
+        segs.push({
+          kind: "loop",
+          blockOrigIdx: bi,
+          patIdx: lastPatIdx,
+          d: `M ${xOf(lastPt[0]).toFixed(2)} ${yOf(lastPt[1]).toFixed(2)} L ${xOf(nextBPItem[0]).toFixed(2)} ${yOf(nextBPItem[1]).toFixed(2)}`,
+          curInterp,
+        });
+      }
+    }
+
+    return segs;
+  }
+
   const baseY = (PAD_T + innerH).toFixed(2);
   const fillD = lineD && exp.points.length >= 2 ?
     `${lineD} L ${lastX.toFixed(2)} ${baseY} L ${firstX.toFixed(2)} ${baseY} Z` :
@@ -1225,7 +1355,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           <div className="ee-canvas" style={{ height: "100%" }}>
             <svg ref={svgRef} className="ee-layer" width="100%" height={H}
             onDoubleClick={onCanvasDblClick}
-            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}}}>
+            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}}}
+            onMouseDown={() => { if (ctxMenu) setCtxMenu(null); }}>
 
               {/* vertical x grid */}
               <g className="ee-grid">
@@ -1374,6 +1505,18 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                 </g>
               )}
 
+              {/* ============ SEGMENT HIT TARGETS (context menu) ============ */}
+              {buildSegmentHitPaths().map((seg, k) => (
+                <path key={"seg-hit-" + k}
+                  d={seg.d}
+                  stroke="transparent"
+                  strokeWidth="12"
+                  fill="none"
+                  pointerEvents="all"
+                  style={{ cursor: "context-menu" }}
+                  onContextMenu={(e) => openSegCtxMenu(e, seg)} />
+              ))}
+
               {/* ============ STANDARD BREAKPOINTS ============ */}
               {bpIndices.map((origIdx) => {
                 const p = rawEnv[origIdx];
@@ -1415,6 +1558,30 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
               fill="#FF8C42" stroke="#0E0F11" strokeWidth="1" pointerEvents="none" /> :
               null}
             </svg>
+
+            {/* ============ SEGMENT INTERPOLATION CONTEXT MENU ============ */}
+            {ctxMenu && (
+              <div className="ee-seg-ctx-menu"
+                style={{ left: ctxMenu.x, top: ctxMenu.y,
+                  transform: [ctxMenu.flipX ? "translateX(-100%)" : "", ctxMenu.flipY ? "translateY(-100%)" : ""].filter(Boolean).join(" ") || undefined }}
+                onMouseLeave={() => setCtxMenu(null)}>
+                {[
+                  { val: "linear", label: "linear",
+                    icon: <polyline points="2,14 26,4" stroke="currentColor" strokeWidth="1.5" fill="none"/> },
+                  { val: "cubic",  label: "cubic",
+                    icon: <path d="M2,14 C8,14 20,4 26,4" stroke="currentColor" strokeWidth="1.5" fill="none"/> },
+                  { val: "step",   label: "step",
+                    icon: <polyline points="2,14 26,14 26,4" stroke="currentColor" strokeWidth="1.5" fill="none"/> },
+                ].map(({ val, label, icon }) => (
+                  <button key={val}
+                    className={"ee-seg-ctx-btn" + (val === ctxMenu.curInterp ? " active" : "")}
+                    onMouseDown={(e) => { e.stopPropagation(); applySegInterp(val); }}>
+                    <svg width="28" height="18" viewBox="0 0 28 18">{icon}</svg>
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* BP tooltip — hover only */}
             {hoverBP != null && rawEnv[hoverBP] && PGEEnv.isBreakpoint(rawEnv[hoverBP]) && dragging == null ? (() => {

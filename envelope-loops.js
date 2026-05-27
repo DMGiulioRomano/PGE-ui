@@ -25,7 +25,8 @@
   const DISCONTINUITY_OFFSET = 1e-6;
 
   function isBreakpoint(item) {
-    return Array.isArray(item) && item.length === 2 &&
+    return Array.isArray(item) &&
+           (item.length === 2 || (item.length === 3 && typeof item[2] === "string")) &&
            typeof item[0] === "number" && typeof item[1] === "number";
   }
 
@@ -44,8 +45,11 @@
   }
   function wrapEnv(items, interp) {
     const hasLoop = items.some(isCompactBlock);
+    // if any breakpoint has an explicit per-point type, keep flat array (3-tuples)
+    const hasPerPoint = items.some((it) => Array.isArray(it) && it.length === 3 && typeof it[2] === "string");
+    if (hasPerPoint) return items;
     if (!interp || interp === "linear" || hasLoop) return items;
-    // dict form available only for pure-BP envelopes with non-linear interp
+    // dict form available only for pure-BP envelopes with non-linear global interp
     return { type: interp, points: items.slice() };
   }
 
@@ -146,7 +150,7 @@
           // discontinuità: primo punto del 1° ciclo se time_offset>0,
           // e primo punto di ogni ciclo successivo
           if (pi === 0 && (c > 0 || blockStart > 0)) pt += DISCONTINUITY_OFFSET;
-          cyclePts.push([pt, y]);
+          cyclePts.push(pattern[pi].length >= 3 ? [pt, y, pattern[pi][2]] : [pt, y]);
           points.push([pt, y]);
         }
         const cycObj = { blockIdx: block.index, cycleIdx: c, start: cs, end: ce, points: cyclePts };
@@ -167,7 +171,10 @@
     if (Math.abs(n) < 1) return (+n.toFixed(4)).toString();
     return (+n.toFixed(3)).toString();
   }
-  function fmtBP(p)      { return `[${fmtNum(p[0])}, ${fmtNum(p[1])}]`; }
+  function fmtBP(p) {
+    const base = `[${fmtNum(p[0])}, ${fmtNum(p[1])}`;
+    return p.length >= 3 ? `${base}, '${p[2]}']` : `${base}]`;
+  }
   function fmtPattern(p) { return "[" + p.map(fmtBP).join(", ") + "]"; }
   function fmtDist(d) {
     if (!d) return null;

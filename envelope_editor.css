@@ -267,3 +267,39 @@
 .pge-envedit .ee-loop-panel-hint {
   font-size: 10px; color: var(--fg-4); line-height: 1.5;
 }
+
+/* ---- segment interpolation context menu ---- */
+.pge-envedit .ee-seg-ctx-menu {
+  position: absolute;
+  z-index: 120;
+  background: var(--bg-elevated, #1e2026);
+  border: 1px solid var(--border-default, #2e3038);
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: all;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+}
+.pge-envedit .ee-seg-ctx-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  color: var(--fg-2, #9ba0aa);
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pge-envedit .ee-seg-ctx-btn:hover {
+  background: var(--bg-hover, #24272e);
+  color: var(--fg-1, #d0d4dc);
+}
+.pge-envedit .ee-seg-ctx-btn.active {
+  color: var(--accent, #5c8868);
+}
