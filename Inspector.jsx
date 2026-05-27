@@ -709,7 +709,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               <window.PGE.EnvelopeSelectorRow
                 value={stream.grain.envelope}
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}
-                onEditCurve={() => setSelRow("grain.envelope.curve")}
+                onEditCurve={() => { setSelRow("grain.envelope.curve"); if (onFocusEnvParam) onFocusEnvParam("grainEnvCurve"); }}
               />
               {stream.grain.reverse !== undefined ? (
                 <div className="pge-prow">

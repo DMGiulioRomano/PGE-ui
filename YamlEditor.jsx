@@ -6,6 +6,10 @@ const { useState: useStateYE, useRef: useRefYE, useMemo: useMemoYE, useEffect: u
    standard breakpoints [t,v] and compact loop blocks. */
 const fmtNum    = (n) => window.PGEEnv.fmtNum(n);
 const envInline = (env) => window.PGEEnv.fmtEnvInline(env);
+const fmtEnvelope = (env) => {
+  if (!env || typeof env === "string") return env || "hanning";
+  return window.jsyaml.dump(env, { flowLevel: 0, lineWidth: -1 }).trim();
+};
 
 /* Build the structured line model — used by both highlighted view and the textarea. */
 function buildLines(stream, sampleRec) {
@@ -52,7 +56,7 @@ function buildLines(stream, sampleRec) {
   if (stream.grain.durationEnv) push({ ind: 1, kind: "raw", key: "duration", val: envInline(stream.grain.durationEnv) });
   else if (stream.grain.duration != null) push({ ind: 1, kind: "v", key: "duration", val: fmtNum(stream.grain.duration) });
   if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
-  push({ ind: 1, kind: "r", key: "envelope", val: stream.grain.envelope });
+  push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
 
   if (stream.pitch.semitonesEnv || stream.pitch.semitones != null) {
     push({ ind: 0, kind: "block", key: "pitch" });
@@ -173,7 +177,7 @@ function parseYaml(text) {
         if (Array.isArray(parsed)) { out.grain.duration = null; out.grain.durationEnv = parsed; }
         else { out.grain.duration = parsed; out.grain.durationEnv = null; }
       } else if (key === "duration_range") out.grain.durationRange = parsed;
-      else if (key === "envelope") out.grain.envelope = String(parsed).replace(/^['"]|['"]$/g, "");
+      else if (key === "envelope") out.grain.envelope = typeof parsed === "string" ? parsed.replace(/^['"]|['"]$/g, "") : parsed;
     } else if (section === "pitch") {
       if (key === "semitones") out.pitch.semitones = parsed;
       else if (key === "range") out.pitch.range = parsed;

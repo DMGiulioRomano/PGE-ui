@@ -174,10 +174,7 @@
 .env-chip.open  { border-color: var(--accent-ring); }
 .env-chip-name { color: var(--accent); }
 .env-chip-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 20;
+  z-index: 9999;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: 4px;

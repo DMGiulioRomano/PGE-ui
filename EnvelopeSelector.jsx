@@ -388,22 +388,31 @@ function WindowGrid({ selected, onPick }) {
 function WindowChip({ name, onPick }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = useStateES(false);
+  const [popPos, setPopPos] = useStateES(null);
   const ref = useRefES(null);
+  const btnRef = useRefES(null);
   useEffectES(() => {
     if (!open) return;
     function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
+  function handleOpen() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPopPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen(!open);
+  }
   return (
     <span className="env-chip-wrap" ref={ref}>
-      <button className={"env-chip" + (open ? " open" : "")} onClick={() => setOpen(!open)}>
+      <button ref={btnRef} className={"env-chip" + (open ? " open" : "")} onClick={handleOpen}>
         <WindowShape name={name} w={28} h={14} stroke="var(--accent)" />
         <span className="env-chip-name">{name}</span>
         <Icon name="chevronDown" size={10} />
       </button>
-      {open ? (
-        <div className="env-chip-pop">
+      {open && popPos ? (
+        <div className="env-chip-pop" style={{ position: "fixed", top: popPos.top, left: popPos.left }}>
           <WindowGrid selected={name} onPick={(n) => { onPick(n); setOpen(false); }} />
         </div>
       ) : null}
@@ -415,7 +424,9 @@ function WindowChip({ name, onPick }) {
 function ListEditor({ items, onPickAt, onRemoveAt, onAdd, label, hint, indexed }) {
   const { Icon } = window.PGE;
   const [adding, setAdding] = useStateES(false);
+  const [addPopPos, setAddPopPos] = useStateES(null);
   const addRef = useRefES(null);
+  const addBtnRef = useRefES(null);
   useEffectES(() => {
     if (!adding) return;
     function onDoc(e) { if (addRef.current && !addRef.current.contains(e.target)) setAdding(false); }
@@ -442,11 +453,17 @@ function ListEditor({ items, onPickAt, onRemoveAt, onAdd, label, hint, indexed }
         ))}
       </div>
       <div className="env-list-add" ref={addRef}>
-        <button className="add-param-btn" onClick={() => setAdding(!adding)}>
+        <button ref={addBtnRef} className="add-param-btn" onClick={() => {
+          if (!adding && addBtnRef.current) {
+            const r = addBtnRef.current.getBoundingClientRect();
+            setAddPopPos({ top: r.bottom + 4, left: r.left });
+          }
+          setAdding(!adding);
+        }}>
           <Icon name="plus" size={11} /> add window
         </button>
-        {adding ? (
-          <div className="env-chip-pop env-chip-pop-add">
+        {adding && addPopPos ? (
+          <div className="env-chip-pop env-chip-pop-add" style={{ position: "fixed", top: addPopPos.top, left: addPopPos.left }}>
             <WindowGrid selected={null} onPick={(n) => { onAdd(n); setAdding(false); }} />
           </div>
         ) : null}

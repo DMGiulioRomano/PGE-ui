@@ -45,6 +45,46 @@
 
   /* ---------- envelope helpers ---------- */
 
+  function serializeGrainEnvelope(env) {
+    if (!env || typeof env === "string" || Array.isArray(env)) return env;
+    if ("from" in env && "to" in env) return env;
+    if ("states" in env && Array.isArray(env.states)) {
+      const n = env.states.length;
+      const engineStates = env.states.map((name, i) =>
+        [n === 1 ? 0.0 : i / (n - 1), name]
+      );
+      const engineCurve = (env.curve || [[0, 0], [1, 1]]).map(pt => {
+        if (Array.isArray(pt) && pt.length >= 2) {
+          return [pt[0], n <= 1 ? 0 : pt[1] / (n - 1)];
+        }
+        return pt;
+      });
+      return { states: engineStates, curve: engineCurve };
+    }
+    return env;
+  }
+
+  function parseGrainEnvelope(env) {
+    if (!env || typeof env === "string" || Array.isArray(env)) return env;
+    if ("from" in env && "to" in env) return env;
+    if ("states" in env && Array.isArray(env.states)) {
+      const raw = env.states;
+      if (raw.length > 0 && Array.isArray(raw[0])) {
+        const names = raw.map(([, w]) => w);
+        const n = names.length;
+        const editorCurve = (env.curve || [[0, 0], [1, 1]]).map(pt => {
+          if (Array.isArray(pt) && pt.length >= 2) {
+            return [pt[0], pt[1] * (n - 1)];
+          }
+          return pt;
+        });
+        return { states: names, curve: editorCurve };
+      }
+      return env;
+    }
+    return env;
+  }
+
   function isEnvObject(v) {
     // Object-form envelope: { points: [...], time_unit?, type?, … }
     // See envelope-loops.js isTypedEnv and engine YAMLs that use
@@ -157,7 +197,7 @@
     const grainY = {
       duration:       grainDur,
       duration_range: nonZero(grain.durationRange) ? grain.durationRange : undefined,
-      envelope:       grain.envelope || undefined,
+      envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
     if (Object.values(grainY).some(v => v !== undefined)) {
       y.grain = stripUndef(grainY);
@@ -298,7 +338,7 @@
         duration:      grDur.scalar,
         durationEnv:   grDur.env,
         durationRange: grain.duration_range || 0,
-        envelope:      grain.envelope || "hanning",
+        envelope:      parseGrainEnvelope(grain.envelope) || "hanning",
       },
       pointer: {
         start:         ptr.start ?? 0,
