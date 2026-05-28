@@ -236,7 +236,9 @@ function EnvelopeSelectorRow({ value, onChange, onEditCurve }) {
   return (
     <>
       {/* Header row — replaces the broken envelope row in Inspector */}
-      <div className={"pge-prow envelope-row" + (open ? " selected" : "")}>
+      <div className={"pge-prow envelope-row" + (open ? " selected" : "")}
+           onClick={() => setOpen(!open)}
+           style={{ cursor: 'pointer' }}>
         <span className="k">envelope</span>
         <span className="env-strategy-tag mono">{strategy}</span>
         <span className="v">
@@ -267,7 +269,7 @@ function EnvelopeSelectorRow({ value, onChange, onEditCurve }) {
           </span>
           <span className="env-summary-label" title={envSummary(value)}>{envSummary(value)}</span>
         </span>
-        <button ref={btnRef} className="pge-icon-btn" onClick={() => setOpen(!open)} title="Choose envelope">
+        <button ref={btnRef} className="pge-icon-btn" onClick={(e) => e.stopPropagation()} title="Choose envelope">
           <Icon name="chevronDown" size={11} />
         </button>
       </div>
@@ -483,7 +485,7 @@ function CurveRow({ value, onChange, onEdit, range }) {
   const xr = xmax - xmin || 1, yr = ymax - ymin || 1;
   const pts = bp.map(p => `${((p[0]-xmin)/xr*100).toFixed(1)},${(14-(p[1]-ymin)/yr*12).toFixed(1)}`).join(" ");
   return (
-    <div className="env-curve-row">
+    <div className="env-curve-row" onClick={onEdit} style={onEdit ? { cursor: "pointer" } : undefined}>
       <span className="env-curve-label">curve</span>
       <span className="env-curve-range mono">{range}</span>
       <span style={{ flex: 1 }} />
@@ -493,9 +495,6 @@ function CurveRow({ value, onChange, onEdit, range }) {
         </svg>
       </span>
       <span className="env-curve-bp mono">{bp.length} bp</span>
-      <button className="pge-icon-btn" onClick={onEdit} title="Edit curve">
-        <Icon name="edit" size={11} />
-      </button>
     </div>
   );
 }

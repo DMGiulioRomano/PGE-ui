@@ -255,7 +255,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-prow .v .pge-field .val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pge-prow .v > span[style*="color"] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .pge-prow .v .range { color: var(--fg-3); font-size: 10px; flex: 0 0 auto; }
-.pge-prow .v.env { color: var(--accent); }
+.pge-prow .v.env { color: var(--accent); cursor: pointer; }
+.pge-prow .v.env:hover .env-mini svg polyline { stroke: var(--fg-1); }
+.pge-prow .v.env:hover .env-mini svg circle { fill: var(--fg-1); }
 .pge-prow .v .env-mini-old { display: none; }
 .pge-prow .v .env-mini svg { width: 100%; height: 100%; display: block; }
 .pge-prow .v .env-label { font-size: 10px; flex: 0 0 auto; }

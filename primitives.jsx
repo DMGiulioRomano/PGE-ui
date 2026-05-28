@@ -288,7 +288,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
           </span>
         </span>
       }
-      {onEditEnv ? <button className="pge-icon-btn" onClick={(e) => {e.stopPropagation();onEditEnv && onEditEnv();}}><Icon name="edit" size={11} /></button> : right || <span />}
+      {right || <span />}
     </div>);
 
 }
