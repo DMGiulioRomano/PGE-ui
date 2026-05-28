@@ -37,6 +37,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutBackToStart": "z",
   "shortcutPlay": "x",
   "shortcutStop": "c",
+  "shortcutMute": "m",
+  "shortcutSolo": "s",
+  "shortcutLog": "l",
   "stepMenuTrigger": "rightClick"
 }/*EDITMODE-END*/;
 
@@ -479,6 +482,7 @@ function App() {
     }
   }
   function dismissToast(id) { setToasts(ts => ts.filter(x => x.id !== id)); }
+  function dismissErrToasts() { setToasts(ts => ts.filter(x => x.kind !== "err")); }
 
   /* Load cache manifest when project changes */
   useEffectApp(() => {
@@ -611,7 +615,23 @@ function App() {
       if (matchShortcut(e, tweaks.shortcutRender || "r"))    { e.preventDefault(); onRender();  return; }
       if (matchShortcut(e, tweaks.shortcutBackToStart || "z")) { e.preventDefault(); doSeekZero(); return; }
       if (matchShortcut(e, tweaks.shortcutPlay || "x"))        { e.preventDefault(); doPlay();    return; }
+      if (terminalOpen && matchShortcut(e, tweaks.shortcutStop || "c")) { e.preventDefault(); setLogLines([]); return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
+      if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
+      if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
+        e.preventDefault();
+        const targets = data.streams.filter(s => selectedIds.includes(s.id));
+        const allMuted = targets.every(s => s.mute);
+        targets.forEach(s => updateStream(s.id, { mute: !allMuted }));
+        return;
+      }
+      if (matchShortcut(e, tweaks.shortcutSolo || "s") && selectedIds.length > 0) {
+        e.preventDefault();
+        const targets = data.streams.filter(s => selectedIds.includes(s.id));
+        const allSoloed = targets.every(s => s.solo);
+        targets.forEach(s => updateStream(s.id, { solo: !allSoloed }));
+        return;
+      }
       if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selectedIds.length > 0) {
         const targets = data.streams.filter(s => selectedIds.includes(s.id));
         if (targets.length) {
@@ -953,8 +973,8 @@ function App() {
     } else {
       pushToast({
         kind: "err", title: "Render failed", message: result.error || "see log",
-        persistent: true,
-        action: { label: "open log", onClick: () => setTerminalOpen(true) },
+        duration: 8000,
+        action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
       });
     }
   }
@@ -1206,7 +1226,7 @@ function App() {
               onSave={onSave} onSaveAs={onSaveAs}
               onOpenSettings={() => setSettingsOpen(true)}
               terminalOpen={terminalOpen}
-              onToggleTerminal={() => { const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); }}
+              onToggleTerminal={() => { const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); }}
               terminalDotState={terminalDotState}
               playReadiness={playReadiness} />
       <div className={"pge-main split"}>

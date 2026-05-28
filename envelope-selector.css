@@ -174,10 +174,7 @@
 .env-chip.open  { border-color: var(--accent-ring); }
 .env-chip-name { color: var(--accent); }
 .env-chip-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 20;
+  z-index: 9999;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: 4px;
@@ -252,6 +249,7 @@
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
+.env-curve-row:hover .env-curve-mini svg polyline { stroke: var(--fg-1); }
 .env-curve-label {
   font-family: var(--font-mono);
   font-size: 11px;

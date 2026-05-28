@@ -236,7 +236,9 @@ function EnvelopeSelectorRow({ value, onChange, onEditCurve }) {
   return (
     <>
       {/* Header row — replaces the broken envelope row in Inspector */}
-      <div className={"pge-prow envelope-row" + (open ? " selected" : "")}>
+      <div className={"pge-prow envelope-row" + (open ? " selected" : "")}
+           onClick={() => setOpen(!open)}
+           style={{ cursor: 'pointer' }}>
         <span className="k">envelope</span>
         <span className="env-strategy-tag mono">{strategy}</span>
         <span className="v">
@@ -267,7 +269,7 @@ function EnvelopeSelectorRow({ value, onChange, onEditCurve }) {
           </span>
           <span className="env-summary-label" title={envSummary(value)}>{envSummary(value)}</span>
         </span>
-        <button ref={btnRef} className="pge-icon-btn" onClick={() => setOpen(!open)} title="Choose envelope">
+        <button ref={btnRef} className="pge-icon-btn" onClick={(e) => e.stopPropagation()} title="Choose envelope">
           <Icon name="chevronDown" size={11} />
         </button>
       </div>
@@ -388,22 +390,31 @@ function WindowGrid({ selected, onPick }) {
 function WindowChip({ name, onPick }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = useStateES(false);
+  const [popPos, setPopPos] = useStateES(null);
   const ref = useRefES(null);
+  const btnRef = useRefES(null);
   useEffectES(() => {
     if (!open) return;
     function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
+  function handleOpen() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPopPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen(!open);
+  }
   return (
     <span className="env-chip-wrap" ref={ref}>
-      <button className={"env-chip" + (open ? " open" : "")} onClick={() => setOpen(!open)}>
+      <button ref={btnRef} className={"env-chip" + (open ? " open" : "")} onClick={handleOpen}>
         <WindowShape name={name} w={28} h={14} stroke="var(--accent)" />
         <span className="env-chip-name">{name}</span>
         <Icon name="chevronDown" size={10} />
       </button>
-      {open ? (
-        <div className="env-chip-pop">
+      {open && popPos ? (
+        <div className="env-chip-pop" style={{ position: "fixed", top: popPos.top, left: popPos.left }}>
           <WindowGrid selected={name} onPick={(n) => { onPick(n); setOpen(false); }} />
         </div>
       ) : null}
@@ -415,7 +426,9 @@ function WindowChip({ name, onPick }) {
 function ListEditor({ items, onPickAt, onRemoveAt, onAdd, label, hint, indexed }) {
   const { Icon } = window.PGE;
   const [adding, setAdding] = useStateES(false);
+  const [addPopPos, setAddPopPos] = useStateES(null);
   const addRef = useRefES(null);
+  const addBtnRef = useRefES(null);
   useEffectES(() => {
     if (!adding) return;
     function onDoc(e) { if (addRef.current && !addRef.current.contains(e.target)) setAdding(false); }
@@ -442,11 +455,17 @@ function ListEditor({ items, onPickAt, onRemoveAt, onAdd, label, hint, indexed }
         ))}
       </div>
       <div className="env-list-add" ref={addRef}>
-        <button className="add-param-btn" onClick={() => setAdding(!adding)}>
+        <button ref={addBtnRef} className="add-param-btn" onClick={() => {
+          if (!adding && addBtnRef.current) {
+            const r = addBtnRef.current.getBoundingClientRect();
+            setAddPopPos({ top: r.bottom + 4, left: r.left });
+          }
+          setAdding(!adding);
+        }}>
           <Icon name="plus" size={11} /> add window
         </button>
-        {adding ? (
-          <div className="env-chip-pop env-chip-pop-add">
+        {adding && addPopPos ? (
+          <div className="env-chip-pop env-chip-pop-add" style={{ position: "fixed", top: addPopPos.top, left: addPopPos.left }}>
             <WindowGrid selected={null} onPick={(n) => { onAdd(n); setAdding(false); }} />
           </div>
         ) : null}
@@ -466,7 +485,7 @@ function CurveRow({ value, onChange, onEdit, range }) {
   const xr = xmax - xmin || 1, yr = ymax - ymin || 1;
   const pts = bp.map(p => `${((p[0]-xmin)/xr*100).toFixed(1)},${(14-(p[1]-ymin)/yr*12).toFixed(1)}`).join(" ");
   return (
-    <div className="env-curve-row">
+    <div className="env-curve-row" onClick={onEdit} style={onEdit ? { cursor: "pointer" } : undefined}>
       <span className="env-curve-label">curve</span>
       <span className="env-curve-range mono">{range}</span>
       <span style={{ flex: 1 }} />
@@ -476,9 +495,6 @@ function CurveRow({ value, onChange, onEdit, range }) {
         </svg>
       </span>
       <span className="env-curve-bp mono">{bp.length} bp</span>
-      <button className="pge-icon-btn" onClick={onEdit} title="Edit curve">
-        <Icon name="edit" size={11} />
-      </button>
     </div>
   );
 }

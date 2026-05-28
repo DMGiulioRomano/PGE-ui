@@ -97,6 +97,14 @@ function listEnvelopes(stream) {
       path: ["dephase"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
   }
+  if (stream.grain && stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope) && Array.isArray(stream.grain.envelope.curve)) {
+    const genv = stream.grain.envelope;
+    const isMultistate = Array.isArray(genv.states);
+    const vmax = isMultistate ? Math.max(1, genv.states.length - 1) : 1;
+    list.push({ key: "grainEnvCurve", label: isMultistate ? "states · blend" : "transition · blend", group: "Grain",
+      path: ["grain", "envelope", "curve"], unit: "",
+      visMin: 0, visMax: vmax, hardMin: 0, hardMax: vmax });
+  }
   return list;
 }
 

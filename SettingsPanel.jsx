@@ -211,6 +211,21 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
             <ShortcutInput value={tweaks.shortcutStop || "c"}
                            onChange={(v) => setTweak("shortcutStop", v)} />
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="apre/chiude il pannello log / terminale">log toggle</span>
+            <ShortcutInput value={tweaks.shortcutLog || "l"}
+                           onChange={(v) => setTweak("shortcutLog", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="muta/smuta gli stream selezionati">mute selection</span>
+            <ShortcutInput value={tweaks.shortcutMute || "m"}
+                           onChange={(v) => setTweak("shortcutMute", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="sola/desola gli stream selezionati">solo selection</span>
+            <ShortcutInput value={tweaks.shortcutSolo || "s"}
+                           onChange={(v) => setTweak("shortcutSolo", v)} />
+          </div>
           <div className="sp-hint">
             Click sul campo e premi la combinazione desiderata. Funziona anche cliccando
             di nuovo sullo stesso stream in timeline. Se nessuno stream è selezionato,
