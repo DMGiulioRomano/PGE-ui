@@ -825,8 +825,9 @@ function App() {
     const hi = Math.max(anchorIdx, targetIdx);
     setSelectedIds(ss.slice(lo, hi + 1).map(s => s.id));
   }
-  function marqueeSelectClips(ids) {
-    setSelectedIds(ids);
+  function marqueeSelectClips(ids, additive) {
+    if (additive) setSelectedIds(prev => [...new Set([...prev, ...ids])]);
+    else setSelectedIds(ids);
   }
   function openInspector(id) {
     if (id != null) setSelectedIds([id]);

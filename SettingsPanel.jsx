@@ -103,7 +103,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
               ) : null}
               <div className="sp-hint">
                 Requires running <span className="mono">python server.py</span> in your
-                PythonGranularEngine folder. See <span className="mono">README-PGE-EDITOR.md</span>.
+                PGE-ui folder. See <span className="mono">README-PGE-EDITOR.md</span>.
               </div>
             </>
           ) : null}
