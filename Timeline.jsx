@@ -212,6 +212,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   function onMarqueeStart(e) {
     if (e.button !== 0) return;
     e.preventDefault();
+    const additive = e.ctrlKey || e.metaKey;
     const getCoords = (ev) => {
       const r = lanesAreaRef.current.getBoundingClientRect();
       return {
@@ -244,7 +245,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
           if (clipR <= minX || clipL >= maxX) continue;
           ids.push(s.id);
         }
-        if (ids.length > 0) onMarqueeSelect && onMarqueeSelect(ids);
+        if (ids.length > 0) onMarqueeSelect && onMarqueeSelect(ids, additive);
         else onDeselect && onDeselect();
       } else {
         onDeselect && onDeselect();
