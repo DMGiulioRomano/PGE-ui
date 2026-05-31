@@ -89,8 +89,8 @@ def soxi_duration(path: Path) -> "float | None":
 # Note: [CACHE] lines appear one per stream as each starts.
 # The absolute path lines appear all together at the end (summary block).
 _RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
-# Matches absolute path ending in __<streamId>.aif
-_RE_STEM_PATH  = re.compile(r"^\s+.+__(\w+)\.aif\s*$", re.IGNORECASE)
+# Matches absolute path ending in __<streamId>.<aif|wav|flac>
+_RE_STEM_PATH  = re.compile(r"^\s+.+__(\w+)\.(aif|aiff|wav|flac)\s*$", re.IGNORECASE)
 
 
 def parse_render_line(line: str, state: dict) -> list:
@@ -464,9 +464,13 @@ def make_app(root: Path) -> Flask:
         if "/" in basename or ".." in basename: abort(400)
         stream_ids = []
         prefix = basename + "__"
-        for p in sorted(output.glob(f"{basename}__*.aif")):
+        seen = set()
+        for p in sorted(output.glob(f"{basename}__*.*")):
+            if p.suffix.lower() not in {".aif", ".aiff", ".wav", ".flac"}:
+                continue
             sid = p.stem[len(prefix):]
-            if sid:
+            if sid and sid not in seen:
+                seen.add(sid)
                 stream_ids.append({"streamId": sid, "mtime": p.stat().st_mtime})
         return jsonify({"basename": basename, "stems": stream_ids})
 
@@ -511,17 +515,22 @@ def make_app(root: Path) -> Flask:
         visualize = bool(opts.get("visualize", False))
         reaper    = bool(opts.get("reaper", False))
         preclean  = bool(opts.get("preclean", False))
+        fmt       = opts.get("outputFormat", "aiff")
+        if fmt not in {"aiff", "wav", "flac"}:
+            abort(400, f"invalid format: {fmt!r}")
+        _EXT = {"aiff": ".aif", "wav": ".wav", "flac": ".flac"}
+        out_ext = _EXT[fmt]
 
         yml = configs / f"{basename}.yml"
         if not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
 
-        aif = output / f"{basename}.aif"
+        output_stem = output / f"{basename}{out_ext}"
 
-        # Optional: wipe previous stems if requested.
+        # Optional: wipe previous stems (current format only) if requested.
         if preclean:
-            for p in output.glob(f"{basename}__*.aif"):
+            for p in output.glob(f"{basename}__*{out_ext}"):
                 try: p.unlink()
                 except Exception: pass
 
@@ -547,10 +556,11 @@ def make_app(root: Path) -> Flask:
             # Build the command using the engine venv python.
             cmd = [
                 str(venv_py), str(root / "src" / "main.py"),
-                str(yml), str(aif),
+                str(yml), str(output_stem),
                 "--renderer", renderer,
                 "--per-stream",
                 "--show-static",
+                "--format", fmt,
             ]
             if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
             if visualize:  cmd += ["--visualize"]
@@ -594,7 +604,7 @@ def make_app(root: Path) -> Flask:
                 ok = (proc.returncode == 0)
                 generated = [
                     str(p.relative_to(root))
-                    for p in sorted(output.glob(f"{basename}__*.aif"))
+                    for p in sorted(output.glob(f"{basename}__*{out_ext}"))
                 ]
                 yield json.dumps({
                     "type": "done", "ok": ok,

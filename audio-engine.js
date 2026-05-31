@@ -58,7 +58,7 @@
       if (!Ctor) throw new Error("Web Audio API not available");
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.7;
+      this.master.gain.value = 1.0;
       this.master.connect(this.ctx.destination);
     }
 
@@ -183,7 +183,7 @@
 
         const gainNode = this.ctx.createGain();
         const dbToLin = (db) => Math.pow(10, db / 20);
-        const gainBase = dbToLin(typeof s.volume === "number" ? s.volume : -6);
+        const gainBase = dbToLin(typeof s.volume === "number" ? s.volume : 0);
 
         const muteSoloGain = this._effectiveMuteSoloGain(s, anySolo);
         gainNode.gain.value = gainBase * muteSoloGain;
@@ -279,7 +279,7 @@
       source.buffer = buf;
       const gainNode = this.ctx.createGain();
       const dbToLin = (db) => Math.pow(10, db / 20);
-      const gainBase = dbToLin(typeof stream.volume === "number" ? stream.volume : -6);
+      const gainBase = dbToLin(typeof stream.volume === "number" ? stream.volume : 0);
       gainNode.gain.value = gainBase * this._effectiveMuteSoloGain(stream, this.anySolo);
       source.connect(gainNode).connect(this.master);
 
