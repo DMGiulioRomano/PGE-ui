@@ -488,8 +488,7 @@
         return stemIndex[`${yamlBasename}__${streamId}`] || null;
       },
       stemUrl(yamlBasename, streamId) {
-        // Use /audio/ (transcoded WAV) — works in every browser including FF.
-        return `${baseUrl}/audio/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+        return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
       },
     };
 
