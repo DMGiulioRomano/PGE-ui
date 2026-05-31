@@ -40,11 +40,13 @@
     return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
   }
 
-  function fingerprintStream(stream) {
+  function fingerprintStream(stream, format) {
     // Mirror python's stable hash: stringify with sorted keys, ignore UI-only
     // fields (color, mute, solo — those don't affect audio).
+    // format is folded in so stems rendered with a different format are stale.
     const ignore = new Set(["color", "mute", "solo", "onset"]);
-    const json = JSON.stringify(stream, (k, v) => (ignore.has(k) ? undefined : v));
+    const json = JSON.stringify(stream, (k, v) => (ignore.has(k) ? undefined : v))
+      + `|fmt:${format || "aiff"}`;
     return fnv1a(json);
   }
 
@@ -120,7 +122,7 @@
       cancel() { state.cancelled = true; },
       async run(opts, onEvent) {
         state.cancelled = false;
-        const { yamlBasename, streams, renderer, useCache, visualize, reaper, preclean } = opts;
+        const { yamlBasename, streams, renderer, useCache, visualize, reaper, preclean, outputFormat } = opts;
         const emit = (e) => onEvent && onEvent(e);
 
         emit({ type: "log", line: `[${new Date().toLocaleTimeString()}] starting render` });
@@ -160,7 +162,7 @@
             return { ok: false, generated, cacheHits };
           }
           const s = streams[i];
-          const fp = fingerprintStream(s);
+          const fp = fingerprintStream(s, outputFormat);
           newCache[s.id] = fp;
           const aifName = `${yamlBasename}__${s.id}.aif`;
           const exists = state.renderedStems[aifName];
@@ -448,7 +450,7 @@
                     if (stemIndex[key]) continue;  // already handled
                     stemIndex[key] = Date.now();
                     const s = (opts.streams || []).find(x => x.id === streamId);
-                    if (s) localFps[s.id] = fingerprintStream(s);
+                    if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                     onEvent && onEvent({ type: "stream-done", streamId, cached: false });
                   }
                   _persistStemIndex();
@@ -459,7 +461,7 @@
                   // freeze the browser-side fingerprint for this stream so the
                   // UI can mark it fresh (and detect later edits as stale).
                   const s = (opts.streams || []).find(x => x.id === ev.streamId);
-                  if (s) localFps[s.id] = fingerprintStream(s);
+                  if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                 }
               } catch (parseErr) {
                 onEvent && onEvent({ type: "log", line: `[warn] bad json line: ${line.slice(0,80)}` });
@@ -487,8 +489,10 @@
       stemMtime(yamlBasename, streamId) {
         return stemIndex[`${yamlBasename}__${streamId}`] || null;
       },
-      stemUrl(yamlBasename, streamId) {
-        return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+      stemUrl(yamlBasename, streamId, format) {
+        const extMap = { wav: ".wav", flac: ".flac" };
+        const ext = extMap[format] || ".aif";
+        return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
     };
 
