@@ -41,7 +41,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutSolo": "s",
   "shortcutLog": "l",
   "stepMenuTrigger": "rightClick",
-  "outputFormat": "aiff"
+  "outputFormat": "wav"
 }/*EDITMODE-END*/;
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize feature) ---- */
@@ -497,7 +497,7 @@ function App() {
   /* Current fingerprint per stream — recomputed when data changes */
   const currentFps = useMemoApp(() => {
     const out = {};
-    const fmt = tweaks.outputFormat || "aiff";
+    const fmt = tweaks.outputFormat || "wav";
     for (const s of data.streams) out[s.id] = window.PGEBackend.fingerprintStream(s, fmt);
     return out;
   }, [data.streams, tweaks.outputFormat]);
@@ -948,7 +948,7 @@ function App() {
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
-      outputFormat: tweaks.outputFormat || "aiff",
+      outputFormat: tweaks.outputFormat || "wav",
     };
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
@@ -1045,7 +1045,7 @@ function App() {
       const last = lastRenderedFps[s.id];
       const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
       if (!hasStem) return;
-      const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "aiff") : null;
+      const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
       try {
         await engine.ensureBuffer(s.id, {
           duration: s.duration,
@@ -1322,10 +1322,10 @@ function App() {
                 pushToast({ kind: "info", title: `backend → ${v}`, duration: 1800 });
               }} />
             <div className="twk-hint">mock = in-browser simulation · local = real fs + http server on localhost:7878</div>
-            <window.TweakSelect label="output format" value={tweaks.outputFormat || "aiff"}
+            <window.TweakSelect label="output format" value={tweaks.outputFormat || "wav"}
               options={[
-                {label:"AIFF (default)", value:"aiff"},
-                {label:"WAV", value:"wav"},
+                {label:"AIFF", value:"aiff"},
+                {label:"WAV (default)", value:"wav"},
                 {label:"FLAC", value:"flac"}]}
               onChange={(v) => setTweak("outputFormat", v)} />
             <window.TweakText label="media path" value={tweaks.mediaPath} onChange={(v) => setTweak("mediaPath", v)} />
