@@ -1074,24 +1074,27 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
-    // Preload buffers for streams that have a stem (fresh or stale). Streams
-    // never rendered will be silent during playback.
-    const preloads = data.streams.map(async (s) => {
+    // Real stems (local backend) are streamed from disk via <audio> at
+    // schedule time — registered as URLs, never decoded whole into RAM. Mock
+    // streams have no URL, so we synth a small AudioBuffer for them. Streams
+    // never rendered are silent.
+    const urlMap = {};
+    const preloads = [];
+    for (const s of data.streams) {
       const last = lastRenderedFps[s.id];
       const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
-      if (!hasStem) return;
+      if (!hasStem) continue;
       const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
-      try {
-        await engine.ensureBuffer(s.id, {
-          duration: s.duration,
-          color: s.color,
-          fingerprint: last || currentFps[s.id],
-          url,
-        });
-      } catch (e) {
-        pushToast({ kind: "warn", title: `couldn't load ${s.id}`, message: e.message, duration: 3000 });
+      if (url) {
+        urlMap[s.id] = url;                            // streamed, no decode
+      } else {
+        preloads.push(
+          engine.ensureBuffer(s.id, { duration: s.duration, color: s.color, fingerprint: last || currentFps[s.id], url: null })
+            .catch((e) => pushToast({ kind: "warn", title: `couldn't load ${s.id}`, message: e.message, duration: 3000 }))
+        );
       }
-    });
+    }
+    engine.setStreamUrls(urlMap);
     await Promise.all(preloads);
 
     engine.syncMuteSoloFromStreams(data.streams);
