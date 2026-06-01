@@ -40,6 +40,7 @@
       this.master = null;
       this.buffers = new Map();          // streamId → AudioBuffer
       this.bufferKeys = new Map();        // streamId → "basename__sid#fingerprint" cache key
+      this.peaks = new Map();             // streamId → { key, data: Float32Array }  waveform peaks
       this.activeNodes = new Map();       // streamId → { source, gainNode, gainBase }
       this.streamMuteSolo = new Map();    // streamId → { mute, solo }
       this.anySolo = false;
@@ -90,10 +91,60 @@
     invalidateStream(id) {
       this.buffers.delete(id);
       this.bufferKeys.delete(id);
+      this.peaks.delete(id);
     }
     invalidateAll() {
       this.buffers.clear();
       this.bufferKeys.clear();
+      this.peaks.clear();
+    }
+
+    // -------- waveform peaks --------
+
+    /**
+     * Reduce an AudioBuffer to a fixed-resolution peak array for waveform
+     * drawing. One pass over the samples; for each of `buckets` columns we take
+     * the max absolute amplitude across all channels. Result is a Float32Array
+     * of length `buckets` with values in 0..1. Downsample this to the clip's
+     * pixel width at draw time.
+     */
+    _computePeaks(buffer, buckets = 4096) {
+      const len = buffer.length;
+      const n = Math.min(buckets, Math.max(1, len));
+      const out = new Float32Array(n);
+      const chans = [];
+      for (let c = 0; c < buffer.numberOfChannels; c++) chans.push(buffer.getChannelData(c));
+      const per = len / n;
+      for (let b = 0; b < n; b++) {
+        const start = Math.floor(b * per);
+        const end = Math.min(len, Math.floor((b + 1) * per));
+        let peak = 0;
+        for (const data of chans) {
+          for (let i = start; i < end; i++) {
+            const a = Math.abs(data[i]);
+            if (a > peak) peak = a;
+          }
+        }
+        out[b] = peak;
+      }
+      return out;
+    }
+
+    /**
+     * Ensure we have a peak array for `streamId`, decoding the buffer first if
+     * needed. Keyed on the same url#fingerprint as ensureBuffer, so a re-render
+     * (new fingerprint) yields fresh peaks. Returns the Float32Array.
+     */
+    async ensurePeaks(streamId, spec) {
+      const key = (spec.url || "synth") + "#" + (spec.fingerprint || "");
+      const cached = this.peaks.get(streamId);
+      if (cached && cached.key === key) return cached.data;
+      await this.ensureBuffer(streamId, spec);
+      const buffer = this.buffers.get(streamId);
+      if (!buffer) return null;
+      const data = this._computePeaks(buffer);
+      this.peaks.set(streamId, { key, data });
+      return data;
     }
 
     /**
