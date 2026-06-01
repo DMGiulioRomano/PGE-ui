@@ -123,7 +123,7 @@
      * of length `buckets` with values in 0..1. Downsample this to the clip's
      * pixel width at draw time.
      */
-    _computePeaks(buffer, buckets = 4096) {
+    _computePeaks(buffer, buckets = 16384) {
       const len = buffer.length;
       const n = Math.min(buckets, Math.max(1, len));
       const out = new Float32Array(n);
@@ -149,8 +149,8 @@
      * Ensure we have a peak array for `streamId`. Keyed on url#fingerprint so a
      * re-render (new fingerprint) yields fresh peaks. Returns a Float32Array.
      *
-     * Local backend supplies `spec.peaksUrl`: we fetch a ready-made 4096-float
-     * array (~16 KB) from the server and NEVER decode the full PCM here — that
+     * Local backend supplies `spec.peaksUrl`: we fetch a ready-made 16384-float
+     * array (~64 KB) from the server and NEVER decode the full PCM here — that
      * would pin ~160 MB per 8-min stereo stem in `this.buffers` just to draw a
      * waveform. Without a peaksUrl (mock/offline) we fall back to decoding and
      * computing peaks locally.

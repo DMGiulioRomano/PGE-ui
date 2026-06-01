@@ -143,7 +143,7 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
-PEAK_BUCKETS = 4096
+PEAK_BUCKETS = 16384
 
 
 def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
@@ -480,7 +480,7 @@ def make_app(root: Path) -> Flask:
     def serve_peaks(fname):
         """Return a waveform peak array for a rendered stem as raw binary:
         `PEAK_BUCKETS` little-endian float32 values in 0..1 (max abs amplitude
-        per bucket across channels). ~16 KB regardless of stem length.
+        per bucket across channels). ~64 KB regardless of stem length.
 
         Computed server-side so the browser never decodes the full PCM just to
         draw a waveform (a 8-min stereo stem is ~160 MB decoded; this is 16 KB).
@@ -498,7 +498,9 @@ def make_app(root: Path) -> Flask:
 
         peaks_dir = cache / "peaks"
         peaks_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = peaks_dir / (stem + ".f32")
+        # Bucket count in the name so bumping PEAK_BUCKETS invalidates old
+        # caches automatically (stale .f32 files just become orphaned).
+        cache_file = peaks_dir / (stem + f".{PEAK_BUCKETS}.f32")
         fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
         if not fresh:
             try:
