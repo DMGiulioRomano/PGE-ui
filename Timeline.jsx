@@ -52,16 +52,27 @@ function ClipWaveform({ peaks, width, height, color }) {
     const mid = H / 2;
     const half = H / 2;
     const n = peaks.length;
+    // Per-pixel peak: take the MAX of every bucket this column spans, so
+    // transients aren't dropped when n >> W (the usual case at normal zoom).
+    // Computed once, reused for both mirrored edges.
+    const cols = new Float32Array(W);
+    for (let x = 0; x < W; x++) {
+      let k0 = Math.floor((x / W) * n);
+      let k1 = Math.floor(((x + 1) / W) * n);
+      if (k1 <= k0) k1 = k0 + 1;          // zoomed in (W > n) → 1 bucket/pixel
+      if (k1 > n) k1 = n;
+      let p = 0;
+      for (let k = k0; k < k1; k++) if (peaks[k] > p) p = peaks[k];
+      cols[x] = p;
+    }
     ctx.beginPath();
     // top edge left→right, then bottom edge right→left, mirrored about mid.
     for (let x = 0; x < W; x++) {
-      const peak = peaks[Math.min(n - 1, Math.floor((x / W) * n))];
-      const y = mid - peak * half;
+      const y = mid - cols[x] * half;
       x === 0 ? ctx.moveTo(0, y) : ctx.lineTo(x, y);
     }
     for (let x = W - 1; x >= 0; x--) {
-      const peak = peaks[Math.min(n - 1, Math.floor((x / W) * n))];
-      ctx.lineTo(x, mid + peak * half);
+      ctx.lineTo(x, mid + cols[x] * half);
     }
     ctx.closePath();
     ctx.fill();
