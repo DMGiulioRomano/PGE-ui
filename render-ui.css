@@ -238,32 +238,30 @@
 @keyframes spnSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 .bw-folder-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
-/* ---------- Clip render-status dot ---------- */
+/* ---------- Clip render-status marker ---------- */
+/* No panel, no label — just a tiny marker. never = red dot, stale/error =
+ * warning triangle, running = pulsing accent dot (+ progress bar), fresh = nothing. */
 .clip-render-status {
   position: absolute;
   left: 4px;
   bottom: 3px;
   display: inline-flex; align-items: center; gap: 3px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background: rgba(0,0,0,0.38);
-  font-size: 9px;
   z-index: 3;
   pointer-events: none;
 }
 .clip-render-status .crs-dot {
   width: 5px; height: 5px; border-radius: 50%;
   background: rgba(255,255,255,0.5);
+  filter: drop-shadow(0 0 1px rgba(0,0,0,0.7));
 }
-.clip-render-status .crs-text { color: rgba(255,255,255,0.85); font-size: 8.5px; letter-spacing: 0.02em; }
-.clip-render-status.s-fresh .crs-dot   { background: #3DB87A; }
-.clip-render-status.s-fresh .crs-text  { color: rgba(255,255,255,0.85); }
-.clip-render-status.s-stale .crs-dot   { background: #F5A524; }
-.clip-render-status.s-stale .crs-text  { color: #FFD68A; }
-.clip-render-status.s-never .crs-dot   { background: rgba(255,255,255,0.35); }
-.clip-render-status.s-never .crs-text  { color: rgba(255,255,255,0.55); }
+.clip-render-status .crs-mark {
+  font-size: 10px; line-height: 1;
+  text-shadow: 0 0 2px rgba(0,0,0,0.85);
+}
+.clip-render-status.s-never .crs-dot   { background: var(--status-error); }
+.clip-render-status.s-stale .crs-mark  { color: #F5A524; }
+.clip-render-status.s-error .crs-mark  { color: var(--status-error); }
 .clip-render-status.s-running .crs-dot { background: var(--accent); animation: pgePulse 0.8s infinite; }
-.clip-render-status.s-running .crs-text { color: var(--accent); }
 .clip-render-status .crs-bar {
   display: inline-block; width: 28px; height: 3px;
   background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden;

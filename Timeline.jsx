@@ -10,19 +10,18 @@ const { useState: useStateTL, useRef: useRefTL, useEffect: useEffTL } = React;
  *   running — currently being rendered
  */
 function ClipRenderStatus({ status }) {
-  if (!status || status.state === "hidden") return null;
-  const label = {
-    fresh:   "✓ rendered",
-    stale:   "⚠ stale",
-    never:   "· never rendered",
+  // fresh & up-to-date shows no marker — only never/stale/running/error surface.
+  if (!status || status.state === "hidden" || status.state === "fresh") return null;
+  const tip = status.tooltip || {
+    stale:   "stale — yaml changed since last render",
+    never:   "never rendered",
     running: "rendering…",
     error:   "error",
   }[status.state] || status.state;
-  const tip = status.tooltip || label;
+  const isWarn = status.state === "stale" || status.state === "error";
   return (
     <div className={"clip-render-status s-" + status.state} title={tip}>
-      <span className="crs-dot" />
-      <span className="crs-text mono">{label}</span>
+      {isWarn ? <span className="crs-mark">⚠</span> : <span className="crs-dot" />}
       {typeof status.progress === "number" && status.state === "running" ? (
         <span className="crs-bar"><span className="crs-bar-fill" style={{ width: (status.progress * 100).toFixed(0) + "%" }} /></span>
       ) : null}
