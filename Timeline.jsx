@@ -30,6 +30,46 @@ function ClipRenderStatus({ status }) {
   );
 }
 
+/* ---------- ClipWaveform ---------- */
+/* Draws the real waveform of a stream's rendered stem onto a <canvas>.
+ * `peaks` is a Float32Array (0..1) from the audio engine; we downsample it to
+ * the clip's pixel width so detail follows timeline zoom. Canvas (not SVG) so
+ * the repaint on every zoom step stays cheap. Renders nothing when peaks are
+ * missing (e.g. never-rendered stream or mock backend). */
+function ClipWaveform({ peaks, width, height, color }) {
+  const canvasRef = useRefTL(null);
+  useEffTL(() => {
+    const cvs = canvasRef.current;
+    if (!cvs || !peaks || width < 2 || height < 2) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.floor(width));
+    const H = Math.max(1, Math.floor(height));
+    cvs.width = Math.floor(W * dpr);
+    cvs.height = Math.floor(H * dpr);
+    const ctx = cvs.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255,255,255,.55)";
+    const mid = H / 2;
+    const half = H / 2;
+    const n = peaks.length;
+    ctx.beginPath();
+    // top edge left→right, then bottom edge right→left, mirrored about mid.
+    for (let x = 0; x < W; x++) {
+      const peak = peaks[Math.min(n - 1, Math.floor((x / W) * n))];
+      const y = mid - peak * half;
+      x === 0 ? ctx.moveTo(0, y) : ctx.lineTo(x, y);
+    }
+    for (let x = W - 1; x >= 0; x--) {
+      const peak = peaks[Math.min(n - 1, Math.floor((x / W) * n))];
+      ctx.lineTo(x, mid + peak * half);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }, [peaks, width, height]);
+  return <canvas className="wave" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
+}
+
 function gestureMatches(rule, e) {
   // rule examples: "wheel", "shift+wheel", "alt+wheel", "cmd+wheel", "ctrl+wheel"
   if (!rule) return false;
@@ -46,7 +86,7 @@ function gestureMatches(rule, e) {
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, laneHeight, gestures, onZoom, onLaneHeight,
-  renderStatusFor }) {
+  renderStatusFor, waveformFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -453,10 +493,8 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
                 <div className="lbl">{s.id} · {s.sample}</div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
-                {showWaveforms !== false ?
-              <svg className="wave" viewBox="0 0 240 22" preserveAspectRatio="none">
-                    <path fill="rgba(255,255,255,.55)" d="M0,11 L8,5 16,17 24,8 32,15 40,4 48,18 56,9 64,16 72,3 80,18 88,11 96,15 104,7 112,17 120,5 128,19 136,10 144,16 152,8 160,17 168,4 176,18 184,11 192,15 200,7 208,17 216,5 224,18 232,11 240,11 240,11 0,11" />
-                  </svg> :
+                {showWaveforms !== false && waveformFor && waveformFor(s.id) ?
+              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id) * 0.6} color={s.color} /> :
               null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, s.id)} title="drag to resize this track" />
