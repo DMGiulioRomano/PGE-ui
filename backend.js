@@ -490,8 +490,13 @@
         return stemIndex[`${yamlBasename}__${streamId}`] || null;
       },
       stemUrl(yamlBasename, streamId, format) {
+        // aiff → /audio/ (server transcodes to WAV via sox; browsers can't decode AIFF natively)
+        // wav/flac → /output/ (browsers decode these natively, no transcode needed)
+        if (!format || format === "aiff") {
+          return `${baseUrl}/audio/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+        }
         const extMap = { wav: ".wav", flac: ".flac" };
-        const ext = extMap[format] || ".aif";
+        const ext = extMap[format] || ".wav";
         return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
     };
