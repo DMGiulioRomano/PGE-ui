@@ -38,10 +38,12 @@
     constructor() {
       this.ctx = null;
       this.master = null;
-      this.buffers = new Map();          // streamId → AudioBuffer
+      this.buffers = new Map();          // streamId → AudioBuffer (mock synth only)
       this.bufferKeys = new Map();        // streamId → "basename__sid#fingerprint" cache key
       this.peaks = new Map();             // streamId → { key, data: Float32Array }  waveform peaks
-      this.activeNodes = new Map();       // streamId → { source, gainNode, gainBase }
+      this.streamUrls = new Map();        // streamId → stem URL (real stems → streamed, not decoded)
+      // streamId → { el?, mediaSource?, gainNode?, gainBase?, source?, timers: [] }
+      this.activeNodes = new Map();
       this.streamMuteSolo = new Map();    // streamId → { mute, solo }
       this.anySolo = false;
       this.playing = false;
@@ -88,6 +90,19 @@
       this.bufferKeys.set(streamId, key);
     }
 
+    /**
+     * Register the stem URL for each real-stem stream. When a stream has a URL
+     * here it is *streamed* via an <audio> element at schedule time (the
+     * browser buffers only a few seconds ahead, ~MBs) instead of being decoded
+     * whole into an AudioBuffer (~160 MB for an 8-min stereo stem). Streams
+     * absent from this map fall back to the mock synth buffer path.
+     * Pass `{ [streamId]: url|null }`; null/empty entries are ignored.
+     */
+    setStreamUrls(map) {
+      this.streamUrls.clear();
+      for (const id in map) { if (map[id]) this.streamUrls.set(id, map[id]); }
+    }
+
     invalidateStream(id) {
       this.buffers.delete(id);
       this.bufferKeys.delete(id);
@@ -131,14 +146,29 @@
     }
 
     /**
-     * Ensure we have a peak array for `streamId`, decoding the buffer first if
-     * needed. Keyed on the same url#fingerprint as ensureBuffer, so a re-render
-     * (new fingerprint) yields fresh peaks. Returns the Float32Array.
+     * Ensure we have a peak array for `streamId`. Keyed on url#fingerprint so a
+     * re-render (new fingerprint) yields fresh peaks. Returns a Float32Array.
+     *
+     * Local backend supplies `spec.peaksUrl`: we fetch a ready-made 4096-float
+     * array (~16 KB) from the server and NEVER decode the full PCM here — that
+     * would pin ~160 MB per 8-min stereo stem in `this.buffers` just to draw a
+     * waveform. Without a peaksUrl (mock/offline) we fall back to decoding and
+     * computing peaks locally.
      */
     async ensurePeaks(streamId, spec) {
       const key = (spec.url || "synth") + "#" + (spec.fingerprint || "");
       const cached = this.peaks.get(streamId);
       if (cached && cached.key === key) return cached.data;
+
+      if (spec.peaksUrl) {
+        const res = await fetch(spec.peaksUrl);
+        if (!res.ok) throw new Error(`peaks fetch failed: HTTP ${res.status}`);
+        const data = new Float32Array(await res.arrayBuffer());
+        this.peaks.set(streamId, { key, data });
+        return data;
+      }
+
+      // Fallback: decode + compute locally (mock has no server peaks).
       await this.ensureBuffer(streamId, spec);
       const buffer = this.buffers.get(streamId);
       if (!buffer) return null;
@@ -204,11 +234,13 @@
     // -------- scheduling --------
 
     /**
-     * Schedule playback for a list of streams. Each stream gets its own
-     * AudioBufferSourceNode scheduled to start at `audioCtx.currentTime +
-     * (onset - fromTime)` if onset > fromTime, or already-in-progress
-     * (`source.start(0, fromTime - onset)`) if we're mid-clip on seek.
-     * Streams without a cached buffer are skipped (silent).
+     * Schedule playback for a list of streams from timeline position
+     * `fromTime`. Two per-stream paths:
+     *   - real stem (URL in `streamUrls`)  → streamed via an <audio> element,
+     *     created lazily right before its onset so only currently-sounding
+     *     clips hold a media decoder (caps RAM at ~MBs/clip, not ~160 MB).
+     *   - mock synth (AudioBuffer in `buffers`) → AudioBufferSourceNode.
+     * Streams with neither are silent.
      */
     scheduleStreams(streams, basename, fromTime) {
       this._stopAllSources();
@@ -221,33 +253,92 @@
       const anySolo = streams.some(s => s.solo);
       this.anySolo = anySolo;
 
-      for (const s of streams) {
-        const buf = this.buffers.get(s.id);
-        if (!buf) continue;
-        const onset = +s.onset || 0;
-        const dur = +s.duration || buf.duration;
-        const clipEnd = onset + dur;
-        if (clipEnd <= fromTime) continue;              // already past
+      for (const s of streams) this._scheduleOne(s, fromTime, anySolo);
+    }
 
-        const source = this.ctx.createBufferSource();
-        source.buffer = buf;
+    // Schedule a single stream from `fromTime`. Picks the streaming or buffer
+    // path. Assumes any prior node for `s.id` has been torn down.
+    _scheduleOne(s, fromTime, anySolo) {
+      const onset = +s.onset || 0;
+      const dur = +s.duration || 0;
+      const clipEnd = onset + (dur || Infinity);
+      if (dur && clipEnd <= fromTime) return;          // already past
 
+      const url = this.streamUrls.get(s.id);
+      if (url) { this._scheduleStreaming(s, url, fromTime, anySolo); return; }
+
+      const buf = this.buffers.get(s.id);
+      if (!buf) return;                                 // silent
+      const bdur = dur || buf.duration;
+      if (onset + bdur <= fromTime) return;
+
+      const source = this.ctx.createBufferSource();
+      source.buffer = buf;
+      const gainNode = this.ctx.createGain();
+      const gainBase = this._dbToLin(s.volume);
+      gainNode.gain.value = gainBase * this._effectiveMuteSoloGain(s, anySolo);
+      source.connect(gainNode).connect(this.master);
+
+      const whenCtx = this.startedAtCtx + Math.max(0, onset - fromTime);
+      const offset = Math.max(0, fromTime - onset);
+      try { source.start(whenCtx, offset, Math.max(0.01, bdur - offset)); } catch {}
+      this.activeNodes.set(s.id, { source, gainNode, gainBase, timers: [] });
+    }
+
+    // Stream a real stem via <audio>. The element + media node are built right
+    // before the clip sounds (now if mid-clip, else on a timer) so only active
+    // clips own a decoder. A second timer tears it down at clipEnd.
+    _scheduleStreaming(s, url, fromTime, anySolo) {
+      const onset = +s.onset || 0;
+      const dur = +s.duration || 0;
+      const offset = Math.max(0, fromTime - onset);     // into-clip seek
+      const startDelay = Math.max(0, onset - fromTime); // s until onset
+      const entry = { gainBase: this._dbToLin(s.volume), timers: [] };
+      this.activeNodes.set(s.id, entry);
+
+      const build = () => {
+        if (this.activeNodes.get(s.id) !== entry) return; // stopped meanwhile
+        const el = new Audio();
+        el.src = url;
+        el.preload = "auto";
+        el.crossOrigin = "anonymous";
+        const mediaSource = this.ctx.createMediaElementSource(el);
         const gainNode = this.ctx.createGain();
-        const dbToLin = (db) => Math.pow(10, db / 20);
-        const gainBase = dbToLin(typeof s.volume === "number" ? s.volume : 0);
+        gainNode.gain.value = entry.gainBase * this._effectiveMuteSoloGain(s, this.anySolo);
+        mediaSource.connect(gainNode).connect(this.master);
+        entry.el = el; entry.mediaSource = mediaSource; entry.gainNode = gainNode;
 
-        const muteSoloGain = this._effectiveMuteSoloGain(s, anySolo);
-        gainNode.gain.value = gainBase * muteSoloGain;
-        source.connect(gainNode).connect(this.master);
+        const go = () => { try { el.currentTime = offset; } catch {} el.play().catch(() => {}); };
+        if (el.readyState >= 2) go(); else el.addEventListener("canplay", go, { once: true });
+      };
 
-        const whenCtx = this.startedAtCtx + Math.max(0, onset - fromTime);
-        const offset = Math.max(0, fromTime - onset);
-        try {
-          source.start(whenCtx, offset, Math.max(0.01, dur - offset));
-        } catch {}
+      if (startDelay <= 0) build();
+      else entry.timers.push(setTimeout(build, startDelay * 1000));
 
-        this.activeNodes.set(s.id, { source, gainNode, gainBase });
+      // Tear down at clip end, timed from `fromTime` (the schedule baseline)
+      // so it is independent of when `build` actually runs.
+      if (dur) {
+        const stopMs = Math.max(0, (onset + dur - fromTime) * 1000);
+        entry.timers.push(setTimeout(() => this._teardownNode(s.id), stopMs));
       }
+    }
+
+    _dbToLin(db) { return Math.pow(10, (typeof db === "number" ? db : 0) / 20); }
+
+    // Tear down and forget a single active node (streaming or buffer).
+    _teardownNode(id) {
+      const n = this.activeNodes.get(id);
+      if (!n) return;
+      if (n.timers) for (const t of n.timers) clearTimeout(t);
+      if (n.el) {
+        try { n.el.pause(); } catch {}
+        try { n.mediaSource.disconnect(); } catch {}
+        try { n.gainNode.disconnect(); } catch {}
+        n.el.src = "";
+      } else if (n.source) {
+        try { n.source.stop(0); } catch {}
+      }
+      this.activeNodes.delete(id);
     }
 
     _effectiveMuteSoloGain(stream, anySolo) {
@@ -259,7 +350,15 @@
 
     _stopAllSources() {
       for (const [, n] of this.activeNodes) {
-        try { n.source.stop(0); } catch {}
+        if (n.timers) for (const t of n.timers) clearTimeout(t);
+        if (n.el) {
+          try { n.el.pause(); } catch {}
+          try { n.mediaSource.disconnect(); } catch {}
+          try { n.gainNode.disconnect(); } catch {}
+          n.el.src = "";
+        } else if (n.source) {
+          try { n.source.stop(0); } catch {}
+        }
       }
       this.activeNodes.clear();
     }
@@ -314,31 +413,8 @@
     // Reschedule a single stream without touching others.
     rescheduleStream(stream) {
       if (!this.ctx || !this.playing) return;
-      const node = this.activeNodes.get(stream.id);
-      if (node) { try { node.source.stop(0); } catch {} }
-      this.activeNodes.delete(stream.id);
-
-      const buf = this.buffers.get(stream.id);
-      if (!buf) return;
-
-      const fromTime = this.currentTime;
-      const onset = +stream.onset || 0;
-      const dur = +stream.duration || buf.duration;
-      if (onset + dur <= fromTime) return;  // already past
-
-      const source = this.ctx.createBufferSource();
-      source.buffer = buf;
-      const gainNode = this.ctx.createGain();
-      const dbToLin = (db) => Math.pow(10, db / 20);
-      const gainBase = dbToLin(typeof stream.volume === "number" ? stream.volume : 0);
-      gainNode.gain.value = gainBase * this._effectiveMuteSoloGain(stream, this.anySolo);
-      source.connect(gainNode).connect(this.master);
-
-      const nowCtx = this.ctx.currentTime;
-      const whenCtx = nowCtx + Math.max(0, onset - fromTime);
-      const offset = Math.max(0, fromTime - onset);
-      try { source.start(whenCtx, offset, Math.max(0.01, dur - offset)); } catch {}
-      this.activeNodes.set(stream.id, { source, gainNode, gainBase });
+      this._teardownNode(stream.id);
+      this._scheduleOne(stream, this.currentTime, this.anySolo);
     }
 
     get currentTime() {
@@ -377,6 +453,7 @@
     }
     _refreshLiveGains() {
       for (const [id, node] of this.activeNodes) {
+        if (!node.gainNode) continue;   // streaming clip not yet sounding
         const s = this.lastStreams.find(x => x.id === id) || { id, mute: false, solo: false };
         node.gainNode.gain.setTargetAtTime(
           node.gainBase * this._effectiveMuteSoloGain(s, this.anySolo),
