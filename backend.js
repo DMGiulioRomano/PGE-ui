@@ -231,6 +231,8 @@
       // mock backend has no real audio file. The audio engine treats this
       // as "synthesize procedurally" when there's no url.
       stemUrl(yamlBasename, streamId) { return null; },
+      // no real stems → no server-side peaks (engine falls back to synth peaks).
+      peaksUrl(yamlBasename, streamId) { return null; },
     };
 
     async function setup(onEvent) {
@@ -498,6 +500,11 @@
         const extMap = { wav: ".wav", flac: ".flac" };
         const ext = extMap[format] || ".wav";
         return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
+      },
+      // Server-side waveform peaks (~16 KB float32). Extension is irrelevant —
+      // the server resolves the stem regardless of format.
+      peaksUrl(yamlBasename, streamId) {
+        return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
       },
     };
 

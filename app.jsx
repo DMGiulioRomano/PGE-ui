@@ -612,8 +612,9 @@ function App() {
           continue;
         }
         const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
+        const peaksUrl = backend.render.peaksUrl ? backend.render.peaksUrl(basename, s.id) : null;
         try {
-          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: last || currentFps[s.id], url });
+          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: last || currentFps[s.id], url, peaksUrl });
           if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
         } catch (e) { /* stem missing or undecodable — leave clip flat */ }
       }

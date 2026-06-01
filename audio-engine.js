@@ -131,14 +131,29 @@
     }
 
     /**
-     * Ensure we have a peak array for `streamId`, decoding the buffer first if
-     * needed. Keyed on the same url#fingerprint as ensureBuffer, so a re-render
-     * (new fingerprint) yields fresh peaks. Returns the Float32Array.
+     * Ensure we have a peak array for `streamId`. Keyed on url#fingerprint so a
+     * re-render (new fingerprint) yields fresh peaks. Returns a Float32Array.
+     *
+     * Local backend supplies `spec.peaksUrl`: we fetch a ready-made 4096-float
+     * array (~16 KB) from the server and NEVER decode the full PCM here — that
+     * would pin ~160 MB per 8-min stereo stem in `this.buffers` just to draw a
+     * waveform. Without a peaksUrl (mock/offline) we fall back to decoding and
+     * computing peaks locally.
      */
     async ensurePeaks(streamId, spec) {
       const key = (spec.url || "synth") + "#" + (spec.fingerprint || "");
       const cached = this.peaks.get(streamId);
       if (cached && cached.key === key) return cached.data;
+
+      if (spec.peaksUrl) {
+        const res = await fetch(spec.peaksUrl);
+        if (!res.ok) throw new Error(`peaks fetch failed: HTTP ${res.status}`);
+        const data = new Float32Array(await res.arrayBuffer());
+        this.peaks.set(streamId, { key, data });
+        return data;
+      }
+
+      // Fallback: decode + compute locally (mock has no server peaks).
       await this.ensureBuffer(streamId, spec);
       const buffer = this.buffers.get(streamId);
       if (!buffer) return null;
