@@ -501,7 +501,7 @@
         const ext = extMap[format] || ".wav";
         return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
-      // Server-side waveform peaks (~64 KB float32). Extension is irrelevant —
+      // Server-side waveform peaks (~128 KB float32). Extension is irrelevant —
       // the server resolves the stem regardless of format.
       peaksUrl(yamlBasename, streamId) {
         return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;

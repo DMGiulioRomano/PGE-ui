@@ -143,7 +143,7 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
-PEAK_BUCKETS = 16384
+PEAK_BUCKETS = 32768
 
 
 def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
@@ -480,7 +480,7 @@ def make_app(root: Path) -> Flask:
     def serve_peaks(fname):
         """Return a waveform peak array for a rendered stem as raw binary:
         `PEAK_BUCKETS` little-endian float32 values in 0..1 (max abs amplitude
-        per bucket across channels). ~64 KB regardless of stem length.
+        per bucket across channels). ~128 KB regardless of stem length.
 
         Computed server-side so the browser never decodes the full PCM just to
         draw a waveform (a 8-min stereo stem is ~160 MB decoded; this is 16 KB).
