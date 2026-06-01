@@ -678,6 +678,16 @@ function App() {
     };
   });
 
+  useEffectApp(() => {
+    function onBeforeUnload(e) {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
   /* ============ Stream mutations ============ */
   function copySelectedStreams() {
     const toCopy = data.streams.filter(s => selectedIds.includes(s.id));
@@ -917,8 +927,6 @@ function App() {
     if (renderStatus.running) return;
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
-    // Auto-save before render so the YAML on disk matches what we're rendering.
-    if (dirty) await onSave();
 
     setLogLines([]);
     setStreamProgress({});
@@ -933,6 +941,7 @@ function App() {
 
     const opts = {
       yamlBasename: basename,
+      yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
       renderer: "numpy",
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
