@@ -143,6 +143,26 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
+PEAK_BUCKETS = 4096
+
+
+def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
+    """Reduce an audio file to `buckets` max-abs amplitude values in 0..1,
+    returned as little-endian float32 bytes. Mirrors the browser-side
+    `_computePeaks` in audio-engine.js so the visual result is identical.
+    Raises ImportError if numpy/soundfile are missing."""
+    import numpy as np
+    import soundfile as sf
+
+    data, _sr = sf.read(str(source), dtype="float32", always_2d=True)
+    mono = np.abs(data).max(axis=1)            # max across channels → (frames,)
+    n = int(min(buckets, max(1, mono.shape[0])))
+    # Bucket boundaries, then max within each bucket via reduceat.
+    edges = (np.arange(n) * (mono.shape[0] / n)).astype(np.int64)
+    out = np.maximum.reduceat(mono, edges).astype("<f4")
+    return out.tobytes()
+
+
 def _ensure_venv_events(root: Path):
     """Generator: yields NDJSON event dicts while creating the engine venv.
 
@@ -311,6 +331,16 @@ def make_app(root: Path) -> Flask:
         except Exception:
             add("soxi", False, "not available — sample list will lack durations")
 
+        # numpy + soundfile (server-side waveform peak extraction)
+        try:
+            import numpy  # noqa: F401
+            import soundfile  # noqa: F401
+            add("waveform deps", True,
+                f"numpy {numpy.__version__} · soundfile {soundfile.__version__}")
+        except ImportError as e:
+            add("waveform deps", False,
+                f"{e} — `pip install -r requirements.txt` for /peaks waveforms")
+
         # engine venv
         venv_py = root / ".venv" / "bin" / "python"
         if venv_py.exists():
@@ -445,6 +475,42 @@ def make_app(root: Path) -> Flask:
             except subprocess.CalledProcessError as e:
                 abort(500, f"sox failed: {e}")
         return send_file(str(wav_cache), mimetype="audio/wav", conditional=True)
+
+    @app.get("/peaks/<path:fname>")
+    def serve_peaks(fname):
+        """Return a waveform peak array for a rendered stem as raw binary:
+        `PEAK_BUCKETS` little-endian float32 values in 0..1 (max abs amplitude
+        per bucket across channels). ~16 KB regardless of stem length.
+
+        Computed server-side so the browser never decodes the full PCM just to
+        draw a waveform (a 8-min stereo stem is ~160 MB decoded; this is 16 KB).
+        Cached on disk under cache/peaks/, regenerated only when the source is
+        newer than the cache (same staleness rule as the WAV transcode above)."""
+        stem = Path(fname).stem
+        source = None
+        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
+            cand = safe_resolve(output, stem + ext)
+            if cand is not None and cand.exists():
+                source = cand
+                break
+        if source is None:
+            abort(404)
+
+        peaks_dir = cache / "peaks"
+        peaks_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = peaks_dir / (stem + ".f32")
+        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
+        if not fresh:
+            try:
+                data = _compute_peaks(source)
+            except ImportError:
+                abort(500, "numpy/soundfile not installed — `pip install -r "
+                           "requirements.txt` for server-side waveforms")
+            except Exception as e:
+                abort(500, f"peak extraction failed: {e}")
+            cache_file.write_bytes(data)
+        return send_file(str(cache_file), mimetype="application/octet-stream",
+                         conditional=True)
 
     @app.get("/cache_manifest/<basename>")
     def cache_manifest(basename):
