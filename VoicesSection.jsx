@@ -16,8 +16,8 @@ const ONSET_STRATEGIES = [
   { value: "stochastic", label: "stochastic", desc: "seeded random in [0, max]" },
 ];
 const POINTER_STRATEGIES = [
-  { value: "linear",     label: "linear",     desc: "i × step (normalized 0–1)" },
-  { value: "stochastic", label: "stochastic", desc: "seeded random in ±range" },
+  { value: "linear",     label: "linear",     desc: "i × step (s · or % sample if normalized)" },
+  { value: "stochastic", label: "stochastic", desc: "seeded random in ±range (s · or % sample if normalized)" },
 ];
 const PAN_STRATEGIES = [
   { value: "linear",     label: "linear",     desc: "symmetric ±spread/2" },
@@ -294,7 +294,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
             {strat === "linear" ? (
               <VoiceStratParamRow name="step"
                 value={(v.pointer||{}).step} valueEnv={(v.pointer||{}).stepEnv}
-                unit=""
+                unit={(v.pointer||{}).normalized ? "×sample" : "s"}
                 onValue={x => updateDim("pointer", { step: x })}
                 onMode={m => toggleStratParam(v, "pointer", "step", 0.1, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPointerStep") : undefined} />
@@ -302,12 +302,27 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
             {strat === "stochastic" ? (
               <VoiceStratParamRow name="pointer_range"
                 value={(v.pointer||{}).pointer_range} valueEnv={(v.pointer||{}).pointer_rangeEnv}
-                unit=""
+                unit={(v.pointer||{}).normalized ? "×sample" : "s"}
                 onValue={x => updateDim("pointer", { pointer_range: x })}
                 onMode={m => toggleStratParam(v, "pointer", "pointer_range", 0.02, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPointerRange") : undefined} />
             ) : null}
-            <div className="voice-meta">offset normalized 0–1 · sums onto base pointer + grain jitter</div>
+            <div className="pge-prow">
+              <span className="k">normalized</span>
+              <span />
+              <span className="v">
+                <input type="checkbox"
+                  checked={!!(v.pointer||{}).normalized}
+                  onChange={e => updateDim("pointer", {
+                    normalized: e.target.checked ? true : undefined
+                  })} />
+                <span className="hint">{(v.pointer||{}).normalized
+                  ? "offset as fraction of sample_dur_sec"
+                  : "offset in seconds (default)"}</span>
+              </span>
+              <span />
+            </div>
+            <div className="voice-meta">offset in s · sums onto base pointer + grain jitter</div>
           </>
         )}
       </VoiceGroup>
