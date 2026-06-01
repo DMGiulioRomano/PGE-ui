@@ -164,7 +164,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); overflow: hidden; cursor: pointer; }
 .clip .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clip .metaline { font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.6); padding: 0 6px; }
-.clip .wave { position: absolute; left: 0; right: 0; top: 50%; height: 60%; transform: translateY(-50%); pointer-events: none; display: block; }
+.clip .wave { position: absolute; left: 0; right: 0; top: 50%; height: 75%; transform: translateY(-50%); pointer-events: none; display: block; }
 .clip .env-overlay { position: absolute; left: 0; right: 0; top: 50%; height: 60%; transform: translateY(-50%); pointer-events: none; }
 .clip .env-overlay svg { width: 100%; height: 100%; display: block; }
 .clip:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 0 1px rgba(255,255,255,.06); }
