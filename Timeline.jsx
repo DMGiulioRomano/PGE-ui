@@ -495,7 +495,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showWaveforms !== false && waveformFor && waveformFor(s.id) ?
-              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id) * 0.75} color={s.color} /> :
+              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} color={s.color} /> :
               null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, s.id)} title="drag to resize this track" />
