@@ -678,6 +678,16 @@ function App() {
     };
   });
 
+  useEffectApp(() => {
+    function onBeforeUnload(e) {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
   /* ============ Stream mutations ============ */
   function copySelectedStreams() {
     const toCopy = data.streams.filter(s => selectedIds.includes(s.id));
