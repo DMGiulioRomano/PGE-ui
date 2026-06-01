@@ -10,6 +10,7 @@ function SampleBrowser({
 }) {
   const { Icon } = window.PGE;
   const [query, setQuery] = useStateSB("");
+  const [projectQuery, setProjectQuery] = useStateSB("");
   const [tab, setTab] = useStateSB("media");
 
   const samples = mediaList?.files || [];
@@ -17,6 +18,7 @@ function SampleBrowser({
   const mediaPath = mediaList?.path;
   const projectsPath = projectsList?.path;
   const filtered = samples.filter((s) => s.name.toLowerCase().includes(query.toLowerCase()));
+  const filteredProjects = projects.filter((p) => p.name.toLowerCase().includes(projectQuery.toLowerCase()));
 
   function FolderRow({ path, kind, onChoose, onRefresh, loading, error }) {
     return (
@@ -104,12 +106,12 @@ function SampleBrowser({
                        loading={projectsList?.loading} error={projectsList?.error} />
             <div className="search">
               <Icon name="search" size={12} />
-              <input placeholder="search projects…" />
+              <input value={projectQuery} onChange={(e) => setProjectQuery(e.target.value)} placeholder="search projects…" />
             </div>
             <div className="list">
-              {projectsList?.loading && projects.length === 0 ? <div className="empty">loading…</div> :
-                projects.length === 0 ? <div className="empty">no projects</div> : null}
-              {projects.map((p) => (
+              {projectsList?.loading && filteredProjects.length === 0 ? <div className="empty">loading…</div> :
+                filteredProjects.length === 0 ? <div className="empty">no projects</div> : null}
+              {filteredProjects.map((p) => (
                 <div key={p.name}
                      className={"it proj" + (activeProject === p.name ? " on" : "")}
                      onClick={() => onSelectProject && onSelectProject(p.name)}>
@@ -120,7 +122,7 @@ function SampleBrowser({
               ))}
               <div className="it new" onClick={onNewProject}><Icon name="plus" size={11} /><span className="nm">new project…</span></div>
             </div>
-            <div className="bw-meta">{projects.length} projects</div>
+            <div className="bw-meta">{filteredProjects.length} of {projects.length} projects</div>
           </>
         ) : <EmptyChoose kind="projects" onChoose={onChooseProjectsFolder} />
       )}
