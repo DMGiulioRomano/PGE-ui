@@ -324,6 +324,7 @@ function App() {
   /* ============ Render state ============ */
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
+  const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
@@ -588,6 +589,38 @@ function App() {
     }
   }, [lastRenderedFps]);
 
+  // Load waveform peaks for clips. Lazy-ish: decode each rendered stem once
+  // (cached in the engine by url#fingerprint) and stash its peak array in
+  // `waveforms` for the Timeline to draw. Local backend only — mock has no
+  // real stems. Re-runs when streams or last-rendered fingerprints change, so
+  // a re-render refreshes the affected waveform (engine.invalidateStream having
+  // already dropped the stale peaks).
+  useEffectApp(() => {
+    const backend = window.PGEBackend.current;
+    if (backend.kind !== "local") { setWaveforms({}); return; }
+    const engine = window.PGEAudio?.engine;
+    if (!engine?.ensurePeaks) return;
+    const basename = activeProject.replace(/\.yml$/, "");
+    let cancelled = false;
+    (async () => {
+      for (const s of data.streams) {
+        if (cancelled) return;
+        const last = lastRenderedFps[s.id];
+        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        if (!hasStem) {
+          setWaveforms(w => { if (!(s.id in w)) return w; const m = { ...w }; delete m[s.id]; return m; });
+          continue;
+        }
+        const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
+        try {
+          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: last || currentFps[s.id], url });
+          if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
+        } catch (e) { /* stem missing or undecodable — leave clip flat */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [data.streams, lastRenderedFps, activeProject, backendKind]);
+
   useEffectApp(() => {
     function onSeek(e) {
       const t = Math.max(0, e.detail);
@@ -788,6 +821,7 @@ function App() {
     // collateral cleanup
     setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
     setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
+    setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
@@ -1191,7 +1225,8 @@ function App() {
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
               onLaneHeight={(v) => setTweak("laneHeight", v)}
-              renderStatusFor={renderStatusForStream} />
+              renderStatusFor={renderStatusForStream}
+              waveformFor={(id) => waveforms[id]} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
