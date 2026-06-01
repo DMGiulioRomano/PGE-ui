@@ -41,7 +41,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutSolo": "s",
   "shortcutLog": "l",
   "stepMenuTrigger": "rightClick",
-  "outputFormat": "aiff"
+  "outputFormat": "wav"
 }/*EDITMODE-END*/;
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize feature) ---- */
@@ -324,6 +324,7 @@ function App() {
   /* ============ Render state ============ */
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
+  const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
@@ -497,7 +498,7 @@ function App() {
   /* Current fingerprint per stream — recomputed when data changes */
   const currentFps = useMemoApp(() => {
     const out = {};
-    const fmt = tweaks.outputFormat || "aiff";
+    const fmt = tweaks.outputFormat || "wav";
     for (const s of data.streams) out[s.id] = window.PGEBackend.fingerprintStream(s, fmt);
     return out;
   }, [data.streams, tweaks.outputFormat]);
@@ -587,6 +588,38 @@ function App() {
       }
     }
   }, [lastRenderedFps]);
+
+  // Load waveform peaks for clips. Lazy-ish: decode each rendered stem once
+  // (cached in the engine by url#fingerprint) and stash its peak array in
+  // `waveforms` for the Timeline to draw. Local backend only — mock has no
+  // real stems. Re-runs when streams or last-rendered fingerprints change, so
+  // a re-render refreshes the affected waveform (engine.invalidateStream having
+  // already dropped the stale peaks).
+  useEffectApp(() => {
+    const backend = window.PGEBackend.current;
+    if (backend.kind !== "local") { setWaveforms({}); return; }
+    const engine = window.PGEAudio?.engine;
+    if (!engine?.ensurePeaks) return;
+    const basename = activeProject.replace(/\.yml$/, "");
+    let cancelled = false;
+    (async () => {
+      for (const s of data.streams) {
+        if (cancelled) return;
+        const last = lastRenderedFps[s.id];
+        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        if (!hasStem) {
+          setWaveforms(w => { if (!(s.id in w)) return w; const m = { ...w }; delete m[s.id]; return m; });
+          continue;
+        }
+        const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
+        try {
+          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: last || currentFps[s.id], url });
+          if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
+        } catch (e) { /* stem missing or undecodable — leave clip flat */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [data.streams, lastRenderedFps, activeProject, backendKind]);
 
   useEffectApp(() => {
     function onSeek(e) {
@@ -788,6 +821,7 @@ function App() {
     // collateral cleanup
     setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
     setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
+    setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
@@ -948,7 +982,7 @@ function App() {
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
-      outputFormat: tweaks.outputFormat || "aiff",
+      outputFormat: tweaks.outputFormat || "wav",
     };
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
@@ -1045,7 +1079,7 @@ function App() {
       const last = lastRenderedFps[s.id];
       const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
       if (!hasStem) return;
-      const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "aiff") : null;
+      const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
       try {
         await engine.ensureBuffer(s.id, {
           duration: s.duration,
@@ -1191,7 +1225,8 @@ function App() {
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
               onLaneHeight={(v) => setTweak("laneHeight", v)}
-              renderStatusFor={renderStatusForStream} />
+              renderStatusFor={renderStatusForStream}
+              waveformFor={(id) => waveforms[id]} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
@@ -1322,10 +1357,10 @@ function App() {
                 pushToast({ kind: "info", title: `backend → ${v}`, duration: 1800 });
               }} />
             <div className="twk-hint">mock = in-browser simulation · local = real fs + http server on localhost:7878</div>
-            <window.TweakSelect label="output format" value={tweaks.outputFormat || "aiff"}
+            <window.TweakSelect label="output format" value={tweaks.outputFormat || "wav"}
               options={[
-                {label:"AIFF (default)", value:"aiff"},
-                {label:"WAV", value:"wav"},
+                {label:"AIFF", value:"aiff"},
+                {label:"WAV (default)", value:"wav"},
                 {label:"FLAC", value:"flac"}]}
               onChange={(v) => setTweak("outputFormat", v)} />
             <window.TweakText label="media path" value={tweaks.mediaPath} onChange={(v) => setTweak("mediaPath", v)} />
