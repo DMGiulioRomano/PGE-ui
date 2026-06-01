@@ -917,8 +917,6 @@ function App() {
     if (renderStatus.running) return;
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
-    // Auto-save before render so the YAML on disk matches what we're rendering.
-    if (dirty) await onSave();
 
     setLogLines([]);
     setStreamProgress({});
@@ -933,6 +931,7 @@ function App() {
 
     const opts = {
       yamlBasename: basename,
+      yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
       renderer: "numpy",
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,

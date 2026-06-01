@@ -49,6 +49,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -521,10 +522,21 @@ def make_app(root: Path) -> Flask:
         _EXT = {"aiff": ".aif", "wav": ".wav", "flac": ".flac"}
         out_ext = _EXT[fmt]
 
-        yml = configs / f"{basename}.yml"
-        if not yml.exists():
-            return jsonify({"ok": False,
-                            "error": f"configs/{basename}.yml not found"}), 404
+        yaml_content = opts.get("yamlContent")
+        tmp_yml: Path | None = None
+        if yaml_content:
+            tf = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yml", dir=configs, delete=False, encoding="utf-8"
+            )
+            tf.write(yaml_content)
+            tf.close()
+            yml = Path(tf.name)
+            tmp_yml = yml
+        else:
+            yml = configs / f"{basename}.yml"
+            if not yml.exists():
+                return jsonify({"ok": False,
+                                "error": f"configs/{basename}.yml not found"}), 404
 
         output_stem = output / f"{basename}{out_ext}"
 
@@ -624,6 +636,9 @@ def make_app(root: Path) -> Flask:
             finally:
                 with rs["lock"]:
                     rs["proc"] = None
+                if tmp_yml is not None:
+                    try: tmp_yml.unlink(missing_ok=True)
+                    except Exception: pass
 
         # mimetype "application/x-ndjson" is what the browser LocalBackend reads.
         return Response(event_stream(), mimetype="application/x-ndjson")
