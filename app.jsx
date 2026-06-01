@@ -6,6 +6,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "zoom": 36,
   "laneHeight": 56,
   "showWaveforms": true,
+  "showClipLabels": true,
   "showEnvOverlay": true,
   "browserWidth": 240,
   "inspectorWidth": 380,
@@ -40,6 +41,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutMute": "m",
   "shortcutSolo": "s",
   "shortcutLog": "l",
+  "shortcutToggleLabels": "h",
   "stepMenuTrigger": "rightClick",
   "outputFormat": "wav"
 }/*EDITMODE-END*/;
@@ -654,6 +656,7 @@ function App() {
       if (terminalOpen && matchShortcut(e, tweaks.shortcutStop || "c")) { e.preventDefault(); setLogLines([]); return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
+      if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
         e.preventDefault();
         const targets = data.streams.filter(s => selectedIds.includes(s.id));
@@ -1225,7 +1228,7 @@ function App() {
               onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={data.duration}
-              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms}
+              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showClipLabels={tweaks.showClipLabels !== false}
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
               onLaneHeight={(v) => setTweak("laneHeight", v)}

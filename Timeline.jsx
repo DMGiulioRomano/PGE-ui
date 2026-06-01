@@ -84,7 +84,7 @@ function gestureMatches(rule, e) {
 
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
-  pxPerSec, showWaveforms, laneHeight, gestures, onZoom, onLaneHeight,
+  pxPerSec, showWaveforms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
@@ -490,8 +490,10 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
             onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
+                {showClipLabels !== false ? (<>
                 <div className="lbl">{s.id} · {s.sample}</div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
+                </>) : null}
                 {showWaveforms !== false && waveformFor && waveformFor(s.id) ?
               <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id) * 0.75} color={s.color} /> :
               null}

@@ -217,6 +217,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
                            onChange={(v) => setTweak("shortcutLog", v)} />
           </div>
           <div className="sp-row">
+            <span className="sp-k" title="mostra/nasconde nome, sample, densità e voci sui clip">clip labels toggle</span>
+            <ShortcutInput value={tweaks.shortcutToggleLabels || "h"}
+                           onChange={(v) => setTweak("shortcutToggleLabels", v)} />
+          </div>
+          <div className="sp-row">
             <span className="sp-k" title="muta/smuta gli stream selezionati">mute selection</span>
             <ShortcutInput value={tweaks.shortcutMute || "m"}
                            onChange={(v) => setTweak("shortcutMute", v)} />
@@ -276,6 +281,10 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
           <div className="sp-row">
             <span className="sp-k">status footer</span>
             <SpToggle v={tweaks.showFooter !== false} onChange={(v) => setTweak("showFooter", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="nome, sample, densità e voci sopra i clip">clip labels</span>
+            <SpToggle v={tweaks.showClipLabels !== false} onChange={(v) => setTweak("showClipLabels", v)} />
           </div>
         </div>
 
