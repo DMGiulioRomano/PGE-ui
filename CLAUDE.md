@@ -26,14 +26,13 @@ There is **no test suite, no linter, no typechecker**. Verification is manual: o
 
 ### Backend abstraction (`backend.js`)
 
-UI never touches I/O directly. It calls `window.PGEBackend` which has two implementations:
-
-| Kind    | Storage                       | Render                                                      |
-|---------|-------------------------------|-------------------------------------------------------------|
-| `mock`  | `localStorage`                | timers + fake `main.py`-shaped log lines                    |
-| `local` | real disk via `server.py`     | `POST /render` → spawns subprocess, streams NDJSON          |
-
-Contract is documented at the top of `backend.js`. Switch in the Settings panel (gear ⚙).
+UI never touches I/O directly. It calls `window.PGEBackend`, which has a single
+implementation, `local`: real disk via `server.py`, `POST /render` spawns the
+subprocess and streams NDJSON. The browser only does `fetch()`; the server holds
+all disk access, so the editor works in any browser. Contract is documented at
+the top of `backend.js`. If `server.py` isn't running the editor flags
+`serverDown` and shows a "start server.py" notice (there is no in-browser
+fallback).
 
 ### NDJSON render protocol
 
@@ -41,7 +40,7 @@ Contract is documented at the top of `backend.js`. Switch in the Settings panel 
 
 ### Fingerprint parity
 
-Mock and local backends both compute per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over JSON with sorted keys, ignoring `color/mute/solo`) is intentionally aligned with python's per-stream hash. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
+The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over JSON with sorted keys, ignoring `color/mute/solo`) is intentionally aligned with python's per-stream hash. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
 
 ### YAML round-trip (`yaml-bridge.js`)
 
@@ -49,10 +48,7 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 ### Audio playback (`audio-engine.js`)
 
-`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. Two modes:
-
-- `mock`: synthesized timbre per stream (no real stems).
-- `http`: fetches `GET /audio/<basename>__<sid>.wav` from `server.py`. **Stems are stored as `.aif`** but `server.py` transcodes to WAV via sox at `/audio/` because Firefox can't decode AIFF natively. `/output/<file>.aif` still serves raw.
+`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. It fetches `GET /audio/<basename>__<sid>.wav` from `server.py`. **Stems are stored as `.aif`** but `server.py` transcodes to WAV via sox at `/audio/` because Firefox can't decode AIFF natively. `/output/<file>.aif` still serves raw. Streams without a rendered stem stay silent (no procedural fallback).
 
 ### History / undo (`app.jsx`)
 
@@ -64,7 +60,7 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 ## File-load order (matters)
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `data.js` → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

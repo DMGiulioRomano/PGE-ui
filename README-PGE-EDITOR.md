@@ -63,36 +63,32 @@ editor (which you open as a `file://` URL) can talk to it.
 
 ### 4) Open the editor
 
-Just open `PGE Editor.html` in Chrome, Firefox, Safari, anything. Then:
+Just open `PGE Editor.html` in Chrome, Firefox, Safari, anything. On launch the
+editor probes the server, lists the real contents of `refs/` and `configs/`, and
+auto-opens the last project (or the first on disk). Then:
 
-1. Click the **⚙ gear icon** in the top-right.
-2. **Backend → switch from "mock" to "local"**.
-3. **Backend → server URL** should already say `http://localhost:7878`.
-4. Click **"test connection"** — it turns green and shows the root path.
-5. The **Media** and **Projects** panels will now show the actual contents
-   of `refs/` and `configs/` from the python repo.
-6. Hit **Render**. The progress bar in the top-bar, the per-clip status dots,
+1. If the server moved, open the **⚙ gear icon → Server** and set the URL
+   (default `http://localhost:7878`); **"test connection"** turns green and
+   shows the root path.
+2. Hit **Render**. The progress bar in the top-bar, the per-clip status dots,
    and the embedded **log** terminal are all live output from `main.py`.
+
+If the server isn't running, the editor flags it (gear panel + a notice) and
+can't list or load anything — there is no offline mode.
 
 ---
 
-## What changes between mock and local
+## How the local backend maps to the server
 
-|                   | mock (default)                  | local                                    |
-| ----------------- | ------------------------------- | ---------------------------------------- |
-| Storage           | `localStorage`                  | real filesystem via `server.py`           |
-| Save              | fake                            | `PUT /file?kind=projects&name=foo.yml`    |
-| Save As…          | fake                            | same, with new name                       |
-| Render            | timers + fake log lines         | `POST /render` → spawns `python src/main.py` |
-| Render cache      | fake fingerprints in localStorage | real `cache/<basename>.json` on disk  |
-| Media / Projects  | hardcoded sample list           | `GET /media` / `GET /projects`            |
-| Play audio        | silent timeline                 | (planned — see below)                     |
-
-> **Play audio in local mode** — currently the timeline still plays
-> silently. Wiring the `<audio>` elements to `GET /output/<basename>__<sid>.aif`
-> per stream, aligned to onsets, is the next step. The endpoint and per-stream
-> URL helper (`render.stemUrl(basename, sid)`) are already wired server-side
-> and in `backend.js`.
+|                   | local backend                                |
+| ----------------- | -------------------------------------------- |
+| Storage           | real filesystem via `server.py`              |
+| Save              | `PUT /file?kind=projects&name=foo.yml`       |
+| Save As…          | same, with new name                          |
+| Render            | `POST /render` → spawns `python src/main.py` |
+| Render cache      | real `cache/<basename>.json` on disk         |
+| Media / Projects  | `GET /media` / `GET /projects`               |
+| Play audio        | `GET /audio/<basename>__<sid>.wav` (sox transcode), scheduled to onsets |
 
 ---
 
