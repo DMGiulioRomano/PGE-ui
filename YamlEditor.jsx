@@ -226,10 +226,10 @@ function parseValue(s) {
   return s;
 }
 
-function YamlEditor({ stream, onChange }) {
+function YamlEditor({ stream, onChange, samples }) {
   const { Icon } = window.PGE;
-  const samples = window.PGE_DATA.samples;
-  const sampleRec = samples.find(s => s.name === stream.sample);
+  const _samples = samples || [];
+  const sampleRec = _samples.find(s => s.name === stream.sample);
 
   const lines = useMemoYE(() => buildLines(stream, sampleRec), [stream]);
   const generated = useMemoYE(() => linesToText(lines), [lines]);

@@ -416,7 +416,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     }
   }
 
-  const _sampleList = samples && samples.length ? samples : window.PGE_DATA.samples;
+  const _sampleList = samples || [];
   const sampleDur = (_sampleList.find(s => s.name === stream.sample) || {}).duration;
   const sampleMissing = !sampleDur;
 
@@ -806,7 +806,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
         </>
       ) : (
         <div className="ibody raw">
-          {window.PGE.YamlEditor ? <window.PGE.YamlEditor stream={stream} onChange={onChange} /> : <div style={{padding:20,color:"var(--fg-3)"}}>YAML editor loading…</div>}
+          {window.PGE.YamlEditor ? <window.PGE.YamlEditor stream={stream} onChange={onChange} samples={samples} /> : <div style={{padding:20,color:"var(--fg-3)"}}>YAML editor loading…</div>}
         </div>
       )}
     </aside>

@@ -34,7 +34,7 @@ function ClipRenderStatus({ status }) {
  * `peaks` is a Float32Array (0..1) from the audio engine; we downsample it to
  * the clip's pixel width so detail follows timeline zoom. Canvas (not SVG) so
  * the repaint on every zoom step stays cheap. Renders nothing when peaks are
- * missing (e.g. never-rendered stream or mock backend). */
+ * missing (e.g. a never-rendered stream). */
 function ClipWaveform({ peaks, width, height, color }) {
   const canvasRef = useRefTL(null);
   useEffTL(() => {
@@ -456,7 +456,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
           </div>
         </div>
         <div className="lanes-head-add">
-          <button className="add-btn" onClick={() => onCreateStream && onCreateStream({ sample: (window.PGE_DATA.samples[0] || {}).name, onset: 0 })}>
+          <button className="add-btn" onClick={() => onCreateStream && onCreateStream({ onset: 0 })}>
             <Icon name="plus" size={12} /> <span className="add-btn-lbl">add stream</span>
           </button>
         </div>

@@ -1,13 +1,9 @@
 /* =============================================================================
  * audio-engine.js — Web Audio playback for rendered stems.
  *
- * Two modes:
- *   - "mock"  : no real .aif files exist. Synthesizes a procedural sound per
- *               stream so the user can hear playback + mute/solo work.
- *               Each stream gets a distinct color-coded timbre based on its id.
- *   - "http"  : fetches real audio from server.py /audio/<basename>__<sid>.wav
- *               (server transcodes the .aif to WAV via sox for cross-browser
- *               compatibility — Firefox doesn't decode AIFF natively).
+ * Fetches real audio from server.py /audio/<basename>__<sid>.wav (the server
+ * transcodes the .aif to WAV via sox for cross-browser compatibility — Firefox
+ * doesn't decode AIFF natively). Streams without a rendered stem stay silent.
  *
  * The engine treats `audioCtx.currentTime` as the master clock once playing.
  * The visual playhead reads from `engine.currentTime` so audio and timeline
@@ -28,17 +24,11 @@
  * ===========================================================================*/
 
 (function () {
-  function strHash(s) {
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i) | 0;
-    return Math.abs(h);
-  }
-
   class AudioEngine {
     constructor() {
       this.ctx = null;
       this.master = null;
-      this.buffers = new Map();          // streamId → AudioBuffer (mock synth only)
+      this.buffers = new Map();          // streamId → decoded AudioBuffer
       this.bufferKeys = new Map();        // streamId → "basename__sid#fingerprint" cache key
       this.peaks = new Map();             // streamId → { key, data: Float32Array }  waveform peaks
       this.streamUrls = new Map();        // streamId → stem URL (real stems → streamed, not decoded)
@@ -74,18 +64,14 @@
      */
     async ensureBuffer(streamId, spec) {
       this._ensureContext();
-      const key = (spec.url || "synth") + "#" + (spec.fingerprint || "");
+      if (!spec.url) return;            // no rendered stem → stays silent
+      const key = spec.url + "#" + (spec.fingerprint || "");
       if (this.bufferKeys.get(streamId) === key && this.buffers.has(streamId)) return;
 
-      let buffer;
-      if (spec.url) {
-        const res = await fetch(spec.url);
-        if (!res.ok) throw new Error(`audio fetch failed: HTTP ${res.status}`);
-        const ab = await res.arrayBuffer();
-        buffer = await this.ctx.decodeAudioData(ab);
-      } else {
-        buffer = this._synthesize(streamId, spec.duration || 5, spec.color);
-      }
+      const res = await fetch(spec.url);
+      if (!res.ok) throw new Error(`audio fetch failed: HTTP ${res.status}`);
+      const ab = await res.arrayBuffer();
+      const buffer = await this.ctx.decodeAudioData(ab);
       this.buffers.set(streamId, buffer);
       this.bufferKeys.set(streamId, key);
     }
@@ -95,7 +81,7 @@
      * here it is *streamed* via an <audio> element at schedule time (the
      * browser buffers only a few seconds ahead, ~MBs) instead of being decoded
      * whole into an AudioBuffer (~160 MB for an 8-min stereo stem). Streams
-     * absent from this map fall back to the mock synth buffer path.
+     * absent from this map fall back to the decoded-buffer path.
      * Pass `{ [streamId]: url|null }`; null/empty entries are ignored.
      */
     setStreamUrls(map) {
@@ -152,11 +138,11 @@
      * Local backend supplies `spec.peaksUrl`: we fetch a ready-made 32768-float
      * array (~128 KB) from the server and NEVER decode the full PCM here — that
      * would pin ~160 MB per 8-min stereo stem in `this.buffers` just to draw a
-     * waveform. Without a peaksUrl (mock/offline) we fall back to decoding and
-     * computing peaks locally.
+     * waveform. Without a peaksUrl we fall back to decoding and computing peaks
+     * locally.
      */
     async ensurePeaks(streamId, spec) {
-      const key = (spec.url || "synth") + "#" + (spec.fingerprint || "");
+      const key = (spec.url || "") + "#" + (spec.fingerprint || "");
       const cached = this.peaks.get(streamId);
       if (cached && cached.key === key) return cached.data;
 
@@ -168,67 +154,13 @@
         return data;
       }
 
-      // Fallback: decode + compute locally (mock has no server peaks).
+      // Fallback: decode + compute locally (no server peaks for this stem).
       await this.ensureBuffer(streamId, spec);
       const buffer = this.buffers.get(streamId);
       if (!buffer) return null;
       const data = this._computePeaks(buffer);
       this.peaks.set(streamId, { key, data });
       return data;
-    }
-
-    /**
-     * Procedural synthesis used in mock mode. Builds a stereo buffer of
-     * `duration` seconds that *sounds like* a granular stream (clouds of
-     * short noise+sine grains with an ADSR-ish envelope). Per-stream pitch
-     * derived from a hash of the streamId so different streams sound distinct.
-     */
-    _synthesize(streamId, duration, color) {
-      const sr = this.ctx.sampleRate;
-      const samples = Math.max(1, Math.floor(sr * duration));
-      const buf = this.ctx.createBuffer(2, samples, sr);
-      const hash = strHash(streamId);
-      const baseFreq = 110 + (hash % 12) * 35;        // 110-495 Hz, just intonation-ish
-      const grainRateHz = 6 + (hash % 5) * 2;          // 6-14 grains/sec
-      const grainLen = 0.04 + (hash % 7) * 0.005;      // 40-70ms
-      const detune = 1 + ((hash >> 4) % 5) * 0.003;
-      const stereoSpread = 0.4 + (hash % 5) * 0.1;
-      const seed = hash || 1;
-
-      // simple LCG so the noise is reproducible per stream
-      let rng = seed;
-      const rand = () => { rng = (rng * 1664525 + 1013904223) >>> 0; return (rng / 0xffffffff) * 2 - 1; };
-
-      for (let ch = 0; ch < 2; ch++) {
-        const data = buf.getChannelData(ch);
-        const pan = ch === 0 ? -stereoSpread : stereoSpread;
-        const freq = baseFreq * (ch === 0 ? 1 : detune);
-
-        // schedule a sequence of grain centers
-        const nGrains = Math.max(1, Math.floor(duration * grainRateHz));
-        for (let g = 0; g < nGrains; g++) {
-          const tCenter = (g / nGrains) * duration + rand() * 0.02;
-          const startSample = Math.max(0, Math.floor((tCenter - grainLen / 2) * sr));
-          const endSample = Math.min(samples, startSample + Math.floor(grainLen * sr));
-          for (let i = startSample; i < endSample; i++) {
-            const local = (i - startSample) / (endSample - startSample); // 0..1
-            const env = Math.sin(Math.PI * local);                       // hanning-ish
-            const t = i / sr;
-            const wobble = Math.sin(2 * Math.PI * (freq * 0.07) * t) * 0.04;
-            const tone = Math.sin(2 * Math.PI * (freq + wobble) * t);
-            const noise = rand() * 0.4;
-            data[i] += (tone * 0.5 + noise * 0.5) * env * 0.45;
-          }
-        }
-        // global fade in/out
-        const fade = Math.floor(0.05 * sr);
-        for (let i = 0; i < fade; i++) {
-          const k = i / fade;
-          data[i] *= k;
-          data[samples - 1 - i] *= k;
-        }
-      }
-      return buf;
     }
 
     // -------- scheduling --------
@@ -239,7 +171,7 @@
      *   - real stem (URL in `streamUrls`)  → streamed via an <audio> element,
      *     created lazily right before its onset so only currently-sounding
      *     clips hold a media decoder (caps RAM at ~MBs/clip, not ~160 MB).
-     *   - mock synth (AudioBuffer in `buffers`) → AudioBufferSourceNode.
+     *   - decoded stem (AudioBuffer in `buffers`) → AudioBufferSourceNode.
      * Streams with neither are silent.
      */
     scheduleStreams(streams, basename, fromTime) {
