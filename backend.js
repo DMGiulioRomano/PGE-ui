@@ -1,13 +1,13 @@
 /* =============================================================================
- * backend.js — adapter abstractions for filesystem + render backend
+ * backend.js — adapter for filesystem + render backend (local server)
  *
- * Goal: keep all I/O behind a single interface so the prototype can run with
- * mocks today, and switch to a real local server + File System Access API
- * later without touching the UI.
+ * Goal: keep all I/O behind a single interface so the UI never touches the
+ * filesystem or the renderer directly. The only backend is `local`: a thin
+ * HTTP client that talks to server.py, which has the real disk access.
  *
  * Exposes globals:
- *   window.PGEBackend        — current active backend (mock by default)
- *   window.PGEBackend.create(kind) — factory: "mock" | "local"
+ *   window.PGEBackend        — current active backend
+ *   window.PGEBackend.create(opts) — factory (returns the local backend)
  *
  * Contract (every backend implements):
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
@@ -24,11 +24,8 @@
  * ===========================================================================*/
 
 (function () {
-  /* ---------- tiny utils ---------- */
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
   // Fast string hash → 16 hex chars. Not cryptographic but stable enough
-  // to match Python's per-stream fingerprint behavior in the prototype.
+  // to match Python's per-stream fingerprint behavior.
   function fnv1a(str) {
     let h1 = 0x811c9dc5 >>> 0;
     let h2 = 0xcbf29ce4 >>> 0;
@@ -48,231 +45,6 @@
     const json = JSON.stringify(stream, (k, v) => (ignore.has(k) ? undefined : v))
       + `|fmt:${format || "aiff"}`;
     return fnv1a(json);
-  }
-
-  /* =========================================================================
-   * MOCK BACKEND — works fully in-browser, no server, no FS access.
-   * ======================================================================= */
-  function createMockBackend() {
-    const state = {
-      folders: {
-        media: "/Users/giulio/PGE/refs",
-        projects: "/Users/giulio/PGE/configs",
-        output: "/Users/giulio/PGE/output",
-        cache: "/Users/giulio/PGE/cache",
-      },
-      // simulate rendered stems on disk: key = `${yamlBasename}__${streamId}.aif`
-      renderedStems: JSON.parse(localStorage.getItem("pge-rendered-stems") || "{}"),
-      // per-project cache manifests (mirrors cache/<name>.json)
-      cacheManifests: JSON.parse(localStorage.getItem("pge-cache-manifests") || "{}"),
-      cancelled: false,
-    };
-
-    function persist() {
-      localStorage.setItem("pge-rendered-stems", JSON.stringify(state.renderedStems));
-      localStorage.setItem("pge-cache-manifests", JSON.stringify(state.cacheManifests));
-    }
-
-    const fs = {
-      async listDir(kind) {
-        await sleep(40);
-        if (kind === "media") {
-          return {
-            path: state.folders.media,
-            files: (window.PGE_DATA?.samples || []).map((s) => ({
-              name: s.name, duration: s.duration,
-            })),
-          };
-        }
-        if (kind === "projects") {
-          return {
-            path: state.folders.projects,
-            files: Object.keys(window.PROJECTS_DB || {}).map((p) => ({ name: p })),
-          };
-        }
-        return { path: state.folders[kind] || "/", files: [] };
-      },
-      async chooseDir(kind) {
-        // Mock: prompt for a fake path (no real picker available in mock).
-        const p = prompt(`mock — set ${kind} folder path:`, state.folders[kind] || "");
-        if (p == null) return null;
-        state.folders[kind] = p;
-        return { path: p };
-      },
-      currentPath(kind) { return state.folders[kind]; },
-      async readFile(kind, name) {
-        await sleep(30);
-        const k = `${kind}:${name}`;
-        return localStorage.getItem("pge-file:" + k) || "";
-      },
-      async writeFile(kind, name, str) {
-        await sleep(80);
-        const k = `${kind}:${name}`;
-        localStorage.setItem("pge-file:" + k, str);
-      },
-      async fileExists(kind, name) {
-        return localStorage.getItem("pge-file:" + kind + ":" + name) != null;
-      },
-    };
-
-    const render = {
-      async loadCache(yamlBasename) {
-        return state.cacheManifests[yamlBasename] || {};
-      },
-      cancel() { state.cancelled = true; },
-      async run(opts, onEvent) {
-        state.cancelled = false;
-        const { yamlBasename, streams, renderer, useCache, visualize, reaper, preclean, outputFormat } = opts;
-        const emit = (e) => onEvent && onEvent(e);
-
-        emit({ type: "log", line: `[${new Date().toLocaleTimeString()}] starting render` });
-        emit({ type: "log", line: `  yaml:       configs/${yamlBasename}.yml` });
-        emit({ type: "log", line: `  renderer:   ${renderer}` });
-        emit({ type: "log", line: `  per-stream: true` });
-        emit({ type: "log", line: `  cache:      ${useCache ? "on" : "off"}` });
-        if (visualize) emit({ type: "log", line: `  visualize:  pdf score` });
-        if (reaper)    emit({ type: "log", line: `  reaper:     export .rpp` });
-        if (preclean)  emit({ type: "log", line: `  preclean:   wipe output/` });
-        emit({ type: "log", line: `` });
-
-        const lastCache = state.cacheManifests[yamlBasename] || {};
-        const newCache = {};
-        const generated = [];
-        const cacheHits = [];
-
-        if (preclean) {
-          // wipe any stem files for this project
-          for (const k of Object.keys(state.renderedStems)) {
-            if (k.startsWith(yamlBasename + "__")) delete state.renderedStems[k];
-          }
-          emit({ type: "log", line: `[CLEAN] removed previous stems for ${yamlBasename}` });
-        }
-
-        emit({ type: "log", line: `Caricamento configs/${yamlBasename}.yml...` });
-        await sleep(120);
-        emit({ type: "log", line: `Generazione streams...` });
-        await sleep(80);
-        emit({ type: "log", line: `[CACHE] Manifest: cache/${yamlBasename}.json` });
-        emit({ type: "log", line: `` });
-
-        for (let i = 0; i < streams.length; i++) {
-          if (state.cancelled) {
-            emit({ type: "log", line: `[ABORT] cancelled by user` });
-            emit({ type: "done", ok: false, generated, cacheHits });
-            return { ok: false, generated, cacheHits };
-          }
-          const s = streams[i];
-          const fp = fingerprintStream(s, outputFormat);
-          newCache[s.id] = fp;
-          const aifName = `${yamlBasename}__${s.id}.aif`;
-          const exists = state.renderedStems[aifName];
-          const cached = useCache && lastCache[s.id] === fp && exists;
-
-          emit({ type: "stream-start", streamId: s.id, index: i, total: streams.length });
-          if (cached) {
-            emit({ type: "log", line: `  [${i + 1}/${streams.length}] ${s.id.padEnd(10)} cached — skip` });
-            cacheHits.push(s.id);
-            generated.push(`output/${aifName}`);
-            emit({ type: "stream-done", streamId: s.id, cached: true });
-            await sleep(60);
-          } else {
-            emit({ type: "log", line: `  [${i + 1}/${streams.length}] ${s.id.padEnd(10)} rendering...` });
-            // simulate work: variable per stream
-            const t = 400 + Math.random() * 700;
-            const tick = 50;
-            let elapsed = 0;
-            while (elapsed < t) {
-              if (state.cancelled) break;
-              await sleep(tick);
-              elapsed += tick;
-              emit({ type: "stream-progress", streamId: s.id, progress: Math.min(1, elapsed / t) });
-            }
-            if (state.cancelled) {
-              emit({ type: "log", line: `[ABORT] cancelled mid-stream ${s.id}` });
-              emit({ type: "done", ok: false, generated, cacheHits });
-              return { ok: false, generated, cacheHits };
-            }
-            state.renderedStems[aifName] = { mtime: Date.now(), duration: s.duration || 5 };
-            generated.push(`output/${aifName}`);
-            emit({ type: "log", line: `      → output/${aifName}` });
-            emit({ type: "stream-done", streamId: s.id, cached: false });
-          }
-        }
-
-        state.cacheManifests[yamlBasename] = newCache;
-        persist();
-
-        if (visualize) {
-          await sleep(300);
-          emit({ type: "log", line: `` });
-          emit({ type: "log", line: `Generazione partitura grafica...` });
-          emit({ type: "log", line: `      → output/${yamlBasename}.pdf` });
-        }
-        if (reaper) {
-          await sleep(100);
-          emit({ type: "log", line: `Reaper project: ${yamlBasename}.rpp` });
-        }
-        emit({ type: "log", line: `` });
-        emit({ type: "log", line: ` Generazione completata! ${generated.length} file generati` });
-        for (const p of generated) emit({ type: "log", line: `    ${p}` });
-        emit({ type: "log", line: `Log: logs/${yamlBasename}.log` });
-        emit({ type: "done", ok: true, generated, cacheHits });
-        return { ok: true, generated, cacheHits };
-      },
-      // does an output stem exist on disk for a given (project, streamId)?
-      hasStem(yamlBasename, streamId) {
-        return !!state.renderedStems[`${yamlBasename}__${streamId}.aif`];
-      },
-      // when was a stem rendered?
-      stemMtime(yamlBasename, streamId) {
-        const e = state.renderedStems[`${yamlBasename}__${streamId}.aif`];
-        return e ? e.mtime : null;
-      },
-      // mock backend has no real audio file. The audio engine treats this
-      // as "synthesize procedurally" when there's no url.
-      stemUrl(yamlBasename, streamId) { return null; },
-      // no real stems → no server-side peaks (engine falls back to synth peaks).
-      peaksUrl(yamlBasename, streamId) { return null; },
-    };
-
-    async function setup(onEvent) {
-      onEvent?.({ type: "log", line: "[VENV] mock backend — no engine setup needed" });
-      onEvent?.({ type: "done", ok: true });
-      return { ok: true };
-    }
-
-    async function diagnose() {
-      const checks = [];
-      const push = (label, ok, detail) => checks.push({ label, ok, detail });
-      push("backend kind", true, "mock (in-browser simulation)");
-      try {
-        const m = await fs.listDir("media");
-        push("media folder", true, `${m.files.length} files · ${m.path}`);
-      } catch (e) { push("media folder", false, e.message); }
-      try {
-        const p = await fs.listDir("projects");
-        push("projects folder", true, `${p.files.length} projects · ${p.path}`);
-      } catch (e) { push("projects folder", false, e.message); }
-      push("yaml bridge", !!window.PGEYaml, window.PGEYaml ? "js-yaml + bridge ready" : "missing");
-      push("audio engine", !!window.PGEAudio?.engine, window.PGEAudio ? "Web Audio API ready" : "missing");
-      // Round-trip self-test on the bundled data
-      if (window.PGEYaml && window.PGE_DATA) {
-        try {
-          const diffs = window.PGEYaml.roundTripDiff(window.PGE_DATA);
-          push("yaml round-trip", diffs.length === 0,
-               diffs.length === 0 ? "lossless on PGE_DATA"
-                                  : `${diffs.length} mismatch(es) — see console`);
-          if (diffs.length) console.warn("[diagnose] round-trip diffs:", diffs);
-        } catch (e) {
-          push("yaml round-trip", false, e.message);
-        }
-      }
-      const renderedCount = Object.keys(JSON.parse(localStorage.getItem("pge-rendered-stems") || "{}")).length;
-      push("simulated stems", true, `${renderedCount} on disk (localStorage)`);
-      return { ok: checks.every(c => c.ok), checks };
-    }
-
-    return { kind: "mock", fs, render, fingerprintStream, diagnose, setup };
   }
 
   /* =========================================================================
@@ -593,11 +365,11 @@
 
   window.PGEBackend = {
     fingerprintStream,
-    create(kind, opts) {
-      return kind === "local" ? createLocalBackend(opts) : createMockBackend();
+    // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.
+    create(opts) {
+      return createLocalBackend(opts);
     },
   };
 
-  // Default: mock
-  window.PGEBackend.current = createMockBackend();
+  window.PGEBackend.current = createLocalBackend();
 })();
