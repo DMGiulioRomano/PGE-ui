@@ -21,7 +21,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showEnvelopeEditor": true,
   "envelopeHeight": 240,
   "activeProject": "PGE_test.yml",
-  "backendKind": "mock",
+  "backendKind": "local",
   "mediaPath": "",
   "projectsPath": "",
   "outputPath": "output",
@@ -173,12 +173,9 @@ function streamWouldTruncate(stream, ratio) {
   return fields.some(f => f && envArrayWouldTruncate(f, ratio));
 }
 
-const PROJECTS_DB = {
-  "PGE_test.yml": { project: "PGE_test", title: "il mondo dorme", duration: 60 },
-  "PGE_brano_8min.yml": { project: "PGE_brano_8min", title: "brano 8min", duration: 480 },
-  "PGE_pino2.yml": { project: "PGE_pino2", title: "pino · sketch 2", duration: 30 },
-};
-window.PROJECTS_DB = PROJECTS_DB;
+// Blank in-memory project used as the editor's initial state before the real
+// project is loaded from the server (server.py lists configs/*.yml on boot).
+const EMPTY_PROJECT = { project: "", title: "", duration: 60, bpm: 120, streams: [], samples: [] };
 
 function App() {
   const t = window.useTweaks ? window.useTweaks(TWEAK_DEFAULTS) : [TWEAK_DEFAULTS, () => {}];
@@ -197,7 +194,7 @@ function App() {
   }, [tweaks.accent, tweaks.laneHeight, tweaks.browserWidth, tweaks.inspectorWidth, tweaks.density, tweaks.terminalHeight]);
 
   /* ============ History-aware data state ============ */
-  const [data, _setDataRaw] = useStateApp(window.PGE_DATA);
+  const [data, _setDataRaw] = useStateApp(EMPTY_PROJECT);
   const historyRef = useRefApp({ past: [], future: [], snapshotBeforeGesture: null, inGesture: false });
   const [, setHistVer] = useStateApp(0);
   const freezeOriginRef = useRefApp(null);   // {id, stream} captured at gesture start when freeze ON
@@ -320,8 +317,8 @@ function App() {
   const tickRef = useRefApp();
   const arrowGestureRef = useRefApp(false);
   const clipboardRef = React.useRef([]);
-  const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: data.samples || [], error: null });
-  const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: Object.keys(PROJECTS_DB).map(p => ({ name: p })), error: null });
+  const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: [], error: null });
+  const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
 
   /* ============ Render state ============ */
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
@@ -337,7 +334,10 @@ function App() {
   const [toasts, setToasts] = useStateApp([]);
   const toastIdRef = useRefApp(0);
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
-  const [backendKind, setBackendKind] = useStateApp(tweaks.backendKind || "mock");
+  // Single backend (`local`). Kept as a value for the few places that still
+  // surface it (Settings footer, diagnose label) — it never changes now.
+  const backendKind = "local";
+  const [serverDown, setServerDown] = useStateApp(false);
   const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
   const [envFocusKey, setEnvFocusKey] = useStateApp(null);
 
@@ -350,25 +350,6 @@ function App() {
       if (!currentTweaks.projectsPath) setTweak("projectsPath", h.configs);
       if (!currentTweaks.outputPath || currentTweaks.outputPath === "output") setTweak("outputPath", h.output);
     } catch {}
-  }
-
-  useEffectApp(() => {
-    if ((tweaks.backendKind || "mock") === "local") {
-      _syncPathsFromServer(tweaks.serverUrl || "http://localhost:7878", tweaks);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function switchBackend(kind) {
-    setBackendKind(kind);
-    setTweak("backendKind", kind);
-    const baseUrl = tweaks.serverUrl || "http://localhost:7878";
-    window.PGEBackend.current = window.PGEBackend.create(kind, { baseUrl });
-    pushToast({ kind: "info", title: `backend → ${kind}`, message: kind === "local" ? "needs server.py running" : "in-browser simulation", duration: 2400 });
-    if (kind === "local") _syncPathsFromServer(baseUrl, tweaks);
-    refreshMedia(); refreshProjects();
-    // audio: invalidate cached buffers since urls change
-    if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
   }
 
   async function refreshMedia() {
@@ -391,42 +372,25 @@ function App() {
       setProjectsList(l => ({ ...l, loading: false, error: e.message }));
     }
   }
-  // Initial load + reload when backend changes
-  useEffectApp(() => {
-    refreshMedia(); refreshProjects();
-  }, [backendKind]);
-
-  // Seed: in mock mode, populate localStorage with the bundled PGE_DATA as
-  // a real YAML file so onProjectSelect → readFile actually returns content
-  // instead of an empty string.
-  useEffectApp(() => {
-    if (backendKind !== "mock" || !window.PGEYaml) return;
-    (async () => {
-      const backend = window.PGEBackend.current;
-      const exists = await backend.fs.fileExists("projects", "PGE_test.yml");
-      if (!exists) {
-        const yaml = window.PGEYaml.serialize(window.PGE_DATA);
-        await backend.fs.writeFile("projects", "PGE_test.yml", yaml);
-      }
-    })();
-  }, [backendKind]);
-
-  // Auto-detect local server on startup: if currently on mock and server responds,
-  // switch to local, then run setup silently so the venv is ready.
+  // Boot: bind the backend to the configured server URL and probe /health.
+  // If reachable → sync resolved paths, list media/projects, run engine setup
+  // silently. If not → flag serverDown so the UI tells the user to start
+  // server.py (local is the only backend).
   useEffectApp(() => {
     (async () => {
-      const url = (tweaks.serverUrl || "http://localhost:7878") + "/health";
+      const baseUrl = tweaks.serverUrl || "http://localhost:7878";
+      window.PGEBackend.current = window.PGEBackend.create({ baseUrl });
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 1500);
-        const r = await fetch(url, { signal: ctrl.signal });
+        const r = await fetch(baseUrl + "/health", { signal: ctrl.signal });
         clearTimeout(tid);
-        if (!r.ok) return;
-        if (backendKind === "mock") {
-          switchBackend("local");
-          pushToast({ kind: "ok", title: "Server rilevato", message: "backend → local", duration: 2500 });
-        }
-        // Run setup in background after a tick so the backend switch has settled.
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        setServerDown(false);
+        _syncPathsFromServer(baseUrl, tweaks);
+        refreshMedia();
+        refreshProjects();
+        // Run setup in background so the engine venv is ready.
         setTimeout(async () => {
           const backend = window.PGEBackend.current;
           if (backend.setup) {
@@ -437,10 +401,31 @@ function App() {
             logToTerminal("[auto-setup] done", "ok");
           }
         }, 100);
-      } catch {}
+      } catch {
+        setServerDown(true);
+        logToTerminal(`[boot] server non raggiungibile su ${baseUrl} — avvia server.py (make serve)`, "err");
+        pushToast({
+          kind: "warn", title: "Server non raggiungibile",
+          message: `avvia server.py su ${baseUrl} (make serve)`,
+          persistent: true,
+        });
+      }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-load a real project once the projects list arrives. Prefer the
+  // persisted activeProject; fall back to the first project on disk.
+  const bootLoadedRef = useRefApp(false);
+  useEffectApp(() => {
+    if (bootLoadedRef.current) return;
+    const files = projectsList.files || [];
+    if (!files.length) return;
+    bootLoadedRef.current = true;
+    const target = files.some(f => f.name === activeProject) ? activeProject : files[0].name;
+    onProjectSelect(target);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectsList.files]);
 
   // Boot diagnostic — once per session, log a summary to console + terminal
   // so the first thing visible during a smoke test is a clear picture of
@@ -593,13 +578,12 @@ function App() {
 
   // Load waveform peaks for clips. Lazy-ish: decode each rendered stem once
   // (cached in the engine by url#fingerprint) and stash its peak array in
-  // `waveforms` for the Timeline to draw. Local backend only — mock has no
-  // real stems. Re-runs when streams or last-rendered fingerprints change, so
+  // `waveforms` for the Timeline to draw. Only streams with a rendered stem
+  // get peaks. Re-runs when streams or last-rendered fingerprints change, so
   // a re-render refreshes the affected waveform (engine.invalidateStream having
   // already dropped the stale peaks).
   useEffectApp(() => {
     const backend = window.PGEBackend.current;
-    if (backend.kind !== "local") { setWaveforms({}); return; }
     const engine = window.PGEAudio?.engine;
     if (!engine?.ensurePeaks) return;
     const basename = activeProject.replace(/\.yml$/, "");
@@ -832,14 +816,16 @@ function App() {
     setDirty(true);
   }
   function createStreamFromSample({ sample, onset = 0, laneIdx }) {
-    const sampleRec = (window.PGE_DATA.samples.find(s => s.name === sample) || { duration: 4 });
+    const media = mediaList.files || [];
+    const sampleName = sample || (media[0] && media[0].name) || "";
+    const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
     const palette = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
     setData(d => {
       const n = d.streams.length + 1;
       const newStream = {
         id: "stream" + n, onset: Math.max(0, +onset.toFixed(2)),
         duration: Math.min(d.duration - onset, Math.max(2, sampleRec.duration)),
-        sample, color: palette[(d.streams.length) % palette.length],
+        sample: sampleName, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
         timeMode: "normalized", distributionMode: "uniform",
         density: 8, distribution: 0,
@@ -1077,10 +1063,9 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
-    // Real stems (local backend) are streamed from disk via <audio> at
-    // schedule time — registered as URLs, never decoded whole into RAM. Mock
-    // streams have no URL, so we synth a small AudioBuffer for them. Streams
-    // never rendered are silent.
+    // Rendered stems are fetched from server.py and decoded into AudioBuffers
+    // for scheduling. Streams that have never been rendered have no stem and
+    // stay silent.
     const urlMap = {};
     const preloads = [];
     for (const s of data.streams) {
@@ -1167,8 +1152,8 @@ function App() {
       logToTerminal(`[ERROR] couldn't load ${name}: ${e.message}`, "err");
       pushToast({ kind: "warn", title: `couldn't load ${name}`, message: e.message + " · using fallback", duration: 3000 });
     }
-    // Fallback: synthesize a minimal data object from PROJECTS_DB.
-    const meta = PROJECTS_DB[name] || { project: name.replace(/\.yml$/, ""), title: "", duration: 60 };
+    // Fallback: empty/unreadable file → synthesize a minimal blank project.
+    const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 60 };
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
@@ -1316,8 +1301,7 @@ function App() {
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
                      tweaks={tweaks} setTweak={setTweak}
-                     currentBackendKind={backendKind}
-                     onSwitchBackend={switchBackend} />
+                     serverDown={serverDown} />
 
       {tweaks.showFooter ? (
         <footer className="pge-footer">
@@ -1356,14 +1340,7 @@ function App() {
               onChange={(v) => setTweak("showFooter", v)} />
           </window.TweakSection>
           <window.TweakSection label="Backend">
-            <window.TweakRadio label="backend" value={tweaks.backendKind || "mock"}
-              options={[{label:"mock", value:"mock"}, {label:"local", value:"local"}]}
-              onChange={(v) => {
-                setTweak("backendKind", v);
-                window.PGEBackend.current = window.PGEBackend.create(v);
-                pushToast({ kind: "info", title: `backend → ${v}`, duration: 1800 });
-              }} />
-            <div className="twk-hint">mock = in-browser simulation · local = real fs + http server on localhost:7878</div>
+            <div className="twk-hint">local server (server.py) on {tweaks.serverUrl || "http://localhost:7878"}</div>
             <window.TweakSelect label="output format" value={tweaks.outputFormat || "wav"}
               options={[
                 {label:"AIFF", value:"aiff"},

@@ -4,8 +4,9 @@
 
 const { useState: useStateSP, useRef: useRefSP, useEffect: useEffectSP } = React;
 
-function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, currentBackendKind, onTestServer }) {
+function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
   const { Icon } = window.PGE;
+  const currentBackendKind = "local";  // single backend now
   const ref = useRefSP(null);
   const [serverStatus, setServerStatus] = useStateSP({ state: "idle", message: "" });
   const [setupLog, setSetupLog] = useStateSP([]);
@@ -69,20 +70,16 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
         </div>
 
         <div className="sp-section">
-          <div className="sp-sec-head">Backend</div>
-          <div className="sp-row">
-            <span className="sp-k">mode</span>
-            <div className="pge-seg sm">
-              <button className={currentBackendKind === "mock" ? "on" : ""}
-                      onClick={() => onSwitchBackend("mock")}>mock</button>
-              <button className={currentBackendKind === "local" ? "on" : ""}
-                      onClick={() => onSwitchBackend("local")}>local</button>
+          <div className="sp-sec-head">Server</div>
+          {serverDown ? (
+            <div className="sp-status sp-status-err">
+              <span className="sp-dot" /> <span className="mono">server non raggiungibile — avvia server.py (make serve)</span>
             </div>
-          </div>
+          ) : null}
           <div className="sp-hint">
-            {currentBackendKind === "mock"
-              ? "in-browser simulation. Save writes to localStorage, Render fakes a python run. Use this to evaluate the UI without setting up the python server."
-              : "real filesystem + local python server. The server has direct disk access — works in any browser (Chrome, Firefox, Safari). Save writes via HTTP PUT, Render POSTs to the URL below."}
+            Real filesystem + local python server. The server has direct disk
+            access, so the editor works in any browser (Chrome, Firefox, Safari).
+            Save writes via HTTP PUT, Render POSTs to the URL below.
           </div>
 
           {currentBackendKind === "local" ? (
@@ -153,8 +150,9 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, onSwitchBackend, curre
                    onChange={(e) => setTweak("outputPath", e.target.value)} />
           </div>
           <div className="sp-hint">
-            In <span className="mono">local</span> mode you'll still need to click "choose folder…"
-            in the Media/Projects panels to grant the browser access (File System Access API).
+            These paths are resolved by <span className="mono">server.py</span> at launch
+            (via <span className="mono">--root</span>). The fields above are informational;
+            edit them on the server side, not here.
           </div>
         </div>
 
