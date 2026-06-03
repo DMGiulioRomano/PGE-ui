@@ -278,6 +278,11 @@
       peaksUrl(yamlBasename, streamId) {
         return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
       },
+      // Server-side STFT spectrogram (uint32 w/h header + uint8 grid). Same stem
+      // resolution as peaksUrl — extension is irrelevant.
+      spectrogramUrl(yamlBasename, streamId) {
+        return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+      },
     };
 
     // Preview URLs for refs/ media files (MediaPreview popup). Heavy work

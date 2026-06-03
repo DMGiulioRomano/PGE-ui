@@ -41,6 +41,7 @@ Endpoints:
     POST /render/cancel         — terminate the running render
     GET  /output/<fname>        — serve a rendered .aif for browser playback
     GET  /audio/<fname>         — same but transcoded to WAV (Firefox-friendly)
+    GET  /spectrogram/<fname>   — STFT spectrogram for a rendered stem
     GET  /media_audio/<fname>   — serve a refs/ media file as WAV for playback
     GET  /media_peaks/<fname>   — waveform peaks for a refs/ media file
     GET  /media_spectrogram/<fname> — STFT spectrogram for a refs/ media file
@@ -582,6 +583,38 @@ def make_app(root: Path) -> Flask:
                            "requirements.txt` for server-side waveforms")
             except Exception as e:
                 abort(500, f"peak extraction failed: {e}")
+            cache_file.write_bytes(data)
+        return send_file(str(cache_file), mimetype="application/octet-stream",
+                         conditional=True)
+
+    @app.get("/spectrogram/<path:fname>")
+    def serve_spectrogram(fname):
+        """Log-magnitude STFT spectrogram for a rendered stem. Binary: uint32
+        width + uint32 height header, then width*height uint8 values. Mirrors
+        /peaks (same stem resolution + staleness rule) but spectrogram instead
+        of waveform peaks. Cached under cache/spec/."""
+        stem = Path(fname).stem
+        source = None
+        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
+            cand = safe_resolve(output, stem + ext)
+            if cand is not None and cand.exists():
+                source = cand
+                break
+        if source is None:
+            abort(404)
+
+        spec_dir = cache / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = spec_dir / (stem + ".spec")
+        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
+        if not fresh:
+            try:
+                data = _compute_spectrogram(source)
+            except ImportError:
+                abort(500, "numpy/soundfile not installed — `pip install -r "
+                           "requirements.txt` for server-side spectrograms")
+            except Exception as e:
+                abort(500, f"spectrogram failed: {e}")
             cache_file.write_bytes(data)
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)

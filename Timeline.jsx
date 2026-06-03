@@ -80,6 +80,78 @@ function ClipWaveform({ peaks, width, height, color }) {
   return <canvas className="wave" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
 }
 
+/* ---------- ClipSpectrogram ---------- */
+/* magma-ish perceptual ramp: uint8 magnitude → [r,g,b]. Mirrors _specColor in
+ * MediaPreview.jsx (kept local to avoid a parse-time cross-file dependency). */
+function _specColorTL(v) {
+  const t = v / 255;
+  const stops = [
+    [0.0, [0, 0, 4]],
+    [0.25, [40, 11, 84]],
+    [0.5, [139, 36, 109]],
+    [0.75, [222, 73, 64]],
+    [0.9, [251, 159, 58]],
+    [1.0, [252, 253, 191]],
+  ];
+  for (let i = 1; i < stops.length; i++) {
+    if (t <= stops[i][0]) {
+      const [t0, c0] = stops[i - 1];
+      const [t1, c1] = stops[i];
+      const f = (t - t0) / (t1 - t0 || 1);
+      return [
+        (c0[0] + (c1[0] - c0[0]) * f) | 0,
+        (c0[1] + (c1[1] - c0[1]) * f) | 0,
+        (c0[2] + (c1[2] - c0[2]) * f) | 0,
+      ];
+    }
+  }
+  return [252, 253, 191];
+}
+
+/* Draws a stream's stem spectrogram (server-computed STFT) onto a <canvas>.
+ * `buf` is the raw ArrayBuffer: 8-byte header (uint32 width, uint32 height)
+ * then width*height uint8 magnitudes (column-major, low freq first). Painted at
+ * native resolution offscreen, then scaled onto the clip-sized canvas. Same
+ * binary protocol + draw as MediaPreview's _drawSpec. */
+function ClipSpectrogram({ buf, width, height }) {
+  const canvasRef = useRefTL(null);
+  useEffTL(() => {
+    const cvs = canvasRef.current;
+    if (!cvs || !buf || width < 2 || height < 2) return;
+    const view = new DataView(buf);
+    const cols = view.getUint32(0, true);
+    const bins = view.getUint32(4, true);
+    if (!cols || !bins) return;
+    const grid = new Uint8Array(buf, 8, cols * bins);
+    // Native-resolution offscreen, then scale onto the visible canvas.
+    const off = document.createElement("canvas");
+    off.width = cols; off.height = bins;
+    const octx = off.getContext("2d");
+    const img = octx.createImageData(cols, bins);
+    for (let c = 0; c < cols; c++) {
+      for (let f = 0; f < bins; f++) {
+        const v = grid[c * bins + f];
+        const [r, g, b] = _specColorTL(v);
+        const y = bins - 1 - f;            // low freq at bottom
+        const p = (y * cols + c) * 4;
+        img.data[p] = r; img.data[p + 1] = g; img.data[p + 2] = b; img.data[p + 3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.floor(width));
+    const H = Math.max(1, Math.floor(height));
+    cvs.width = Math.floor(W * dpr);
+    cvs.height = Math.floor(H * dpr);
+    const ctx = cvs.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(off, 0, 0, cols, bins, 0, 0, W, H);
+  }, [buf, width, height]);
+  return <canvas className="wave spec" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
+}
+
 function gestureMatches(rule, e) {
   // rule examples: "wheel", "shift+wheel", "alt+wheel", "cmd+wheel", "ctrl+wheel"
   if (!rule) return false;
@@ -95,8 +167,8 @@ function gestureMatches(rule, e) {
 
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
-  pxPerSec, showWaveforms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
-  renderStatusFor, waveformFor }) {
+  pxPerSec, showWaveforms, showSpectrograms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
+  renderStatusFor, waveformFor, spectrogramFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -505,7 +577,9 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
                 <div className="lbl">{s.id} · {s.sample}</div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
-                {showWaveforms !== false && waveformFor && waveformFor(s.id) ?
+                {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?
+              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} /> :
+              showWaveforms !== false && waveformFor && waveformFor(s.id) ?
               <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} color={s.color} /> :
               null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />

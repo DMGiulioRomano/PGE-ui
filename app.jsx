@@ -6,6 +6,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "zoom": 36,
   "laneHeight": 56,
   "showWaveforms": true,
+  "showSpectrograms": false,
   "showClipLabels": true,
   "showEnvOverlay": true,
   "browserWidth": 240,
@@ -42,6 +43,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutSolo": "s",
   "shortcutLog": "l",
   "shortcutToggleLabels": "h",
+  "shortcutToggleSpectrogram": "t",
   "stepMenuTrigger": "rightClick",
   "outputFormat": "wav"
 }/*EDITMODE-END*/;
@@ -325,6 +327,7 @@ function App() {
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
+  const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
@@ -609,6 +612,37 @@ function App() {
     return () => { cancelled = true; };
   }, [data.streams, lastRenderedFps, activeProject, backendKind]);
 
+  // Load STFT spectrograms for clips — only while the spectrogram view is on
+  // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
+  // fetches the server-computed grid per rendered stem and stashes the raw
+  // ArrayBuffer for the Timeline to paint. Refetches on re-render (fingerprint
+  // change) and when the toggle flips on.
+  useEffectApp(() => {
+    if (!tweaks.showSpectrograms) return;
+    const backend = window.PGEBackend.current;
+    if (!backend.render.spectrogramUrl) return;
+    const basename = activeProject.replace(/\.yml$/, "");
+    let cancelled = false;
+    (async () => {
+      for (const s of data.streams) {
+        if (cancelled) return;
+        const last = lastRenderedFps[s.id];
+        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        if (!hasStem) {
+          setSpectrograms(m => { if (!(s.id in m)) return m; const n = { ...m }; delete n[s.id]; return n; });
+          continue;
+        }
+        try {
+          const res = await fetch(backend.render.spectrogramUrl(basename, s.id));
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const buf = await res.arrayBuffer();
+          if (!cancelled && buf) setSpectrograms(m => ({ ...m, [s.id]: buf }));
+        } catch (e) { /* stem missing / numpy absent — leave clip without spectrogram */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms]);
+
   useEffectApp(() => {
     function onSeek(e) {
       const t = Math.max(0, e.detail);
@@ -642,6 +676,7 @@ function App() {
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
       if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
+      if (matchShortcut(e, tweaks.shortcutToggleSpectrogram || "t")) { e.preventDefault(); setTweak("showSpectrograms", !tweaks.showSpectrograms); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
         e.preventDefault();
         const targets = data.streams.filter(s => selectedIds.includes(s.id));
@@ -1215,12 +1250,13 @@ function App() {
               onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={data.duration}
-              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showClipLabels={tweaks.showClipLabels !== false}
+              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showClipLabels={tweaks.showClipLabels !== false}
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
               onLaneHeight={(v) => setTweak("laneHeight", v)}
               renderStatusFor={renderStatusForStream}
-              waveformFor={(id) => waveforms[id]} />
+              waveformFor={(id) => waveforms[id]}
+              spectrogramFor={(id) => spectrograms[id]} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
@@ -1366,6 +1402,8 @@ function App() {
               onChange={(v) => setTweak("laneHeight", v)} />
             <window.TweakToggle label="waveforms in clips" value={tweaks.showWaveforms}
               onChange={(v) => setTweak("showWaveforms", v)} />
+            <window.TweakToggle label="spettrogramma nei clip" value={!!tweaks.showSpectrograms}
+              onChange={(v) => setTweak("showSpectrograms", v)} />
             <window.TweakToggle label="envelope overlay" value={tweaks.showEnvOverlay}
               onChange={(v) => setTweak("showEnvOverlay", v)} />
             <window.TweakToggle label="envelope editor pane" value={tweaks.showEnvelopeEditor !== false}

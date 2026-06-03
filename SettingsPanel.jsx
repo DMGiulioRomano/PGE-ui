@@ -220,6 +220,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
                            onChange={(v) => setTweak("shortcutToggleLabels", v)} />
           </div>
           <div className="sp-row">
+            <span className="sp-k" title="commuta tutti i clip tra waveform e spettrogramma">spettrogramma nei clip</span>
+            <ShortcutInput value={tweaks.shortcutToggleSpectrogram || "t"}
+                           onChange={(v) => setTweak("shortcutToggleSpectrogram", v)} />
+          </div>
+          <div className="sp-row">
             <span className="sp-k" title="muta/smuta gli stream selezionati">mute selection</span>
             <ShortcutInput value={tweaks.shortcutMute || "m"}
                            onChange={(v) => setTweak("shortcutMute", v)} />
