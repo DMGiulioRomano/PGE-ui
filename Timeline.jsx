@@ -534,7 +534,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         const body = bodyRef.current;
         if (!body) return;
         e.preventDefault();
-        const factor = e.key === "ArrowUp" ? 1.2 : 1 / 1.2;
+        const factor = e.key === "ArrowUp" ? 1 / 1.2 : 1.2;
         const next = +Math.max(0.5, Math.min(200, PX_PER_S * factor)).toFixed(2);
         zoomAnchor.current.active = true;
         if (zoomLockRef.current) {
