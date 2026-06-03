@@ -406,13 +406,16 @@ def make_app(root: Path) -> Flask:
         except Exception as e:
             add("sox", False, str(e))
 
-        # soxi (used to read sample durations)
+        # soxi (used to read sample durations). soxi has no --version flag of
+        # its own (it exits non-zero), so probe by running it bare: a missing
+        # binary raises FileNotFoundError, anything else means it's installed.
         try:
-            subprocess.check_output(["soxi", "--version"],
-                                    stderr=subprocess.STDOUT, timeout=2)
+            subprocess.run(["soxi"], capture_output=True, timeout=2)
             add("soxi", True, "available — sample durations enabled")
-        except Exception:
-            add("soxi", False, "not available — sample list will lack durations")
+        except FileNotFoundError:
+            add("soxi", False, "not installed — sample list will lack durations")
+        except Exception as e:
+            add("soxi", False, f"not available — sample list will lack durations ({e})")
 
         # numpy + soundfile (server-side waveform peak extraction)
         try:
@@ -974,8 +977,18 @@ def main():
             return True
         except Exception:
             return False
+    def _binary_present(name):
+        # soxi has no --version flag (exits non-zero); treat only a missing
+        # binary (FileNotFoundError) as absent.
+        try:
+            subprocess.run([name], capture_output=True, timeout=2)
+            return True
+        except FileNotFoundError:
+            return False
+        except Exception:
+            return True
     sox_ok  = _check_cmd(["sox", "--version"])
-    soxi_ok = _check_cmd(["soxi", "--version"])
+    soxi_ok = _binary_present("soxi")
 
     print(f"PGE bridge")
     print(f"  root:    {root}")
