@@ -223,6 +223,13 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             <span className="sp-k" title="commuta tutti i clip tra waveform e spettrogramma">spettrogramma nei clip</span>
             <ShortcutInput value={tweaks.shortcutToggleSpectrogram || "t"}
                            onChange={(v) => setTweak("shortcutToggleSpectrogram", v)} />
+            <select className="sp-select mono"
+                    title="scala dell'asse delle frequenze dello spettrogramma"
+                    value={tweaks.spectrogramScale || "linear"}
+                    onChange={(e) => setTweak("spectrogramScale", e.target.value)}>
+              <option value="linear">lineare</option>
+              <option value="log">logaritmico</option>
+            </select>
           </div>
           <div className="sp-row">
             <span className="sp-k" title="muta/smuta gli stream selezionati">mute selection</span>

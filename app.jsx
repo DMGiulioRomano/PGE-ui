@@ -7,6 +7,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "laneHeight": 56,
   "showWaveforms": true,
   "showSpectrograms": false,
+  "spectrogramScale": "linear",
   "showClipLabels": true,
   "showEnvOverlay": true,
   "browserWidth": 240,
@@ -633,7 +634,7 @@ function App() {
           continue;
         }
         try {
-          const res = await fetch(backend.render.spectrogramUrl(basename, s.id));
+          const res = await fetch(backend.render.spectrogramUrl(basename, s.id, tweaks.spectrogramScale || "linear"));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = await res.arrayBuffer();
           if (!cancelled && buf) setSpectrograms(m => ({ ...m, [s.id]: buf }));
@@ -641,7 +642,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms]);
+  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
 
   useEffectApp(() => {
     function onSeek(e) {

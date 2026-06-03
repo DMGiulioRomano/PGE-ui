@@ -190,11 +190,15 @@ def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
     return out.tobytes()
 
 
-def _compute_spectrogram(source: Path) -> bytes:
+def _compute_spectrogram(source: Path, scale: str = "linear") -> bytes:
     """Compute a log-magnitude STFT spectrogram, returned as binary:
     8-byte little-endian header (uint32 width=time cols, uint32 height=freq
     bins) followed by width*height uint8 values (0..255). numpy-only — no
     scipy/matplotlib. Heavy FFT work runs here so the browser only paints.
+
+    `scale` controls the FREQUENCY axis: "linear" buckets the rfft bins
+    evenly; "log" buckets them on a log-frequency (geometric) spacing so low
+    frequencies get more vertical room. Magnitude is always in dB either way.
     Raises ImportError if numpy/soundfile are missing."""
     import numpy as np
     import soundfile as sf
@@ -219,15 +223,21 @@ def _compute_spectrogram(source: Path) -> bytes:
     norm = ((db - SPEC_DB_FLOOR) / (-SPEC_DB_FLOOR) * 255.0)  # 0..255
 
     # Downsample to the capped grid via max-pool (reduceat) on each axis.
-    def _pool(arr, target, axis):
+    # Linear edges are evenly spaced; log edges are geometric (low freq gets
+    # more bins). reduceat needs strictly increasing edges, so dedupe.
+    def _pool(arr, target, axis, log=False):
         size = arr.shape[axis]
-        if size <= target:
+        if size <= target and not log:
             return arr
-        edges = (np.arange(target) * (size / target)).astype(np.int64)
+        if log:
+            edges = np.unique(np.geomspace(1, size, target).astype(np.int64)) - 1
+            edges = np.clip(edges, 0, size - 1)
+        else:
+            edges = (np.arange(target) * (size / target)).astype(np.int64)
         return np.maximum.reduceat(arr, edges, axis=axis)
 
-    norm = _pool(norm, SPEC_MAX_COLS, axis=0)   # time cols
-    norm = _pool(norm, SPEC_FREQ_BINS, axis=1)  # freq bins
+    norm = _pool(norm, SPEC_MAX_COLS, axis=0)   # time cols (always linear)
+    norm = _pool(norm, SPEC_FREQ_BINS, axis=1, log=(scale == "log"))  # freq bins
     grid = norm.astype(np.uint8)                # (cols, bins)
 
     width, height = grid.shape[0], grid.shape[1]
@@ -603,13 +613,18 @@ def make_app(root: Path) -> Flask:
         if source is None:
             abort(404)
 
+        scale = request.args.get("scale", "linear")
+        if scale not in ("linear", "log"):
+            scale = "linear"
+
         spec_dir = cache / "spec"
         spec_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = spec_dir / (stem + ".spec")
+        # scale in the filename so linear/log cache side-by-side.
+        cache_file = spec_dir / (stem + f".{scale}.spec")
         fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
         if not fresh:
             try:
-                data = _compute_spectrogram(source)
+                data = _compute_spectrogram(source, scale)
             except ImportError:
                 abort(500, "numpy/soundfile not installed — `pip install -r "
                            "requirements.txt` for server-side spectrograms")

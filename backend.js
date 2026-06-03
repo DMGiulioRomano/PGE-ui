@@ -279,9 +279,11 @@
         return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
       },
       // Server-side STFT spectrogram (uint32 w/h header + uint8 grid). Same stem
-      // resolution as peaksUrl — extension is irrelevant.
-      spectrogramUrl(yamlBasename, streamId) {
-        return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+      // resolution as peaksUrl — extension is irrelevant. `scale` ("linear" |
+      // "log") picks the frequency-axis bucketing.
+      spectrogramUrl(yamlBasename, streamId, scale) {
+        const q = scale === "log" ? "?scale=log" : "";
+        return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif${q}`;
       },
     };
 
