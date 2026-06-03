@@ -22,7 +22,7 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
     ├── server.py                ← local HTTP bridge to the renderer
     ├── requirements.txt         ← flask + flask-cors
     ├── Makefile                 ← convenience targets
-    ├── backend.js               ← mock + http adapters (browser side)
+    ├── backend.js               ← local HTTP adapter (browser side)
     ├── app.jsx, TopBar.jsx, …   ← editor UI (React + Babel-in-browser)
     └── README-PGE-EDITOR.md     ← detailed setup + troubleshooting
 ```
@@ -82,25 +82,23 @@ Open `PGE Editor.html` in any browser (Chrome, Firefox, Safari — all work, bec
 
 In the editor:
 
-1. **⚙ gear icon** (top-right)
-2. Backend → switch from **mock** to **local**
-3. Server URL: `http://localhost:7878` (default)
-4. **"test connection"** → green dot
-5. The Media and Projects panels now show the real contents of `refs/` and `configs/`
-6. Hit **Render**. The split-button's progress bar, the per-clip status dots, and the **log** terminal all stream live output from `python src/main.py`.
+1. On launch the editor probes `server.py` (`http://localhost:7878` by default), lists the real contents of `refs/` and `configs/`, and auto-opens the last project (or the first on disk).
+2. **⚙ gear icon** (top-right) → **Server** to change the URL or run **"test connection"**.
+3. Hit **Render**. The split-button's progress bar, the per-clip status dots, and the **log** terminal all stream live output from `python src/main.py`.
+
+If the server isn't running the editor shows a "start server.py" notice — there is no offline/in-browser mode.
 
 ---
 
-## Backends
+## Backend
 
-The editor speaks to a `PGEBackend` abstraction. Two implementations are bundled:
+The editor speaks to a `PGEBackend` abstraction with a single implementation, `local`:
 
-| Backend | Storage         | Render                              | Use it for                                                         |
-|---------|-----------------|-------------------------------------|--------------------------------------------------------------------|
-| `mock`  | `localStorage`  | timers + fake `main.py`-shaped logs | Evaluating the UI without any server. Default at first launch.     |
-| `local` | real disk via `server.py` | `subprocess.Popen(python src/main.py …)` streaming NDJSON | Real composition work. Requires `python server.py` running.       |
+| Backend | Storage                   | Render                                                    | Notes                                          |
+|---------|---------------------------|-----------------------------------------------------------|------------------------------------------------|
+| `local` | real disk via `server.py` | `subprocess.Popen(python src/main.py …)` streaming NDJSON | Requires `python server.py` running (`make serve`). |
 
-Switch in the gear (⚙) panel. The default is `mock` so the editor opens cleanly without setup.
+The browser only does `fetch()`; the server holds all disk access, so the editor works in any browser. There is no offline mode — without the server, the editor can't list or load anything.
 
 ---
 
@@ -141,8 +139,7 @@ PGE-ui/
 ├── README-PGE-EDITOR.md         deep dive: endpoints, NDJSON protocol, troubleshooting
 │
 ├── app.jsx                      root React component, glue + history + render orchestration
-├── backend.js                   PGEBackend abstraction (mock + local HTTP)
-├── data.js                      bundled sample data (used by mock backend)
+├── backend.js                   PGEBackend abstraction (local HTTP to server.py)
 ├── envelope-loops.js            envelope math + gesture-bracketed undo
 │
 ├── primitives.jsx               Button, Icon, Switch, Tag, Section, SplitPane, …
@@ -176,4 +173,4 @@ PGE-ui/
 
 ## Status
 
-Active development. The mock backend is feature-complete for evaluating the UI. The local backend is feature-complete for rendering; **audio playback during Play is still silent** (the timeline advances visually but the rendered `.aif` stems aren't loaded yet). Wiring `<audio>` elements to `GET /output/<basename>__<sid>.aif` per stream, aligned to onsets, is the next planned step.
+Active development. The local backend is feature-complete for rendering and playback: rendered `.aif` stems are fetched from `server.py` (transcoded to WAV via sox) and scheduled against the timeline.

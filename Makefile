@@ -33,6 +33,6 @@ serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) --port $(PORT)
 
 dev-clean:
-	@echo "Removing localStorage hint: open the editor's devtools and run"
+	@echo "Reset the editor's cached stem index: open devtools and run"
 	@echo "    localStorage.clear()"
-	@echo "to reset the mock backend's saved state."
+	@echo "(clears pge-local-stems / pge-local-fp; the server keeps the real files)."
