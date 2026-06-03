@@ -120,7 +120,7 @@
     for (let i = 0; i < env.length; i++) {
       const item = env[i];
       if (isBreakpoint(item)) {
-        points.push([item[0], item[1]]);
+        points.push([item[0], item[1], (typeof item[2] === "string" ? item[2] : globalInterp)]);
         if (item[0] > currentTime) currentTime = item[0];
         continue;
       }
@@ -151,7 +151,7 @@
           // e primo punto di ogni ciclo successivo
           if (pi === 0 && (c > 0 || blockStart > 0)) pt += DISCONTINUITY_OFFSET;
           cyclePts.push(pattern[pi].length >= 3 ? [pt, y, pattern[pi][2]] : [pt, y]);
-          points.push([pt, y]);
+          points.push([pt, y, (pattern[pi].length >= 3 ? pattern[pi][2] : interp)]);
         }
         const cycObj = { blockIdx: block.index, cycleIdx: c, start: cs, end: ce, points: cyclePts };
         cycles.push(cycObj);

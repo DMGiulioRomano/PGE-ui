@@ -1304,20 +1304,49 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     `${lineD} L ${lastX.toFixed(2)} ${baseY} L ${firstX.toFixed(2)} ${baseY} Z` :
     "";
 
-  /* ============ value at playhead ============ */
+  /* ============ value at playhead ============
+     Mirrors emitGroup: samples honoring the per-segment interp tagged onto
+     each flat point (pt[2]) by expandMixed — step holds, cubic uses PCHIP
+     (Fritsch-Carlson) tangents, otherwise linear. */
   function valueAtTime(t) {
-    if (!exp.points.length) return null;
+    const pts = exp.points;
+    if (!pts.length) return null;
     const x = (t - stream.onset) / Math.max(1e-9, stream.duration);
-    if (x <= exp.points[0][0]) return exp.points[0][1];
-    if (x >= exp.points[exp.points.length - 1][0]) return exp.points[exp.points.length - 1][1];
-    for (let i = 0; i < exp.points.length - 1; i++) {
-      const a = exp.points[i],b = exp.points[i + 1];
+    if (x <= pts[0][0]) return pts[0][1];
+    if (x >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
       if (x >= a[0] && x <= b[0]) {
-        const u = (x - a[0]) / (b[0] - a[0] || 1);
+        const hseg = b[0] - a[0];
+        if (hseg <= 0) return a[1];
+        const u = (x - a[0]) / hseg;
+        const si = (typeof a[2] === "string") ? a[2] : "linear";
+        if (si === "step") return a[1];
+        if (si === "cubic") {
+          // PCHIP tangents at a (i) and b (i+1) from neighboring deltas.
+          const dCur = (b[1] - a[1]) / hseg;
+          const tangent = (idx) => {
+            const hL = idx > 0 ? pts[idx][0] - pts[idx - 1][0] : 0;
+            const hR = idx < pts.length - 1 ? pts[idx + 1][0] - pts[idx][0] : 0;
+            const dL = hL > 0 ? (pts[idx][1] - pts[idx - 1][1]) / hL : null;
+            const dR = hR > 0 ? (pts[idx + 1][1] - pts[idx][1]) / hR : null;
+            if (dL == null) return dR == null ? 0 : dR;          // first point
+            if (dR == null) return dL;                            // last point
+            if (dL * dR <= 0) return 0;                           // local extremum
+            return 2 / (1 / dL + 1 / dR);                         // weighted harmonic
+          };
+          const mA = tangent(i), mB = tangent(i + 1);
+          const u2 = u * u, u3 = u2 * u;
+          const h00 = 2 * u3 - 3 * u2 + 1;
+          const h10 = u3 - 2 * u2 + u;
+          const h01 = -2 * u3 + 3 * u2;
+          const h11 = u3 - u2;
+          return h00 * a[1] + h10 * hseg * mA + h01 * b[1] + h11 * hseg * mB;
+        }
         return a[1] + u * (b[1] - a[1]);
       }
     }
-    return exp.points[0][1];
+    return pts[0][1];
   }
   const inStream = playhead != null && playhead >= stream.onset && playhead <= stream.onset + stream.duration;
   const liveVal = inStream ? valueAtTime(playhead) : null;
