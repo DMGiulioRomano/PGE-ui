@@ -3,7 +3,7 @@ const { useState: useStateSB } = React;
 
 function SampleBrowser({
   mediaList, projectsList, onRefreshMedia, onRefreshProjects,
-  activeSample, onSelectSample,
+  activeSample, onSelectSample, onPreviewSample,
   activeProject, onSelectProject, onNewProject,
   showWaveform,
   onChooseMediaFolder, onChooseProjectsFolder,
@@ -83,7 +83,7 @@ function SampleBrowser({
                 <div key={s.name}
                      className={"it" + (activeSample === s.name ? " on" : "")}
                      draggable
-                     onClick={() => onSelectSample && onSelectSample(s.name)}
+                     onClick={() => { onSelectSample && onSelectSample(s.name); onPreviewSample && onPreviewSample(s.name); }}
                      onDragStart={(e) => e.dataTransfer.setData("text/sample", s.name)}>
                   {showWaveform !== false ? (
                     <svg className="wave" viewBox="0 0 36 14" preserveAspectRatio="none">

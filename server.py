@@ -41,6 +41,9 @@ Endpoints:
     POST /render/cancel         — terminate the running render
     GET  /output/<fname>        — serve a rendered .aif for browser playback
     GET  /audio/<fname>         — same but transcoded to WAV (Firefox-friendly)
+    GET  /media_audio/<fname>   — serve a refs/ media file as WAV for playback
+    GET  /media_peaks/<fname>   — waveform peaks for a refs/ media file
+    GET  /media_spectrogram/<fname> — STFT spectrogram for a refs/ media file
 """
 
 import argparse
@@ -143,7 +146,30 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
+_AUDIO_EXTS = (".aif", ".aiff", ".wav", ".flac", ".mp3")
+
+
+def _resolve_audio(base: Path, fname: str) -> "Path | None":
+    """Resolve an audio source under `base` by its stem, accepting any of the
+    known audio extensions (the browser may request `name.aif` for a `name.wav`
+    on disk, or vice versa). Rejects traversal via safe_resolve. Returns the
+    first existing match, else None."""
+    stem = Path(fname).stem
+    for ext in _AUDIO_EXTS:
+        cand = safe_resolve(base, stem + ext)
+        if cand is not None and cand.exists():
+            return cand
+    return None
+
+
 PEAK_BUCKETS = 32768
+
+# Spectrogram grid caps — keep the payload tiny regardless of file length.
+SPEC_NFFT = 2048
+SPEC_HOP = SPEC_NFFT // 4
+SPEC_MAX_COLS = 512
+SPEC_FREQ_BINS = 256
+SPEC_DB_FLOOR = -90.0
 
 
 def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
@@ -161,6 +187,52 @@ def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
     edges = (np.arange(n) * (mono.shape[0] / n)).astype(np.int64)
     out = np.maximum.reduceat(mono, edges).astype("<f4")
     return out.tobytes()
+
+
+def _compute_spectrogram(source: Path) -> bytes:
+    """Compute a log-magnitude STFT spectrogram, returned as binary:
+    8-byte little-endian header (uint32 width=time cols, uint32 height=freq
+    bins) followed by width*height uint8 values (0..255). numpy-only — no
+    scipy/matplotlib. Heavy FFT work runs here so the browser only paints.
+    Raises ImportError if numpy/soundfile are missing."""
+    import numpy as np
+    import soundfile as sf
+
+    data, _sr = sf.read(str(source), dtype="float32", always_2d=True)
+    mono = data.mean(axis=1)                    # downmix to mono
+    n = mono.shape[0]
+    if n < SPEC_NFFT:
+        mono = np.pad(mono, (0, SPEC_NFFT - n))
+        n = mono.shape[0]
+
+    # Frame the signal: one column per hop.
+    n_frames = 1 + (n - SPEC_NFFT) // SPEC_HOP
+    n_frames = max(1, n_frames)
+    window = np.hanning(SPEC_NFFT).astype("float32")
+    idx = np.arange(SPEC_NFFT)[None, :] + np.arange(n_frames)[:, None] * SPEC_HOP
+    frames = mono[idx] * window                 # (n_frames, nfft)
+
+    spec = np.abs(np.fft.rfft(frames, axis=1))  # (n_frames, nfft/2+1)
+    db = 20.0 * np.log10(spec + 1e-9)
+    db = np.clip(db, SPEC_DB_FLOOR, 0.0)
+    norm = ((db - SPEC_DB_FLOOR) / (-SPEC_DB_FLOOR) * 255.0)  # 0..255
+
+    # Downsample to the capped grid via max-pool (reduceat) on each axis.
+    def _pool(arr, target, axis):
+        size = arr.shape[axis]
+        if size <= target:
+            return arr
+        edges = (np.arange(target) * (size / target)).astype(np.int64)
+        return np.maximum.reduceat(arr, edges, axis=axis)
+
+    norm = _pool(norm, SPEC_MAX_COLS, axis=0)   # time cols
+    norm = _pool(norm, SPEC_FREQ_BINS, axis=1)  # freq bins
+    grid = norm.astype(np.uint8)                # (cols, bins)
+
+    width, height = grid.shape[0], grid.shape[1]
+    header = np.array([width, height], dtype="<u4").tobytes()
+    # Row-major by time column: column c, then its freq bins low→high.
+    return header + grid.tobytes()
 
 
 def _ensure_venv_events(root: Path):
@@ -510,6 +582,82 @@ def make_app(root: Path) -> Flask:
                            "requirements.txt` for server-side waveforms")
             except Exception as e:
                 abort(500, f"peak extraction failed: {e}")
+            cache_file.write_bytes(data)
+        return send_file(str(cache_file), mimetype="application/octet-stream",
+                         conditional=True)
+
+    # --------- media (refs/) preview: playback, waveform, spectrogram ---------
+    # Same patterns as the output/ endpoints above but rooted at refs/, with
+    # all derived artifacts cached under cache/ (never written into refs/).
+
+    @app.get("/media_audio/<path:fname>")
+    def media_audio(fname):
+        """Serve a refs/ media file as WAV for browser playback (transcoding
+        via sox if it isn't already WAV). Mirrors /audio but for refs/."""
+        source = _resolve_audio(refs, fname)
+        if source is None:
+            abort(404)
+        if source.suffix.lower() == ".wav":
+            return send_file(str(source), mimetype="audio/wav", conditional=True)
+
+        wav_dir = cache / "media_wav"
+        wav_dir.mkdir(parents=True, exist_ok=True)
+        wav_cache = wav_dir / (source.stem + ".wav")
+        fresh = wav_cache.exists() and wav_cache.stat().st_mtime >= source.stat().st_mtime
+        if not fresh:
+            try:
+                subprocess.check_call(["sox", str(source), str(wav_cache)],
+                                      stderr=subprocess.DEVNULL, timeout=60)
+            except FileNotFoundError:
+                abort(500, "sox not found — needed to transcode media for "
+                           "browser playback")
+            except subprocess.CalledProcessError as e:
+                abort(500, f"sox failed: {e}")
+        return send_file(str(wav_cache), mimetype="audio/wav", conditional=True)
+
+    @app.get("/media_peaks/<path:fname>")
+    def media_peaks(fname):
+        """Waveform peak array for a refs/ media file. Mirrors /peaks but for
+        refs/, cached under cache/peaks_media/."""
+        source = _resolve_audio(refs, fname)
+        if source is None:
+            abort(404)
+        peaks_dir = cache / "peaks_media"
+        peaks_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = peaks_dir / (source.stem + f".{PEAK_BUCKETS}.f32")
+        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
+        if not fresh:
+            try:
+                data = _compute_peaks(source)
+            except ImportError:
+                abort(500, "numpy/soundfile not installed — `pip install -r "
+                           "requirements.txt` for server-side waveforms")
+            except Exception as e:
+                abort(500, f"peak extraction failed: {e}")
+            cache_file.write_bytes(data)
+        return send_file(str(cache_file), mimetype="application/octet-stream",
+                         conditional=True)
+
+    @app.get("/media_spectrogram/<path:fname>")
+    def media_spectrogram(fname):
+        """Log-magnitude STFT spectrogram for a refs/ media file (numpy-only,
+        computed server-side). Binary: uint32 width + uint32 height header,
+        then width*height uint8 values. Cached under cache/spec_media/."""
+        source = _resolve_audio(refs, fname)
+        if source is None:
+            abort(404)
+        spec_dir = cache / "spec_media"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = spec_dir / (source.stem + ".spec")
+        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
+        if not fresh:
+            try:
+                data = _compute_spectrogram(source)
+            except ImportError:
+                abort(500, "numpy/soundfile not installed — `pip install -r "
+                           "requirements.txt` for server-side spectrograms")
+            except Exception as e:
+                abort(500, f"spectrogram failed: {e}")
             cache_file.write_bytes(data)
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)

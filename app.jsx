@@ -314,6 +314,7 @@ function App() {
   const [dirty, setDirty] = useStateApp(true);
   const [activeProject, setActiveProject] = useStateApp(tweaks.activeProject || "PGE_test.yml");
   const [activeSample, setActiveSample] = useStateApp(null);
+  const [previewSample, setPreviewSample] = useStateApp(null);
   const tickRef = useRefApp();
   const arrowGestureRef = useRefApp(false);
   const clipboardRef = React.useRef([]);
@@ -1194,13 +1195,14 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browser = (
     <SampleBrowser mediaList={mediaList} projectsList={projectsList}
                    onRefreshMedia={refreshMedia} onRefreshProjects={refreshProjects}
                    activeSample={activeSample} onSelectSample={setActiveSample}
+                   onPreviewSample={setPreviewSample}
                    activeProject={activeProject}
                    onSelectProject={onProjectSelect}
                    onNewProject={onNewProject}
@@ -1302,6 +1304,12 @@ function App() {
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
                      tweaks={tweaks} setTweak={setTweak}
                      serverDown={serverDown} />
+
+      {previewSample && MediaPreview ? (
+        <MediaPreview sample={previewSample}
+                      baseUrl={tweaks.serverUrl || "http://localhost:7878"}
+                      onClose={() => setPreviewSample(null)} />
+      ) : null}
 
       {tweaks.showFooter ? (
         <footer className="pge-footer">
