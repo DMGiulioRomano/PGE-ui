@@ -64,12 +64,38 @@ function MediaPreview({ sample, baseUrl, onClose }) {
   const peaksUrl = media ? media.peaksUrl(sample) : `${baseUrl}/media_peaks/${encodeURIComponent(sample)}`;
   const specUrl = media ? media.spectrogramUrl(sample) : `${baseUrl}/media_spectrogram/${encodeURIComponent(sample)}`;
 
-  // Esc + backdrop close.
+  // Keyboard: Space toggles THIS popup's player (not the timeline), Esc closes.
+  // Capture phase + stopPropagation so the app's window-level keydown handler
+  // (which would otherwise play/pause the timeline) never sees the event.
   useEffectMP(() => {
-    function onKey(e) { if (e.key === "Escape") onClose(); }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    function onKey(e) {
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        const el = audioRef.current;
+        if (el) { if (el.paused) el.play().catch(() => {}); else el.pause(); }
+      } else if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
+
+  // Smooth playhead: drive curTime from requestAnimationFrame while playing
+  // (onTimeUpdate alone fires only ~4x/sec → visibly choppy).
+  useEffectMP(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const el = audioRef.current;
+      if (el) setCurTime(el.currentTime || 0);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
 
   // Fetch + draw waveform.
   useEffectMP(() => {
@@ -228,7 +254,6 @@ function MediaPreview({ sample, baseUrl, onClose }) {
             onPause={() => setPlaying(false)}
             onEnded={() => setPlaying(false)}
             onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-            onTimeUpdate={(e) => setCurTime(e.currentTarget.currentTime || 0)}
           />
         </div>
       </div>
