@@ -280,6 +280,14 @@
       },
     };
 
+    // Preview URLs for refs/ media files (MediaPreview popup). Heavy work
+    // (transcode, peaks, STFT) runs server-side; the browser only paints.
+    const media = {
+      audioUrl(name)       { return `${baseUrl}/media_audio/${encodeURIComponent(name)}`; },
+      peaksUrl(name)       { return `${baseUrl}/media_peaks/${encodeURIComponent(name)}`; },
+      spectrogramUrl(name) { return `${baseUrl}/media_spectrogram/${encodeURIComponent(name)}`; },
+    };
+
     async function setup(onEvent) {
       try {
         const res = await fetch(baseUrl + "/setup", { method: "POST" });
@@ -360,7 +368,7 @@
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, fingerprintStream, baseUrl, diagnose, setup };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup };
   }
 
   window.PGEBackend = {
