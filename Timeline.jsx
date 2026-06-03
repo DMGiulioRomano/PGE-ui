@@ -186,6 +186,10 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
+  const [zoomLock, setZoomLock] = useStateTL(false);
+  // Latest values readable inside the wheel listener without re-binding it.
+  const playheadRef = useRefTL(playhead); playheadRef.current = playhead;
+  const zoomLockRef = useRefTL(zoomLock); zoomLockRef.current = zoomLock;
 
   // Re-anchor scrollLeft after each zoom-driven re-render, synchronously,
   // so the time under the cursor stays put across frames.
@@ -472,11 +476,18 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         e.preventDefault();
         const rect = body.getBoundingClientRect();
         const cursorVX = e.clientX - rect.left;
-        // Anchor: time under the cursor RIGHT NOW (using current scrollLeft + current PX_PER_S).
-        // Update on every event so the cursor tracks if user moves it mid-zoom.
+        // Anchor: when zoom-lock is on, pin the playhead (yellow line) as the zoom
+        // center; otherwise pin the time under the cursor RIGHT NOW.
+        // Update on every event so the anchor tracks if user moves the cursor mid-zoom.
         zoomAnchor.current.active = true;
-        zoomAnchor.current.t = (body.scrollLeft + cursorVX) / PX_PER_S;
-        zoomAnchor.current.vx = cursorVX;
+        if (zoomLockRef.current) {
+          const ph = playheadRef.current;
+          zoomAnchor.current.t = ph;
+          zoomAnchor.current.vx = ph * PX_PER_S - body.scrollLeft;
+        } else {
+          zoomAnchor.current.t = (body.scrollLeft + cursorVX) / PX_PER_S;
+          zoomAnchor.current.vx = cursorVX;
+        }
         clearTimeout(zoomAnchor.current.endTimer);
         zoomAnchor.current.endTimer = setTimeout(() => { zoomAnchor.current.active = false; }, 250);
         // Accumulate factor across rapid wheel events into a single rAF commit.
@@ -513,6 +524,15 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
       <div className="lanes-head">
         <div className="ruler-corner">
           <span className="z2">{duration}s · 120 bpm</span>
+          <button className={"zoom-lock-tgl" + (zoomLock ? " active" : "")}
+                  onClick={() => setZoomLock(v => !v)}
+                  title={zoomLock
+                    ? "zoom centrato sulla testina (playhead) — clicca per tornare al cursore"
+                    : "zoom centrato sul cursore — clicca per bloccarlo sulla testina (playhead)"}
+                  aria-pressed={zoomLock}>
+            <Icon name="search" size={12} />
+            <Icon name={zoomLock ? "lock" : "lockOpen"} size={10} />
+          </button>
         </div>
         <div className="lanes-head-clip">
           <div className="track-heads" ref={headRef}>
