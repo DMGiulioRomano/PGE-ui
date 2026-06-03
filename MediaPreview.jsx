@@ -58,6 +58,7 @@ function MediaPreview({ sample, baseUrl, onClose }) {
   const [playing, setPlaying] = useStateMP(false);
   const [curTime, setCurTime] = useStateMP(0);
   const [duration, setDuration] = useStateMP(0);
+  const [hoverTime, setHoverTime] = useStateMP(null);
 
   const media = window.PGEBackend?.current?.media;
   const audioUrl = media ? media.audioUrl(sample) : `${baseUrl}/media_audio/${encodeURIComponent(sample)}`;
@@ -208,6 +209,13 @@ function MediaPreview({ sample, baseUrl, onClose }) {
     setCurTime(el.currentTime);
   }
 
+  function hoverFromEvent(e) {
+    if (!duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setHoverTime(frac * duration);
+  }
+
   const playheadPct = duration ? (curTime / duration) * 100 : 0;
 
   return (
@@ -221,7 +229,7 @@ function MediaPreview({ sample, baseUrl, onClose }) {
         <div className="mp-body">
           <div className="mp-sec">
             <div className="mp-sec-label">waveform</div>
-            <div className="mp-canvas-wrap" onClick={seekFromEvent}>
+            <div className="mp-canvas-wrap" onClick={seekFromEvent} onMouseMove={hoverFromEvent} onMouseLeave={() => setHoverTime(null)}>
               <canvas ref={waveRef} className="mp-canvas mp-wave" />
               {playheadPct > 0 || duration ? <div className="mp-playhead" style={{ left: playheadPct + "%" }} /> : null}
               {loadingWave ? <div className="mp-status">computing waveform…</div> : null}
@@ -231,7 +239,7 @@ function MediaPreview({ sample, baseUrl, onClose }) {
 
           <div className="mp-sec">
             <div className="mp-sec-label">spectrogram</div>
-            <div className="mp-canvas-wrap" onClick={seekFromEvent}>
+            <div className="mp-canvas-wrap" onClick={seekFromEvent} onMouseMove={hoverFromEvent} onMouseLeave={() => setHoverTime(null)}>
               <canvas ref={specRef} className="mp-canvas mp-spec" />
               {duration ? <div className="mp-playhead" style={{ left: playheadPct + "%" }} /> : null}
               {loadingSpec ? <div className="mp-status">computing spectrogram…</div> : null}
@@ -244,6 +252,7 @@ function MediaPreview({ sample, baseUrl, onClose }) {
               <Icon name={playing ? "pause" : "play"} size={14} />
             </button>
             <span className="mp-time mono">{fmtTime(curTime)} / {fmtTime(duration)}</span>
+            {hoverTime != null ? <span className="mp-hover-time mono">↳ {fmtTime(hoverTime)}</span> : null}
           </div>
 
           <audio
