@@ -482,8 +482,13 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         zoomAnchor.current.active = true;
         if (zoomLockRef.current) {
           const ph = playheadRef.current;
+          // Pull the playhead toward the viewport center as we zoom: lerp its
+          // on-screen x from where it is now toward center. scrollLeft clamps
+          // near edges, so it centers only as far as content allows.
+          const curVX = ph * PX_PER_S - body.scrollLeft;
+          const center = body.clientWidth / 2;
           zoomAnchor.current.t = ph;
-          zoomAnchor.current.vx = ph * PX_PER_S - body.scrollLeft;
+          zoomAnchor.current.vx = curVX + (center - curVX) * 0.08;
         } else {
           zoomAnchor.current.t = (body.scrollLeft + cursorVX) / PX_PER_S;
           zoomAnchor.current.vx = cursorVX;
@@ -516,6 +521,54 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
     body.addEventListener("wheel", onWheel, { passive: false });
     return () => body.removeEventListener("wheel", onWheel);
   }, [PX_PER_S, laneHeight, gestures, onZoom, onLaneHeight]);
+
+  // Arrow Left/Right → scroll the timeline horizontally. When a stream is
+  // selected the app-level handler claims the arrows (to nudge onset/duration)
+  // and calls preventDefault first, so we bow out via e.defaultPrevented.
+  useEffTL(() => {
+    function onKey(e) {
+      // Ctrl/Cmd + Up/Down → zoom the timeline (in / out), anchored on the
+      // playhead when zoom-lock is on, otherwise on the viewport center.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        if (e.defaultPrevented) return;
+        const body = bodyRef.current;
+        if (!body) return;
+        e.preventDefault();
+        const factor = e.key === "ArrowUp" ? 1.2 : 1 / 1.2;
+        const next = +Math.max(0.5, Math.min(200, PX_PER_S * factor)).toFixed(2);
+        zoomAnchor.current.active = true;
+        if (zoomLockRef.current) {
+          const ph = playheadRef.current;
+          // Pull the playhead toward center as we zoom (clamped by scroll bounds).
+          const curVX = ph * PX_PER_S - body.scrollLeft;
+          const center = body.clientWidth / 2;
+          zoomAnchor.current.t = ph;
+          zoomAnchor.current.vx = curVX + (center - curVX) * 0.35;
+        } else {
+          const cx = body.clientWidth / 2;
+          zoomAnchor.current.t = (body.scrollLeft + cx) / PX_PER_S;
+          zoomAnchor.current.vx = cx;
+        }
+        clearTimeout(zoomAnchor.current.endTimer);
+        zoomAnchor.current.endTimer = setTimeout(() => { zoomAnchor.current.active = false; }, 250);
+        onZoom && onZoom(next);
+        return;
+      }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.defaultPrevented) return;
+      // Selection present → arrows belong to the app (nudge onset / ctrl-resize).
+      if (selected && selected.length > 0) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const body = bodyRef.current;
+      if (!body) return;
+      e.preventDefault();
+      const step = e.shiftKey ? body.clientWidth * 0.5 : PX_PER_S;
+      body.scrollLeft += e.key === "ArrowLeft" ? -step : step;
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [PX_PER_S, selected, onZoom]);
 
   return (
     <div className="pge-timeline split-tl" ref={ref}>
