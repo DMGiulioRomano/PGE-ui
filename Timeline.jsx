@@ -527,9 +527,29 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   // and calls preventDefault first, so we bow out via e.defaultPrevented.
   useEffTL(() => {
     function onKey(e) {
+      // Ctrl/Cmd + Shift + Up/Down → vertical zoom: grow/shrink ALL lane heights
+      // together. Up expands, Down shrinks. Scales the global default AND every
+      // per-lane override so manually-resized lanes move in step.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        const delta = e.key === "ArrowUp" ? 8 : -8;
+        const nextGlobal = Math.max(36, Math.min(120, (laneHeight || 56) + delta));
+        onLaneHeight && onLaneHeight(nextGlobal);
+        setLaneHeights(h => {
+          const m = {};
+          for (const k in h) m[k] = Math.max(28, Math.min(240, h[k] + delta));
+          localStorage.setItem("pge-lane-heights", JSON.stringify(m));
+          return m;
+        });
+        setHint(`lane ${nextGlobal}px`);
+        clearTimeout(onKey._hintT);
+        onKey._hintT = setTimeout(() => setHint(null), 700);
+        return;
+      }
       // Ctrl/Cmd + Up/Down → zoom the timeline (in / out), anchored on the
       // playhead when zoom-lock is on, otherwise on the viewport center.
-      if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         if (e.defaultPrevented) return;
         const body = bodyRef.current;
         if (!body) return;
@@ -568,7 +588,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [PX_PER_S, selected, onZoom]);
+  }, [PX_PER_S, selected, onZoom, laneHeight, onLaneHeight]);
 
   return (
     <div className="pge-timeline split-tl" ref={ref}>
