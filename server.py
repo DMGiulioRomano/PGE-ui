@@ -432,12 +432,22 @@ def make_app(root: Path) -> Flask:
             add("engine venv", False,
                 "not found — click 'Setup engine' in Settings ⚙ or POST /setup")
 
-        # python deps available?
-        try:
-            __import__("yaml")
-            add("python yaml", True, "pyyaml present (engine dep)")
-        except ImportError:
-            add("python yaml", False, "pyyaml not in venv — main.py may fail")
+        # pyyaml available to the ENGINE venv that actually runs main.py
+        # (not this server process — they can be different interpreters).
+        if venv_py.exists():
+            try:
+                subprocess.check_output([str(venv_py), "-c", "import yaml"],
+                                        stderr=subprocess.STDOUT, timeout=5)
+                add("python yaml", True, "pyyaml present in engine venv")
+            except subprocess.CalledProcessError:
+                add("python yaml", False,
+                    "pyyaml not in engine venv — main.py may fail; click "
+                    "'Setup engine' in Settings ⚙ or pip install in .venv")
+            except Exception as e:
+                add("python yaml", False, f"could not check engine venv: {e}")
+        else:
+            add("python yaml", False,
+                "engine venv missing — click 'Setup engine' in Settings ⚙")
 
         # stems present?
         stems = list(output.glob("*__*.aif")) + list(output.glob("*__*.wav"))
