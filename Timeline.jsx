@@ -1,6 +1,8 @@
 /* @jsx React.createElement */
 const { useState: useStateTL, useRef: useRefTL, useEffect: useEffTL } = React;
 
+const LOOP_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='17 1 21 5 17 9'/%3E%3Cpath d='M3 11V9a4 4 0 0 1 4-4h14'/%3E%3Cpolyline points='7 23 3 19 7 15'/%3E%3Cpath d='M21 13v2a4 4 0 0 1-4 4H3'/%3E%3C/svg%3E\") 8 8, pointer";
+
 /* ---------- ClipRenderStatus ---------- */
 /* tiny status pill sitting in the bottom-left of a clip.
  * states:
@@ -658,13 +660,17 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
                const x = e.clientX - rect.left;
                const y = e.clientY - rect.top;
                if (!loopDragRef.current) {
-                 // Cursor hint when hovering near loop region edges
                  const hasRegion = loopRegion && loopRegion.end > loopRegion.start;
                  if (y <= 12 && hasRegion) {
                    const lx = loopRegion.start * PX_PER_S;
                    const rx = loopRegion.end * PX_PER_S;
-                   e.currentTarget.style.cursor = (Math.abs(x - lx) <= 6 || Math.abs(x - rx) <= 6)
-                     ? 'ew-resize' : 'col-resize';
+                   if (Math.abs(x - lx) <= 6 || Math.abs(x - rx) <= 6) {
+                     e.currentTarget.style.cursor = 'ew-resize';
+                   } else if (x >= lx && x <= rx) {
+                     e.currentTarget.style.cursor = LOOP_CURSOR;
+                   } else {
+                     e.currentTarget.style.cursor = 'col-resize';
+                   }
                  } else {
                    e.currentTarget.style.cursor = '';
                  }
