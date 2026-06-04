@@ -396,21 +396,15 @@ body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !
 .pge-terminal .t-line.muted .t-text { color: var(--fg-3); }
 .pge-terminal .t-line.blank { min-height: 6px; }
 
-/* ---------- Stereoscope ---------- */
+/* ---------- Stereoscope (inline in sidebar, not fixed overlay) ---------- */
 .pge-scope {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  height: var(--scope-h, 200px);
   background: #0a0a0a;
-  border-top: 1px solid var(--border-default);
+  border-top: 1px solid rgba(255,255,255,0.07);
   display: flex; flex-direction: column;
-  z-index: 49;
-  box-shadow: 0 -8px 24px rgba(0,0,0,0.35);
+  flex-shrink: 0;
+  /* height comes from inline style set by React component */
+  position: relative;
 }
-.pge-app.with-scope { padding-bottom: calc(var(--scope-h, 200px) + var(--terminal-h, 0px)); }
-.pge-app.with-scope.with-terminal { padding-bottom: calc(var(--scope-h, 200px) + var(--terminal-h, 220px)); }
-.pge-app.with-scope .pge-footer { bottom: var(--scope-h, 200px); }
-.pge-app.with-scope.with-terminal .pge-terminal { bottom: var(--scope-h, 200px); }
 
 .pge-scope .sc-resize {
   position: absolute;

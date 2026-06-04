@@ -691,7 +691,7 @@ function App() {
       if (terminalOpen && matchShortcut(e, tweaks.shortcutStop || "c")) { e.preventDefault(); setLogLines([]); return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
-      if (matchShortcut(e, tweaks.shortcutScope || "v")) { e.preventDefault(); const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); return; }
+      if (matchShortcut(e, tweaks.shortcutScope || "v")) { e.preventDefault(); const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); if (v && !browserOpen) { setBrowserOpen(true); } return; }
       if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
       if (matchShortcut(e, tweaks.shortcutToggleSpectrogram || "t")) { e.preventDefault(); setTweak("showSpectrograms", !tweaks.showSpectrograms); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
@@ -1250,17 +1250,23 @@ function App() {
   const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
-  const browser = (
-    <SampleBrowser mediaList={mediaList} projectsList={projectsList}
-                   onRefreshMedia={refreshMedia} onRefreshProjects={refreshProjects}
-                   activeSample={activeSample} onSelectSample={setActiveSample}
-                   onPreviewSample={setPreviewSample}
-                   activeProject={activeProject}
-                   onSelectProject={onProjectSelect}
-                   onNewProject={onNewProject}
-                   showWaveform={tweaks.showWaveformBrowser}
-                   onChooseMediaFolder={onChooseMediaFolder}
-                   onChooseProjectsFolder={onChooseProjectsFolder} />
+  const browserPanel = (
+    <div className="pge-browser-col">
+      <SampleBrowser mediaList={mediaList} projectsList={projectsList}
+                     onRefreshMedia={refreshMedia} onRefreshProjects={refreshProjects}
+                     activeSample={activeSample} onSelectSample={setActiveSample}
+                     onPreviewSample={setPreviewSample}
+                     activeProject={activeProject}
+                     onSelectProject={onProjectSelect}
+                     onNewProject={onNewProject}
+                     showWaveform={tweaks.showWaveformBrowser}
+                     onChooseMediaFolder={onChooseMediaFolder}
+                     onChooseProjectsFolder={onChooseProjectsFolder} />
+      <Stereoscope open={scopeOpen}
+                   height={tweaks.scopeHeight || 180}
+                   onHeightChange={(h) => setTweak("scopeHeight", h)}
+                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
+    </div>
   );
   const timelineEl = (
     <Timeline streams={data.streams} selected={selectedIds}
@@ -1308,7 +1314,7 @@ function App() {
   ) : null;
 
   return (
-    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "") + (scopeOpen ? " with-scope" : "")}>
+    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "")}>
       <TopBar project={data.project} title={data.title} dirty={dirty}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
@@ -1326,12 +1332,12 @@ function App() {
               onToggleTerminal={() => { const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); }}
               terminalDotState={terminalDotState}
               scopeOpen={scopeOpen}
-              onToggleScope={() => { const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); }}
+              onToggleScope={() => { const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); if (v && !browserOpen) { setBrowserOpen(true); } }}
               playReadiness={playReadiness} />
       <div className={"pge-main split"}>
         {browserOpen ? (
           <SplitPane dir="horiz" persist="browser" initial={tweaks.browserWidth || 240} min={180} max={420}>
-            {browser}
+            {browserPanel}
             {inspectorEl ? (
               <SplitPane dir="horiz" persist="inspector" initial={tweaks.inspectorWidth || 380} min={260} max={560} side="primary-last">
                 {center}
@@ -1356,10 +1362,6 @@ function App() {
                 height={tweaks.terminalHeight || 220}
                 onHeightChange={(h) => setTweak("terminalHeight", h)}
                 status={renderStatus} />
-      <Stereoscope open={scopeOpen}
-                   height={tweaks.scopeHeight || 200}
-                   onHeightChange={(h) => setTweak("scopeHeight", h)}
-                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
