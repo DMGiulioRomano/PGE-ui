@@ -3,7 +3,7 @@ const { useState: useStateTB } = React;
 
 function TopBar({
   project, title, dirty,
-  playing, onPlay, onStop, onSeekZero,
+  playing, onPlay, onStop, onSeekZero, loopEnabled, onToggleLoop,
   onRender, onCancelRender, renderStatus, renderOptions, onRenderOptionsChange,
   time, duration, status,
   onUndo, onRedo, canUndo, canRedo,
@@ -41,6 +41,11 @@ function TopBar({
           <Icon name={playing ? "pause" : "play"} size={11} />
         </button>
         <button className="tbtn" onClick={onStop} title="stop"><Icon name="stop" size={11} /></button>
+        <button className={"tbtn" + (loopEnabled ? " active" : "")}
+                onClick={onToggleLoop}
+                title={loopEnabled ? "loop on — click to disable" : "loop off — click to enable"}>
+          <Icon name="repeat" size={11} />
+        </button>
       </div>
       <span className="clk">{fmtTime(time)}</span>
       <span className="meta dur">/ {duration.toFixed(3)}</span>

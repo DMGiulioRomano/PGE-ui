@@ -314,6 +314,8 @@ function App() {
   const [inspectorTab, setInspectorTab] = useStateApp("preview");
   const [playing, setPlaying] = useStateApp(false);
   const [time, setTime] = useStateApp(0);
+  const [loopEnabled, setLoopEnabled] = useStateApp(false);
+  const [loopRegion, setLoopRegion] = useStateApp({ start: 0, end: 0 });
   const [dirty, setDirty] = useStateApp(true);
   const [activeProject, setActiveProject] = useStateApp(tweaks.activeProject || "PGE_test.yml");
   const [activeSample, setActiveSample] = useStateApp(null);
@@ -533,15 +535,24 @@ function App() {
     return () => window.removeEventListener("pge-audio-tick", onTick);
   }, []);
 
-  // Auto-stop when audio reaches duration
+  // Auto-stop when audio reaches duration (skip if looping)
   useEffectApp(() => {
-    if (playing && time >= data.duration) {
+    if (playing && time >= data.duration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
       const engine = window.PGEAudio?.engine;
       if (engine) engine.stop();
       setPlaying(false);
       setTime(0);
     }
-  }, [time, playing, data.duration]);
+  }, [time, playing, data.duration, loopEnabled, loopRegion.start, loopRegion.end]);
+
+  // Loop-back when playhead reaches loop region end
+  useEffectApp(() => {
+    if (playing && loopEnabled && loopRegion.end > loopRegion.start && time >= loopRegion.end) {
+      const t = loopRegion.start;
+      window.PGEAudio?.engine?.seek(t);
+      setTime(t);
+    }
+  }, [time, playing, loopEnabled, loopRegion.start, loopRegion.end]);
 
   // Keep engine's mute/solo in sync with stream data
   useEffectApp(() => {
@@ -1257,7 +1268,8 @@ function App() {
               onLaneHeight={(v) => setTweak("laneHeight", v)}
               renderStatusFor={renderStatusForStream}
               waveformFor={(id) => waveforms[id]}
-              spectrogramFor={(id) => spectrograms[id]} />
+              spectrogramFor={(id) => spectrograms[id]}
+              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
@@ -1295,6 +1307,7 @@ function App() {
       <TopBar project={data.project} title={data.title} dirty={dirty}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
+              loopEnabled={loopEnabled} onToggleLoop={() => setLoopEnabled(v => !v)}
               onSeekZero={doSeekZero}
               onRender={onRender} onCancelRender={onCancelRender}
               renderStatus={renderStatus}

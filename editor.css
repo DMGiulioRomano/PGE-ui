@@ -161,6 +161,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .ruler .lbl { position: absolute; top: 4px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); transform: translateX(2px); }
 .ruler .head { position: absolute; top: 0; bottom: -2000px; width: 0; z-index: 3; }
 .ruler .head .head-flag { position: absolute; left: -5px; top: 0; width: 10px; height: 8px; background: var(--accent); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.ruler .loop-region { position: absolute; top: 0; height: 12px; background: var(--accent); opacity: 0.18; pointer-events: none; z-index: 2; border-radius: 1px; }
+.ruler .loop-region.enabled { opacity: 0.38; box-shadow: 0 0 0 1px var(--accent); }
 .lanes-area { position: relative; }
 .lane { height: var(--lane-h); border-bottom: 1px solid var(--border-subtle); position: relative; background-image: none; }
 .comp-end-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--border-default); z-index: 1; pointer-events: none; opacity: .6; }

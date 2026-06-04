@@ -168,7 +168,8 @@ function gestureMatches(rule, e) {
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, showSpectrograms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
-  renderStatusFor, waveformFor, spectrogramFor }) {
+  renderStatusFor, waveformFor, spectrogramFor,
+  loopEnabled, loopRegion, onLoopRegionChange }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -183,6 +184,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   const [sampleDragOver, setSampleDragOver] = useStateTL(false);
   const [marquee, setMarquee] = useStateTL(null);
   const lanesAreaRef = useRefTL(null);
+  const loopDragRef = useRefTL(null);
   const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
@@ -632,7 +634,29 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
              onPointerDown={(e) => {
                const rect = e.currentTarget.getBoundingClientRect();
                const x = e.clientX - rect.left;
-               window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x / PX_PER_S) }));
+               const y = e.clientY - rect.top;
+               if (y <= 12) {
+                 e.currentTarget.setPointerCapture(e.pointerId);
+                 const startT = Math.max(0, x / PX_PER_S);
+                 loopDragRef.current = { startT };
+                 onLoopRegionChange && onLoopRegionChange({ start: startT, end: startT });
+               } else {
+                 window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x / PX_PER_S) }));
+               }
+             }}
+             onPointerMove={(e) => {
+               if (!loopDragRef.current) return;
+               const rect = e.currentTarget.getBoundingClientRect();
+               const t = Math.max(0, (e.clientX - rect.left) / PX_PER_S);
+               const { startT } = loopDragRef.current;
+               onLoopRegionChange && onLoopRegionChange(
+                 t >= startT ? { start: startT, end: t } : { start: t, end: startT }
+               );
+             }}
+             onPointerUp={(e) => {
+               if (!loopDragRef.current) return;
+               e.currentTarget.releasePointerCapture(e.pointerId);
+               loopDragRef.current = null;
              }}>
           {ticks.map((t) =>
           <React.Fragment key={t.s}>
@@ -640,6 +664,10 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               {t.major ? <span className="lbl" style={{ left: t.x }}>{fmt(t.s)}</span> : null}
             </React.Fragment>
           )}
+          {loopRegion && loopRegion.end > loopRegion.start ? (
+            <div className={"loop-region" + (loopEnabled ? " enabled" : "")}
+                 style={{ left: loopRegion.start * PX_PER_S, width: (loopRegion.end - loopRegion.start) * PX_PER_S }} />
+          ) : null}
           <div className="head" style={{ left: playhead * PX_PER_S }}>
             <div className="head-flag" />
           </div>
