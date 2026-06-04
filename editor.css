@@ -61,6 +61,14 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 /* ---------- Main: browser | center | inspector ---------- */
 
 /* ---------- Sample browser ---------- */
+/* Wrapper column: browser list on top, optional scope widget at bottom */
+.pge-browser-col {
+  display: flex; flex-direction: column;
+  height: 100%; overflow: hidden;
+  border-right: 1px solid var(--border-default);
+}
+.pge-browser-col .pge-browser { flex: 1; min-height: 0; overflow: auto; border-right: none; }
+
 .pge-browser { background: var(--bg-panel); border-right: 1px solid var(--border-default); padding: 8px; overflow: auto; min-height: 0; flex: 1; height: 100%; }
 .pge-browser .head { display: flex; align-items: center; gap: 6px; font-family: var(--font-ui); font-size: 11px; font-weight: 500; color: var(--fg-2); padding: 4px 6px 6px; }
 .pge-browser .search { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 2px; color: var(--fg-3); font-family: var(--font-mono); font-size: 11px; margin-bottom: 6px; }

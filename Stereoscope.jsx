@@ -1,35 +1,28 @@
 /* @jsx React.createElement */
-/* Stereoscope — real-time goniometer / Lissajous panel.
+/* Stereoscope — real-time goniometer / Lissajous widget.
  *
- * Shows an XY scatter plot of L vs R audio (rotated 45° into classic
- * goniometer orientation) with a phosphor trail effect and a phase
- * correlation meter. Reads from window.PGEAudio.engine.analysers which
- * are created lazily on first play — renders "waiting for audio…" until
- * the context exists.
+ * Embedded at the bottom of the sample-browser sidebar (not a fixed overlay).
+ * Shows an XY scatter plot of L vs R audio rotated 45° (classic goniometer)
+ * with phosphor trail and a phase correlation meter.
  *
- * Layout: fixed bottom panel, vertically resizable, same pattern as Terminal.
+ * Reads from window.PGEAudio.engine.analysers (lazy — null until first play).
+ * DISPLAY_GAIN amplifies weak signals so the shape is visible even at low levels.
  * Exposed as window.PGE.Stereoscope. */
 
 const { useRef: useRefSC, useEffect: useEffectSC, useState: useStateSC } = React;
 
 const SCOPE_MIN_H = 80;
-const SCOPE_MAX_FRACTION = 0.6;
+const SCOPE_MAX_FRACTION = 0.55;
 const INV_SQRT2 = 1 / Math.sqrt(2);
+const DISPLAY_GAIN = 4.0;   // amplify weak signals before plotting
+const CORR_BAR_H = 20;
 
-function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
+function Stereoscope({ open, height = 180, onHeightChange, onClose }) {
   const { Icon } = window.PGE;
   const canvasRef = useRefSC(null);
   const rafRef = useRefSC(null);
-  const playingRef = useRefSC(false);
   const dragRef = useRefSC({ active: false, startY: 0, startH: 0 });
   const [resizing, setResizing] = useStateSC(false);
-
-  // Track playing state via the pge-audio-tick event
-  useEffectSC(() => {
-    function onTick() { playingRef.current = true; }
-    window.addEventListener("pge-audio-tick", onTick);
-    return () => window.removeEventListener("pge-audio-tick", onTick);
-  }, []);
 
   // RAF draw loop — active while panel is open
   useEffectSC(() => {
@@ -41,7 +34,6 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // One-time setup: black fill
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#0a0a0a";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -49,19 +41,17 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
     function draw() {
       rafRef.current = requestAnimationFrame(draw);
       const analysers = window.PGEAudio?.engine?.analysers;
-
       const w = canvas.width;
       const h = canvas.height;
       const scopeH = h - CORR_BAR_H;
 
       if (!analysers) {
-        // No audio context yet — show placeholder
         ctx.fillStyle = "#0a0a0a";
         ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = "#333";
-        ctx.font = "11px monospace";
+        ctx.fillStyle = "#2a2a2a";
+        ctx.font = "10px monospace";
         ctx.textAlign = "center";
-        ctx.fillText("waiting for audio…", w / 2, scopeH / 2 + 4);
+        ctx.fillText("play to activate", w / 2, scopeH / 2 + 4);
         return;
       }
 
@@ -71,40 +61,37 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
       analysers.left.getFloatTimeDomainData(dataL);
       analysers.right.getFloatTimeDomainData(dataR);
 
-      // Phosphor trail: semi-transparent black fade
+      // Phosphor trail
       ctx.fillStyle = "rgba(10,10,10,0.18)";
       ctx.fillRect(0, 0, w, scopeH);
 
-      // Draw grid lines (dim, only if scope big enough)
-      if (scopeH > 60) {
+      // Grid lines
+      if (scopeH > 50) {
         ctx.strokeStyle = "rgba(255,255,255,0.04)";
         ctx.lineWidth = 0.5;
         ctx.beginPath();
         ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, scopeH);
         ctx.moveTo(0, scopeH / 2); ctx.lineTo(w, scopeH / 2);
-        // 45° diagonals
         ctx.moveTo(0, 0); ctx.lineTo(w, scopeH);
         ctx.moveTo(w, 0); ctx.lineTo(0, scopeH);
         ctx.stroke();
       }
 
-      // Plot Lissajous points (rotated 45° — classic goniometer)
+      // Lissajous plot (rotated 45°) with gain amplification
       const cx = w / 2;
       const cy = scopeH / 2;
       const scale = Math.min(w, scopeH) * 0.44;
-
       ctx.fillStyle = "#00ff88";
-      const step = Math.max(1, Math.floor(bufLen / 512)); // max 512 points per frame
+      const step = Math.max(1, Math.floor(bufLen / 512));
       for (let i = 0; i < bufLen; i += step) {
-        const l = dataL[i];
-        const r = dataR[i];
-        // Rotate 45°: x = (L+R)/√2, y = (L-R)/√2
+        const l = Math.max(-1, Math.min(1, dataL[i] * DISPLAY_GAIN));
+        const r = Math.max(-1, Math.min(1, dataR[i] * DISPLAY_GAIN));
         const px = cx + (l + r) * INV_SQRT2 * scale;
         const py = cy - (l - r) * INV_SQRT2 * scale;
         ctx.fillRect(px - 0.5, py - 0.5, 1.5, 1.5);
       }
 
-      // Correlation meter
+      // Correlation (on raw data, not amplified)
       let sumLR = 0, sumL2 = 0, sumR2 = 0;
       for (let i = 0; i < bufLen; i++) {
         sumLR += dataL[i] * dataR[i];
@@ -115,7 +102,7 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
         ? Math.max(-1, Math.min(1, sumLR / Math.sqrt(sumL2 * sumR2)))
         : 0;
 
-      drawCorrBar(ctx, w, h, scopeH, corr);
+      _drawCorrBar(ctx, w, h, scopeH, corr);
     }
 
     rafRef.current = requestAnimationFrame(draw);
@@ -125,26 +112,28 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
     };
   }, [open]);
 
-  // Keep canvas pixel size in sync with CSS size
+  // Sync canvas pixel dimensions with CSS size
   useEffectSC(() => {
     if (!open) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ro = new ResizeObserver(() => {
       const rect = canvas.getBoundingClientRect();
-      if (canvas.width !== Math.round(rect.width) || canvas.height !== Math.round(rect.height)) {
-        canvas.width = Math.round(rect.width);
-        canvas.height = Math.round(rect.height);
+      const nw = Math.round(rect.width);
+      const nh = Math.round(rect.height);
+      if (canvas.width !== nw || canvas.height !== nh) {
+        canvas.width = nw;
+        canvas.height = nh;
         const ctx = canvas.getContext("2d");
         ctx.fillStyle = "#0a0a0a";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, nw, nh);
       }
     });
     ro.observe(canvas);
     return () => ro.disconnect();
   }, [open]);
 
-  // ---- resize handle (same as Terminal) ----
+  // Resize handle
   function clampH(h) {
     const max = Math.max(SCOPE_MIN_H + 40, Math.round(window.innerHeight * SCOPE_MAX_FRACTION));
     return Math.max(SCOPE_MIN_H, Math.min(max, Math.round(h)));
@@ -193,7 +182,7 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
   if (!open) return null;
   return (
     <div className={"pge-scope" + (resizing ? " is-resizing" : "")}
-         style={{ "--scope-h": height + "px" }}
+         style={{ height: height + "px" }}
          role="region"
          aria-label="stereoscope">
       <div className="sc-resize"
@@ -203,13 +192,13 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
            tabIndex={0}
            onMouseDown={onResizeDown}
            onTouchStart={onResizeDown}
-           onDoubleClick={() => onHeightChange && onHeightChange(200)}
+           onDoubleClick={() => onHeightChange && onHeightChange(180)}
            onKeyDown={onResizeKey}
            title="drag to resize · double-click to reset" />
       <div className="sc-head">
-        <span className="sc-title mono">stereoscope</span>
+        <span className="sc-title mono">scope</span>
         <span style={{ flex: 1 }} />
-        <button className="sc-btn" onClick={onClose} title="hide stereoscope">
+        <button className="sc-btn" onClick={onClose} title="hide stereoscope (v)">
           <Icon name="x" size={11} />
         </button>
       </div>
@@ -218,42 +207,24 @@ function Stereoscope({ open, height = 200, onHeightChange, onClose }) {
   );
 }
 
-const CORR_BAR_H = 20;
-
-function drawCorrBar(ctx, w, h, scopeH, corr) {
+function _drawCorrBar(ctx, w, h, scopeH, corr) {
   const barY = scopeH;
   const barH = CORR_BAR_H;
-
-  // Background
   ctx.fillStyle = "#111";
   ctx.fillRect(0, barY, w, barH);
-
-  // Center tick
-  ctx.fillStyle = "#333";
+  ctx.fillStyle = "#252525";
   ctx.fillRect(w / 2 - 0.5, barY + 2, 1, barH - 4);
-
-  // Bar color by correlation value
-  let color;
-  if (corr > 0.5)       color = "#3DB87A"; // green
-  else if (corr > 0)    color = "#F5A623"; // yellow/amber
-  else                  color = "#E5484D"; // red
-
+  const color = corr > 0.5 ? "#3DB87A" : corr > 0 ? "#F5A623" : "#E5484D";
   const cx = w / 2;
-  const barW = Math.abs(corr) * (w / 2 - 4);
-  const barX = corr >= 0 ? cx : cx - barW;
+  const barW = Math.abs(corr) * (cx - 4);
   ctx.fillStyle = color;
-  ctx.fillRect(barX, barY + 4, barW, barH - 8);
-
-  // Label
-  ctx.fillStyle = "#555";
+  ctx.fillRect(corr >= 0 ? cx : cx - barW, barY + 4, barW, barH - 8);
+  ctx.fillStyle = "#444";
   ctx.font = "9px monospace";
-  ctx.textAlign = "left";
-  ctx.fillText("-1", 4, barY + barH - 4);
-  ctx.textAlign = "right";
-  ctx.fillText("+1", w - 4, barY + barH - 4);
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#666";
-  ctx.fillText(corr.toFixed(2), w / 2, barY + barH - 4);
+  ctx.textAlign = "left";  ctx.fillText("-1", 4, barY + barH - 4);
+  ctx.textAlign = "right"; ctx.fillText("+1", w - 4, barY + barH - 4);
+  ctx.textAlign = "center"; ctx.fillStyle = "#555";
+  ctx.fillText(corr.toFixed(2), cx, barY + barH - 4);
 }
 
 window.PGE.Stereoscope = Stereoscope;
