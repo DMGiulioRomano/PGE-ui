@@ -1,6 +1,8 @@
 /* @jsx React.createElement */
 const { useState: useStateTL, useRef: useRefTL, useEffect: useEffTL } = React;
 
+const LOOP_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='17 1 21 5 17 9'/%3E%3Cpath d='M3 11V9a4 4 0 0 1 4-4h14'/%3E%3Cpolyline points='7 23 3 19 7 15'/%3E%3Cpath d='M21 13v2a4 4 0 0 1-4 4H3'/%3E%3C/svg%3E\") 8 8, pointer";
+
 /* ---------- ClipRenderStatus ---------- */
 /* tiny status pill sitting in the bottom-left of a clip.
  * states:
@@ -168,7 +170,8 @@ function gestureMatches(rule, e) {
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, showSpectrograms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
-  renderStatusFor, waveformFor, spectrogramFor }) {
+  renderStatusFor, waveformFor, spectrogramFor,
+  loopEnabled, loopRegion, onLoopRegionChange }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -183,6 +186,7 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   const [sampleDragOver, setSampleDragOver] = useStateTL(false);
   const [marquee, setMarquee] = useStateTL(null);
   const lanesAreaRef = useRefTL(null);
+  const loopDragRef = useRefTL(null);
   const dragEnterCount = useRefTL(0);
   const zoomState = useRefTL({ pending: null, raf: null });
   const zoomAnchor = useRefTL({ active: false, t: 0, vx: 0, endTimer: null });
@@ -632,7 +636,66 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
              onPointerDown={(e) => {
                const rect = e.currentTarget.getBoundingClientRect();
                const x = e.clientX - rect.left;
-               window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x / PX_PER_S) }));
+               const y = e.clientY - rect.top;
+               if (y <= 12) {
+                 const hasRegion = loopRegion && loopRegion.end > loopRegion.start;
+                 const leftPx = hasRegion ? loopRegion.start * PX_PER_S : -Infinity;
+                 const rightPx = hasRegion ? loopRegion.end * PX_PER_S : -Infinity;
+                 e.currentTarget.setPointerCapture(e.pointerId);
+                 if (hasRegion && Math.abs(x - leftPx) <= 6) {
+                   loopDragRef.current = { mode: 'resize', fixedT: loopRegion.end };
+                 } else if (hasRegion && Math.abs(x - rightPx) <= 6) {
+                   loopDragRef.current = { mode: 'resize', fixedT: loopRegion.start };
+                 } else {
+                   const startT = Math.max(0, x / PX_PER_S);
+                   loopDragRef.current = { mode: 'new', startT };
+                   onLoopRegionChange && onLoopRegionChange({ start: startT, end: startT });
+                 }
+               } else {
+                 window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x / PX_PER_S) }));
+               }
+             }}
+             onPointerMove={(e) => {
+               const rect = e.currentTarget.getBoundingClientRect();
+               const x = e.clientX - rect.left;
+               const y = e.clientY - rect.top;
+               if (!loopDragRef.current) {
+                 const hasRegion = loopRegion && loopRegion.end > loopRegion.start;
+                 if (y <= 12 && hasRegion) {
+                   const lx = loopRegion.start * PX_PER_S;
+                   const rx = loopRegion.end * PX_PER_S;
+                   if (Math.abs(x - lx) <= 6 || Math.abs(x - rx) <= 6) {
+                     e.currentTarget.style.cursor = 'ew-resize';
+                   } else if (x >= lx && x <= rx) {
+                     e.currentTarget.style.cursor = LOOP_CURSOR;
+                   } else {
+                     e.currentTarget.style.cursor = 'col-resize';
+                   }
+                 } else {
+                   e.currentTarget.style.cursor = '';
+                 }
+                 return;
+               }
+               const t = Math.max(0, x / PX_PER_S);
+               const { mode, startT, fixedT } = loopDragRef.current;
+               if (mode === 'resize') {
+                 onLoopRegionChange && onLoopRegionChange(
+                   t <= fixedT ? { start: t, end: fixedT } : { start: fixedT, end: t }
+                 );
+               } else {
+                 onLoopRegionChange && onLoopRegionChange(
+                   t >= startT ? { start: startT, end: t } : { start: t, end: startT }
+                 );
+               }
+             }}
+             onPointerUp={(e) => {
+               if (!loopDragRef.current) return;
+               e.currentTarget.releasePointerCapture(e.pointerId);
+               e.currentTarget.style.cursor = '';
+               loopDragRef.current = null;
+             }}
+             onPointerLeave={(e) => {
+               if (!loopDragRef.current) e.currentTarget.style.cursor = '';
              }}>
           {ticks.map((t) =>
           <React.Fragment key={t.s}>
@@ -640,6 +703,10 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               {t.major ? <span className="lbl" style={{ left: t.x }}>{fmt(t.s)}</span> : null}
             </React.Fragment>
           )}
+          {loopRegion && loopRegion.end > loopRegion.start ? (
+            <div className={"loop-region" + (loopEnabled ? " enabled" : "")}
+                 style={{ left: loopRegion.start * PX_PER_S, width: (loopRegion.end - loopRegion.start) * PX_PER_S }} />
+          ) : null}
           <div className="head" style={{ left: playhead * PX_PER_S }}>
             <div className="head-flag" />
           </div>

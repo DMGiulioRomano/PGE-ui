@@ -3,7 +3,7 @@ const { useState: useStateTB } = React;
 
 function TopBar({
   project, title, dirty,
-  playing, onPlay, onStop, onSeekZero,
+  playing, onPlay, onStop, onSeekZero, loopEnabled, onToggleLoop,
   onRender, onCancelRender, renderStatus, renderOptions, onRenderOptionsChange,
   time, duration, status,
   onUndo, onRedo, canUndo, canRedo,
@@ -11,6 +11,7 @@ function TopBar({
   onSave, onSaveAs,
   onOpenSettings,
   terminalOpen, onToggleTerminal, terminalDotState,
+  scopeOpen, onToggleScope,
   playReadiness,
 }) {
   const { Button, Icon, RenderButton } = window.PGE;
@@ -41,10 +42,21 @@ function TopBar({
           <Icon name={playing ? "pause" : "play"} size={11} />
         </button>
         <button className="tbtn" onClick={onStop} title="stop"><Icon name="stop" size={11} /></button>
+        <button className={"tbtn" + (loopEnabled ? " active" : "")}
+                onClick={onToggleLoop}
+                title={loopEnabled ? "loop on — click to disable" : "loop off — click to enable"}>
+          <Icon name="repeat" size={11} />
+        </button>
       </div>
       <span className="clk">{fmtTime(time)}</span>
       <span className="meta dur">/ {duration.toFixed(3)}</span>
       <span style={{ flex: 1 }} />
+      <button className={"tbtn scope-tgl" + (scopeOpen ? " active" : "")}
+              onClick={onToggleScope}
+              title={scopeOpen ? "hide stereoscope (v)" : "show stereoscope (v)"}>
+        <Icon name="scope" size={11} />
+        <span className="hide-md">scope</span>
+      </button>
       <button className={"tbtn terminal-tgl" + (terminalOpen ? " active" : "")}
               onClick={onToggleTerminal}
               title={terminalOpen ? "hide render log" : "show render log"}>

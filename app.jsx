@@ -46,7 +46,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutToggleLabels": "h",
   "shortcutToggleSpectrogram": "t",
   "stepMenuTrigger": "rightClick",
-  "outputFormat": "wav"
+  "outputFormat": "wav",
+  "scopeOpen": false,
+  "scopeHeight": 200,
+  "shortcutScope": "v"
 }/*EDITMODE-END*/;
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize feature) ---- */
@@ -314,6 +317,8 @@ function App() {
   const [inspectorTab, setInspectorTab] = useStateApp("preview");
   const [playing, setPlaying] = useStateApp(false);
   const [time, setTime] = useStateApp(0);
+  const [loopEnabled, setLoopEnabled] = useStateApp(false);
+  const [loopRegion, setLoopRegion] = useStateApp({ start: 0, end: 0 });
   const [dirty, setDirty] = useStateApp(true);
   const [activeProject, setActiveProject] = useStateApp(tweaks.activeProject || "PGE_test.yml");
   const [activeSample, setActiveSample] = useStateApp(null);
@@ -330,6 +335,7 @@ function App() {
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
+  const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
     running: false, total: 0, done: 0, currentStreamId: null, streamProgress: 0,
@@ -533,15 +539,24 @@ function App() {
     return () => window.removeEventListener("pge-audio-tick", onTick);
   }, []);
 
-  // Auto-stop when audio reaches duration
+  // Auto-stop when audio reaches duration (skip if looping)
   useEffectApp(() => {
-    if (playing && time >= data.duration) {
+    if (playing && time >= data.duration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
       const engine = window.PGEAudio?.engine;
       if (engine) engine.stop();
       setPlaying(false);
       setTime(0);
     }
-  }, [time, playing, data.duration]);
+  }, [time, playing, data.duration, loopEnabled, loopRegion.start, loopRegion.end]);
+
+  // Loop-back when playhead reaches loop region end
+  useEffectApp(() => {
+    if (playing && loopEnabled && loopRegion.end > loopRegion.start && time >= loopRegion.end) {
+      const t = loopRegion.start;
+      window.PGEAudio?.engine?.seek(t);
+      setTime(t);
+    }
+  }, [time, playing, loopEnabled, loopRegion.start, loopRegion.end]);
 
   // Keep engine's mute/solo in sync with stream data
   useEffectApp(() => {
@@ -676,6 +691,7 @@ function App() {
       if (terminalOpen && matchShortcut(e, tweaks.shortcutStop || "c")) { e.preventDefault(); setLogLines([]); return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
+      if (matchShortcut(e, tweaks.shortcutScope || "v")) { e.preventDefault(); const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); return; }
       if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
       if (matchShortcut(e, tweaks.shortcutToggleSpectrogram || "t")) { e.preventDefault(); setTweak("showSpectrograms", !tweaks.showSpectrograms); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
@@ -1231,7 +1247,7 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browser = (
@@ -1257,7 +1273,8 @@ function App() {
               onLaneHeight={(v) => setTweak("laneHeight", v)}
               renderStatusFor={renderStatusForStream}
               waveformFor={(id) => waveforms[id]}
-              spectrogramFor={(id) => spectrograms[id]} />
+              spectrogramFor={(id) => spectrograms[id]}
+              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
@@ -1291,10 +1308,11 @@ function App() {
   ) : null;
 
   return (
-    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "")}>
+    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "") + (scopeOpen ? " with-scope" : "")}>
       <TopBar project={data.project} title={data.title} dirty={dirty}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
+              loopEnabled={loopEnabled} onToggleLoop={() => setLoopEnabled(v => !v)}
               onSeekZero={doSeekZero}
               onRender={onRender} onCancelRender={onCancelRender}
               renderStatus={renderStatus}
@@ -1307,6 +1325,8 @@ function App() {
               terminalOpen={terminalOpen}
               onToggleTerminal={() => { const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); }}
               terminalDotState={terminalDotState}
+              scopeOpen={scopeOpen}
+              onToggleScope={() => { const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); }}
               playReadiness={playReadiness} />
       <div className={"pge-main split"}>
         {browserOpen ? (
@@ -1336,6 +1356,10 @@ function App() {
                 height={tweaks.terminalHeight || 220}
                 onHeightChange={(h) => setTweak("terminalHeight", h)}
                 status={renderStatus} />
+      <Stereoscope open={scopeOpen}
+                   height={tweaks.scopeHeight || 200}
+                   onHeightChange={(h) => setTweak("scopeHeight", h)}
+                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}

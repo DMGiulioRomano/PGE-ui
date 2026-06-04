@@ -53,6 +53,23 @@
       this.master = this.ctx.createGain();
       this.master.gain.value = 1.0;
       this.master.connect(this.ctx.destination);
+
+      // Stereoscope analysers — L/R split from master output
+      this._splitter = this.ctx.createChannelSplitter(2);
+      this._analyserL = this.ctx.createAnalyser();
+      this._analyserR = this.ctx.createAnalyser();
+      this._analyserL.fftSize = 2048;
+      this._analyserL.smoothingTimeConstant = 0;
+      this._analyserR.fftSize = 2048;
+      this._analyserR.smoothingTimeConstant = 0;
+      this.master.connect(this._splitter);
+      this._splitter.connect(this._analyserL, 0);
+      this._splitter.connect(this._analyserR, 1);
+    }
+
+    get analysers() {
+      if (!this._analyserL) return null;
+      return { left: this._analyserL, right: this._analyserR };
     }
 
     // -------- buffer cache --------

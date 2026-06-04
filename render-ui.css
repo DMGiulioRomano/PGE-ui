@@ -396,6 +396,74 @@ body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !
 .pge-terminal .t-line.muted .t-text { color: var(--fg-3); }
 .pge-terminal .t-line.blank { min-height: 6px; }
 
+/* ---------- Stereoscope ---------- */
+.pge-scope {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: var(--scope-h, 200px);
+  background: #0a0a0a;
+  border-top: 1px solid var(--border-default);
+  display: flex; flex-direction: column;
+  z-index: 49;
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.35);
+}
+.pge-app.with-scope { padding-bottom: calc(var(--scope-h, 200px) + var(--terminal-h, 0px)); }
+.pge-app.with-scope.with-terminal { padding-bottom: calc(var(--scope-h, 200px) + var(--terminal-h, 220px)); }
+.pge-app.with-scope .pge-footer { bottom: var(--scope-h, 200px); }
+.pge-app.with-scope.with-terminal .pge-terminal { bottom: var(--scope-h, 200px); }
+
+.pge-scope .sc-resize {
+  position: absolute;
+  top: -3px; left: 0; right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 2;
+  background: transparent;
+  touch-action: none;
+}
+.pge-scope .sc-resize:focus { outline: none; }
+.pge-scope .sc-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 36px; height: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--fg-4);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.pge-scope .sc-resize:hover::after,
+.pge-scope .sc-resize:focus-visible::after,
+.pge-scope.is-resizing .sc-resize::after { opacity: 0.7; }
+.pge-scope.is-resizing .sc-resize::after { background: var(--accent); opacity: 1; }
+.pge-scope.is-resizing { user-select: none; }
+body.pge-resizing-scope,
+body.pge-resizing-scope * { cursor: ns-resize !important; user-select: none !important; }
+
+.pge-scope .sc-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: #111;
+  flex-shrink: 0;
+}
+.pge-scope .sc-title { font-size: 10px; color: #555; font-family: var(--mono, monospace); }
+.pge-scope .sc-btn {
+  appearance: none; background: transparent; border: 0;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #444; cursor: pointer; border-radius: 2px;
+}
+.pge-scope .sc-btn:hover { color: #aaa; background: rgba(255,255,255,0.05); }
+
+.pge-scope .sc-canvas {
+  flex: 1;
+  display: block;
+  width: 100%;
+  min-height: 0;
+}
+
 /* ---------- Toasts ---------- */
 .pge-toasts {
   position: fixed;
