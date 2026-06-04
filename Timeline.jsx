@@ -636,27 +636,60 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
                const x = e.clientX - rect.left;
                const y = e.clientY - rect.top;
                if (y <= 12) {
+                 const hasRegion = loopRegion && loopRegion.end > loopRegion.start;
+                 const leftPx = hasRegion ? loopRegion.start * PX_PER_S : -Infinity;
+                 const rightPx = hasRegion ? loopRegion.end * PX_PER_S : -Infinity;
                  e.currentTarget.setPointerCapture(e.pointerId);
-                 const startT = Math.max(0, x / PX_PER_S);
-                 loopDragRef.current = { startT };
-                 onLoopRegionChange && onLoopRegionChange({ start: startT, end: startT });
+                 if (hasRegion && Math.abs(x - leftPx) <= 6) {
+                   loopDragRef.current = { mode: 'resize', fixedT: loopRegion.end };
+                 } else if (hasRegion && Math.abs(x - rightPx) <= 6) {
+                   loopDragRef.current = { mode: 'resize', fixedT: loopRegion.start };
+                 } else {
+                   const startT = Math.max(0, x / PX_PER_S);
+                   loopDragRef.current = { mode: 'new', startT };
+                   onLoopRegionChange && onLoopRegionChange({ start: startT, end: startT });
+                 }
                } else {
                  window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x / PX_PER_S) }));
                }
              }}
              onPointerMove={(e) => {
-               if (!loopDragRef.current) return;
                const rect = e.currentTarget.getBoundingClientRect();
-               const t = Math.max(0, (e.clientX - rect.left) / PX_PER_S);
-               const { startT } = loopDragRef.current;
-               onLoopRegionChange && onLoopRegionChange(
-                 t >= startT ? { start: startT, end: t } : { start: t, end: startT }
-               );
+               const x = e.clientX - rect.left;
+               const y = e.clientY - rect.top;
+               if (!loopDragRef.current) {
+                 // Cursor hint when hovering near loop region edges
+                 const hasRegion = loopRegion && loopRegion.end > loopRegion.start;
+                 if (y <= 12 && hasRegion) {
+                   const lx = loopRegion.start * PX_PER_S;
+                   const rx = loopRegion.end * PX_PER_S;
+                   e.currentTarget.style.cursor = (Math.abs(x - lx) <= 6 || Math.abs(x - rx) <= 6)
+                     ? 'ew-resize' : 'col-resize';
+                 } else {
+                   e.currentTarget.style.cursor = '';
+                 }
+                 return;
+               }
+               const t = Math.max(0, x / PX_PER_S);
+               const { mode, startT, fixedT } = loopDragRef.current;
+               if (mode === 'resize') {
+                 onLoopRegionChange && onLoopRegionChange(
+                   t <= fixedT ? { start: t, end: fixedT } : { start: fixedT, end: t }
+                 );
+               } else {
+                 onLoopRegionChange && onLoopRegionChange(
+                   t >= startT ? { start: startT, end: t } : { start: t, end: startT }
+                 );
+               }
              }}
              onPointerUp={(e) => {
                if (!loopDragRef.current) return;
                e.currentTarget.releasePointerCapture(e.pointerId);
+               e.currentTarget.style.cursor = '';
                loopDragRef.current = null;
+             }}
+             onPointerLeave={(e) => {
+               if (!loopDragRef.current) e.currentTarget.style.cursor = '';
              }}>
           {ticks.map((t) =>
           <React.Fragment key={t.s}>
