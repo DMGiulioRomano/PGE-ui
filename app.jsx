@@ -46,7 +46,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "shortcutToggleLabels": "h",
   "shortcutToggleSpectrogram": "t",
   "stepMenuTrigger": "rightClick",
-  "outputFormat": "wav"
+  "outputFormat": "wav",
+  "scopeOpen": false,
+  "scopeHeight": 200,
+  "shortcutScope": "v"
 }/*EDITMODE-END*/;
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize feature) ---- */
@@ -332,6 +335,7 @@ function App() {
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
+  const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
     running: false, total: 0, done: 0, currentStreamId: null, streamProgress: 0,
@@ -687,6 +691,7 @@ function App() {
       if (terminalOpen && matchShortcut(e, tweaks.shortcutStop || "c")) { e.preventDefault(); setLogLines([]); return; }
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
+      if (matchShortcut(e, tweaks.shortcutScope || "v")) { e.preventDefault(); const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); return; }
       if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
       if (matchShortcut(e, tweaks.shortcutToggleSpectrogram || "t")) { e.preventDefault(); setTweak("showSpectrograms", !tweaks.showSpectrograms); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
@@ -1242,7 +1247,7 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browser = (
@@ -1303,7 +1308,7 @@ function App() {
   ) : null;
 
   return (
-    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "")}>
+    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "") + (scopeOpen ? " with-scope" : "")}>
       <TopBar project={data.project} title={data.title} dirty={dirty}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
@@ -1320,6 +1325,8 @@ function App() {
               terminalOpen={terminalOpen}
               onToggleTerminal={() => { const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); }}
               terminalDotState={terminalDotState}
+              scopeOpen={scopeOpen}
+              onToggleScope={() => { const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); }}
               playReadiness={playReadiness} />
       <div className={"pge-main split"}>
         {browserOpen ? (
@@ -1349,6 +1356,10 @@ function App() {
                 height={tweaks.terminalHeight || 220}
                 onHeightChange={(h) => setTweak("terminalHeight", h)}
                 status={renderStatus} />
+      <Stereoscope open={scopeOpen}
+                   height={tweaks.scopeHeight || 200}
+                   onHeightChange={(h) => setTweak("scopeHeight", h)}
+                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
