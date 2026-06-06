@@ -60,16 +60,17 @@ function buildLines(stream, sampleRec) {
 
   if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null)) {
     const pu = stream.pitch.unit || "semitones";
+    const _safeNum = (n) => typeof n === "number" ? fmtNum(n) : fmtNum(0);
     push({ ind: 0, kind: "block", key: "pitch" });
     if (pu === "edo") {
       push({ ind: 1, kind: "v", key: "edo", val: String(stream.pitch.edoDivisions || 12) });
       if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: "value", val: envInline(stream.pitch.valueEnv) });
-      else push({ ind: 1, kind: "v", key: "value", val: fmtNum(stream.pitch.value) });
+      else push({ ind: 1, kind: "v", key: "value", val: _safeNum(stream.pitch.value) });
     } else {
       if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: pu, val: envInline(stream.pitch.valueEnv) });
-      else push({ ind: 1, kind: "v", key: pu, val: fmtNum(stream.pitch.value) });
+      else push({ ind: 1, kind: "v", key: pu, val: _safeNum(stream.pitch.value) });
     }
-    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: fmtNum(stream.pitch.range) });
+    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
