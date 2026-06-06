@@ -58,10 +58,17 @@ function buildLines(stream, sampleRec) {
   if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
   push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
 
-  if (stream.pitch.semitonesEnv || stream.pitch.semitones != null) {
+  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null)) {
+    const pu = stream.pitch.unit || "semitones";
     push({ ind: 0, kind: "block", key: "pitch" });
-    if (stream.pitch.semitonesEnv) push({ ind: 1, kind: "raw", key: "semitones", val: envInline(stream.pitch.semitonesEnv) });
-    else push({ ind: 1, kind: "v", key: "semitones", val: fmtNum(stream.pitch.semitones) });
+    if (pu === "edo") {
+      push({ ind: 1, kind: "v", key: "edo", val: String(stream.pitch.edoDivisions || 12) });
+      if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: "value", val: envInline(stream.pitch.valueEnv) });
+      else push({ ind: 1, kind: "v", key: "value", val: fmtNum(stream.pitch.value) });
+    } else {
+      if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: pu, val: envInline(stream.pitch.valueEnv) });
+      else push({ ind: 1, kind: "v", key: pu, val: fmtNum(stream.pitch.value) });
+    }
     if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: fmtNum(stream.pitch.range) });
   }
 
@@ -179,8 +186,18 @@ function parseYaml(text) {
       } else if (key === "duration_range") out.grain.durationRange = parsed;
       else if (key === "envelope") out.grain.envelope = typeof parsed === "string" ? parsed.replace(/^['"]|['"]$/g, "") : parsed;
     } else if (section === "pitch") {
-      if (key === "semitones") out.pitch.semitones = parsed;
-      else if (key === "range") out.pitch.range = parsed;
+      const UNITS = ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"];
+      if (UNITS.includes(key)) {
+        out.pitch.unit = key;
+        if (Array.isArray(parsed)) { out.pitch.value = null; out.pitch.valueEnv = parsed; }
+        else { out.pitch.value = parsed; out.pitch.valueEnv = null; }
+      } else if (key === "edo") {
+        out.pitch.unit = "edo";
+        out.pitch.edoDivisions = parsed;
+      } else if (key === "value") {
+        if (Array.isArray(parsed)) { out.pitch.value = null; out.pitch.valueEnv = parsed; }
+        else { out.pitch.value = parsed; out.pitch.valueEnv = null; }
+      } else if (key === "range") out.pitch.range = parsed;
     } else {
       // top-level
       if (key === "stream_id") out.patch.id = String(parsed).replace(/^['"]|['"]$/g, "");

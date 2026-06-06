@@ -45,10 +45,18 @@ function listEnvelopes(stream) {
       path: ["volumeEnv"], unit: "dB",
       visMin: -40, visMax: 0, hardMin: -120, hardMax: 12 });
   }
-  if (stream.pitch && stream.pitch.semitonesEnv) {
-    list.push({ key: "pitch", label: "semitones", group: "Pitch",
-      path: ["pitch", "semitonesEnv"], unit: "st",
-      visMin: -12, visMax: 12, hardMin: -36, hardMax: 36 });
+  if (stream.pitch && stream.pitch.valueEnv) {
+    const pu = stream.pitch.unit || "semitones";
+    const puLabel = pu === "ratio" ? "ratio" : pu;
+    const puUnit  = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
+    const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, -3600, 3600]
+      : pu === "quarter_tone" ? [-12, 12, -72, 72]
+      : pu === "eighth_tone" ? [-24, 24, -144, 144]
+      : pu === "ratio"       ? [0.5, 2, 0.0625, 16]
+      : [-12, 12, -36, 36];
+    list.push({ key: "pitch", label: puLabel, group: "Pitch",
+      path: ["pitch", "valueEnv"], unit: puUnit,
+      visMin: pvMin, visMax: pvMax, hardMin: phMin, hardMax: phMax });
   }
   if (stream.voices && stream.voices.numEnv) {
     list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
@@ -64,9 +72,9 @@ function listEnvelopes(stream) {
     list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
       path: ["voices", "pitch", "stepEnv"], unit: "st",
       visMin: -12, visMax: 12, hardMin: -48, hardMax: 48 });
-  if (stream.voices && stream.voices.pitch && stream.voices.pitch.semitone_rangeEnv)
-    list.push({ key: "voicesPitchRange", label: "pitch · semitone_range", group: "Voices",
-      path: ["voices", "pitch", "semitone_rangeEnv"], unit: "st",
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.pitch_rangeEnv)
+    list.push({ key: "voicesPitchRange", label: "pitch · pitch_range", group: "Voices",
+      path: ["voices", "pitch", "pitch_rangeEnv"], unit: "",
       visMin: 0, visMax: 24, hardMin: 0, hardMax: 96 });
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
     list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
