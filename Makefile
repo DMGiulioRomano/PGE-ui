@@ -9,7 +9,7 @@ ROOT     ?= ../PythonGranularEngine
 VENV     := .venv
 VENV_BIN := $(VENV)/bin
 
-.PHONY: help serve install dev-clean
+.PHONY: help serve install dev-clean tests tests-node tests-python
 
 help:
 	@echo " PGE-ui · targets"
@@ -31,6 +31,18 @@ install: $(VENV_BIN)/pip
 
 serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) --port $(PORT)
+
+.PHONY: tests tests-node tests-python
+
+tests: tests-node tests-python
+	@echo ""
+	@echo "All tests passed."
+
+tests-node:
+	cd tests/node && npm install --silent && node test-yaml-bridge.js
+
+tests-python:
+	$(VENV_BIN)/python -m pytest tests/python/ -v
 
 dev-clean:
 	@echo "Reset the editor's cached stem index: open devtools and run"

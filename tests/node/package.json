@@ -1,0 +1,7 @@
+{
+  "name": "pge-ui-tests",
+  "private": true,
+  "dependencies": {
+    "js-yaml": "^4"
+  }
+}
