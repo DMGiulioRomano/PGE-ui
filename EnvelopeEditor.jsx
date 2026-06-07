@@ -68,14 +68,20 @@ function listEnvelopes(stream) {
       path: ["voices", "scatterEnv"], unit: "",
       visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
   }
-  if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv)
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv) {
+    const vpu = (stream.voices.pitch || {}).unit;
     list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
-      path: ["voices", "pitch", "stepEnv"], unit: "st",
+      path: ["voices", "pitch", "stepEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+      integer: window.PGEEnv.pitchUnitIsInteger(vpu),
       visMin: -12, visMax: 12, hardMin: -48, hardMax: 48 });
-  if (stream.voices && stream.voices.pitch && stream.voices.pitch.pitch_rangeEnv)
+  }
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.pitch_rangeEnv) {
+    const vpu = (stream.voices.pitch || {}).unit;
     list.push({ key: "voicesPitchRange", label: "pitch · pitch_range", group: "Voices",
-      path: ["voices", "pitch", "pitch_rangeEnv"], unit: "",
+      path: ["voices", "pitch", "pitch_rangeEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+      integer: window.PGEEnv.pitchUnitIsInteger(vpu),
       visMin: 0, visMax: 24, hardMin: 0, hardMax: 96 });
+  }
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
     list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
       path: ["voices", "onset_offset", "stepEnv"], unit: "s",
@@ -586,7 +592,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function valOfY(yPx) {return ymin + (1 - (yPx - PAD_T) / innerH) * (ymax - ymin);}
 
   const xPrec = 4;
-  const yPrec = env.unit === "s" ? 4 : 2;
+  const yPrec = env.integer ? 0 : (env.unit === "s" ? 4 : 2);
   const xMin = 0,xMax = 1;
 
   /* time grid */
