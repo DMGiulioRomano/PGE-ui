@@ -193,7 +193,22 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                     function setUnit(u) {
                       const edoN = isEdo ? curUnit.edo : 12;
                       const newUnit = u === "edo" ? { edo: edoN } : u;
-                      updateDim("pitch", { unit: newUnit });
+                      const E = window.PGEEnv;
+                      const p = v.pitch || {};
+                      const fromEdo = isEdo ? curUnit.edo : 12;
+                      const toEdo = u === "edo" ? edoN : 12;
+                      const patch = { unit: newUnit };
+                      // convert scalars + envelope breakpoints for both pitch params
+                      ["step", "pitch_range"].forEach(key => {
+                        if (p[key] != null) {
+                          patch[key] = E.convertPitchValue(p[key], curUnit, newUnit, fromEdo, toEdo);
+                        }
+                        const envKey = key + "Env";
+                        if (Array.isArray(p[envKey])) {
+                          patch[envKey] = E.convertPitchEnv(p[envKey], curUnit, newUnit, fromEdo, toEdo);
+                        }
+                      });
+                      updateDim("pitch", patch);
                     }
                     return (
                       <>
@@ -235,7 +250,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
               <VoiceStratParamRow name="step"
                 value={(v.pitch||{}).step} valueEnv={(v.pitch||{}).stepEnv}
                 unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
-                onValue={x => updateDim("pitch", { step: x })}
+                onValue={x => updateDim("pitch", { step: window.PGEEnv.pitchUnitIsInteger((v.pitch||{}).unit) ? Math.round(x) : x })}
                 onMode={m => toggleStratParam(v, "pitch", "step", 3.0, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchStep") : undefined} />
             ) : null}
@@ -243,7 +258,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
               <VoiceStratParamRow name="pitch_range"
                 value={(v.pitch||{}).pitch_range} valueEnv={(v.pitch||{}).pitch_rangeEnv}
                 unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
-                onValue={x => updateDim("pitch", { pitch_range: x })}
+                onValue={x => updateDim("pitch", { pitch_range: window.PGEEnv.pitchUnitIsInteger((v.pitch||{}).unit) ? Math.round(x) : x })}
                 onMode={m => toggleStratParam(v, "pitch", "pitch_range", 12.0, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchRange") : undefined} />
             ) : null}
@@ -269,7 +284,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                 <VoiceStratParamRow name="pitch_range"
                   value={(v.pitch||{}).pitch_range} valueEnv={(v.pitch||{}).pitch_rangeEnv}
                   unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
-                  onValue={x => updateDim("pitch", { pitch_range: x })}
+                  onValue={x => updateDim("pitch", { pitch_range: window.PGEEnv.pitchUnitIsInteger((v.pitch||{}).unit) ? Math.round(x) : x })}
                   onMode={m => toggleStratParam(v, "pitch", "pitch_range", 0.5, m, onChange)}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchRange") : undefined} />
                 <div className="voice-meta">seed = hash(stream_id + voice_idx) · direction cached</div>
