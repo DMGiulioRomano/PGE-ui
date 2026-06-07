@@ -242,7 +242,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
             {strat === "range" ? (
               <VoiceStratParamRow name="pitch_range"
                 value={(v.pitch||{}).pitch_range} valueEnv={(v.pitch||{}).pitch_rangeEnv}
-                unit=""
+                unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
                 onValue={x => updateDim("pitch", { pitch_range: x })}
                 onMode={m => toggleStratParam(v, "pitch", "pitch_range", 12.0, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchRange") : undefined} />
@@ -268,7 +268,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
               <>
                 <VoiceStratParamRow name="pitch_range"
                   value={(v.pitch||{}).pitch_range} valueEnv={(v.pitch||{}).pitch_rangeEnv}
-                  unit=""
+                  unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
                   onValue={x => updateDim("pitch", { pitch_range: x })}
                   onMode={m => toggleStratParam(v, "pitch", "pitch_range", 0.5, m, onChange)}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchRange") : undefined} />
