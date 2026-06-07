@@ -125,8 +125,16 @@ function buildLines(stream, sampleRec) {
           push({ ind: 2, kind: "raw", key: k, val: envInline(envVal) });
         } else {
           if (val == null) continue;
-          push({ ind: 2, kind: typeof val === "string" ? "r" : "v", key: k,
-                 val: typeof val === "number" ? fmtNum(val) : String(val) });
+          if (typeof val === "number") {
+            push({ ind: 2, kind: "v", key: k, val: fmtNum(val) });
+          } else if (typeof val === "string") {
+            push({ ind: 2, kind: "r", key: k, val });
+          } else if (typeof val === "object") {
+            push({ ind: 2, kind: "r", key: k,
+                   val: window.jsyaml.dump(val, { flowLevel: 0, lineWidth: -1 }).trim() });
+          } else {
+            push({ ind: 2, kind: "v", key: k, val: String(val) });
+          }
         }
       }
     }
