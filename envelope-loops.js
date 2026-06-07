@@ -392,14 +392,26 @@
     else out = +out.toFixed(4);
     return out;
   }
-  // remap envelope breakpoints [[x, y], …] — only y (the pitch value) is
-  // rescaled; x (the time axis) is untouched
+  // remap envelope y-values (the pitch value) into the new unit; x (time) is
+  // untouched. Handles all three voices env shapes: plain breakpoint array,
+  // typed `{type, points}`, and compact loop blocks (nested breakpoints).
   function convertPitchEnv(env, fromUnit, toUnit, fromEdoDiv, toEdoDiv) {
+    const conv = y => convertPitchValue(y, fromUnit, toUnit, fromEdoDiv, toEdoDiv);
+    function mapItem(item) {
+      if (isCompactBlock(item)) {
+        // [ [[x,y],…], end_time, n_reps, interp_in, interp_out ]
+        return [item[0].map(mapItem), ...item.slice(1)];
+      }
+      if (isBreakpoint(item)) {
+        return [item[0], conv(item[1]), ...item.slice(2)];
+      }
+      return item;
+    }
+    if (isTypedEnv(env)) {
+      return { ...env, points: env.points.map(mapItem) };
+    }
     if (!Array.isArray(env)) return env;
-    return env.map(bp =>
-      (Array.isArray(bp) && bp.length >= 2)
-        ? [bp[0], convertPitchValue(bp[1], fromUnit, toUnit, fromEdoDiv, toEdoDiv), ...bp.slice(2)]
-        : bp);
+    return env.map(mapItem);
   }
 
   window.PGEEnv = {
