@@ -736,7 +736,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               const isEdo = pu === "edo";
               const edoN = isEdo ? (pi.edoDivisions || 12) : null;
               const unitLabel = pu;
-              const unitSymbol = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu === "quarter_tone" ? "qt" : pu === "eighth_tone" ? "et" : isEdo ? `°/${edoN}` : "st";
+              const unitSymbol = window.PGEEnv.pitchUnitSymbol(pu, edoN);
               const [slMin, slMax] = pu === "cents" ? [-3600, 3600]
                 : pu === "quarter_tone" ? [-72, 72]
                 : pu === "eighth_tone" ? [-144, 144]

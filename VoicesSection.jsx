@@ -234,7 +234,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
             {strat === "step" ? (
               <VoiceStratParamRow name="step"
                 value={(v.pitch||{}).step} valueEnv={(v.pitch||{}).stepEnv}
-                unit="st"
+                unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
                 onValue={x => updateDim("pitch", { step: x })}
                 onMode={m => toggleStratParam(v, "pitch", "step", 3.0, m, onChange)}
                 onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchStep") : undefined} />
