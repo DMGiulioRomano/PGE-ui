@@ -326,6 +326,21 @@
     ];
   }
 
+  function pitchUnitSymbol(unit, edoDivisions) {
+    if (unit && typeof unit === "object" && unit.edo != null) {
+      return "°/" + unit.edo;
+    }
+    switch (unit) {
+      case "ratio":        return "×";
+      case "cents":        return "¢";
+      case "quarter_tone": return "qt";
+      case "eighth_tone":  return "et";
+      case "edo":          return "°/" + (edoDivisions || 12);
+      case "semitones":    return "st";
+      default:             return "st";
+    }
+  }
+
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
     isBreakpoint, isCompactBlock, envHasLoop,
@@ -333,5 +348,6 @@
     computeCycleDurations, expandMixed,
     fmtEnvInline, fmtCompact, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
+    pitchUnitSymbol,
   };
 })();
