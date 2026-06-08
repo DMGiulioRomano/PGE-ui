@@ -266,7 +266,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
   const samplePickerTrigger = React.useRef(null);
+  const ibodyRef = React.useRef(null);
+  const ibodyScrollTop = React.useRef(0);
   const focusEnv = onFocusEnvParam ? (key) => () => onFocusEnvParam(key) : () => undefined;
+
+  React.useEffect(() => {
+    if (tab === "preview") {
+      if (ibodyRef.current) ibodyRef.current.scrollTop = ibodyScrollTop.current;
+    } else {
+      if (ibodyRef.current) ibodyScrollTop.current = ibodyRef.current.scrollTop;
+    }
+  }, [tab]);
 
   // Empty state — inspector opened via shortcut with no stream selected.
   // Keep the panel chrome so the layout doesn't jump, but show a hint.
@@ -497,7 +507,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             <Switch value={stream.solo} onChange={v => onChange({solo: v})} label="solo" />
             <Switch value={stream.mute} onChange={v => onChange({mute: v})} label="mute" />
           </div>
-          <div className="ibody">
+          <div className="ibody" ref={ibodyRef}>
 
             <Section title="Essentials"
                      badge={sampleDur ? <span className="mono">{sampleDur.toFixed(3)} s</span> :
