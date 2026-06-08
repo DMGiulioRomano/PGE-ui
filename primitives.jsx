@@ -70,7 +70,7 @@ function Switch({ value, onChange, label }) {
 }
 
 /* ---------- Numeric field ---------- */
-function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
+function NumberField({ value, unit, width = 96, onChange, accent, focus, steps }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
   const [stepMenu, setStepMenu] = useState(null);
@@ -81,7 +81,7 @@ function NumberField({ value, unit, width = 96, onChange, accent, focus }) {
   const valueRef = useRef(value);
   const lastYRef = useRef(null);
   const accPxRef = useRef(0);
-  const STEPS = [0.01, 0.1, 1, 10];
+  const STEPS = Array.isArray(steps) && steps.length ? steps : [0.01, 0.1, 1, 10];
   const PX_PER_STEP = 3;
 
   useEffect(() => { setDraft(String(value)); valueRef.current = value; }, [value]);
@@ -231,7 +231,7 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
 }
 
 /* ---------- Parameter Row ---------- */
-function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, right }) {
+function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, right, steps }) {
   // Build polyline points from envValue (array of [x, y] OR mixed with compact blocks).
   // For loops, expand via PGEEnv to the actual point sequence.
   let pts = "0,12 25,9 50,4 75,7 100,11";
@@ -264,7 +264,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
       <span />}
       {mode === "scalar" || !envValue ?
       <span className="v">
-          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
+          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} steps={steps} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
           {range ? <span className="range">±{range}</span> : null}
         </span> :
 

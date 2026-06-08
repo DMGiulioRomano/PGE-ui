@@ -737,6 +737,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               const edoN = isEdo ? (pi.edoDivisions || 12) : null;
               const unitLabel = pu;
               const unitSymbol = window.PGEEnv.pitchUnitSymbol(pu, edoN);
+              const pitchSteps = window.PGEEnv.pitchUnitIsInteger(pu) ? [1, 10, 100] : [0.1, 1, 10];
               const [slMin, slMax] = pu === "cents" ? [-3600, 3600]
                 : pu === "quarter_tone" ? [-72, 72]
                 : pu === "eighth_tone" ? [-144, 144]
@@ -800,9 +801,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             envValue={pi.valueEnv}
                             onEditEnv={focusEnv("pitch")}
                             onSelect={() => setSelRow("pitch.value")} selected={selRow==="pitch.value"}
+                            steps={pitchSteps}
                             onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
                   <ParamRow name="range" mode="scalar" value={pi.range != null ? pi.range : 0}
-                            unit={unitSymbol}
+                            unit={unitSymbol} steps={pitchSteps}
                             onValue={(v) => onChange({pitch: {...pi, range: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
                 </Section>
               );
