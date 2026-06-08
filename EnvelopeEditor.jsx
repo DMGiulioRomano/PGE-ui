@@ -1,6 +1,22 @@
 /* @jsx React.createElement */
 const { useState: useStateEE, useEffect: useEffectEE, useRef: useRefEE, useMemo: useMemoEE } = React;
 
+/* Derive env-editor bounds for a voices pitch param from a semitone baseline,
+   scaled into the actual unit so cents/edo don't clip the axis. `signed` →
+   symmetric ±range (step); otherwise 0..range (pitch_range). */
+function pitchEnvBounds(unit, semis, signed) {
+  const E = window.PGEEnv;
+  const toU = st => {
+    const v = E.semitonesToPitch(st, unit);
+    return E.pitchUnitIsInteger(unit) ? Math.round(v) : +v.toFixed(4);
+  };
+  const vis = toU(semis.vis);
+  const hard = toU(semis.hard);
+  return signed
+    ? { visMin: -vis, visMax: vis, hardMin: -hard, hardMax: hard }
+    : { visMin: 0,    visMax: vis, hardMin: 0,     hardMax: hard };
+}
+
 /* ---------- Envelope catalog ---------- */
 function listEnvelopes(stream) {
   if (!stream) return [];
@@ -70,17 +86,19 @@ function listEnvelopes(stream) {
   }
   if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv) {
     const vpu = (stream.voices.pitch || {}).unit;
+    const b = pitchEnvBounds(vpu, { vis: 12, hard: 48 }, true);
     list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
       path: ["voices", "pitch", "stepEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
       integer: window.PGEEnv.pitchUnitIsInteger(vpu),
-      visMin: -12, visMax: 12, hardMin: -48, hardMax: 48 });
+      visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
   }
   if (stream.voices && stream.voices.pitch && stream.voices.pitch.pitch_rangeEnv) {
     const vpu = (stream.voices.pitch || {}).unit;
+    const b = pitchEnvBounds(vpu, { vis: 24, hard: 96 }, false);
     list.push({ key: "voicesPitchRange", label: "pitch · pitch_range", group: "Voices",
       path: ["voices", "pitch", "pitch_rangeEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
       integer: window.PGEEnv.pitchUnitIsInteger(vpu),
-      visMin: 0, visMax: 24, hardMin: 0, hardMax: 96 });
+      visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
   }
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
     list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
