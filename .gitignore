@@ -3,3 +3,4 @@ screenshots/
 __pycache__
 .vscode/
 .venv/
+.DS_Store
