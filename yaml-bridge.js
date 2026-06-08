@@ -341,7 +341,7 @@
       distribution:    dist.scalar,
       distributionEnv: dist.env,
 
-      ...(() => { const v = unpackValueOrEnv(y.volume ?? -6); return { volume: v.scalar, volumeEnv: v.env }; })(),
+      ...(() => { const v = unpackValueOrEnv(y.volume ?? 0); return { volume: v.scalar, volumeEnv: v.env }; })(),
       volumeRange: y.volume_range || 0,
       pan:    pan.scalar,
       panEnv: pan.env,

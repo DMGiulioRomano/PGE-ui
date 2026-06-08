@@ -882,7 +882,7 @@ function App() {
         mute: false, solo: false,
         timeMode: "normalized", distributionMode: "uniform",
         density: 8, distribution: 0,
-        volume: -6, volumeRange: 0,
+        volume: 0, volumeRange: 0,
         pan: 0, panRange: 0,
         grain: { duration: 0.05, durationRange: 0, envelope: "hanning" },
         pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null },

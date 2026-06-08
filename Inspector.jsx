@@ -322,7 +322,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: -6 };
+    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
       distribution: { sk: "distribution",ek: "distributionEnv" },
