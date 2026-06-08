@@ -1,6 +1,22 @@
 /* @jsx React.createElement */
 const { useState: useStateEE, useEffect: useEffectEE, useRef: useRefEE, useMemo: useMemoEE } = React;
 
+/* Derive env-editor bounds for a voices pitch param from a semitone baseline,
+   scaled into the actual unit so cents/edo don't clip the axis. `signed` →
+   symmetric ±range (step); otherwise 0..range (pitch_range). */
+function pitchEnvBounds(unit, semis, signed) {
+  const E = window.PGEEnv;
+  const toU = st => {
+    const v = E.semitonesToPitch(st, unit);
+    return E.pitchUnitIsInteger(unit) ? Math.round(v) : +v.toFixed(4);
+  };
+  const vis = toU(semis.vis);
+  const hard = toU(semis.hard);
+  return signed
+    ? { visMin: -vis, visMax: vis, hardMin: -hard, hardMax: hard }
+    : { visMin: 0,    visMax: vis, hardMin: 0,     hardMax: hard };
+}
+
 /* ---------- Envelope catalog ---------- */
 function listEnvelopes(stream) {
   if (!stream) return [];
@@ -45,10 +61,19 @@ function listEnvelopes(stream) {
       path: ["volumeEnv"], unit: "dB",
       visMin: -40, visMax: 0, hardMin: -120, hardMax: 12 });
   }
-  if (stream.pitch && stream.pitch.semitonesEnv) {
-    list.push({ key: "pitch", label: "semitones", group: "Pitch",
-      path: ["pitch", "semitonesEnv"], unit: "st",
-      visMin: -12, visMax: 12, hardMin: -36, hardMax: 36 });
+  if (stream.pitch && stream.pitch.valueEnv) {
+    const pu = stream.pitch.unit || "semitones";
+    const puLabel = pu === "ratio" ? "ratio" : pu;
+    const puUnit  = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
+    const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, -3600, 3600]
+      : pu === "quarter_tone" ? [-12, 12, -72, 72]
+      : pu === "eighth_tone" ? [-24, 24, -144, 144]
+      : pu === "ratio"       ? [0.5, 2, 0.0625, 16]
+      : [-12, 12, -36, 36];
+    list.push({ key: "pitch", label: puLabel, group: "Pitch",
+      path: ["pitch", "valueEnv"], unit: puUnit,
+      integer: window.PGEEnv.pitchUnitIsInteger(pu),
+      visMin: pvMin, visMax: pvMax, hardMin: phMin, hardMax: phMax });
   }
   if (stream.voices && stream.voices.numEnv) {
     list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
@@ -60,14 +85,22 @@ function listEnvelopes(stream) {
       path: ["voices", "scatterEnv"], unit: "",
       visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
   }
-  if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv)
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv) {
+    const vpu = (stream.voices.pitch || {}).unit;
+    const b = pitchEnvBounds(vpu, { vis: 12, hard: 48 }, true);
     list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
-      path: ["voices", "pitch", "stepEnv"], unit: "st",
-      visMin: -12, visMax: 12, hardMin: -48, hardMax: 48 });
-  if (stream.voices && stream.voices.pitch && stream.voices.pitch.semitone_rangeEnv)
-    list.push({ key: "voicesPitchRange", label: "pitch · semitone_range", group: "Voices",
-      path: ["voices", "pitch", "semitone_rangeEnv"], unit: "st",
-      visMin: 0, visMax: 24, hardMin: 0, hardMax: 96 });
+      path: ["voices", "pitch", "stepEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+      integer: window.PGEEnv.pitchUnitIsInteger(vpu),
+      visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
+  }
+  if (stream.voices && stream.voices.pitch && stream.voices.pitch.pitch_rangeEnv) {
+    const vpu = (stream.voices.pitch || {}).unit;
+    const b = pitchEnvBounds(vpu, { vis: 24, hard: 96 }, false);
+    list.push({ key: "voicesPitchRange", label: "pitch · pitch_range", group: "Voices",
+      path: ["voices", "pitch", "pitch_rangeEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+      integer: window.PGEEnv.pitchUnitIsInteger(vpu),
+      visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
+  }
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
     list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
       path: ["voices", "onset_offset", "stepEnv"], unit: "s",
@@ -578,7 +611,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function valOfY(yPx) {return ymin + (1 - (yPx - PAD_T) / innerH) * (ymax - ymin);}
 
   const xPrec = 4;
-  const yPrec = env.unit === "s" ? 4 : 2;
+  const yPrec = env.integer ? 0 : (env.unit === "s" ? 4 : 2);
   const xMin = 0,xMax = 1;
 
   /* time grid */

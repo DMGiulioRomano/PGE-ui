@@ -58,11 +58,19 @@ function buildLines(stream, sampleRec) {
   if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
   push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
 
-  if (stream.pitch.semitonesEnv || stream.pitch.semitones != null) {
+  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null)) {
+    const pu = stream.pitch.unit || "semitones";
+    const _safeNum = (n) => typeof n === "number" ? fmtNum(n) : fmtNum(0);
     push({ ind: 0, kind: "block", key: "pitch" });
-    if (stream.pitch.semitonesEnv) push({ ind: 1, kind: "raw", key: "semitones", val: envInline(stream.pitch.semitonesEnv) });
-    else push({ ind: 1, kind: "v", key: "semitones", val: fmtNum(stream.pitch.semitones) });
-    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: fmtNum(stream.pitch.range) });
+    if (pu === "edo") {
+      push({ ind: 1, kind: "v", key: "edo", val: String(stream.pitch.edoDivisions || 12) });
+      if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: "value", val: envInline(stream.pitch.valueEnv) });
+      else push({ ind: 1, kind: "v", key: "value", val: _safeNum(stream.pitch.value) });
+    } else {
+      if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: pu, val: envInline(stream.pitch.valueEnv) });
+      else push({ ind: 1, kind: "v", key: pu, val: _safeNum(stream.pitch.value) });
+    }
+    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
@@ -117,8 +125,16 @@ function buildLines(stream, sampleRec) {
           push({ ind: 2, kind: "raw", key: k, val: envInline(envVal) });
         } else {
           if (val == null) continue;
-          push({ ind: 2, kind: typeof val === "string" ? "r" : "v", key: k,
-                 val: typeof val === "number" ? fmtNum(val) : String(val) });
+          if (typeof val === "number") {
+            push({ ind: 2, kind: "v", key: k, val: fmtNum(val) });
+          } else if (typeof val === "string") {
+            push({ ind: 2, kind: "r", key: k, val });
+          } else if (typeof val === "object") {
+            push({ ind: 2, kind: "r", key: k,
+                   val: window.jsyaml.dump(val, { flowLevel: 0, lineWidth: -1 }).trim() });
+          } else {
+            push({ ind: 2, kind: "v", key: k, val: String(val) });
+          }
         }
       }
     }
@@ -179,8 +195,18 @@ function parseYaml(text) {
       } else if (key === "duration_range") out.grain.durationRange = parsed;
       else if (key === "envelope") out.grain.envelope = typeof parsed === "string" ? parsed.replace(/^['"]|['"]$/g, "") : parsed;
     } else if (section === "pitch") {
-      if (key === "semitones") out.pitch.semitones = parsed;
-      else if (key === "range") out.pitch.range = parsed;
+      const UNITS = ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"];
+      if (UNITS.includes(key)) {
+        out.pitch.unit = key;
+        if (Array.isArray(parsed)) { out.pitch.value = null; out.pitch.valueEnv = parsed; }
+        else { out.pitch.value = parsed; out.pitch.valueEnv = null; }
+      } else if (key === "edo") {
+        out.pitch.unit = "edo";
+        out.pitch.edoDivisions = parsed;
+      } else if (key === "value") {
+        if (Array.isArray(parsed)) { out.pitch.value = null; out.pitch.valueEnv = parsed; }
+        else { out.pitch.value = parsed; out.pitch.valueEnv = null; }
+      } else if (key === "range") out.pitch.range = parsed;
     } else {
       // top-level
       if (key === "stream_id") out.patch.id = String(parsed).replace(/^['"]|['"]$/g, "");

@@ -120,7 +120,7 @@
     return { scalar: yamlVal, env: null };
   }
 
-  const VOICE_STRAT_ENV_PARAMS = ["step", "semitone_range", "max_offset", "base", "pointer_range", "spread"];
+  const VOICE_STRAT_ENV_PARAMS = ["step", "pitch_range", "max_offset", "base", "pointer_range", "spread"];
 
   function unpackStrategy(raw) {
     if (!raw || typeof raw !== "object") return raw;
@@ -215,13 +215,26 @@
       y.pointer = stripUndef(ptrY);
     }
 
-    const pi = s.pitch || {};
-    const pitchSemi = pickValueOrEnv(pi.semitones, pi.semitonesEnv);
-    if (pitchSemi !== undefined || nonZero(pi.range)) {
-      y.pitch = stripUndef({
-        semitones: pitchSemi !== undefined ? pitchSemi : undefined,
-        range:     nonZero(pi.range) ? pi.range : undefined,
-      });
+    const pi = s.pitch;
+    if (pi && typeof pi === "object") {
+      const unit = pi.unit || "semitones";
+      const pitchVal = pickValueOrEnv(pi.value, pi.valueEnv);
+      const hasValue = pitchVal !== undefined;
+      const hasRange = nonZero(pi.range);
+      if (hasValue || hasRange) {
+        if (unit === "edo") {
+          y.pitch = stripUndef({
+            edo:   pi.edoDivisions ?? undefined,
+            value: pitchVal,
+            range: hasRange ? pi.range : undefined,
+          });
+        } else {
+          y.pitch = stripUndef({
+            [unit]: pitchVal,
+            range:  hasRange ? pi.range : undefined,
+          });
+        }
+      }
     }
 
     const pan = pickValueOrEnv(s.pan, s.panEnv);
@@ -348,8 +361,19 @@
         ...(() => { const ld = unpackValueOrEnv(ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
       },
       pitch: (() => {
-        const ps = unpackValueOrEnv(y.pitch?.semitones ?? 0);
-        return { semitones: ps.scalar, semitonesEnv: ps.env, range: y.pitch?.range || 0 };
+        const p = y.pitch;
+        if (!p || typeof p !== "object") return null;
+        const UNITS = ["semitones", "cents", "quarter_tone", "eighth_tone", "edo", "ratio"];
+        const unit = UNITS.find(u => u in p) || "semitones";
+        const rawVal = unit === "edo" ? p.value : p[unit];
+        const { scalar, env } = unpackValueOrEnv(rawVal ?? null);
+        return {
+          unit,
+          value:        scalar,
+          valueEnv:     env,
+          edoDivisions: unit === "edo" ? (p.edo ?? null) : null,
+          range:        p.range ?? null,
+        };
       })(),
       voices: (() => {
         const nv = unpackValueOrEnv(y.voices?.num_voices);

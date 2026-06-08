@@ -326,6 +326,94 @@
     ];
   }
 
+  function pitchUnitSymbol(unit, edoDivisions) {
+    if (unit && typeof unit === "object" && unit.edo != null) {
+      return "°/" + unit.edo;
+    }
+    switch (unit) {
+      case "ratio":        return "×";
+      case "cents":        return "¢";
+      case "quarter_tone": return "qt";
+      case "eighth_tone":  return "et";
+      case "edo":          return "°/" + (edoDivisions || 12);
+      case "semitones":    return "st";
+      default:             return "st";
+    }
+  }
+
+  // ---- pitch unit conversion (shared Inspector + Voices) ----
+  // edo unit may be the string "edo" (Inspector, divisions in a separate
+  // field) or the object { edo: N } (Voices). Normalize to { kind, edo }.
+  function normalizePitchUnit(unit, edoDivisions) {
+    if (unit && typeof unit === "object" && unit.edo != null) {
+      return { kind: "edo", edo: unit.edo };
+    }
+    if (unit === "edo") return { kind: "edo", edo: edoDivisions || 12 };
+    return { kind: unit || "semitones", edo: null };
+  }
+  // value in given unit → equivalent in semitones
+  function pitchToSemitones(value, unit, edoDivisions) {
+    const u = normalizePitchUnit(unit, edoDivisions);
+    switch (u.kind) {
+      case "semitones":    return value;
+      case "cents":        return value / 100;
+      case "quarter_tone": return value / 2;
+      case "eighth_tone":  return value / 4;
+      case "ratio":        return 12 * Math.log2(value);
+      case "edo":          return value * 12 / (u.edo || 12);
+      default:             return value;
+    }
+  }
+  // semitones → value in target unit
+  function semitonesToPitch(st, unit, edoDivisions) {
+    const u = normalizePitchUnit(unit, edoDivisions);
+    switch (u.kind) {
+      case "semitones":    return st;
+      case "cents":        return st * 100;
+      case "quarter_tone": return st * 2;
+      case "eighth_tone":  return st * 4;
+      case "ratio":        return Math.pow(2, st / 12);
+      case "edo":          return st * (u.edo || 12) / 12;
+      default:             return st;
+    }
+  }
+  // true when the unit only admits integer values (everything but ratio)
+  function pitchUnitIsInteger(unit) {
+    const u = normalizePitchUnit(unit);
+    return u.kind !== "ratio";
+  }
+  // convert a single scalar between two pitch units, applying the integer
+  // rule of the destination unit
+  function convertPitchValue(value, fromUnit, toUnit, fromEdoDiv, toEdoDiv) {
+    if (value == null) return value;
+    const st = pitchToSemitones(value, fromUnit, fromEdoDiv);
+    let out = semitonesToPitch(st, toUnit, toEdoDiv);
+    if (pitchUnitIsInteger(toUnit)) out = Math.round(out);
+    else out = +out.toFixed(4);
+    return out;
+  }
+  // remap envelope y-values (the pitch value) into the new unit; x (time) is
+  // untouched. Handles all three voices env shapes: plain breakpoint array,
+  // typed `{type, points}`, and compact loop blocks (nested breakpoints).
+  function convertPitchEnv(env, fromUnit, toUnit, fromEdoDiv, toEdoDiv) {
+    const conv = y => convertPitchValue(y, fromUnit, toUnit, fromEdoDiv, toEdoDiv);
+    function mapItem(item) {
+      if (isCompactBlock(item)) {
+        // [ [[x,y],…], end_time, n_reps, interp_in, interp_out ]
+        return [item[0].map(mapItem), ...item.slice(1)];
+      }
+      if (isBreakpoint(item)) {
+        return [item[0], conv(item[1]), ...item.slice(2)];
+      }
+      return item;
+    }
+    if (isTypedEnv(env)) {
+      return { ...env, points: env.points.map(mapItem) };
+    }
+    if (!Array.isArray(env)) return env;
+    return env.map(mapItem);
+  }
+
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
     isBreakpoint, isCompactBlock, envHasLoop,
@@ -333,5 +421,8 @@
     computeCycleDurations, expandMixed,
     fmtEnvInline, fmtCompact, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
+    pitchUnitSymbol,
+    normalizePitchUnit, pitchToSemitones, semitonesToPitch,
+    pitchUnitIsInteger, convertPitchValue, convertPitchEnv,
   };
 })();

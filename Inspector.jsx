@@ -312,7 +312,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "grainDur" && stream.grain && stream.grain.durationEnv) return "env";
     if (k === "pan" && stream.panEnv) return "env";
     if (k === "volume" && stream.volumeEnv) return "env";
-    if (k === "pitch" && stream.pitch && stream.pitch.semitonesEnv) return "env";
+    if (k === "pitch" && stream.pitch && stream.pitch.valueEnv) return "env";
     if (k === "voicesNum" && stream.voices && stream.voices.numEnv) return "env";
     if (k === "scatter" && stream.voices && stream.voices.scatterEnv) return "env";
     return fallback || "scalar";
@@ -376,11 +376,11 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "pitch") {
       const cur = stream.pitch || {};
       if (newMode === "env") {
-        const v = cur.semitones != null ? cur.semitones : 0;
-        onChange({ pitch: { ...cur, semitones: null, semitonesEnv: [[0, v], [1, v]] } });
+        const v = cur.value != null ? cur.value : (cur.unit === "ratio" ? 1.0 : 0);
+        onChange({ pitch: { ...cur, value: null, valueEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.semitonesEnv && cur.semitonesEnv[0] && cur.semitonesEnv[0][1]) || 0;
-        onChange({ pitch: { ...cur, semitones: v, semitonesEnv: null } });
+        const v = (cur.valueEnv && cur.valueEnv[0] && cur.valueEnv[0][1]);
+        onChange({ pitch: { ...cur, value: v != null ? v : (cur.unit === "ratio" ? 1.0 : 0), valueEnv: null } });
       }
       return;
     }
@@ -730,48 +730,85 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
             </Section>
 
-            <Section title="Pitch"
-                     badge={stream.pitch.ratio != null && stream.pitch.semitones == null
-                            ? <span className="mono">ratio</span>
-                            : <span className="mono">semitones</span>}>
-              <div className="pge-prow">
-                <span className="k">unit</span>
-                <span />
-                <span className="v">
-                  <Seg size="xs"
-                       value={stream.pitch.ratio != null && stream.pitch.semitones == null ? "ratio" : "semitones"}
-                       onChange={(u) => {
-                         if (u === "semitones") {
-                           const semi = stream.pitch.ratio != null ? Math.round(12 * Math.log2(stream.pitch.ratio)) : 0;
-                           onChange({ pitch: { ...stream.pitch, semitones: semi, ratio: null } });
-                         } else {
-                           const r = stream.pitch.semitones != null ? +Math.pow(2, stream.pitch.semitones / 12).toFixed(4) : 1.0;
-                           onChange({ pitch: { ...stream.pitch, ratio: r, semitones: null } });
-                         }
-                       }}
-                       options={[{label:"semitones",value:"semitones"},{label:"ratio",value:"ratio"}]} />
-                </span>
-                <span />
-              </div>
-              {stream.pitch.ratio != null && stream.pitch.semitones == null ? (
-                <ParamRow name="ratio" mode="scalar" value={stream.pitch.ratio} unit="×" range={stream.pitch.range}
-                  onSelect={() => setSelRow("pitch.ratio")} selected={selRow==="pitch.ratio"}
-                  onValue={(v) => onChange({pitch: {...stream.pitch, ratio: v}})} />
-              ) : (
-                <ParamRow name="semitones"
-                          mode={getMode("pitch")} onMode={(m) => toggleMode("pitch", m)}
-                          value={stream.pitch.semitones != null ? stream.pitch.semitones : "—"} unit={stream.pitch.semitonesEnv ? "" : "st"}
-                          range={stream.pitch.range}
-                          accent={stream.pitch.semitonesEnv != null}
-                          envValue={stream.pitch.semitonesEnv}
-                          onEditEnv={focusEnv("pitch")}
-                          onSelect={() => setSelRow("pitch.semi")} selected={selRow==="pitch.semi"}
-                          onValue={(v) => onChange({pitch: {...stream.pitch, semitones: v}})} />
-              )}
-              <ParamRow name="range" mode="scalar" value={stream.pitch.range != null ? stream.pitch.range : 0}
-                        unit={stream.pitch.ratio != null && stream.pitch.semitones == null ? "" : "st"}
-                        onValue={(v) => onChange({pitch: {...stream.pitch, range: v}})} />
-            </Section>
+            {(() => {
+              const pi = stream.pitch || {};
+              const pu = pi.unit || "semitones";
+              const isEdo = pu === "edo";
+              const edoN = isEdo ? (pi.edoDivisions || 12) : null;
+              const unitLabel = pu;
+              const unitSymbol = window.PGEEnv.pitchUnitSymbol(pu, edoN);
+              const pitchSteps = window.PGEEnv.pitchUnitIsInteger(pu) ? [1, 10, 100] : [0.1, 1, 10];
+              const [slMin, slMax] = pu === "cents" ? [-3600, 3600]
+                : pu === "quarter_tone" ? [-72, 72]
+                : pu === "eighth_tone" ? [-144, 144]
+                : pu === "ratio" ? [0.25, 4]
+                : isEdo ? [-(3 * edoN), 3 * edoN]
+                : [-48, 48];
+              function setPitchUnit(newU) {
+                if (newU === pu) return;
+                const E = window.PGEEnv;
+                const isNewEdo = newU === "edo";
+                const newEDivs = isNewEdo ? (pi.edoDivisions || 12) : null;
+                const fromDiv = edoN;            // current edo divisions (null if not edo)
+                const toDiv = isNewEdo ? newEDivs : null;
+                const patch = { ...pi, unit: newU, edoDivisions: newEDivs };
+                if (pi.valueEnv) {
+                  // keep env mode, remap breakpoints into the new unit
+                  patch.valueEnv = E.convertPitchEnv(pi.valueEnv, pu, newU, fromDiv, toDiv);
+                } else {
+                  const curVal = pi.value ?? (pu === "ratio" ? 1.0 : 0);
+                  patch.value = E.convertPitchValue(curVal, pu, newU, fromDiv, toDiv);
+                  patch.valueEnv = null;
+                }
+                onChange({ pitch: patch });
+              }
+              return (
+                <Section title="Pitch" badge={<span className="mono">{unitLabel}</span>}>
+                  <div className="pge-prow">
+                    <span className="k">unit</span>
+                    <span />
+                    <span className="v">
+                      <select className="pge-mini-select" value={pu}
+                              onChange={e => setPitchUnit(e.target.value)}>
+                        <option value="semitones">semitones</option>
+                        <option value="cents">cents</option>
+                        <option value="quarter_tone">quarter_tone</option>
+                        <option value="eighth_tone">eighth_tone</option>
+                        <option value="edo">edo (N-TET)</option>
+                        <option value="ratio">ratio</option>
+                      </select>
+                    </span>
+                    <span />
+                  </div>
+                  {isEdo ? (
+                    <div className="pge-prow">
+                      <span className="k">divisions</span>
+                      <span />
+                      <span className="v">
+                        <input type="number" className="pge-mini-input" min={1} step={1} value={edoN}
+                               onChange={e => onChange({ pitch: { ...pi, edoDivisions: Math.max(1, Math.round(+e.target.value || 12)), unit: "edo" } })} />
+                        <span className="hint">divisions/octave</span>
+                      </span>
+                      <span />
+                    </div>
+                  ) : null}
+                  <ParamRow name={pu}
+                            mode={getMode("pitch")} onMode={(m) => toggleMode("pitch", m)}
+                            value={pi.value != null ? pi.value : "—"}
+                            unit={pi.valueEnv ? "" : unitSymbol}
+                            range={pi.range}
+                            accent={pi.valueEnv != null}
+                            envValue={pi.valueEnv}
+                            onEditEnv={focusEnv("pitch")}
+                            onSelect={() => setSelRow("pitch.value")} selected={selRow==="pitch.value"}
+                            steps={pitchSteps}
+                            onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
+                  <ParamRow name="range" mode="scalar" value={pi.range != null ? pi.range : 0}
+                            unit={unitSymbol} steps={pitchSteps}
+                            onValue={(v) => onChange({pitch: {...pi, range: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
+                </Section>
+              );
+            })()}
 
             <Section title="Volume & Pan">
               <ParamRow name="volume"
