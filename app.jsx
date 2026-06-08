@@ -301,7 +301,7 @@ function App() {
       else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); }
       else if (k === "s" && !e.shiftKey) { e.preventDefault(); onSave(); }
       else if (k === "s" && e.shiftKey)  { e.preventDefault(); onSaveAs(); }
-      else if (k === "c" && selectedIds.length > 0) { e.preventDefault(); copySelectedStreams(); }
+      else if (k === "c" && selectedIds.length > 0 && !window.getSelection()?.toString()) { e.preventDefault(); copySelectedStreams(); }
       else if (k === "v" && clipboardRef.current.length > 0) { e.preventDefault(); pasteStreams(); }
     }
     window.addEventListener("keydown", onKey);

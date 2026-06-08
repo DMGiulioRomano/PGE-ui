@@ -395,6 +395,22 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
 
 }
 
+let _envClipboard = null;
+
+function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
+  const range = srcMax - srcMin;
+  function remap(y) {
+    const t = range === 0 ? 0.5 : (y - srcMin) / range;
+    return Math.max(dstMin, Math.min(dstMax, dstMin + t * (dstMax - dstMin)));
+  }
+  const PGEEnv = window.PGEEnv;
+  return items.map(it => {
+    if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
+    if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
+    return it;
+  });
+}
+
 function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey }) {
   const { Icon } = window.PGE;
   const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
@@ -411,6 +427,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
+  const [envClipboard, setEnvClipboard] = useStateEE(_envClipboard);
 
   /* undo/redo handled globally (TopBar + ⌘Z) — gestures bracket via window.PGEHistory */
 
@@ -575,6 +592,21 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
      so that hook call count stays stable across renders. */
   const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
   useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
+
+  function handleCopyEnv() {
+    const clip = { sourceStreamId: stream.id, sourceParam: env.key,
+                   srcHardMin: env.hardMin, srcHardMax: env.hardMax,
+                   rawEnv: JSON.parse(JSON.stringify(rawEnvRaw)) };
+    _envClipboard = clip;
+    setEnvClipboard(clip);
+  }
+
+  function handlePasteEnv() {
+    if (!envClipboard) return;
+    const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
+    const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
+    onChange(patchForPath(stream, env.path, window.PGEEnv.wrapEnv(remapped, interp)));
+  }
 
   /* ============ Empty states ============ */
   if (!stream) {
@@ -1444,6 +1476,17 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         <span className="ee-sub mono">{stream.sample}</span>
         <span className="ee-time-mode mono">normalized · x ∈ [0,1]{isNormalized ? "" : " · maps to clip onset → end"}</span>
         <span style={{ flex: 1 }} />
+        <button className="ee-undo" onClick={handleCopyEnv}
+                title={`Copia envelope: ${env.key} (${stream.id})`}>
+          <Icon name="copy" size={12} />
+        </button>
+        <button className="ee-undo" onClick={handlePasteEnv}
+                disabled={!envClipboard}
+                title={envClipboard
+                  ? `Incolla da: ${envClipboard.sourceParam} (${envClipboard.sourceStreamId})`
+                  : "Nessun envelope copiato"}>
+          <Icon name="clipboard" size={12} />
+        </button>
         {!hasLoop ?
         <label className="ee-loop-fld" title="global interpolation for this envelope's breakpoints">
             <span className="ee-loop-lbl">interp</span>
