@@ -265,7 +265,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
       {mode === "scalar" || !envValue ?
       <span className="v">
           {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} steps={steps} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
-          {range ? <span className="range">±{range}</span> : null}
+          {range ? <span className="range">±{typeof range === "number" ? (range / 2) : range}</span> : null}
         </span> :
 
       <span className="v env" onClick={onEditEnv}>

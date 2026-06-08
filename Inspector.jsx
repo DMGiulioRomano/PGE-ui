@@ -138,7 +138,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                      }}
                      options={[{label:"scalar",value:"scalar"},{label:"env",value:"env"}]} />
                 {isEnv ? (
-                  <span className="v env">
+                  <span className="v env" onClick={onFocusEnvParam ? () => onFocusEnvParam("dephase_" + p.key) : undefined} style={onFocusEnvParam ? {cursor:"pointer"} : undefined}>
                     <span className="env-mini"><svg viewBox="0 0 100 16" preserveAspectRatio="none"><polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={val.map((q,i) => `${(q[0]/(val[val.length-1][0]||1)*100).toFixed(1)},${(14 - q[1]/100*12).toFixed(1)}`).join(" ")} /></svg></span>
                     <span className="env-label">{val.length} bp</span>
                   </span>
@@ -315,6 +315,11 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "pitch" && stream.pitch && stream.pitch.valueEnv) return "env";
     if (k === "voicesNum" && stream.voices && stream.voices.numEnv) return "env";
     if (k === "scatter" && stream.voices && stream.voices.scatterEnv) return "env";
+    if (k === "panRange"      && stream.panRangeEnv)                              return "env";
+    if (k === "volumeRange"   && stream.volumeRangeEnv)                           return "env";
+    if (k === "pitchRange"    && stream.pitch && stream.pitch.rangeEnv)           return "env";
+    if (k === "durationRange" && stream.grain && stream.grain.durationRangeEnv)   return "env";
+    if (k === "offsetRange"   && stream.pointer && stream.pointer.offsetRangeEnv) return "env";
     return fallback || "scalar";
   };
 
@@ -403,6 +408,59 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
       } else {
         const v = (cur.scatterEnv && cur.scatterEnv[0] && cur.scatterEnv[0][1]) || 0;
         onChange({ voices: { ...cur, scatter: v, scatterEnv: null } });
+      }
+      return;
+    }
+    if (k === "panRange") {
+      if (newMode === "env") {
+        const v = stream.panRange != null ? stream.panRange : 0;
+        onChange({ panRange: null, panRangeEnv: [[0, v], [1, v]] });
+      } else {
+        const v = (stream.panRangeEnv && stream.panRangeEnv[0] && stream.panRangeEnv[0][1]) || 0;
+        onChange({ panRange: v, panRangeEnv: null });
+      }
+      return;
+    }
+    if (k === "volumeRange") {
+      if (newMode === "env") {
+        const v = stream.volumeRange != null ? stream.volumeRange : 0;
+        onChange({ volumeRange: null, volumeRangeEnv: [[0, v], [1, v]] });
+      } else {
+        const v = (stream.volumeRangeEnv && stream.volumeRangeEnv[0] && stream.volumeRangeEnv[0][1]) || 0;
+        onChange({ volumeRange: v, volumeRangeEnv: null });
+      }
+      return;
+    }
+    if (k === "pitchRange") {
+      const cur = stream.pitch || {};
+      if (newMode === "env") {
+        const v = cur.range != null ? cur.range : 0;
+        onChange({ pitch: { ...cur, range: null, rangeEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.rangeEnv && cur.rangeEnv[0] && cur.rangeEnv[0][1]) || 0;
+        onChange({ pitch: { ...cur, range: v, rangeEnv: null } });
+      }
+      return;
+    }
+    if (k === "durationRange") {
+      const cur = stream.grain || {};
+      if (newMode === "env") {
+        const v = cur.durationRange != null ? cur.durationRange : 0;
+        onChange({ grain: { ...cur, durationRange: null, durationRangeEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.durationRangeEnv && cur.durationRangeEnv[0] && cur.durationRangeEnv[0][1]) || 0;
+        onChange({ grain: { ...cur, durationRange: v, durationRangeEnv: null } });
+      }
+      return;
+    }
+    if (k === "offsetRange") {
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = cur.offsetRange != null ? cur.offsetRange : 0;
+        onChange({ pointer: { ...cur, offsetRange: null, offsetRangeEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.offsetRangeEnv && cur.offsetRangeEnv[0] && cur.offsetRangeEnv[0][1]) || 0;
+        onChange({ pointer: { ...cur, offsetRange: v, offsetRangeEnv: null } });
       }
       return;
     }
@@ -659,15 +717,19 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               ) : (
                 <div className="pge-prow"><span className="k" style={{color:"var(--fg-3)"}}>loop</span><span /><span className="v" style={{color:"var(--fg-3)"}}>—</span><span /></div>
               )}
-              {stream.pointer.offsetRange != null ? (
-                <div className="pge-prow">
-                  <span className="k">offset_range</span><span />
-                  <span className="v"><NumberField value={stream.pointer.offsetRange} width={70} /></span>
-                  <button className="pge-icon-btn" title="Remove"
-                          onClick={() => { const np = { ...stream.pointer }; delete np.offsetRange; onChange({ pointer: np }); }}>
-                    <Icon name="x" size={11} />
-                  </button>
-                </div>
+              {(stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null) ? (
+                <ParamRow name="offset_range"
+                          mode={getMode("offsetRange")} onMode={(m) => toggleMode("offsetRange", m)}
+                          value={stream.pointer.offsetRange != null ? stream.pointer.offsetRange : 0}
+                          unit={stream.pointer.offsetRangeEnv ? "" : ""}
+                          accent={stream.pointer.offsetRangeEnv != null}
+                          envValue={stream.pointer.offsetRangeEnv}
+                          onEditEnv={focusEnv("offsetRange")}
+                          onValue={(v) => onChange({ pointer: { ...stream.pointer, offsetRange: v } })}
+                          right={<button className="pge-icon-btn" title="Remove"
+                            onClick={() => { const np = { ...stream.pointer }; delete np.offsetRange; delete np.offsetRangeEnv; onChange({ pointer: np }); }}>
+                            <Icon name="x" size={11} />
+                          </button>} />
               ) : null}
               <AddParamMenu
                 options={[
@@ -680,7 +742,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
                     exists: stream.pointer.loopUnit != null, def: "normalized" },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1]",
-                    exists: stream.pointer.offsetRange != null, def: 0.01 },
+                    exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
                 ]}
                 onAdd={(o) => {
                   const np = { ...stream.pointer, [o.key]: o.def };
@@ -700,12 +762,21 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         mode={getMode("grainDur")} onMode={(m) => toggleMode("grainDur", m)}
                         value={stream.grain.duration != null ? stream.grain.duration : "—"}
                         unit={stream.grain.durationEnv ? "" : "s"}
-                        range={stream.grain.durationRange}
+                        range={stream.grain.durationRange != null && !stream.grain.durationRangeEnv ? stream.grain.durationRange : undefined}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
                         onEditEnv={focusEnv("grainDur")}
                         onSelect={() => setSelRow("grain.dur")} selected={selRow==="grain.dur"}
                         onValue={(v) => onChange({grain: {...stream.grain, duration: v}})} />
+              {(stream.grain.durationRange != null || stream.grain.durationRangeEnv != null) ? (
+                <ParamRow name="duration_range"
+                          mode={getMode("durationRange")} onMode={(m) => toggleMode("durationRange", m)}
+                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : "s"}
+                          accent={stream.grain.durationRangeEnv != null}
+                          envValue={stream.grain.durationRangeEnv}
+                          onEditEnv={focusEnv("durationRange")}
+                          onValue={(v) => onChange({grain: {...stream.grain, durationRange: v}})} />
+              ) : null}
               <window.PGE.EnvelopeSelectorRow
                 value={stream.grain.envelope}
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}
@@ -724,7 +795,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               ) : null}
               <AddParamMenu
                 options={[
-                  { key: "durationRange", label: "duration_range", desc: "± randomization on grain duration", exists: stream.grain.durationRange != null, def: 0.01 },
+                  { key: "durationRange", label: "duration_range", desc: "± randomization on grain duration", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
                   { key: "reverse",       label: "reverse",        desc: "force reverse (key present, value empty)", exists: stream.grain.reverse !== undefined, def: null },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
@@ -803,8 +874,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             onSelect={() => setSelRow("pitch.value")} selected={selRow==="pitch.value"}
                             steps={pitchSteps}
                             onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
-                  <ParamRow name="range" mode="scalar" value={pi.range != null ? pi.range : 0}
-                            unit={unitSymbol} steps={pitchSteps}
+                  <ParamRow name="range"
+                            mode={getMode("pitchRange")} onMode={(m) => toggleMode("pitchRange", m)}
+                            value={pi.range != null ? pi.range : 0}
+                            unit={pi.rangeEnv ? "" : unitSymbol} steps={pitchSteps}
+                            accent={pi.rangeEnv != null}
+                            envValue={pi.rangeEnv}
+                            onEditEnv={focusEnv("pitchRange")}
                             onValue={(v) => onChange({pitch: {...pi, range: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
                 </Section>
               );
@@ -820,8 +896,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         onEditEnv={focusEnv("volume")}
                         onSelect={() => setSelRow("vol")} selected={selRow==="vol"}
                         onValue={(v) => onChange({volume: v})} />
-              <ParamRow name="volume_range" mode="scalar" value={stream.volumeRange != null ? stream.volumeRange : 0} unit="dB"
-                onValue={(v) => onChange({volumeRange: v})} />
+              <ParamRow name="volume_range"
+                        mode={getMode("volumeRange")} onMode={(m) => toggleMode("volumeRange", m)}
+                        value={stream.volumeRange != null ? stream.volumeRange : 0} unit={stream.volumeRangeEnv ? "" : "dB"}
+                        accent={stream.volumeRangeEnv != null}
+                        envValue={stream.volumeRangeEnv}
+                        onEditEnv={focusEnv("volumeRange")}
+                        onValue={(v) => onChange({volumeRange: v})} />
               <ParamRow name="pan"
                         mode={getMode("pan")} onMode={(m) => toggleMode("pan", m)}
                         value={stream.pan != null ? stream.pan : "—"} unit={stream.panEnv ? "" : "°"}
@@ -831,8 +912,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         onEditEnv={focusEnv("pan")}
                         onSelect={() => setSelRow("pan")} selected={selRow==="pan"}
                         onValue={(v) => onChange({pan: v})} />
-              <ParamRow name="pan_range" mode="scalar" value={stream.panRange != null ? stream.panRange : 0} unit="°"
-                onValue={(v) => onChange({panRange: v})} />
+              <ParamRow name="pan_range"
+                        mode={getMode("panRange")} onMode={(m) => toggleMode("panRange", m)}
+                        value={stream.panRange != null ? stream.panRange : 0} unit={stream.panRangeEnv ? "" : "°"}
+                        accent={stream.panRangeEnv != null}
+                        envValue={stream.panRangeEnv}
+                        onEditEnv={focusEnv("panRange")}
+                        onValue={(v) => onChange({panRange: v})} />
             </Section>
 
             <DephaseSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} />

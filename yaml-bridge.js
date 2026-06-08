@@ -196,7 +196,7 @@
     const grainDur = pickValueOrEnv(grain.duration, grain.durationEnv);
     const grainY = {
       duration:       grainDur,
-      duration_range: nonZero(grain.durationRange) ? grain.durationRange : undefined,
+      duration_range: (() => { const dr = pickValueOrEnv(grain.durationRange, grain.durationRangeEnv); return (dr !== undefined && dr !== 0) ? dr : undefined; })(),
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
     if (Object.values(grainY).some(v => v !== undefined)) {
@@ -205,11 +205,13 @@
 
     const ptr = s.pointer || {};
     const ptrSp = pickValueOrEnv(ptr.speedRatio, ptr.speedRatioEnv);
+    const ptrOffRange = pickValueOrEnv(ptr.offsetRange, ptr.offsetRangeEnv);
     const ptrY = {
       start:         ptr.start ?? undefined,
       speed_ratio:   ptrSp,
       loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
       loop_duration: pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
+      offset_range:  ptrOffRange !== undefined && ptrOffRange !== 0 ? ptrOffRange : undefined,
     };
     if (Object.values(ptrY).some(v => v !== undefined)) {
       y.pointer = stripUndef(ptrY);
@@ -220,18 +222,19 @@
       const unit = pi.unit || "semitones";
       const pitchVal = pickValueOrEnv(pi.value, pi.valueEnv);
       const hasValue = pitchVal !== undefined;
-      const hasRange = nonZero(pi.range);
+      const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
+      const hasRange = rangeVal !== undefined && rangeVal !== 0;
       if (hasValue || hasRange) {
         if (unit === "edo") {
           y.pitch = stripUndef({
             edo:   pi.edoDivisions ?? undefined,
             value: pitchVal,
-            range: hasRange ? pi.range : undefined,
+            range: hasRange ? rangeVal : undefined,
           });
         } else {
           y.pitch = stripUndef({
             [unit]: pitchVal,
-            range:  hasRange ? pi.range : undefined,
+            range:  hasRange ? rangeVal : undefined,
           });
         }
       }
@@ -239,11 +242,13 @@
 
     const pan = pickValueOrEnv(s.pan, s.panEnv);
     if (pan !== undefined) y.pan = pan;
-    if (nonZero(s.panRange)) y.pan_range = s.panRange;
+    const panRange = pickValueOrEnv(s.panRange, s.panRangeEnv);
+    if (panRange !== undefined && panRange !== 0) y.pan_range = panRange;
 
     const vol = pickValueOrEnv(s.volume, s.volumeEnv);
     if (vol !== undefined) y.volume = vol;
-    if (nonZero(s.volumeRange)) y.volume_range = s.volumeRange;
+    const volRange = pickValueOrEnv(s.volumeRange, s.volumeRangeEnv);
+    if (volRange !== undefined && volRange !== 0) y.volume_range = volRange;
 
     const v = s.voices || {};
     const numOut = pickValueOrEnv(v.num, v.numEnv);
@@ -342,15 +347,15 @@
       distributionEnv: dist.env,
 
       ...(() => { const v = unpackValueOrEnv(y.volume ?? 0); return { volume: v.scalar, volumeEnv: v.env }; })(),
-      volumeRange: y.volume_range || 0,
+      ...(() => { const vr = unpackValueOrEnv(y.volume_range ?? 0); return { volumeRange: vr.scalar, volumeRangeEnv: vr.env }; })(),
       pan:    pan.scalar,
       panEnv: pan.env,
-      panRange: y.pan_range || 0,
+      ...(() => { const pr = unpackValueOrEnv(y.pan_range ?? 0); return { panRange: pr.scalar, panRangeEnv: pr.env }; })(),
 
       grain: {
         duration:      grDur.scalar,
         durationEnv:   grDur.env,
-        durationRange: grain.duration_range || 0,
+        ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? 0); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),
         envelope:      parseGrainEnvelope(grain.envelope) || "hanning",
       },
       pointer: {
@@ -359,6 +364,7 @@
         speedRatioEnv: ptrSp.env,
         ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),
         ...(() => { const ld = unpackValueOrEnv(ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
+        ...(() => { const or = unpackValueOrEnv(ptr.offset_range ?? null); return or.scalar != null || or.env ? { offsetRange: or.scalar, offsetRangeEnv: or.env } : {}; })(),
       },
       pitch: (() => {
         const p = y.pitch;
@@ -372,7 +378,7 @@
           value:        scalar,
           valueEnv:     env,
           edoDivisions: unit === "edo" ? (p.edo ?? null) : null,
-          range:        p.range ?? null,
+          ...(() => { const rr = unpackValueOrEnv(p.range ?? null); return { range: rr.scalar, rangeEnv: rr.env }; })(),
         };
       })(),
       voices: (() => {
