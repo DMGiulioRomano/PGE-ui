@@ -744,18 +744,22 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 : isEdo ? [-(3 * edoN), 3 * edoN]
                 : [-48, 48];
               function setPitchUnit(newU) {
+                if (newU === pu) return;
+                const E = window.PGEEnv;
                 const isNewEdo = newU === "edo";
-                const curVal = pi.value ?? (pu === "ratio" ? 1.0 : 0);
-                let converted = curVal;
-                if (!isNewEdo && newU !== pu) {
-                  if (pu === "semitones" && newU === "cents") converted = curVal * 100;
-                  else if (pu === "cents" && newU === "semitones") converted = curVal / 100;
-                  else if (pu === "ratio" && newU === "semitones") converted = Math.round(12 * Math.log2(curVal));
-                  else if (pu === "semitones" && newU === "ratio") converted = +Math.pow(2, curVal / 12).toFixed(4);
-                }
-                if (isNewEdo) converted = 0;
                 const newEDivs = isNewEdo ? (pi.edoDivisions || 12) : null;
-                onChange({ pitch: { ...pi, unit: newU, value: converted, valueEnv: null, edoDivisions: newEDivs } });
+                const fromDiv = edoN;            // current edo divisions (null if not edo)
+                const toDiv = isNewEdo ? newEDivs : null;
+                const patch = { ...pi, unit: newU, edoDivisions: newEDivs };
+                if (pi.valueEnv) {
+                  // keep env mode, remap breakpoints into the new unit
+                  patch.valueEnv = E.convertPitchEnv(pi.valueEnv, pu, newU, fromDiv, toDiv);
+                } else {
+                  const curVal = pi.value ?? (pu === "ratio" ? 1.0 : 0);
+                  patch.value = E.convertPitchValue(curVal, pu, newU, fromDiv, toDiv);
+                  patch.valueEnv = null;
+                }
+                onChange({ pitch: patch });
               }
               return (
                 <Section title="Pitch" badge={<span className="mono">{unitLabel}</span>}>
@@ -796,10 +800,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             envValue={pi.valueEnv}
                             onEditEnv={focusEnv("pitch")}
                             onSelect={() => setSelRow("pitch.value")} selected={selRow==="pitch.value"}
-                            onValue={(v) => onChange({pitch: {...pi, value: v}})} />
+                            onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
                   <ParamRow name="range" mode="scalar" value={pi.range != null ? pi.range : 0}
                             unit={unitSymbol}
-                            onValue={(v) => onChange({pitch: {...pi, range: v}})} />
+                            onValue={(v) => onChange({pitch: {...pi, range: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
                 </Section>
               );
             })()}
