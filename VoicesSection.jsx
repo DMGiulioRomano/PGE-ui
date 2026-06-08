@@ -31,7 +31,7 @@ const STRATEGY_DEFAULTS = {
     step:       { step: 3.0 },
     range:      { pitch_range: 12.0 },
     chord:      { chord: "dom7", inversion: 0 },
-    stochastic: { pitch_range: 0.5 },
+    stochastic: { pitch_range: 12.0 },
     spectral:   { max_partial: 16 },
   },
   onset_offset: {
@@ -285,7 +285,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                   value={(v.pitch||{}).pitch_range} valueEnv={(v.pitch||{}).pitch_rangeEnv}
                   unit={window.PGEEnv.pitchUnitSymbol((v.pitch||{}).unit || "semitones")}
                   onValue={x => updateDim("pitch", { pitch_range: window.PGEEnv.pitchUnitIsInteger((v.pitch||{}).unit) ? Math.round(x) : x })}
-                  onMode={m => toggleStratParam(v, "pitch", "pitch_range", 0.5, m, onChange)}
+                  onMode={m => toggleStratParam(v, "pitch", "pitch_range", 12.0, m, onChange)}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPitchRange") : undefined} />
                 <div className="voice-meta">seed = hash(stream_id + voice_idx) · direction cached</div>
               </>
