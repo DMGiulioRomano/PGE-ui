@@ -72,6 +72,7 @@ function listEnvelopes(stream) {
       : [-12, 12, -36, 36];
     list.push({ key: "pitch", label: puLabel, group: "Pitch",
       path: ["pitch", "valueEnv"], unit: puUnit,
+      integer: window.PGEEnv.pitchUnitIsInteger(pu),
       visMin: pvMin, visMax: pvMax, hardMin: phMin, hardMax: phMax });
   }
   if (stream.voices && stream.voices.numEnv) {
