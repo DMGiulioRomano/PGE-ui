@@ -77,7 +77,7 @@ function buildLines(stream, sampleRec) {
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
-    warn: stream.panEnv.some(p => Math.abs(p[1]) > 90) ? "pan values exceed conventional range [−90, 90]" : null });
+    warn: stream.panEnv.some(p => Math.abs(p[1]) > 3600) ? "pan values exceed conventional range [−3600, 3600]" : null });
   else if (stream.pan != null) push({ ind: 0, kind: "v", key: "pan", val: fmtNum(stream.pan) });
   if (stream.panRangeEnv) push({ ind: 0, kind: "raw", key: "pan_range", val: envInline(stream.panRangeEnv) });
   else if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
