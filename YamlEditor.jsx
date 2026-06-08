@@ -50,12 +50,14 @@ function buildLines(stream, sampleRec) {
     }
     if (stream.pointer.loopUnit) push({ ind: 1, kind: "r", key: "loop_unit", val: stream.pointer.loopUnit });
   }
-  if (stream.pointer.offsetRange != null) push({ ind: 1, kind: "v", key: "offset_range", val: fmtNum(stream.pointer.offsetRange) });
+  if (stream.pointer.offsetRangeEnv) push({ ind: 1, kind: "raw", key: "offset_range", val: envInline(stream.pointer.offsetRangeEnv) });
+  else if (stream.pointer.offsetRange != null) push({ ind: 1, kind: "v", key: "offset_range", val: fmtNum(stream.pointer.offsetRange) });
 
   push({ ind: 0, kind: "block", key: "grain" });
   if (stream.grain.durationEnv) push({ ind: 1, kind: "raw", key: "duration", val: envInline(stream.grain.durationEnv) });
   else if (stream.grain.duration != null) push({ ind: 1, kind: "v", key: "duration", val: fmtNum(stream.grain.duration) });
-  if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
+  if (stream.grain.durationRangeEnv) push({ ind: 1, kind: "raw", key: "duration_range", val: envInline(stream.grain.durationRangeEnv) });
+  else if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
   push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
 
   if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null)) {
@@ -70,17 +72,20 @@ function buildLines(stream, sampleRec) {
       if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: pu, val: envInline(stream.pitch.valueEnv) });
       else push({ ind: 1, kind: "v", key: pu, val: _safeNum(stream.pitch.value) });
     }
-    if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
+    if (stream.pitch.rangeEnv) push({ ind: 1, kind: "raw", key: "range", val: envInline(stream.pitch.rangeEnv) });
+    else if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
     warn: stream.panEnv.some(p => Math.abs(p[1]) > 90) ? "pan values exceed conventional range [−90, 90]" : null });
   else if (stream.pan != null) push({ ind: 0, kind: "v", key: "pan", val: fmtNum(stream.pan) });
-  if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
+  if (stream.panRangeEnv) push({ ind: 0, kind: "raw", key: "pan_range", val: envInline(stream.panRangeEnv) });
+  else if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
 
   if (stream.volumeEnv) push({ ind: 0, kind: "raw", key: "volume", val: envInline(stream.volumeEnv) });
   else push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
-  if (stream.volumeRange) push({ ind: 0, kind: "v", key: "volume_range", val: fmtNum(stream.volumeRange) });
+  if (stream.volumeRangeEnv) push({ ind: 0, kind: "raw", key: "volume_range", val: envInline(stream.volumeRangeEnv) });
+  else if (stream.volumeRange) push({ ind: 0, kind: "v", key: "volume_range", val: fmtNum(stream.volumeRange) });
 
   if (stream.dephase !== undefined) {
     if (stream.dephase === false) {
@@ -188,12 +193,18 @@ function parseYaml(text) {
         else { out.pointer.speedRatio = parsed; out.pointer.speedRatioEnv = null; }
       } else if (key === "loop_start") out.pointer.loopStart = parsed;
       else if (key === "loop_dur") out.pointer.loopDur = parsed;
+      else if (key === "offset_range") {
+        if (Array.isArray(parsed)) { out.pointer.offsetRange = null; out.pointer.offsetRangeEnv = parsed; }
+        else { out.pointer.offsetRange = parsed; out.pointer.offsetRangeEnv = null; }
+      }
     } else if (section === "grain") {
       if (key === "duration") {
         if (Array.isArray(parsed)) { out.grain.duration = null; out.grain.durationEnv = parsed; }
         else { out.grain.duration = parsed; out.grain.durationEnv = null; }
-      } else if (key === "duration_range") out.grain.durationRange = parsed;
-      else if (key === "envelope") out.grain.envelope = typeof parsed === "string" ? parsed.replace(/^['"]|['"]$/g, "") : parsed;
+      } else if (key === "duration_range") {
+        if (Array.isArray(parsed)) { out.grain.durationRange = null; out.grain.durationRangeEnv = parsed; }
+        else { out.grain.durationRange = parsed; out.grain.durationRangeEnv = null; }
+      } else if (key === "envelope") out.grain.envelope = typeof parsed === "string" ? parsed.replace(/^['"]|['"]$/g, "") : parsed;
     } else if (section === "pitch") {
       const UNITS = ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"];
       if (UNITS.includes(key)) {
@@ -206,7 +217,10 @@ function parseYaml(text) {
       } else if (key === "value") {
         if (Array.isArray(parsed)) { out.pitch.value = null; out.pitch.valueEnv = parsed; }
         else { out.pitch.value = parsed; out.pitch.valueEnv = null; }
-      } else if (key === "range") out.pitch.range = parsed;
+      } else if (key === "range") {
+        if (Array.isArray(parsed)) { out.pitch.range = null; out.pitch.rangeEnv = parsed; }
+        else { out.pitch.range = parsed; out.pitch.rangeEnv = null; }
+      }
     } else {
       // top-level
       if (key === "stream_id") out.patch.id = String(parsed).replace(/^['"]|['"]$/g, "");
@@ -224,9 +238,14 @@ function parseYaml(text) {
       } else if (key === "pan") {
         if (Array.isArray(parsed)) { out.patch.pan = null; out.patch.panEnv = parsed; }
         else { out.patch.pan = parsed; out.patch.panEnv = null; }
-      } else if (key === "pan_range") out.patch.panRange = parsed;
-      else if (key === "volume") out.patch.volume = parsed;
-      else if (key === "volume_range") out.patch.volumeRange = parsed;
+      } else if (key === "pan_range") {
+        if (Array.isArray(parsed)) { out.patch.panRange = null; out.patch.panRangeEnv = parsed; }
+        else { out.patch.panRange = parsed; out.patch.panRangeEnv = null; }
+      } else if (key === "volume") out.patch.volume = parsed;
+      else if (key === "volume_range") {
+        if (Array.isArray(parsed)) { out.patch.volumeRange = null; out.patch.volumeRangeEnv = parsed; }
+        else { out.patch.volumeRange = parsed; out.patch.volumeRangeEnv = null; }
+      }
     }
   }
   return out;

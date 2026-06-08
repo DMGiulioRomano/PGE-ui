@@ -46,20 +46,40 @@ function listEnvelopes(stream) {
       path: ["pointer", "loopDurEnv"], unit: "s",
       visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
   }
+  if (stream.pointer && stream.pointer.offsetRangeEnv) {
+    list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
+      path: ["pointer", "offsetRangeEnv"], unit: "",
+      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+  }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
       path: ["grain", "durationEnv"], unit: "s",
       visMin: 0.001, visMax: 0.1, hardMin: 0.001, hardMax: 10 });
+  }
+  if (stream.grain && stream.grain.durationRangeEnv) {
+    list.push({ key: "durationRange", label: "duration_range", group: "Grain",
+      path: ["grain", "durationRangeEnv"], unit: "s",
+      visMin: 0, visMax: 0.5, hardMin: 0, hardMax: 10 });
   }
   if (stream.panEnv) {
     list.push({ key: "pan", label: "pan", group: "Volume & Pan",
       path: ["panEnv"], unit: "°",
       visMin: -360, visMax: 360, hardMin: -3600, hardMax: 3600 });
   }
+  if (stream.panRangeEnv) {
+    list.push({ key: "panRange", label: "pan_range", group: "Volume & Pan",
+      path: ["panRangeEnv"], unit: "°",
+      visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
+  }
   if (stream.volumeEnv) {
     list.push({ key: "volume", label: "volume", group: "Volume & Pan",
       path: ["volumeEnv"], unit: "dB",
       visMin: -40, visMax: 0, hardMin: -120, hardMax: 12 });
+  }
+  if (stream.volumeRangeEnv) {
+    list.push({ key: "volumeRange", label: "volume_range", group: "Volume & Pan",
+      path: ["volumeRangeEnv"], unit: "dB",
+      visMin: 0, visMax: 12, hardMin: 0, hardMax: 120 });
   }
   if (stream.pitch && stream.pitch.valueEnv) {
     const pu = stream.pitch.unit || "semitones";
@@ -74,6 +94,19 @@ function listEnvelopes(stream) {
       path: ["pitch", "valueEnv"], unit: puUnit,
       integer: window.PGEEnv.pitchUnitIsInteger(pu),
       visMin: pvMin, visMax: pvMax, hardMin: phMin, hardMax: phMax });
+  }
+  if (stream.pitch && stream.pitch.rangeEnv) {
+    const pu = stream.pitch.unit || "semitones";
+    const puUnit = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
+    const [prVis, prHard] = pu === "cents" ? [1200, 3600]
+      : pu === "quarter_tone" ? [12, 72]
+      : pu === "eighth_tone" ? [24, 144]
+      : pu === "ratio"       ? [2, 8]
+      : [12, 36];
+    list.push({ key: "pitchRange", label: "range", group: "Pitch",
+      path: ["pitch", "rangeEnv"], unit: puUnit,
+      integer: window.PGEEnv.pitchUnitIsInteger(pu),
+      visMin: 0, visMax: prVis, hardMin: 0, hardMax: prHard });
   }
   if (stream.voices && stream.voices.numEnv) {
     list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
@@ -129,6 +162,16 @@ function listEnvelopes(stream) {
     list.push({ key: "dephase", label: "probability", group: "Dephase",
       path: ["dephase"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
+  }
+  if (stream.dephase && typeof stream.dephase === "object" && !Array.isArray(stream.dephase)) {
+    const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","envelope"];
+    for (const pk of DEPHASE_PARAM_KEYS) {
+      if (Array.isArray(stream.dephase[pk])) {
+        list.push({ key: "dephase_" + pk, label: pk, group: "Dephase",
+          path: ["dephase", pk], unit: "%",
+          visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
+      }
+    }
   }
   if (stream.grain && stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope) && Array.isArray(stream.grain.envelope.curve)) {
     const genv = stream.grain.envelope;
@@ -408,7 +451,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!focusKey) return;
     const key = focusKey.split(":")[0];
     if (envelopes.find((e) => e.key === key)) setSelectedKey(key);
-  }, [focusKey]);
+  }, [focusKey, envelopes]);
 
   /* clear selected block/bp on stream/env switch */
   useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}, [stream && stream.id, selectedKey]);
