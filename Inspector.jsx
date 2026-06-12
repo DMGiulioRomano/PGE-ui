@@ -45,12 +45,14 @@ const DEPHASE_PARAMS = [
 ];
 
 function detectDephaseMode(d) {
-  if (d === false) return "off";
-  if (d == null) return "implicit";
+  if (d === window.PGEYaml.DEPHASE_IMPLICIT) return "implicit";
+  // Key absent = engine default off (StreamConfig.dephase = False) — same as
+  // explicit false. Only `dephase: null` (the sentinel) means implicit 1%.
+  if (d === false || d == null) return "off";
   if (typeof d === "number") return "global";
   if (Array.isArray(d)) return "global";
   if (typeof d === "object") return "perParam";
-  return "implicit";
+  return "off";
 }
 
 function DephaseSection({ stream, onChange, onFocusEnvParam }) {
@@ -60,7 +62,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
 
   function setMode(next) {
     if (next === "off")       return onChange({ dephase: false });
-    if (next === "implicit")  return onChange({ dephase: null });
+    if (next === "implicit")  return onChange({ dephase: window.PGEYaml.DEPHASE_IMPLICIT });
     if (next === "global")    return onChange({ dephase: typeof d === "number" ? d : (Array.isArray(d) ? d : 1) });
     if (next === "perParam")  return onChange({ dephase: (typeof d === "object" && !Array.isArray(d) && d) ? d : { volume: 50 } });
   }
@@ -146,7 +148,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                   <span className="v"><span className="pge-field" style={{width:70}}><span className="val">{val}</span><span className="unit">%</span></span></span>
                 )}
                 <button className="pge-icon-btn" title="Remove"
-                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : null }); }}>
+                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : window.PGEYaml.DEPHASE_IMPLICIT }); }}>
                   <Icon name="x" size={11} />
                 </button>
               </div>

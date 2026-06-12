@@ -98,7 +98,8 @@ function buildLines(stream, sampleRec) {
   if (stream.dephase !== undefined) {
     if (stream.dephase === false) {
       push({ ind: 0, kind: "v", key: "dephase", val: "false" });
-    } else if (stream.dephase === null) {
+    } else if (stream.dephase === window.PGEYaml.DEPHASE_IMPLICIT || stream.dephase === null) {
+      // implicit mode (engine default 1% probability) — key present, null value
       push({ ind: 0, kind: "v", key: "dephase", val: "null" });
     } else if (typeof stream.dephase === "number") {
       push({ ind: 0, kind: "v", key: "dephase", val: fmtNum(stream.dephase) });
@@ -184,7 +185,14 @@ function parseYaml(text) {
       const sect = sectionMatch[1];
       if (sect === "mute") { out.patch.mute = true; section = null; continue; }
       if (sect === "solo") { out.patch.solo = true; section = null; continue; }
-      section = (sect === "pointer" || sect === "grain" || sect === "pitch" || sect === "dephase") ? sect : null;
+      if (sect === "dephase") {
+        // bare `dephase:` = implicit 1%; indented lines below (if any)
+        // promote it to a per-param object.
+        out.patch.dephase = window.PGEYaml.DEPHASE_IMPLICIT;
+        section = "dephase";
+        continue;
+      }
+      section = (sect === "pointer" || sect === "grain" || sect === "pitch") ? sect : null;
       continue;
     }
     if (indent === 0) section = null; // a top-level key clears section
@@ -194,8 +202,16 @@ function parseYaml(text) {
     const valStr = kv[2].trim();
     const parsed = parseValue(valStr);
     if (parsed === undefined) {
-      // bare key inside a block: presence-only flag (engine: forced reverse)
-      if (section === "grain" && key === "reverse" && valStr === "") out.grain.reverse = null;
+      if (valStr === "") {
+        // bare key inside a block: presence-only flag (engine: forced reverse)
+        if (section === "grain" && key === "reverse") out.grain.reverse = null;
+        // bare per-param key inside dephase: null = default prob for that key
+        else if (section === "dephase") {
+          const cur = (out.patch.dephase && typeof out.patch.dephase === "object" && !Array.isArray(out.patch.dephase)) ? out.patch.dephase : {};
+          cur[key] = null;
+          out.patch.dephase = cur;
+        }
+      }
       continue;
     }
 
@@ -244,6 +260,11 @@ function parseYaml(text) {
         if (Array.isArray(parsed)) { out.pitch.range = null; out.pitch.rangeEnv = parsed; }
         else { out.pitch.range = parsed; out.pitch.rangeEnv = null; }
       }
+    } else if (section === "dephase") {
+      // per-param dephase entry (number or env array) — promote/extend object
+      const cur = (out.patch.dephase && typeof out.patch.dephase === "object" && !Array.isArray(out.patch.dephase)) ? out.patch.dephase : {};
+      cur[key] = parsed;
+      out.patch.dephase = cur;
     } else {
       // top-level
       if (key === "stream_id") out.patch.id = String(parsed).replace(/^['"]|['"]$/g, "");
@@ -269,6 +290,9 @@ function parseYaml(text) {
       } else if (key === "pan_range") {
         if (Array.isArray(parsed)) { out.patch.panRange = null; out.patch.panRangeEnv = parsed; }
         else { out.patch.panRange = parsed; out.patch.panRangeEnv = null; }
+      } else if (key === "dephase") {
+        if (parsed === "null" || parsed === "~") out.patch.dephase = window.PGEYaml.DEPHASE_IMPLICIT;
+        else out.patch.dephase = parsed; // false | number | env array, verbatim
       } else if (key === "volume") out.patch.volume = parsed;
       else if (key === "volume_range") {
         if (Array.isArray(parsed)) { out.patch.volumeRange = null; out.patch.volumeRangeEnv = parsed; }

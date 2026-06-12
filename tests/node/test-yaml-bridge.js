@@ -579,6 +579,110 @@ console.log("\n── time_mode (#35) ──");
 }
 
 /* ============================================================
+ * SECTION 8c — dephase: implicit null vs absent vs explicit (#36)
+ * ============================================================ */
+
+console.log("\n── dephase (#36) ──");
+
+const { DEPHASE_IMPLICIT } = window.PGEYaml;
+
+{
+  assert("DEPHASE_IMPLICIT exported", typeof DEPHASE_IMPLICIT === "string" && DEPHASE_IMPLICIT.length > 0,
+    JSON.stringify(DEPHASE_IMPLICIT));
+}
+
+{
+  // absent → off (no key emitted)
+  const data = parse(topLevelYaml([]));
+  assert("dephase absent — undefined in state", data.streams[0].dephase === undefined,
+    JSON.stringify(data.streams[0].dephase));
+  const y = serialize(data);
+  assert("dephase absent — not emitted", !y.includes("dephase"), y.slice(0, 400));
+}
+
+{
+  // explicit false → kept
+  const data = parse(topLevelYaml(["dephase: false"]));
+  assert("dephase false — kept in state", data.streams[0].dephase === false, JSON.stringify(data.streams[0].dephase));
+  const y = serialize(data);
+  assert("dephase false — emitted", /dephase: false/.test(y), y.slice(0, 400));
+  assert("roundtrip dephase false — no diffs", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // `dephase: null` (explicit) and `dephase:` (bare) both = implicit 1%
+  for (const variant of ["dephase: null", "dephase:"]) {
+    const data = parse(topLevelYaml([variant]));
+    assert(`'${variant}' — sentinel in state`, data.streams[0].dephase === DEPHASE_IMPLICIT,
+      JSON.stringify(data.streams[0].dephase));
+    const y = serialize(data);
+    assert(`'${variant}' — re-emitted as dephase: null`, /^\s*dephase: null$/m.test(y), y.slice(0, 500));
+    assert(`'${variant}' — roundtrip no diffs`, roundTripDiff(data).length === 0,
+      JSON.stringify(roundTripDiff(data)));
+  }
+}
+
+{
+  // global scalar and envelope forms unchanged
+  const dataN = parse(topLevelYaml(["dephase: 50"]));
+  assert("dephase scalar — kept", dataN.streams[0].dephase === 50, JSON.stringify(dataN.streams[0].dephase));
+  assert("roundtrip dephase scalar — no diffs", roundTripDiff(dataN).length === 0,
+    JSON.stringify(roundTripDiff(dataN)));
+  const dataE = parse(topLevelYaml(["dephase: [[0, 0], [30, 80]]"]));
+  assert("dephase env — kept", Array.isArray(dataE.streams[0].dephase) && dataE.streams[0].dephase.length === 2,
+    JSON.stringify(dataE.streams[0].dephase));
+  assert("roundtrip dephase env — no diffs", roundTripDiff(dataE).length === 0,
+    JSON.stringify(roundTripDiff(dataE)));
+}
+
+{
+  // per-param object: passes verbatim; an INTERNAL null (per-key default
+  // prob) stays null, it must NOT become the sentinel.
+  const yamlPP = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+    dephase:
+      pitch: 50
+      reverse:
+`;
+  const data = parse(yamlPP);
+  const d = data.streams[0].dephase;
+  assert("dephase per-param — object kept", d && typeof d === "object" && !Array.isArray(d), JSON.stringify(d));
+  assert("dephase per-param — pitch 50", d.pitch === 50, JSON.stringify(d));
+  assert("dephase per-param — internal null stays null", d.reverse === null, JSON.stringify(d));
+  const y = serialize(data);
+  assert("dephase per-param — reverse: null re-emitted", /reverse: null/.test(y), y.slice(0, 500));
+  assert("roundtrip dephase per-param — no diffs", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // UI→YAML→UI starting from sentinel state (e.g. set via Inspector)
+  const data = parse(topLevelYaml([]));
+  data.streams[0].dephase = DEPHASE_IMPLICIT;
+  const back = parse(serialize(data));
+  assert("sentinel state survives UI→YAML→UI", back.streams[0].dephase === DEPHASE_IMPLICIT,
+    JSON.stringify(back.streams[0].dephase));
+}
+
+const dephaseFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
+for (const f of dephaseFixtures) {
+  const p = path.join(__dirname, "../../..", "PythonGranularEngine/configs", f);
+  if (!fs.existsSync(p)) { console.log(`  SKIP dephase fixture ${f} (not found)`); continue; }
+  const data = parse(fs.readFileSync(p, "utf8"));
+  const flags = data.streams.map(s => s.dephase !== undefined);
+  const back = parse(serialize(data));
+  const backFlags = back.streams.map(s => s.dephase !== undefined);
+  assert(`${f} — dephase presence stable through reparse`, eq(flags, backFlags),
+    JSON.stringify({ before: flags, after: backFlags }));
+  assert(`${f} — dephase values stable through reparse`,
+    eq(data.streams.map(s => s.dephase), back.streams.map(s => s.dephase)),
+    JSON.stringify({ before: data.streams.map(s => s.dephase), after: back.streams.map(s => s.dephase) }));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 

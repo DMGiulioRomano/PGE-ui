@@ -23,7 +23,10 @@
  *     `<block>._extra` (those blocks are rebuilt in full on serialize).
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
- *   - dephase keeps all three shapes: scalar | envelope-array | per-param object.
+ *   - dephase keeps all engine states: absent (off) | false (off) |
+ *     null = implicit 1% (stored as the DEPHASE_IMPLICIT sentinel string,
+ *     because parse/serialize plumbing collapses null and undefined) |
+ *     scalar | envelope-array | per-param object.
  *   - time_mode: absence is preserved (engine default is "absolute");
  *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
@@ -34,6 +37,14 @@
   }
 
   const PALETTE = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
+
+  /* Editor-state sentinel for `dephase: null` (key present, empty value),
+   * which the engine reads as "implicit mode, default 1% probability".
+   * A plain null cannot represent it in the editor state: it would collapse
+   * into undefined (= key absent = off) across `??` plumbing and JSON
+   * clipboard copies. A string survives all of those and never collides
+   * with legit engine values (bool | number | array | object). */
+  const DEPHASE_IMPLICIT = "implicit";
 
   /* Known stream-level keys we map explicitly. Everything else under a
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
@@ -318,7 +329,8 @@
       y.voices = vy;
     }
 
-    if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
+    if (s.dephase === DEPHASE_IMPLICIT) y.dephase = null; // dumps as `dephase: null`
+    else if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
 
     // Pass through any extra top-level keys we don't model explicitly.
     if (s._extra && typeof s._extra === "object") {
@@ -475,7 +487,10 @@
           ...(() => { const ex = collectExtras(y.voices, VOICES_KNOWN); return ex ? { _extra: ex } : {}; })(),
         };
       })(),
-      dephase: y.dephase ?? undefined,
+      // Key present with null value = implicit 1% — distinct from key absent
+      // (= off). Per-param objects pass verbatim: a null INSIDE the object
+      // means "default prob for that key" and stays null.
+      dephase: ("dephase" in y) ? (y.dephase === null ? DEPHASE_IMPLICIT : y.dephase) : undefined,
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -605,5 +620,6 @@
     serialize:     dataToYaml,
     emptyProject,
     roundTripDiff,
+    DEPHASE_IMPLICIT,
   };
 })();
