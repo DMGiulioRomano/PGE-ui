@@ -16,7 +16,7 @@ make serve            # python server.py --root ../PythonGranularEngine --port 7
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 ```
 
-There is **no test suite, no linter, no typechecker**. Verification is manual: open `PGE Editor.html` in a browser, switch the Settings panel backend to `local`, hit "test connection", render.
+`make tests-node` runs the node test suite for `yaml-bridge.js` round-trip fidelity (`tests/node/test-yaml-bridge.js`; engine configs in the sibling repo serve as fixtures when present). There is no linter or typechecker, and the React UI itself has no automated tests — UI verification is manual: open `PGE Editor.html` in a browser, switch the Settings panel backend to `local`, hit "test connection", render.
 
 ## Architecture
 

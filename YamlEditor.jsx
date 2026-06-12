@@ -43,7 +43,7 @@ function buildLines(stream, sampleRec) {
       push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
         err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
     } else if (stream.pointer.loopDurEnv) {
-      push({ ind: 1, kind: "raw", key: "loop_duration", val: envInline(stream.pointer.loopDurEnv) });
+      push({ ind: 1, kind: "raw", key: "loop_dur", val: envInline(stream.pointer.loopDurEnv) });
     } else if (stream.pointer.loopDur != null) {
       push({ ind: 1, kind: "v", key: "loop_dur", val: fmtNum(stream.pointer.loopDur),
         err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
@@ -191,9 +191,13 @@ function parseYaml(text) {
       if (key === "speed_ratio") {
         if (Array.isArray(parsed)) { out.pointer.speedRatio = null; out.pointer.speedRatioEnv = parsed; }
         else { out.pointer.speedRatio = parsed; out.pointer.speedRatioEnv = null; }
-      } else if (key === "loop_start") out.pointer.loopStart = parsed;
-      else if (key === "loop_dur") out.pointer.loopDur = parsed;
-      else if (key === "offset_range") {
+      } else if (key === "loop_start") {
+        if (Array.isArray(parsed)) { out.pointer.loopStart = null; out.pointer.loopStartEnv = parsed; }
+        else { out.pointer.loopStart = parsed; out.pointer.loopStartEnv = null; }
+      } else if (key === "loop_dur" || key === "loop_duration") { // legacy alias accepted on input
+        if (Array.isArray(parsed)) { out.pointer.loopDur = null; out.pointer.loopDurEnv = parsed; }
+        else { out.pointer.loopDur = parsed; out.pointer.loopDurEnv = null; }
+      } else if (key === "offset_range") {
         if (Array.isArray(parsed)) { out.pointer.offsetRange = null; out.pointer.offsetRangeEnv = parsed; }
         else { out.pointer.offsetRange = parsed; out.pointer.offsetRangeEnv = null; }
       }

@@ -210,7 +210,7 @@
       start:         ptr.start ?? undefined,
       speed_ratio:   ptrSp,
       loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
-      loop_duration: pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
+      loop_dur:      pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
       offset_range:  ptrOffRange !== undefined && ptrOffRange !== 0 ? ptrOffRange : undefined,
     };
     if (Object.values(ptrY).some(v => v !== undefined)) {
@@ -363,7 +363,9 @@
         speedRatio:    ptrSp.scalar,
         speedRatioEnv: ptrSp.env,
         ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),
-        ...(() => { const ld = unpackValueOrEnv(ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
+        // `loop_duration` is a legacy alias: older editor builds wrote it, but
+        // the engine only knows `loop_dur` — read both, emit only `loop_dur`.
+        ...(() => { const ld = unpackValueOrEnv(ptr.loop_dur ?? ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
         ...(() => { const or = unpackValueOrEnv(ptr.offset_range ?? null); return or.scalar != null || or.env ? { offsetRange: or.scalar, offsetRangeEnv: or.env } : {}; })(),
       },
       pitch: (() => {

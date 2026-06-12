@@ -42,7 +42,7 @@ function listEnvelopes(stream) {
       visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
   }
   if (stream.pointer && stream.pointer.loopDurEnv) {
-    list.push({ key: "loopDur", label: "loop_duration", group: "Pointer",
+    list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
       path: ["pointer", "loopDurEnv"], unit: "s",
       visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
   }

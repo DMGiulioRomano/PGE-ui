@@ -698,7 +698,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     <span />
                   </div>
                   {stream.pointer.loopEnd == null ? (
-                    <ParamRow name="loop_duration"
+                    <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
                               value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
                               accent={stream.pointer.loopDurEnv != null}

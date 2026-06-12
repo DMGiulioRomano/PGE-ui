@@ -1,5 +1,7 @@
 /* =============================================================================
- * test-yaml-bridge.js — test suite for yaml-bridge.js pitch unit alignment
+ * test-yaml-bridge.js — test suite for yaml-bridge.js round-trip fidelity
+ * (pitch units, pointer loop keys, fill_factor, per-block extras, time_mode,
+ * dephase) — YAML→editor→YAML and editor→YAML→editor.
  *
  * Run: node test-yaml-bridge.js (from tests/node/ after npm install)
  * =========================================================================== */
@@ -227,6 +229,73 @@ if (fs.existsSync(showcasePath)) {
   }
 } else {
   console.log("  SKIP showcase (file not found at " + showcasePath + ")");
+}
+
+/* ============================================================
+ * SECTION 6 — pointer loop keys: loop_dur, not loop_duration (#32)
+ * ============================================================ */
+
+console.log("\n── pointer: loop_dur (#32) ──");
+
+function pointerYaml(ptrLines) {
+  return `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+    pointer:
+${ptrLines.map(l => "      " + l).join("\n")}
+`;
+}
+
+{
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_dur: 2"]));
+  const ptr = data.streams[0].pointer;
+  assert("parse loop_dur scalar", ptr.loopDur === 2, JSON.stringify(ptr));
+  assert("parse loop_dur scalar — env null", ptr.loopDurEnv == null, JSON.stringify(ptr));
+  const y = serialize(data);
+  assert("serialize loop — emits loop_dur", y.includes("loop_dur:"), y.slice(0, 500));
+  assert("serialize loop — never loop_duration", !y.includes("loop_duration"), y.slice(0, 500));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip loop scalar — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_dur: [[0, 0.6], [10, 0.1]]"]));
+  const ptr = data.streams[0].pointer;
+  assert("parse loop_dur env", Array.isArray(ptr.loopDurEnv) && ptr.loopDurEnv.length === 2, JSON.stringify(ptr));
+  assert("parse loop_dur env — scalar null", ptr.loopDur == null, JSON.stringify(ptr));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip loop env — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // Legacy healing: files written by older editor builds used `loop_duration`.
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_duration: 2"]));
+  assert("legacy loop_duration healed on parse", data.streams[0].pointer.loopDur === 2,
+    JSON.stringify(data.streams[0].pointer));
+  const y = serialize(data);
+  assert("legacy re-serialized as loop_dur", y.includes("loop_dur:") && !y.includes("loop_duration"), y.slice(0, 500));
+}
+
+{
+  // Both present: canonical loop_dur wins over the legacy alias.
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_dur: 3", "loop_duration: 9"]));
+  assert("loop_dur wins over legacy alias", data.streams[0].pointer.loopDur === 3,
+    JSON.stringify(data.streams[0].pointer));
+}
+
+const pino3Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino3.yml");
+if (fs.existsSync(pino3Path)) {
+  const data = parse(fs.readFileSync(pino3Path, "utf8"));
+  const withLoop = data.streams.find(s => s.pointer && s.pointer.loopDurEnv);
+  assert("pino3 fixture — compact loop env lands in loopDurEnv", !!withLoop,
+    JSON.stringify(data.streams.map(s => s.pointer)));
+  const y = serialize(data);
+  assert("pino3 fixture — serialize emits loop_dur", y.includes("loop_dur:"), y.slice(0, 800));
+  assert("pino3 fixture — serialize never loop_duration", !y.includes("loop_duration"), y.slice(0, 800));
+} else {
+  console.log("  SKIP pino3 fixture (file not found)");
 }
 
 /* ============================================================
