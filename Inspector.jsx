@@ -323,6 +323,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "pitchRange"    && stream.pitch && stream.pitch.rangeEnv)           return "env";
     if (k === "durationRange" && stream.grain && stream.grain.durationRangeEnv)   return "env";
     if (k === "offsetRange"   && stream.pointer && stream.pointer.offsetRangeEnv) return "env";
+    if (k === "fillFactor"    && stream.fillFactorEnv)                            return "env";
     return fallback || "scalar";
   };
 
@@ -330,9 +331,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
+    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
+      fillFactor:   { sk: "fillFactor",  ek: "fillFactorEnv" },
       distribution: { sk: "distribution",ek: "distributionEnv" },
       pan:          { sk: "pan",         ek: "panEnv" },
       volume:       { sk: "volume",      ek: "volumeEnv" },
@@ -593,8 +595,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             </Section>
 
             <Section title="Overall density"
-                     badge={stream.fillFactor != null
-                       ? <span className="mono" style={{color:"var(--accent)"}}>fill_factor</span>
+                     badge={(stream.fillFactor != null || stream.fillFactorEnv != null)
+                       ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${stream.fillFactorEnv.length} bp` : "fill_factor"}</span>
                        : (stream.densityEnv
                            ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {stream.densityEnv.length} bp</span>
                            : <span className="mono">density</span>)}>
@@ -603,23 +605,28 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <span />
                 <span className="v">
                   <Seg size="xs"
-                       value={stream.fillFactor != null ? "fill_factor" : "density"}
+                       value={(stream.fillFactor != null || stream.fillFactorEnv != null) ? "fill_factor" : "density"}
                        onChange={(u) => {
                          if (u === "fill_factor") {
                            const ff = 2.0;
-                           onChange({ density: null, densityEnv: null, fillFactor: ff });
+                           onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null });
                          } else {
-                           onChange({ fillFactor: null, density: 8, densityEnv: null });
+                           onChange({ fillFactor: null, fillFactorEnv: null, density: 8, densityEnv: null });
                          }
                        }}
                        options={[{label:"density",value:"density"},{label:"fill_factor",value:"fill_factor"}]} />
                 </span>
                 <span />
               </div>
-              {stream.fillFactor != null ? (
-                <ParamRow name="fill_factor" mode="scalar" value={stream.fillFactor} unit="×"
+              {(stream.fillFactor != null || stream.fillFactorEnv != null) ? (
+                <ParamRow name="fill_factor"
+                  mode={getMode("fillFactor")} onMode={(m) => toggleMode("fillFactor", m)}
+                  value={stream.fillFactor != null ? stream.fillFactor : "—"} unit={stream.fillFactorEnv ? "" : "×"}
+                  accent={stream.fillFactorEnv != null}
+                  envValue={stream.fillFactorEnv}
+                  onEditEnv={focusEnv("fillFactor")}
                   onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"}
-                  onValue={(v) => onChange({fillFactor: v})} />
+                  onValue={(v) => onChange({fillFactor: Math.min(50, Math.max(0.001, v))})} />
               ) : (
                 <ParamRow name="density"
                           mode={getMode("density")} onMode={(m) => toggleMode("density", m)}

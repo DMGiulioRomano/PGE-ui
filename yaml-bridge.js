@@ -37,7 +37,7 @@
     "stream_id", "onset", "duration", "sample",
     "time_mode", "distribution_mode",
     "range_always_active", "time_scale", "clip_strategy", "clip_margin",
-    "density", "distribution",
+    "density", "fill_factor", "distribution",
     "grain", "pointer", "pitch", "voices",
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
@@ -187,8 +187,12 @@
     if (s.clipStrategy && s.clipStrategy !== "overflow_margin") y.clip_strategy = s.clipStrategy;
     if (s.clipMargin != null && s.clipMargin !== 0)        y.clip_margin = s.clipMargin;
 
+    // fill_factor and density are mutually exclusive; the engine gives
+    // fill_factor priority when both are present, so emit exactly one.
+    const fillFactor = pickValueOrEnv(s.fillFactor, s.fillFactorEnv);
     const density = pickValueOrEnv(s.density, s.densityEnv);
-    if (density !== undefined) y.density = density;
+    if (fillFactor !== undefined) y.fill_factor = fillFactor;
+    else if (density !== undefined) y.density = density;
     const distribution = pickValueOrEnv(s.distribution, s.distributionEnv);
     if (distribution !== undefined) y.distribution = distribution;
 
@@ -313,6 +317,10 @@
     const id = y.stream_id || ("stream" + (idx + 1));
 
     const dens = unpackValueOrEnv(y.density);
+    const ff   = unpackValueOrEnv(y.fill_factor ?? null);
+    // fill_factor wins over density engine-side; mirror that at parse so the
+    // Inspector shows the branch the engine will actually use.
+    const hasFF = ff.scalar != null || ff.env != null;
     const dist = unpackValueOrEnv(y.distribution);
     const pan  = unpackValueOrEnv(y.pan);
 
@@ -341,8 +349,10 @@
       clipStrategy: y.clip_strategy || "overflow_margin",
       clipMargin:   y.clip_margin   != null ? y.clip_margin   : 0.0,
 
-      density:    dens.scalar,
-      densityEnv: dens.env,
+      density:    hasFF ? null : dens.scalar,
+      densityEnv: hasFF ? null : dens.env,
+      fillFactor:    ff.scalar,
+      fillFactorEnv: ff.env,
       distribution:    dist.scalar,
       distributionEnv: dist.env,
 

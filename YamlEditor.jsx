@@ -26,7 +26,8 @@ function buildLines(stream, sampleRec) {
   if (stream.solo) push({ ind: 0, kind: "flag", key: "solo" });
   if (stream.distributionMode) push({ ind: 0, kind: "s", key: "distribution_mode", val: `'${stream.distributionMode}'` });
 
-  if (stream.fillFactor != null) push({ ind: 0, kind: "v", key: "fill_factor", val: fmtNum(stream.fillFactor) });
+  if (stream.fillFactorEnv) push({ ind: 0, kind: "raw", key: "fill_factor", val: envInline(stream.fillFactorEnv) });
+  else if (stream.fillFactor != null) push({ ind: 0, kind: "v", key: "fill_factor", val: fmtNum(stream.fillFactor) });
   else if (stream.densityEnv) push({ ind: 0, kind: "raw", key: "density", val: envInline(stream.densityEnv) });
   else if (stream.density != null) push({ ind: 0, kind: "v", key: "density", val: fmtNum(stream.density) });
 
@@ -236,6 +237,11 @@ function parseYaml(text) {
       else if (key === "density") {
         if (Array.isArray(parsed)) { out.patch.density = null; out.patch.densityEnv = parsed; }
         else { out.patch.density = parsed; out.patch.densityEnv = null; }
+        out.patch.fillFactor = null; out.patch.fillFactorEnv = null;
+      } else if (key === "fill_factor") {
+        if (Array.isArray(parsed)) { out.patch.fillFactor = null; out.patch.fillFactorEnv = parsed; }
+        else { out.patch.fillFactor = parsed; out.patch.fillFactorEnv = null; }
+        out.patch.density = null; out.patch.densityEnv = null;
       } else if (key === "distribution") {
         if (Array.isArray(parsed)) { out.patch.distribution = null; out.patch.distributionEnv = parsed; }
         else { out.patch.distribution = parsed; out.patch.distributionEnv = null; }

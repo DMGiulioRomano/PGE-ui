@@ -299,6 +299,90 @@ if (fs.existsSync(pino3Path)) {
 }
 
 /* ============================================================
+ * SECTION 7 — fill_factor modelled, mutex with density (#33)
+ * ============================================================ */
+
+console.log("\n── fill_factor (#33) ──");
+
+function topLevelYaml(extraLines) {
+  return `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+${extraLines.map(l => "    " + l).join("\n")}
+`;
+}
+
+{
+  const data = parse(topLevelYaml(["fill_factor: 2.0"]));
+  const s = data.streams[0];
+  assert("parse fill_factor scalar", s.fillFactor === 2, JSON.stringify({ ff: s.fillFactor, ffe: s.fillFactorEnv }));
+  assert("parse fill_factor — density null", s.density == null && s.densityEnv == null,
+    JSON.stringify({ d: s.density, de: s.densityEnv }));
+  assert("parse fill_factor — not in _extra", !s._extra || !("fill_factor" in s._extra), JSON.stringify(s._extra));
+  const y = serialize(data);
+  assert("serialize — fill_factor emitted", y.includes("fill_factor:"), y.slice(0, 400));
+  assert("serialize — density not emitted", !y.includes("density:"), y.slice(0, 400));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip fill_factor scalar — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // Both present in the file: fill_factor wins (engine priority), density dropped.
+  const data = parse(topLevelYaml(["density: 10", "fill_factor: 2"]));
+  const s = data.streams[0];
+  assert("both keys — fill_factor wins", s.fillFactor === 2, JSON.stringify(s.fillFactor));
+  assert("both keys — density dropped", s.density == null, JSON.stringify(s.density));
+  const y = serialize(data);
+  assert("both keys — serialize emits only fill_factor", y.includes("fill_factor:") && !y.includes("density:"),
+    y.slice(0, 400));
+}
+
+{
+  const data = parse(topLevelYaml(["fill_factor: [[0, 1], [10, 4]]"]));
+  const s = data.streams[0];
+  assert("parse fill_factor env", Array.isArray(s.fillFactorEnv) && s.fillFactorEnv.length === 2,
+    JSON.stringify(s.fillFactorEnv));
+  assert("parse fill_factor env — scalar null", s.fillFactor == null, JSON.stringify(s.fillFactor));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip fill_factor env — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // Defensive: inconsistent UI state with both set → fill_factor wins on serialize.
+  const data = parse(topLevelYaml(["density: 8"]));
+  data.streams[0].fillFactor = 2;
+  const y = serialize(data);
+  assert("state with both — only fill_factor emitted", y.includes("fill_factor:") && !y.includes("density:"),
+    y.slice(0, 400));
+}
+
+{
+  // Neither present: parse must not inject either (engine default applies).
+  const data = parse(topLevelYaml([]));
+  const s = data.streams[0];
+  assert("neither key — both absent in state", s.density == null && s.fillFactor == null,
+    JSON.stringify({ d: s.density, ff: s.fillFactor }));
+  const y = serialize(data);
+  assert("neither key — neither emitted", !y.includes("density:") && !y.includes("fill_factor:"), y.slice(0, 400));
+}
+
+const ffPath = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_ff2_rassegna.yml");
+if (fs.existsSync(ffPath)) {
+  const data = parse(fs.readFileSync(ffPath, "utf8"));
+  const ffStreams = data.streams.filter(s => s.fillFactor === 2);
+  assert("ff2 fixture — fillFactor read on all streams", ffStreams.length === data.streams.length,
+    `${ffStreams.length}/${data.streams.length}`);
+  const back = parse(serialize(data));
+  assert("ff2 fixture — fillFactor survives reparse",
+    back.streams.every(s => s.fillFactor === 2 && s.density == null),
+    JSON.stringify(back.streams.map(s => [s.fillFactor, s.density])));
+} else {
+  console.log("  SKIP ff2 fixture (file not found)");
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 

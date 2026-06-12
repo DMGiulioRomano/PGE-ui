@@ -130,6 +130,7 @@ function _applyEnvFields(stream, fn) {
   return {
     ...stream,
     ...wf(stream, "densityEnv"),
+    ...wf(stream, "fillFactorEnv"),
     ...wf(stream, "distributionEnv"),
     ...wf(stream, "panEnv"),
     ...wf(stream, "volumeEnv"),
@@ -159,7 +160,7 @@ function truncateStreamEnvelopes(stream) {
 
 function streamWouldTruncate(stream, ratio) {
   const fields = [
-    stream.densityEnv, stream.distributionEnv, stream.panEnv, stream.volumeEnv,
+    stream.densityEnv, stream.fillFactorEnv, stream.distributionEnv, stream.panEnv, stream.volumeEnv,
     stream.grain    && stream.grain.durationEnv,
     stream.pointer  && stream.pointer.speedRatioEnv,
     stream.pointer  && stream.pointer.loopStartEnv,
