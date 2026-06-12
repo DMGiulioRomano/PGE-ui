@@ -551,10 +551,12 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             <Section title="Identity"
                      right={<span className="mono" style={{fontSize:9, color:"var(--fg-4)"}}>stream context</span>}>
               <div className="pge-prow">
-                <span className="k" title="onset ∈ [0,1] of total duration">time_mode</span>
+                <span className="k" title="envelope time axis: normalized → x ∈ [0,1] of stream duration · absolute → x in seconds (engine default)">time_mode</span>
                 <span />
                 <span className="v">
-                  <span className="mono" style={{fontSize:10, color:"var(--fg-3)"}}>normalized</span>
+                  <span className="mono" style={{fontSize:10, color:"var(--fg-3)"}}>
+                    {stream.timeMode || "absolute"}{stream.timeMode ? "" : " (default)"}
+                  </span>
                 </span>
                 <span />
               </div>

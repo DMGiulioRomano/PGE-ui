@@ -535,6 +535,50 @@ if (fs.existsSync(pino4Path)) {
 }
 
 /* ============================================================
+ * SECTION 8b — time_mode: absence preserved, no default injected (#35)
+ * ============================================================ */
+
+console.log("\n── time_mode (#35) ──");
+
+{
+  // The bug: a file WITHOUT time_mode (= engine default "absolute") used to
+  // come back from a load→save cycle with `time_mode: normalized`, silently
+  // rescaling every envelope's time axis. YAML→UI→YAML direction.
+  const data = parse(topLevelYaml([]));
+  assert("absent time_mode — not defaulted in state", data.streams[0].timeMode == null,
+    JSON.stringify(data.streams[0].timeMode));
+  const y = serialize(data);
+  assert("absent time_mode — not emitted", !y.includes("time_mode"), y.slice(0, 400));
+}
+
+{
+  const data = parse(topLevelYaml(["time_mode: normalized"]));
+  assert("explicit normalized — kept in state", data.streams[0].timeMode === "normalized",
+    JSON.stringify(data.streams[0].timeMode));
+  const y = serialize(data);
+  assert("explicit normalized — emitted", y.includes("time_mode: normalized"), y.slice(0, 400));
+}
+
+{
+  const data = parse(topLevelYaml(["time_mode: absolute"]));
+  assert("explicit absolute — kept in state", data.streams[0].timeMode === "absolute",
+    JSON.stringify(data.streams[0].timeMode));
+  const y = serialize(data);
+  assert("explicit absolute — emitted", y.includes("time_mode: absolute"), y.slice(0, 400));
+}
+
+{
+  // New streams created by the UI carry timeMode: "normalized" explicitly —
+  // serialize must keep writing it.
+  const data = parse(topLevelYaml([]));
+  data.streams[0].timeMode = "normalized";
+  const y = serialize(data);
+  assert("template-like state — time_mode emitted", y.includes("time_mode: normalized"), y.slice(0, 400));
+  const diffs = roundTripDiff(data);
+  assert("template-like state — roundtrip no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 

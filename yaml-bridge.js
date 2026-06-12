@@ -24,6 +24,8 @@
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
  *   - dephase keeps all three shapes: scalar | envelope-array | per-param object.
+ *   - time_mode: absence is preserved (engine default is "absolute");
+ *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
 
 (function () {
@@ -387,7 +389,11 @@
       sample: y.sample || "",
       color: colorForStream(id, idx),
       mute: false, solo: false,
-      timeMode: y.time_mode || "normalized",
+      // Engine default is "absolute" — do NOT inject a default here. Absence
+      // must round-trip as absence or saving a file rescales every envelope's
+      // time axis. New streams created by the UI write "normalized"
+      // explicitly (see createStreamFromSample in app.jsx).
+      timeMode: y.time_mode ?? undefined,
       distributionMode: y.distribution_mode || "uniform",
       rangeAlwaysActive: !!y.range_always_active,
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
