@@ -135,7 +135,7 @@ function _applyEnvFields(stream, fn) {
     ...wf(stream, "panEnv"),
     ...wf(stream, "volumeEnv"),
     grain:   stream.grain   ? { ...stream.grain,   ...wf(stream.grain,   "durationEnv")   } : stream.grain,
-    pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv") } : stream.pointer,
+    pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv") } : stream.pointer,
     pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "valueEnv")      } : stream.pitch,
     voices:  stream.voices  ? {
       ...stream.voices,
@@ -165,6 +165,7 @@ function streamWouldTruncate(stream, ratio) {
     stream.pointer  && stream.pointer.speedRatioEnv,
     stream.pointer  && stream.pointer.loopStartEnv,
     stream.pointer  && stream.pointer.loopDurEnv,
+    stream.pointer  && stream.pointer.loopEndEnv,
     stream.pitch    && stream.pitch.valueEnv,
     stream.voices   && stream.voices.numEnv,
     stream.voices   && stream.voices.scatterEnv,
@@ -887,7 +888,7 @@ function App() {
         pan: 0, panRange: 0,
         grain: { duration: 0.05, durationRange: 0, envelope: "hanning" },
         pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null },
-        pitch: { semitones: 0, range: 0 },
+        pitch: { semitones: 0, range: null },
         voices: { num: 1 },
       };
       const arr = [...d.streams];

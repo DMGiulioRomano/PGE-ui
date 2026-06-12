@@ -383,6 +383,193 @@ if (fs.existsSync(ffPath)) {
 }
 
 /* ============================================================
+ * SECTION 8 — loop_end / loop_unit / grain.reverse / per-block _extra (#34)
+ * ============================================================ */
+
+console.log("\n── loop_end · loop_unit · reverse · block extras (#34) ──");
+
+{
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_end: 2.5"]));
+  const ptr = data.streams[0].pointer;
+  assert("parse loop_end scalar", ptr.loopEnd === 2.5, JSON.stringify(ptr));
+  const y = serialize(data);
+  assert("serialize — loop_end emitted", y.includes("loop_end:"), y.slice(0, 500));
+  assert("serialize — loop_dur not emitted", !y.includes("loop_dur:"), y.slice(0, 500));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip loop_end scalar — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_end: [[0, 1], [10, 3]]"]));
+  const ptr = data.streams[0].pointer;
+  assert("parse loop_end env", Array.isArray(ptr.loopEndEnv) && ptr.loopEndEnv.length === 2, JSON.stringify(ptr));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip loop_end env — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // Both in the file: loop_end wins (engine exclusive group priority).
+  const data = parse(pointerYaml(["loop_start: 0.25", "loop_end: 2.5", "loop_dur: 9"]));
+  const ptr = data.streams[0].pointer;
+  assert("loop_end + loop_dur — loop_end kept", ptr.loopEnd === 2.5, JSON.stringify(ptr));
+  assert("loop_end + loop_dur — loop_dur dropped", ptr.loopDur == null && ptr.loopDurEnv == null, JSON.stringify(ptr));
+  const y = serialize(data);
+  assert("loop_end + loop_dur — only loop_end emitted", y.includes("loop_end:") && !y.includes("loop_dur:"),
+    y.slice(0, 500));
+}
+
+{
+  const data = parse(pointerYaml(["loop_start: 0.2", "loop_dur: 0.4", "loop_unit: normalized"]));
+  const ptr = data.streams[0].pointer;
+  assert("parse loop_unit", ptr.loopUnit === "normalized", JSON.stringify(ptr));
+  const y = serialize(data);
+  assert("serialize — loop_unit emitted", y.includes("loop_unit: normalized"), y.slice(0, 500));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip loop_unit — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  const yamlRev = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+    grain:
+      duration: 0.05
+      reverse:
+`;
+  const data = parse(yamlRev);
+  assert("parse reverse bare key → null", data.streams[0].grain.reverse === null,
+    JSON.stringify(data.streams[0].grain));
+  const y = serialize(data);
+  assert("serialize — reverse: null emitted", /reverse: null/.test(y), y.slice(0, 500));
+  assert("serialize — reverse never true/false", !/reverse: (true|false)/.test(y), y.slice(0, 500));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip reverse — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // reverse absent → key never appears.
+  const data = parse(topLevelYaml(["grain: {duration: 0.05}"]));
+  assert("reverse absent in state", !("reverse" in data.streams[0].grain), JSON.stringify(data.streams[0].grain));
+  const y = serialize(data);
+  assert("reverse absent — not emitted", !y.includes("reverse"), y.slice(0, 500));
+}
+
+{
+  // Unknown keys inside rebuilt blocks survive via <block>._extra.
+  const yamlExtras = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+    pointer:
+      start: 0
+      futuro_param: 7
+    grain:
+      duration: 0.05
+      xkey: 1
+    pitch:
+      semitones: 2
+      glide: 3
+    voices:
+      num_voices: 2
+      nuova: 4
+`;
+  const data = parse(yamlExtras);
+  const s = data.streams[0];
+  assert("pointer._extra captured", s.pointer._extra && s.pointer._extra.futuro_param === 7, JSON.stringify(s.pointer._extra));
+  assert("grain._extra captured", s.grain._extra && s.grain._extra.xkey === 1, JSON.stringify(s.grain._extra));
+  assert("pitch._extra captured", s.pitch._extra && s.pitch._extra.glide === 3, JSON.stringify(s.pitch._extra));
+  assert("voices._extra captured", s.voices._extra && s.voices._extra.nuova === 4, JSON.stringify(s.voices._extra));
+  const y = serialize(data);
+  for (const frag of ["futuro_param: 7", "xkey: 1", "glide: 3", "nuova: 4"]) {
+    assert(`block extra re-emitted — ${frag}`, y.includes(frag), y.slice(0, 800));
+  }
+  const back = parse(y);
+  const b = back.streams[0];
+  assert("block extras stable after reparse",
+    b.pointer._extra.futuro_param === 7 && b.grain._extra.xkey === 1 &&
+    b.pitch._extra.glide === 3 && b.voices._extra.nuova === 4,
+    JSON.stringify({ p: b.pointer._extra, g: b.grain._extra, pi: b.pitch._extra, v: b.voices._extra }));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip block extras — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+const pino2Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino2.yml");
+if (fs.existsSync(pino2Path)) {
+  const text = fs.readFileSync(pino2Path, "utf8");
+  const data = parse(text);
+  const y = serialize(data);
+  const count = (y.match(/loop_unit: normalized/g) || []).length;
+  assert("pino2 fixture — loop_unit preserved on both streams", count === 2, `found ${count}, expected 2`);
+} else {
+  console.log("  SKIP pino2 fixture (file not found)");
+}
+
+const pino4Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino4.yml");
+if (fs.existsSync(pino4Path)) {
+  const data = parse(fs.readFileSync(pino4Path, "utf8"));
+  const revCount = data.streams.filter(s => s.grain && s.grain.reverse === null).length;
+  assert("pino4 fixture — bare reverse parsed on 2 streams", revCount === 2, `found ${revCount}`);
+  const y = serialize(data);
+  const emitted = (y.match(/reverse: null/g) || []).length;
+  assert("pino4 fixture — reverse re-emitted on 2 streams", emitted === 2, `found ${emitted}`);
+} else {
+  console.log("  SKIP pino4 fixture (file not found)");
+}
+
+{
+  // Explicit pitch.range: 0 disables implicit detune engine-side — it must
+  // survive the round trip (caught by PGE_detune_implicito_test.yml).
+  const data = parse(minimalYaml({ semitones: 7, range: 0 }));
+  assert("parse pitch.range 0 kept", data.streams[0].pitch.range === 0, JSON.stringify(data.streams[0].pitch));
+  const y = serialize(data);
+  assert("serialize pitch.range 0 emitted", /range: 0/.test(y), y.slice(0, 400));
+  const diffs = roundTripDiff(data);
+  assert("roundtrip pitch.range 0 — no diffs", diffs.length === 0, JSON.stringify(diffs));
+  // unset range (null) still omitted
+  const data2 = parse(minimalYaml({ semitones: 7 }));
+  const y2 = serialize(data2);
+  assert("unset pitch.range still omitted", !/range:/.test(y2), y2.slice(0, 400));
+}
+
+/* ============================================================
+ * SECTION 9 — corpus: every engine config round-trips
+ * ============================================================ */
+
+console.log("\n── corpus: engine configs ──");
+
+const configsDir = path.join(__dirname, "../../..", "PythonGranularEngine/configs");
+if (fs.existsSync(configsDir)) {
+  const files = fs.readdirSync(configsDir).filter(f => /\.ya?ml$/.test(f)).sort();
+  for (const f of files) {
+    const text = fs.readFileSync(path.join(configsDir, f), "utf8");
+    let data;
+    try {
+      data = parse(text);
+    } catch (e) {
+      assert(`corpus ${f} — parse`, false, e.message);
+      continue;
+    }
+    const diffs = roundTripDiff(data);
+    assert(`corpus ${f} — roundTripDiff []`, diffs.length === 0,
+      diffs.slice(0, 4).map(d => JSON.stringify(d)).join("; "));
+    let back;
+    try {
+      back = parse(serialize(data));
+    } catch (e) {
+      assert(`corpus ${f} — reparse`, false, e.message);
+      continue;
+    }
+    assert(`corpus ${f} — stream count stable`, back.streams.length === data.streams.length,
+      `${data.streams.length} → ${back.streams.length}`);
+  }
+} else {
+  console.log("  SKIP corpus (engine configs dir not found)");
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 

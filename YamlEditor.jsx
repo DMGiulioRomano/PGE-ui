@@ -40,7 +40,9 @@ function buildLines(stream, sampleRec) {
   if (stream.pointer.loopStart != null || stream.pointer.loopStartEnv) {
     if (stream.pointer.loopStartEnv) push({ ind: 1, kind: "raw", key: "loop_start", val: envInline(stream.pointer.loopStartEnv) });
     else push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
-    if (stream.pointer.loopEnd != null) {
+    if (stream.pointer.loopEndEnv) {
+      push({ ind: 1, kind: "raw", key: "loop_end", val: envInline(stream.pointer.loopEndEnv) });
+    } else if (stream.pointer.loopEnd != null) {
       push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
         err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
     } else if (stream.pointer.loopDurEnv) {
@@ -60,21 +62,26 @@ function buildLines(stream, sampleRec) {
   if (stream.grain.durationRangeEnv) push({ ind: 1, kind: "raw", key: "duration_range", val: envInline(stream.grain.durationRangeEnv) });
   else if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
   push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
+  if (stream.grain.reverse !== undefined) {
+    if (stream.grain.reverse === null) push({ ind: 1, kind: "flag", key: "reverse" });
+    else push({ ind: 1, kind: "v", key: "reverse", val: String(stream.grain.reverse) });
+  }
 
-  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null)) {
+  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null || stream.pitch.rangeEnv || stream.pitch.range != null)) {
     const pu = stream.pitch.unit || "semitones";
     const _safeNum = (n) => typeof n === "number" ? fmtNum(n) : fmtNum(0);
     push({ ind: 0, kind: "block", key: "pitch" });
     if (pu === "edo") {
       push({ ind: 1, kind: "v", key: "edo", val: String(stream.pitch.edoDivisions || 12) });
       if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: "value", val: envInline(stream.pitch.valueEnv) });
-      else push({ ind: 1, kind: "v", key: "value", val: _safeNum(stream.pitch.value) });
+      else if (stream.pitch.value != null) push({ ind: 1, kind: "v", key: "value", val: _safeNum(stream.pitch.value) });
     } else {
       if (stream.pitch.valueEnv) push({ ind: 1, kind: "raw", key: pu, val: envInline(stream.pitch.valueEnv) });
-      else push({ ind: 1, kind: "v", key: pu, val: _safeNum(stream.pitch.value) });
+      else if (stream.pitch.value != null) push({ ind: 1, kind: "v", key: pu, val: _safeNum(stream.pitch.value) });
     }
     if (stream.pitch.rangeEnv) push({ ind: 1, kind: "raw", key: "range", val: envInline(stream.pitch.rangeEnv) });
-    else if (stream.pitch.range) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
+    // range: 0 is meaningful (disables implicit detune) — render explicit zeros too
+    else if (stream.pitch.range != null) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
@@ -186,7 +193,11 @@ function parseYaml(text) {
     const key = kv[1];
     const valStr = kv[2].trim();
     const parsed = parseValue(valStr);
-    if (parsed === undefined) continue;
+    if (parsed === undefined) {
+      // bare key inside a block: presence-only flag (engine: forced reverse)
+      if (section === "grain" && key === "reverse" && valStr === "") out.grain.reverse = null;
+      continue;
+    }
 
     if (section === "pointer") {
       if (key === "speed_ratio") {
@@ -198,6 +209,13 @@ function parseYaml(text) {
       } else if (key === "loop_dur" || key === "loop_duration") { // legacy alias accepted on input
         if (Array.isArray(parsed)) { out.pointer.loopDur = null; out.pointer.loopDurEnv = parsed; }
         else { out.pointer.loopDur = parsed; out.pointer.loopDurEnv = null; }
+        out.pointer.loopEnd = null; out.pointer.loopEndEnv = null; // mutex
+      } else if (key === "loop_end") {
+        if (Array.isArray(parsed)) { out.pointer.loopEnd = null; out.pointer.loopEndEnv = parsed; }
+        else { out.pointer.loopEnd = parsed; out.pointer.loopEndEnv = null; }
+        out.pointer.loopDur = null; out.pointer.loopDurEnv = null; // mutex (loop_end wins engine-side)
+      } else if (key === "loop_unit") {
+        out.pointer.loopUnit = String(parsed).replace(/^['"]|['"]$/g, "");
       } else if (key === "offset_range") {
         if (Array.isArray(parsed)) { out.pointer.offsetRange = null; out.pointer.offsetRangeEnv = parsed; }
         else { out.pointer.offsetRange = parsed; out.pointer.offsetRangeEnv = null; }

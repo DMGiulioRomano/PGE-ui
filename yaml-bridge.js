@@ -18,7 +18,9 @@
  *   - Comments are lost.
  *   - Key order is normalised.
  *   - Numeric precision unchanged (no rounding) but YAML may emit `1` for `1.0`.
- *   - Unknown stream-level keys are preserved verbatim under `_extra`.
+ *   - Unknown stream-level keys are preserved verbatim under `_extra`;
+ *     unknown keys inside pointer/grain/pitch/voices are preserved under
+ *     `<block>._extra` (those blocks are rebuilt in full on serialize).
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
  *   - dephase keeps all three shapes: scalar | envelope-array | per-param object.
@@ -42,6 +44,32 @@
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
   ]);
+
+  /* Known keys inside the block nodes that serialize rebuilds in full
+   * (pointer/grain/pitch/voices). Anything else found inside those blocks is
+   * preserved under `<block>._extra` and re-emitted on serialize, so engine
+   * keys the editor doesn't model yet survive the round trip instead of
+   * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
+  const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "envelope", "reverse"]);
+  const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
+  const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
+
+  function collectExtras(block, known) {
+    if (!block || typeof block !== "object") return undefined;
+    const extras = {};
+    for (const k of Object.keys(block)) {
+      if (!known.has(k)) extras[k] = block[k];
+    }
+    return Object.keys(extras).length ? extras : undefined;
+  }
+
+  function mergeBlockExtras(blockY, extra) {
+    if (!extra || typeof extra !== "object") return;
+    for (const k of Object.keys(extra)) {
+      if (!(k in blockY) || blockY[k] === undefined) blockY[k] = extra[k];
+    }
+  }
 
   /* ---------- envelope helpers ---------- */
 
@@ -203,6 +231,11 @@
       duration_range: (() => { const dr = pickValueOrEnv(grain.durationRange, grain.durationRangeEnv); return (dr !== undefined && dr !== 0) ? dr : undefined; })(),
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
+    // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
+    // = auto). The editor stores null for the bare key; emit it verbatim —
+    // null survives stripUndef and dumps as `reverse: null`.
+    if (grain.reverse !== undefined) grainY.reverse = grain.reverse;
+    mergeBlockExtras(grainY, grain._extra);
     if (Object.values(grainY).some(v => v !== undefined)) {
       y.grain = stripUndef(grainY);
     }
@@ -210,13 +243,19 @@
     const ptr = s.pointer || {};
     const ptrSp = pickValueOrEnv(ptr.speedRatio, ptr.speedRatioEnv);
     const ptrOffRange = pickValueOrEnv(ptr.offsetRange, ptr.offsetRangeEnv);
+    // loop_end and loop_dur are an exclusive group engine-side with loop_end
+    // taking priority — emit at most one of the two.
+    const loopEndOut = pickValueOrEnv(ptr.loopEnd, ptr.loopEndEnv);
     const ptrY = {
       start:         ptr.start ?? undefined,
       speed_ratio:   ptrSp,
       loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
-      loop_dur:      pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
+      loop_end:      loopEndOut,
+      loop_dur:      loopEndOut === undefined ? pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv) : undefined,
+      loop_unit:     ptr.loopUnit || undefined,
       offset_range:  ptrOffRange !== undefined && ptrOffRange !== 0 ? ptrOffRange : undefined,
     };
+    mergeBlockExtras(ptrY, ptr._extra);
     if (Object.values(ptrY).some(v => v !== undefined)) {
       y.pointer = stripUndef(ptrY);
     }
@@ -227,20 +266,24 @@
       const pitchVal = pickValueOrEnv(pi.value, pi.valueEnv);
       const hasValue = pitchVal !== undefined;
       const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
-      const hasRange = rangeVal !== undefined && rangeVal !== 0;
-      if (hasValue || hasRange) {
-        if (unit === "edo") {
-          y.pitch = stripUndef({
-            edo:   pi.edoDivisions ?? undefined,
-            value: pitchVal,
-            range: hasRange ? rangeVal : undefined,
-          });
-        } else {
-          y.pitch = stripUndef({
-            [unit]: pitchVal,
-            range:  hasRange ? rangeVal : undefined,
-          });
-        }
+      // Explicit `range: 0` is meaningful engine-side (it disables the
+      // implicit detune that dephase.pitch would otherwise apply) — emit it.
+      // Unset stays null in the editor state and is not emitted.
+      const hasRange = rangeVal !== undefined;
+      const pitchExtra = (pi._extra && typeof pi._extra === "object" && Object.keys(pi._extra).length) ? pi._extra : undefined;
+      if (hasValue || hasRange || pitchExtra) {
+        const py = unit === "edo"
+          ? {
+              edo:   pi.edoDivisions ?? undefined,
+              value: pitchVal,
+              range: hasRange ? rangeVal : undefined,
+            }
+          : {
+              [unit]: pitchVal,
+              range:  hasRange ? rangeVal : undefined,
+            };
+        mergeBlockExtras(py, pitchExtra);
+        y.pitch = stripUndef(py);
       }
     }
 
@@ -257,10 +300,11 @@
     const v = s.voices || {};
     const numOut = pickValueOrEnv(v.num, v.numEnv);
     const scatterOut = pickValueOrEnv(v.scatter, v.scatterEnv);
+    const voicesExtra = (v._extra && typeof v._extra === "object" && Object.keys(v._extra).length) ? v._extra : undefined;
     const hasVoiceCfg =
       (numOut !== undefined && numOut !== 1) ||
       scatterOut != null ||
-      v.pitch || v.onset_offset || v.pointer || v.pan;
+      v.pitch || v.onset_offset || v.pointer || v.pan || voicesExtra;
     if (hasVoiceCfg) {
       const vy = { num_voices: numOut !== undefined ? numOut : 1 };
       if (scatterOut != null) vy.scatter      = scatterOut;
@@ -268,6 +312,7 @@
       if (v.onset_offset)     vy.onset_offset = packStrategy(v.onset_offset);
       if (v.pointer)          vy.pointer      = packStrategy(v.pointer);
       if (v.pan)              vy.pan          = packStrategy(v.pan);
+      mergeBlockExtras(vy, voicesExtra);
       y.voices = vy;
     }
 
@@ -367,16 +412,31 @@
         durationEnv:   grDur.env,
         ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? 0); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),
         envelope:      parseGrainEnvelope(grain.envelope) || "hanning",
+        // Presence-keyed: `reverse:` bare (null) = forced, absent = auto.
+        // Keep the value verbatim — anything non-null is an engine error the
+        // user should still see round-trip.
+        ...("reverse" in grain ? { reverse: grain.reverse ?? null } : {}),
+        ...(() => { const ex = collectExtras(y.grain, GRAIN_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pointer: {
         start:         ptr.start ?? 0,
         speedRatio:    ptrSp.scalar,
         speedRatioEnv: ptrSp.env,
         ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),
-        // `loop_duration` is a legacy alias: older editor builds wrote it, but
-        // the engine only knows `loop_dur` — read both, emit only `loop_dur`.
-        ...(() => { const ld = unpackValueOrEnv(ptr.loop_dur ?? ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
+        ...(() => {
+          const le = unpackValueOrEnv(ptr.loop_end ?? null);
+          const hasLE = le.scalar != null || le.env != null;
+          // loop_end wins over loop_dur engine-side (exclusive group): when
+          // both are in the file, keep only loop_end so the editor state
+          // matches what the engine will render.
+          // `loop_duration` is a legacy alias: older editor builds wrote it,
+          // but the engine only knows `loop_dur` — read both, emit `loop_dur`.
+          const ld = hasLE ? { scalar: null, env: null } : unpackValueOrEnv(ptr.loop_dur ?? ptr.loop_duration ?? null);
+          return { loopEnd: le.scalar, loopEndEnv: le.env, loopDur: ld.scalar, loopDurEnv: ld.env };
+        })(),
+        ...(ptr.loop_unit != null ? { loopUnit: ptr.loop_unit } : {}),
         ...(() => { const or = unpackValueOrEnv(ptr.offset_range ?? null); return or.scalar != null || or.env ? { offsetRange: or.scalar, offsetRangeEnv: or.env } : {}; })(),
+        ...(() => { const ex = collectExtras(y.pointer, POINTER_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pitch: (() => {
         const p = y.pitch;
@@ -391,6 +451,7 @@
           valueEnv:     env,
           edoDivisions: unit === "edo" ? (p.edo ?? null) : null,
           ...(() => { const rr = unpackValueOrEnv(p.range ?? null); return { range: rr.scalar, rangeEnv: rr.env }; })(),
+          ...(() => { const ex = collectExtras(p, PITCH_KNOWN); return ex ? { _extra: ex } : {}; })(),
         };
       })(),
       voices: (() => {
@@ -405,6 +466,7 @@
           onset_offset: unpackStrategy(y.voices?.onset_offset),
           pointer:      unpackStrategy(y.voices?.pointer),
           pan:          unpackStrategy(y.voices?.pan),
+          ...(() => { const ex = collectExtras(y.voices, VOICES_KNOWN); return ex ? { _extra: ex } : {}; })(),
         };
       })(),
       dephase: y.dephase ?? undefined,

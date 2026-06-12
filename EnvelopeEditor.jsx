@@ -51,6 +51,11 @@ function listEnvelopes(stream) {
       path: ["pointer", "loopDurEnv"], unit: "s",
       visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
   }
+  if (stream.pointer && stream.pointer.loopEndEnv) {
+    list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
+      path: ["pointer", "loopEndEnv"], unit: "s",
+      visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
+  }
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
       path: ["pointer", "offsetRangeEnv"], unit: "",

@@ -324,6 +324,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "durationRange" && stream.grain && stream.grain.durationRangeEnv)   return "env";
     if (k === "offsetRange"   && stream.pointer && stream.pointer.offsetRangeEnv) return "env";
     if (k === "fillFactor"    && stream.fillFactorEnv)                            return "env";
+    if (k === "loopEnd"       && stream.pointer && stream.pointer.loopEndEnv)     return "env";
     return fallback || "scalar";
   };
 
@@ -380,6 +381,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
       } else {
         const v = (cur.loopDurEnv && cur.loopDurEnv[0] && cur.loopDurEnv[0][1]) || 1;
         onChange({ pointer: { ...cur, loopDur: v, loopDurEnv: null } });
+      }
+      return;
+    }
+    if (k === "loopEnd") {
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = cur.loopEnd != null ? cur.loopEnd : 1;
+        onChange({ pointer: { ...cur, loopEnd: null, loopEndEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.loopEndEnv && cur.loopEndEnv[0] && cur.loopEndEnv[0][1]) || 1;
+        onChange({ pointer: { ...cur, loopEnd: v, loopEndEnv: null } });
       }
       return;
     }
@@ -668,7 +680,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
+              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
@@ -680,31 +692,31 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
-                         value={stream.pointer.loopEnd != null ? "loop_end" : "loop_dur"}
+                         value={(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? "loop_end" : "loop_dur"}
                          onChange={(u) => {
                            if (u === "loop_end") {
                              const le = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
                                : (stream.pointer.loopStart || 0) + (stream.pointer.loopDur != null ? stream.pointer.loopDur : 1);
-                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopDur: null, loopDurEnv: null } });
+                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopEndEnv: null, loopDur: null, loopDurEnv: null } });
                            } else {
                              const ld = stream.pointer.loopDur != null ? stream.pointer.loopDur
                                : Math.max(0.01, (stream.pointer.loopEnd || 0) - (stream.pointer.loopStart || 0));
-                             onChange({ pointer: { ...stream.pointer, loopDur: ld, loopEnd: null } });
+                             onChange({ pointer: { ...stream.pointer, loopDur: ld, loopDurEnv: null, loopEnd: null, loopEndEnv: null } });
                            }
                          }}
                          options={[{label:"loop_dur",value:"loop_dur"},{label:"loop_end",value:"loop_end"}]} />
-                    {stream.pointer.loopEnd != null ? (
-                      <span className="v">
-                        <NumberField value={stream.pointer.loopEnd} unit="s" width={70} />
-                      </span>
-                    ) : (
-                      <span className="v">
-                        <NumberField value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? null : 0)} unit={stream.pointer.loopDurEnv ? "" : "s"} width={70} />
-                      </span>
-                    )}
+                    <span />
                     <span />
                   </div>
-                  {stream.pointer.loopEnd == null ? (
+                  {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
+                    <ParamRow name="loop_end"
+                              mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : "s"}
+                              accent={stream.pointer.loopEndEnv != null}
+                              envValue={stream.pointer.loopEndEnv}
+                              onEditEnv={focusEnv("loopEnd")}
+                              onValue={(v) => onChange({pointer: {...stream.pointer, loopEnd: v}})} />
+                  ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
                               value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
@@ -712,7 +724,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
                               onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: v}})} />
-                  ) : null}
+                  )}
                   {stream.pointer.loopUnit ? (
                     <div className="pge-prow">
                       <span className="k">loop_unit</span><span />
@@ -746,9 +758,9 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   { key: "loopStart",   label: "loop_start",   desc: "loop window start (s)",
                     exists: stream.pointer.loopStart != null, def: 0 },
                   { key: "loopEnd",     label: "loop_end",     desc: "loop end (s) — mutex w/ loop_dur, has priority",
-                    exists: stream.pointer.loopEnd != null || stream.pointer.loopDur != null, def: 1 },
+                    exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
                   { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s)",
-                    exists: stream.pointer.loopDur != null || stream.pointer.loopEnd != null, def: 1 },
+                    exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
                   { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
                     exists: stream.pointer.loopUnit != null, def: "normalized" },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1]",
