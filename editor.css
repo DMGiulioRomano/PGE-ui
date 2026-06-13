@@ -398,5 +398,13 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 /* VU Meters */
 .scope-row { display: flex; flex-direction: row; align-items: stretch; }
 .vu-master  { flex-shrink: 0; display: block; }
-.track-head { position: relative; }
-.vu-track   { position: absolute; right: 8px; top: 0; display: block; pointer-events: none; }
+
+/* VU per-traccia: colonna fissa nel flex row del track-head, non assoluta —
+   così non copre i pulsanti M/S e l'altezza segue la lane (il canvas riceve
+   height=laneH da Timeline.jsx). */
+.track-head .vu-track {
+  flex: 0 0 6px;
+  align-self: stretch;
+  display: block;
+  pointer-events: none;
+}
