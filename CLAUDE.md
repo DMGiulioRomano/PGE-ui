@@ -40,7 +40,7 @@ fallback).
 
 ### Fingerprint parity
 
-The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over JSON with sorted keys, ignoring `color/mute/solo`) is intentionally aligned with python's per-stream hash. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
+The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys, ignoring `color/mute/solo/onset`) is semantically aligned with python's per-stream hash. The algorithms differ (FNV-1a vs SHA-256) and `onset` is intentionally excluded on the JS side: moving a clip on the timeline doesn't change the rendered audio, so it shouldn't mark the stem stale. The engine includes `onset` in its hash because it hashes the full YAML dict. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
 
 ### YAML round-trip (`yaml-bridge.js`)
 

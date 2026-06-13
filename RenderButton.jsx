@@ -78,6 +78,15 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status }) 
                     hint="only re-renders streams whose YAML changed" />
           <RsToggle k="pdf score" v={options.visualize} onChange={(v) => toggle("visualize", v)}
                     hint="generate a graphic score alongside audio" />
+          {options.visualize ? (
+            <div className="rs-row" style={{paddingLeft: 18}}>
+              <span className="rs-k">page duration</span>
+              <input type="number" className="pge-mini-input" min={1} step={1} style={{width: 52}}
+                     value={options.pageDuration ?? 15}
+                     onChange={e => toggle("pageDuration", Math.max(1, +e.target.value || 15))} />
+              <span className="rs-hint">seconds per page</span>
+            </div>
+          ) : null}
           <RsToggle k="reaper project" v={options.reaper} onChange={(v) => toggle("reaper", v)}
                     hint="export a .rpp Reaper session" />
           <RsToggle k="preclean output" v={options.preclean} onChange={(v) => toggle("preclean", v)}
@@ -125,7 +134,10 @@ function buildCommand(o) {
     "--per-stream",
   ];
   if (o.useCache) parts.push("--cache", "--cache-dir", "cache");
-  if (o.visualize) parts.push("--visualize", "--show-static");
+  if (o.visualize) {
+    parts.push("--visualize", "--show-static");
+    if (o.pageDuration && o.pageDuration !== 15) parts.push("--page-duration", String(o.pageDuration));
+  }
   if (o.reaper) parts.push("--reaper");
   return parts.join(" ");
 }

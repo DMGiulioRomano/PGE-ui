@@ -544,12 +544,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 </span>
                 <span />
               </div>
-              <div className="pge-prow">
-                <span className="k" title="stochastic distribution shape used by all *_range fields">distribution_mode</span>
+              <div className="pge-prow" style={{opacity: 0.45, pointerEvents: "none"}}>
+                <span className="k" title="reserved — not yet used by the engine">distribution_mode</span>
                 <span />
                 <span className="v">
                   <Seg size="xs" value={stream.distributionMode || "uniform"} onChange={v => onChange({distributionMode: v})}
                        options={[{label:"uniform",value:"uniform"},{label:"gaussian",value:"gaussian"}]} />
+                  <span className="hint" style={{fontSize: 9, marginLeft: 4}}>reserved</span>
                 </span>
                 <span />
               </div>
@@ -619,7 +620,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               {stream.fillFactor != null ? (
                 <ParamRow name="fill_factor" mode="scalar" value={stream.fillFactor} unit="×"
                   onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"}
-                  onValue={(v) => onChange({fillFactor: v})} />
+                  onValue={(v) => onChange({fillFactor: Math.max(window.PGE_BOUNDS.fillFactor.min, Math.min(window.PGE_BOUNDS.fillFactor.max, v))})} />
               ) : (
                 <ParamRow name="density"
                           mode={getMode("density")} onMode={(m) => toggleMode("density", m)}
@@ -812,12 +813,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               const unitLabel = pu;
               const unitSymbol = window.PGEEnv.pitchUnitSymbol(pu, edoN);
               const pitchSteps = window.PGEEnv.pitchUnitIsInteger(pu) ? [1, 10, 100] : [0.1, 1, 10];
-              const [slMin, slMax] = pu === "cents" ? [-3600, 3600]
-                : pu === "quarter_tone" ? [-72, 72]
-                : pu === "eighth_tone" ? [-144, 144]
-                : pu === "ratio" ? [0.25, 4]
-                : isEdo ? [-(3 * edoN), 3 * edoN]
-                : [-48, 48];
+              const pb = isEdo
+                ? { min: -(3 * edoN), max: 3 * edoN }
+                : (window.PGE_BOUNDS.pitch[pu] || window.PGE_BOUNDS.pitch.semitones);
+              const [slMin, slMax] = [pb.min, pb.max];
               function setPitchUnit(newU) {
                 if (newU === pu) return;
                 const E = window.PGEEnv;
@@ -885,6 +884,16 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             envValue={pi.rangeEnv}
                             onEditEnv={focusEnv("pitchRange")}
                             onValue={(v) => onChange({pitch: {...pi, range: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
+                  {pu !== "ratio" ? (
+                    <div className="pge-prow" style={{fontSize: 9, color: "var(--fg-4)", padding: "2px 0"}}>
+                      <span className="k" />
+                      <span />
+                      <span className="v" title="EDO units without an explicit range get implicit detune; range: 0 disables it">
+                        {pi.range == null ? "implicit detune ±12 cents" : (pi.range === 0 ? "detune disabled (range: 0)" : "")}
+                      </span>
+                      <span />
+                    </div>
+                  ) : null}
                 </Section>
               );
             })()}

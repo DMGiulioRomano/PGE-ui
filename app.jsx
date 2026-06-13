@@ -29,6 +29,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "outputPath": "output",
   "renderUseCache": true,
   "renderVisualize": false,
+  "renderPageDuration": 15,
   "renderReaper": false,
   "renderPreclean": false,
   "terminalOpen": false,
@@ -983,6 +984,7 @@ function App() {
   const renderOptions = {
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
+    pageDuration: tweaks.renderPageDuration ?? 15,
     reaper: !!tweaks.renderReaper,
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
@@ -996,6 +998,7 @@ function App() {
     }
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
+    setTweak("renderPageDuration", next.pageDuration);
     setTweak("renderReaper",    next.reaper);
     setTweak("renderPreclean",  next.preclean);
   }
@@ -1022,6 +1025,7 @@ function App() {
       renderer: "numpy",
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
+      pageDuration: renderOptions.visualize ? renderOptions.pageDuration : undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
