@@ -184,7 +184,7 @@ function streamWouldTruncate(stream, ratio) {
 
 // Blank in-memory project used as the editor's initial state before the real
 // project is loaded from the server (server.py lists configs/*.yml on boot).
-const EMPTY_PROJECT = { project: "", title: "", duration: 60, bpm: 120, streams: [], samples: [] };
+const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
 function App() {
   const t = window.useTweaks ? window.useTweaks(TWEAK_DEFAULTS) : [TWEAK_DEFAULTS, () => {}];
@@ -504,6 +504,13 @@ function App() {
     return out;
   }, [data.streams, tweaks.outputFormat]);
 
+  /* Composition length is derived from the streams (furthest edge + silent tail),
+     not the stored data.duration which goes stale after edits. Single source of
+     truth lives in yaml-bridge.computeDuration. */
+  const compDuration = useMemoApp(
+    () => window.PGEYaml ? window.PGEYaml.computeDuration(data.streams) : data.duration,
+    [data.streams]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(() => {
     const basename = activeProject.replace(/\.yml$/, "");
@@ -544,13 +551,13 @@ function App() {
 
   // Auto-stop when audio reaches duration (skip if looping)
   useEffectApp(() => {
-    if (playing && time >= data.duration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
+    if (playing && time >= compDuration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
       const engine = window.PGEAudio?.engine;
       if (engine) engine.stop();
       setPlaying(false);
       setTime(0);
     }
-  }, [time, playing, data.duration, loopEnabled, loopRegion.start, loopRegion.end]);
+  }, [time, playing, compDuration, loopEnabled, loopRegion.start, loopRegion.end]);
 
   // Loop-back when playhead reaches loop region end
   useEffectApp(() => {
@@ -671,7 +678,7 @@ function App() {
     }
     window.addEventListener("pge-seek", onSeek);
     return () => window.removeEventListener("pge-seek", onSeek);
-  }, [data.duration]);
+  }, [compDuration]);
 
   useEffectApp(() => {
     function onKey(e) {
@@ -970,7 +977,7 @@ function App() {
     const basename = name.replace(/\.yml$/i, "");
     const fullName = basename + ".yml";
     const empty = window.PGEYaml ? window.PGEYaml.emptyProject(basename)
-                                 : { project: basename, title: "", duration: 60, streams: [], samples: [] };
+                                 : { project: basename, title: "", duration: 10, streams: [], samples: [] };
     const backend = window.PGEBackend.current;
     try {
       await backend.fs.writeFile("projects", fullName, window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n");
@@ -1212,7 +1219,7 @@ function App() {
       pushToast({ kind: "warn", title: `couldn't load ${name}`, message: e.message + " · using fallback", duration: 3000 });
     }
     // Fallback: empty/unreadable file → synthesize a minimal blank project.
-    const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 60 };
+    const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 10 };
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
@@ -1278,7 +1285,7 @@ function App() {
     <Timeline streams={data.streams} selected={selectedIds}
               onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
-              playhead={time} duration={data.duration}
+              playhead={time} duration={compDuration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showClipLabels={tweaks.showClipLabels !== false}
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
@@ -1289,7 +1296,7 @@ function App() {
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
   );
   const envelopeEl = (
-    <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
+    <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={compDuration}
                     playhead={time}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
                     onLoopPanelChange={setLoopPanelOpen}
@@ -1329,7 +1336,7 @@ function App() {
               onRender={onRender} onCancelRender={onCancelRender}
               renderStatus={renderStatus}
               renderOptions={renderOptions} onRenderOptionsChange={setRenderOptions}
-              time={time} duration={data.duration}
+              time={time} duration={compDuration}
               onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
               browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen(o => !o)}
               onSave={onSave} onSaveAs={onSaveAs}

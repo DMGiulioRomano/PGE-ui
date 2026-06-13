@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, roundTripDiff } = window.PGEYaml;
+const { parse, serialize, roundTripDiff, computeDuration } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -831,6 +831,40 @@ assert("#51 helpers loaded", typeof _ye.buildLines === "function" && typeof pars
     JSON.stringify(reparsed.pointer));
   assert("#51 parseInline — loop_dur read back", reparsed.pointer.loopDur === 0.4,
     JSON.stringify(reparsed.pointer));
+}
+
+/* ============================================================
+ * SECTION — composition duration derived from streams (#auto-duration)
+ * ============================================================ */
+
+console.log("\n── computeDuration: derived from streams ──");
+
+{
+  assert("computeDuration([]) — pad only", computeDuration([]) === 10, String(computeDuration([])));
+  assert("computeDuration default pad — furthest edge + 10",
+    computeDuration([{ onset: 50, duration: 20 }]) === 80,
+    String(computeDuration([{ onset: 50, duration: 20 }])));
+  assert("computeDuration — max over many streams",
+    computeDuration([{ onset: 0, duration: 5 }, { onset: 60, duration: 10 }, { onset: 30, duration: 5 }]) === 80,
+    String(computeDuration([{ onset: 0, duration: 5 }, { onset: 60, duration: 10 }, { onset: 30, duration: 5 }])));
+  assert("computeDuration — custom pad",
+    computeDuration([{ onset: 5, duration: 5 }], 0) === 10,
+    String(computeDuration([{ onset: 5, duration: 5 }], 0)));
+}
+
+{
+  // serialize always emits the derived duration, ignoring stored data.duration.
+  const data = parse("streams:\n  - stream_id: s1\n    onset: 60\n    duration: 10\n    sample: test.wav\n");
+  data.duration = 9999;                       // stale stored value
+  const y = serialize(data);
+  const obj = window.jsyaml.load(y);
+  assert("serialize — duration derived (70 + 10), stored ignored", obj.duration === 80, JSON.stringify(obj.duration));
+}
+
+{
+  // parse ignores a stored duration: and derives from the streams instead.
+  const data = parse("duration: 60\nstreams:\n  - stream_id: s1\n    onset: 100\n    duration: 5\n    sample: test.wav\n");
+  assert("parse — stored duration ignored, derived from streams", data.duration === 115, String(data.duration));
 }
 
 /* ============================================================

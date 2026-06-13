@@ -363,7 +363,7 @@
     if (!window.jsyaml) return "";
     const payload = {};
     if (data.title)    payload.title    = data.title;
-    if (data.duration) payload.duration = data.duration;
+    payload.duration = computeDuration(data.streams);
     if (data.bpm)      payload.bpm      = data.bpm;
     payload.streams = (data.streams || []).map(streamToYaml);
 
@@ -540,7 +540,7 @@
     const data = {
       project:  opts.project || (y.project || "untitled"),
       title:    y.title || "",
-      duration: y.duration || streams.reduce((m, s) => Math.max(m, (s.onset || 0) + (s.duration || 0)), 60),
+      duration: computeDuration(streams),
       bpm:      y.bpm || 120,
       streams,
       samples:  opts.samples || [],
@@ -553,11 +553,21 @@
     return {
       project: (name || "new_project").replace(/\.yml$/i, ""),
       title: "",
-      duration: 60,
+      duration: computeDuration([]),
       bpm: 120,
       streams: [],
       samples: [],
     };
+  }
+
+  // Composition length is always derived from the streams: the furthest stream
+  // edge (onset + duration) plus a silent tail. The renderer (PythonGranularEngine)
+  // uses the top-level duration as the total render length, so this must reflect
+  // the actual content or audio gets clipped. Single source of truth = streams.
+  function computeDuration(streams, pad = 10) {
+    const extent = (streams || []).reduce(
+      (m, s) => Math.max(m, (s.onset || 0) + (s.duration || 0)), 0);
+    return extent > 0 ? extent + pad : pad;
   }
 
   /* ---------- round-trip self-test ----------
@@ -618,9 +628,10 @@
 
     const diffs = [];
     // Compare project-level fields
+    // duration is derived from streams, not round-tripped — skip it here.
     deepDiff(
-      { title: data.title || "", duration: data.duration || 0, bpm: data.bpm || 0 },
-      { title: back.title || "",  duration: back.duration || 0, bpm: back.bpm || 0 },
+      { title: data.title || "", bpm: data.bpm || 0 },
+      { title: back.title || "",  bpm: back.bpm || 0 },
       ["project"], diffs
     );
     // Compare each stream by id
@@ -637,6 +648,7 @@
     parse,
     serialize:     dataToYaml,
     emptyProject,
+    computeDuration,
     roundTripDiff,
     DEPHASE_IMPLICIT,
   };
