@@ -64,6 +64,22 @@
    * with legit engine values (bool | number | array | object). */
   const DEPHASE_IMPLICIT = "implicit";
 
+  /* Engine defaults — keep in sync with PythonGranularEngine. serialize() omits
+   * a per-stream key whose value equals the engine default, so the on-disk YAML
+   * stays canonical: the engine's per-stream SHA-256 fingerprint (and the UI
+   * FNV-1a) of an UNTOUCHED stream doesn't change just because a default is
+   * injected at parse for display. Without this, importing a hand-written YAML
+   * (or changing a default) shifts every stream's dict together → all stems read
+   * stale. Sources: distribution_mode core/stream_config.py; volume &
+   * grain.envelope & pointer.start parameters/parameter_schema.py. If the engine
+   * changes any of these, update here (see .claude/rules/cross-repo-impact.md). */
+  const ENGINE_DEFAULTS = {
+    distributionMode: "uniform",
+    volume:           0.0,
+    grainEnvelope:    "hanning",
+    pointerStart:     0.0,
+  };
+
   /* Known stream-level keys we map explicitly. Everything else under a
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
   const KNOWN_STREAM_KEYS = new Set([
@@ -240,7 +256,9 @@
       sample:    s.sample,
     };
     if (s.timeMode)         y.time_mode = s.timeMode;
-    if (s.distributionMode) y.distribution_mode = s.distributionMode;
+    // Omit when it equals the engine default ("uniform"): injected at parse for
+    // the Inspector only — emitting it would bloat the YAML and bust the cache.
+    if (s.distributionMode && s.distributionMode !== ENGINE_DEFAULTS.distributionMode) y.distribution_mode = s.distributionMode;
     if (s.rangeAlwaysActive) y.range_always_active = true;
     if (s.timeScale != null && s.timeScale !== 1.0)        y.time_scale = s.timeScale;
     if (s.clipStrategy && s.clipStrategy !== "overflow_margin") y.clip_strategy = s.clipStrategy;
@@ -257,10 +275,13 @@
 
     const grain = s.grain || {};
     const grainDur = pickValueOrEnv(grain.duration, grain.durationEnv);
+    const grainEnvOut = serializeGrainEnvelope(grain.envelope);
     const grainY = {
       duration:       grainDur,
       duration_range: (() => { const dr = pickValueOrEnv(grain.durationRange, grain.durationRangeEnv); return (dr !== undefined && dr !== 0) ? dr : undefined; })(),
-      envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
+      // Omit the default string "hanning" (injected at parse for display);
+      // object-form envelopes and non-default names are emitted verbatim.
+      envelope:       (grainEnvOut === ENGINE_DEFAULTS.grainEnvelope) ? undefined : (grainEnvOut || undefined),
     };
     // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
     // = auto). The editor stores null for the bare key; emit it verbatim —
@@ -278,7 +299,8 @@
     // taking priority — emit at most one of the two.
     const loopEndOut = pickValueOrEnv(ptr.loopEnd, ptr.loopEndEnv);
     const ptrY = {
-      start:         ptr.start ?? undefined,
+      // Omit when equal to the engine default (0.0); injected at parse for display.
+      start:         (ptr.start == null || ptr.start === ENGINE_DEFAULTS.pointerStart) ? undefined : ptr.start,
       speed_ratio:   ptrSp,
       loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
       loop_end:      loopEndOut,
@@ -324,7 +346,10 @@
     if (panRange !== undefined && panRange !== 0) y.pan_range = panRange;
 
     const vol = pickValueOrEnv(s.volume, s.volumeEnv);
-    if (vol !== undefined) y.volume = vol;
+    // Emit envelopes always; omit only a scalar equal to the engine default (0 dB),
+    // injected at parse for the Inspector. pickValueOrEnv returns the array/object
+    // for an envelope, so `typeof vol === "number"` isolates the scalar branch.
+    if (vol !== undefined && !(typeof vol === "number" && vol === ENGINE_DEFAULTS.volume)) y.volume = vol;
     const volRange = pickValueOrEnv(s.volumeRange, s.volumeRangeEnv);
     if (volRange !== undefined && volRange !== 0) y.volume_range = volRange;
 
@@ -651,5 +676,6 @@
     computeDuration,
     roundTripDiff,
     DEPHASE_IMPLICIT,
+    ENGINE_DEFAULTS,
   };
 })();

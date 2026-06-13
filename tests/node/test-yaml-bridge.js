@@ -683,6 +683,135 @@ for (const f of dephaseFixtures) {
 }
 
 /* ============================================================
+ * SECTION 8d — engine-default canonicalization: serialize omits a per-stream
+ * key whose value equals the engine default, so the on-disk YAML stays canonical
+ * and the per-stream fingerprint (engine SHA-256 + UI FNV-1a) of UNTOUCHED
+ * streams is stable. parse() still injects the defaults for the Inspector.
+ * Without this, importing a hand-written YAML (or a default change) shifts every
+ * stream's dict together → all stems read stale. (#cache-bust)
+ * ============================================================ */
+
+console.log("\n── engine-default canonicalization (#cache) ──");
+
+const serStream0 = (d) => window.jsyaml.load(serialize(d)).streams[0];
+
+/* distribution_mode — engine default "uniform" */
+{
+  const data = parse(topLevelYaml([]));
+  assert("dist_mode absent — injected 'uniform' in state", data.streams[0].distributionMode === "uniform",
+    JSON.stringify(data.streams[0].distributionMode));
+  assert("dist_mode default — not emitted", !("distribution_mode" in serStream0(data)),
+    JSON.stringify(serStream0(data)));
+}
+{
+  const data = parse(topLevelYaml(["distribution_mode: uniform"]));
+  assert("dist_mode explicit uniform — not emitted (canonical)", !("distribution_mode" in serStream0(data)),
+    JSON.stringify(serStream0(data)));
+  assert("dist_mode explicit uniform — roundtrip lossless", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(topLevelYaml(["distribution_mode: gaussian"]));
+  assert("dist_mode gaussian — emitted", serStream0(data).distribution_mode === "gaussian",
+    JSON.stringify(serStream0(data)));
+  assert("dist_mode gaussian — roundtrip lossless", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+/* volume — engine default 0.0 (dual scalar/envelope) */
+{
+  const data = parse(topLevelYaml([]));
+  assert("volume absent — injected 0 in state", data.streams[0].volume === 0, JSON.stringify(data.streams[0].volume));
+  assert("volume default 0 — not emitted", !("volume" in serStream0(data)), JSON.stringify(serStream0(data)));
+}
+{
+  const data = parse(topLevelYaml(["volume: 0"]));
+  assert("volume explicit 0 — not emitted (canonical)", !("volume" in serStream0(data)), JSON.stringify(serStream0(data)));
+  assert("volume explicit 0 — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(topLevelYaml(["volume: -6"]));
+  assert("volume -6 — emitted", serStream0(data).volume === -6, JSON.stringify(serStream0(data)));
+  assert("volume -6 — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  // an envelope is emitted even if it passes through the default value
+  const data = parse(topLevelYaml(["volume: [[0, 0], [10, -6]]"]));
+  assert("volume envelope — emitted", Array.isArray(serStream0(data).volume), JSON.stringify(serStream0(data)));
+  assert("volume envelope — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+/* grain.envelope — engine default "hanning" (dual string/object) */
+{
+  const data = parse(topLevelYaml(["grain: {duration: 0.05}"]));
+  assert("grain.envelope absent — injected 'hanning' in state", data.streams[0].grain.envelope === "hanning",
+    JSON.stringify(data.streams[0].grain.envelope));
+  assert("grain.envelope default — not emitted", !("envelope" in (serStream0(data).grain || {})),
+    JSON.stringify(serStream0(data).grain));
+}
+{
+  const data = parse(topLevelYaml(["grain: {duration: 0.05, envelope: hanning}"]));
+  assert("grain.envelope explicit hanning — not emitted (canonical)",
+    !("envelope" in (serStream0(data).grain || {})), JSON.stringify(serStream0(data).grain));
+  assert("grain.envelope hanning — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(topLevelYaml(["grain: {duration: 0.05, envelope: gaussian}"]));
+  assert("grain.envelope gaussian — emitted", (serStream0(data).grain || {}).envelope === "gaussian",
+    JSON.stringify(serStream0(data).grain));
+  assert("grain.envelope gaussian — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  // object-form envelope (from/to) is always emitted verbatim
+  const yamlObjEnv = "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n    grain:\n      duration: 0.05\n      envelope:\n        from: hanning\n        to: gaussian\n";
+  const data = parse(yamlObjEnv);
+  const g = serStream0(data).grain || {};
+  assert("grain.envelope object (from/to) — emitted",
+    !!g.envelope && g.envelope.from === "hanning" && g.envelope.to === "gaussian", JSON.stringify(g));
+  assert("grain.envelope object — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  // a grain block holding ONLY the default envelope collapses away entirely
+  const data = parse(topLevelYaml(["grain: {envelope: hanning}"]));
+  assert("grain with only default envelope — grain block omitted", !("grain" in serStream0(data)),
+    JSON.stringify(serStream0(data)));
+}
+
+/* pointer.start — engine default 0.0 */
+{
+  const data = parse(pointerYaml(["speed_ratio: 1.5"]));
+  assert("pointer.start absent — injected 0 in state", data.streams[0].pointer.start === 0,
+    JSON.stringify(data.streams[0].pointer.start));
+  assert("pointer.start default — not emitted", !("start" in (serStream0(data).pointer || {})),
+    JSON.stringify(serStream0(data).pointer));
+}
+{
+  const data = parse(pointerYaml(["start: 0", "speed_ratio: 1.5"]));
+  assert("pointer.start explicit 0 — not emitted (canonical)", !("start" in (serStream0(data).pointer || {})),
+    JSON.stringify(serStream0(data).pointer));
+  assert("pointer.start 0 — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(pointerYaml(["start: 0.3"]));
+  assert("pointer.start 0.3 — emitted", (serStream0(data).pointer || {}).start === 0.3,
+    JSON.stringify(serStream0(data).pointer));
+  assert("pointer.start 0.3 — roundtrip lossless", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(pointerYaml(["start: 0"]));
+  assert("pointer with only start:0 — pointer block omitted", !("pointer" in serStream0(data)),
+    JSON.stringify(serStream0(data)));
+}
+
+/* duration — REQUIRED, no engine default: must ALWAYS be emitted (guard against
+ * a future regression that would canonicalize it away). See audit note. */
+{
+  const data = parse(topLevelYaml([]));
+  assert("duration — always emitted (never canonicalized away)", "duration" in serStream0(data),
+    JSON.stringify(serStream0(data)));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 
@@ -831,6 +960,22 @@ assert("#51 helpers loaded", typeof _ye.buildLines === "function" && typeof pars
     JSON.stringify(reparsed.pointer));
   assert("#51 parseInline — loop_dur read back", reparsed.pointer.loopDur === 0.4,
     JSON.stringify(reparsed.pointer));
+}
+
+{
+  // #51 — buildLines mirrors serialize's engine-default omissions (#cache)
+  const t1 = inlineText(streamOf(topLevelYaml(["distribution_mode: uniform", "volume: 0"])));
+  assert("#51 buildLines — distribution_mode uniform omitted", !t1.includes("distribution_mode"), t1);
+  assert("#51 buildLines — volume 0 omitted", !/^\s*volume:/m.test(t1), t1);
+
+  const t2 = inlineText(streamOf(topLevelYaml(["grain: {duration: 0.05, envelope: hanning}"])));
+  assert("#51 buildLines — grain.envelope hanning omitted", !/^\s*envelope:/m.test(t2), t2);
+
+  const t3 = inlineText(streamOf(topLevelYaml(
+    ["distribution_mode: gaussian", "volume: -6", "grain: {duration: 0.05, envelope: gaussian}"])));
+  assert("#51 buildLines — gaussian dist_mode kept", t3.includes("distribution_mode") && t3.includes("gaussian"), t3);
+  assert("#51 buildLines — volume -6 kept", /^\s*volume:\s*-6/m.test(t3), t3);
+  assert("#51 buildLines — envelope gaussian kept", /^\s*envelope:\s*gaussian/m.test(t3), t3);
 }
 
 /* ============================================================
