@@ -394,3 +394,22 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-yaml .edit-gutter { margin: 0; padding: 8px 8px 16px 10px; min-width: 44px; text-align: right; color: var(--fg-4); background: var(--bg-elevated); border-right: 1px solid var(--border-subtle); font: 12px/1.65 var(--font-mono); user-select: none; overflow: hidden; white-space: pre; flex: 0 0 auto; }
 .pge-yaml .edit-area { flex: 1; min-width: 0; padding: 8px 12px 16px; background: transparent; color: var(--fg-1); border: 0; outline: none; resize: none; font: 12px/1.65 var(--font-mono); white-space: pre; overflow: auto; caret-color: var(--accent); tab-size: 2; }
 .pge-yaml .edit-area::selection { background: rgba(255,140,66,0.25); }
+
+/* VU Meters */
+.scope-row { display: flex; flex-direction: row; align-items: stretch; }
+/* lo Stereoscope cede spazio al VU invece di occupare tutta la colonna
+   (default flex-shrink:0 lo spingerebbe oltre overflow:hidden) */
+.scope-row .pge-scope { flex: 1 1 auto; min-width: 0; }
+.vu-master  { flex: 0 0 auto; align-self: stretch; display: block; width: 50px;
+              background: #1a1a1a; border-left: 1px solid rgba(255,255,255,0.08);
+              border-top: 1px solid rgba(255,255,255,0.07); }
+
+/* VU per-traccia: colonna fissa nel flex row del track-head, non assoluta —
+   così non copre i pulsanti M/S e l'altezza segue la lane (il canvas riceve
+   height=laneH da Timeline.jsx). */
+.track-head .vu-track {
+  flex: 0 0 6px;
+  align-self: stretch;
+  display: block;
+  pointer-events: none;
+}
