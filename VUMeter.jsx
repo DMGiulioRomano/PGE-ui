@@ -42,6 +42,11 @@
     const peaksRef  = useRef({ L: -Infinity, R: -Infinity, tL: 0, tR: 0 });
 
     useEffect(() => {
+      if (!open) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        return;
+      }
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
@@ -120,7 +125,7 @@
 
       rafRef.current = requestAnimationFrame(draw);
       return () => cancelAnimationFrame(rafRef.current);
-    }, []);
+    }, [open]);
 
     if (!open) return null;
 
