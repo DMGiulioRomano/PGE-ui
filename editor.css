@@ -397,7 +397,10 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 
 /* VU Meters */
 .scope-row { display: flex; flex-direction: row; align-items: stretch; }
-.vu-master  { flex-shrink: 0; display: block; }
+/* lo Stereoscope cede spazio al VU invece di occupare tutta la colonna
+   (default flex-shrink:0 lo spingerebbe oltre overflow:hidden) */
+.scope-row .pge-scope { flex: 1 1 auto; min-width: 0; }
+.vu-master  { flex: 0 0 auto; align-self: stretch; display: block; }
 
 /* VU per-traccia: colonna fissa nel flex row del track-head, non assoluta —
    così non copre i pulsanti M/S e l'altezza segue la lane (il canvas riceve
