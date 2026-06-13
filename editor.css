@@ -394,3 +394,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .pge-yaml .edit-gutter { margin: 0; padding: 8px 8px 16px 10px; min-width: 44px; text-align: right; color: var(--fg-4); background: var(--bg-elevated); border-right: 1px solid var(--border-subtle); font: 12px/1.65 var(--font-mono); user-select: none; overflow: hidden; white-space: pre; flex: 0 0 auto; }
 .pge-yaml .edit-area { flex: 1; min-width: 0; padding: 8px 12px 16px; background: transparent; color: var(--fg-1); border: 0; outline: none; resize: none; font: 12px/1.65 var(--font-mono); white-space: pre; overflow: auto; caret-color: var(--accent); tab-size: 2; }
 .pge-yaml .edit-area::selection { background: rgba(255,140,66,0.25); }
+
+/* VU Meters */
+.scope-row { display: flex; flex-direction: row; align-items: stretch; }
+.vu-master  { flex-shrink: 0; display: block; }
+.track-head { position: relative; }
+.vu-track   { position: absolute; right: 8px; top: 0; display: block; pointer-events: none; }

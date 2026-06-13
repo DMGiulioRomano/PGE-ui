@@ -171,7 +171,8 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, showSpectrograms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor, spectrogramFor,
-  loopEnabled, loopRegion, onLoopRegionChange }) {
+  loopEnabled, loopRegion, onLoopRegionChange,
+  analyserFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -620,7 +621,8 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               onReorderStart={(e) => startReorder(e, i)}
               onSelect={(multi) => onSelect(s.id, multi)} onRangeSelect={() => onRangeSelect && onRangeSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
               onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
-              effMuted={isEffMuted(s)} anySolo={anySolo} />
+              effMuted={isEffMuted(s)} anySolo={anySolo}
+              analyser={analyserFor ? analyserFor(s.id) : null} />
             )}
           </div>
         </div>
@@ -765,7 +767,9 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
 
 }
 
-function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
+function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo, analyser }) {
+  const VUMeter = window.PGE?.VUMeter;
+  const laneH = typeof height === "number" ? height : 56;
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
     style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }}
@@ -782,6 +786,7 @@ function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect
         </div>
         <span className="sub">{stream.sample}</span>
       </div>
+      {VUMeter && <VUMeter mode="track" analyser={analyser} height={laneH} />}
       <div className="track-head-resize" onPointerDown={onResizeStart} onClick={(e) => e.stopPropagation()} />
     </div>);
 

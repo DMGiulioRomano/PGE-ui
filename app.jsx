@@ -1260,7 +1260,7 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope, VUMeter } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browserPanel = (
@@ -1275,10 +1275,13 @@ function App() {
                      showWaveform={tweaks.showWaveformBrowser}
                      onChooseMediaFolder={onChooseMediaFolder}
                      onChooseProjectsFolder={onChooseProjectsFolder} />
-      <Stereoscope open={scopeOpen}
-                   height={tweaks.scopeHeight || 180}
-                   onHeightChange={(h) => setTweak("scopeHeight", h)}
-                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
+      <div className="scope-row">
+        <Stereoscope open={scopeOpen}
+                     height={tweaks.scopeHeight || 180}
+                     onHeightChange={(h) => setTweak("scopeHeight", h)}
+                     onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
+        {VUMeter && <VUMeter mode="master" open={scopeOpen} height={tweaks.scopeHeight || 180} />}
+      </div>
     </div>
   );
   const timelineEl = (
@@ -1293,7 +1296,8 @@ function App() {
               renderStatusFor={renderStatusForStream}
               waveformFor={(id) => waveforms[id]}
               spectrogramFor={(id) => spectrograms[id]}
-              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
+              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
+              analyserFor={(id) => window.PGEAudio?.engine?.trackAnalyser(id)} />
   );
   const envelopeEl = (
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={compDuration}
