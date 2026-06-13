@@ -18,10 +18,17 @@
  *   - Comments are lost.
  *   - Key order is normalised.
  *   - Numeric precision unchanged (no rounding) but YAML may emit `1` for `1.0`.
- *   - Unknown stream-level keys are preserved verbatim under `_extra`.
+ *   - Unknown stream-level keys are preserved verbatim under `_extra`;
+ *     unknown keys inside pointer/grain/pitch/voices are preserved under
+ *     `<block>._extra` (those blocks are rebuilt in full on serialize).
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
- *   - dephase keeps all three shapes: scalar | envelope-array | per-param object.
+ *   - dephase keeps all engine states: absent (off) | false (off) |
+ *     null = implicit 1% (stored as the DEPHASE_IMPLICIT sentinel string,
+ *     because parse/serialize plumbing collapses null and undefined) |
+ *     scalar | envelope-array | per-param object.
+ *   - time_mode: absence is preserved (engine default is "absolute");
+ *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
 
 (function () {
@@ -31,17 +38,51 @@
 
   const PALETTE = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
 
+  /* Editor-state sentinel for `dephase: null` (key present, empty value),
+   * which the engine reads as "implicit mode, default 1% probability".
+   * A plain null cannot represent it in the editor state: it would collapse
+   * into undefined (= key absent = off) across `??` plumbing and JSON
+   * clipboard copies. A string survives all of those and never collides
+   * with legit engine values (bool | number | array | object). */
+  const DEPHASE_IMPLICIT = "implicit";
+
   /* Known stream-level keys we map explicitly. Everything else under a
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
   const KNOWN_STREAM_KEYS = new Set([
     "stream_id", "onset", "duration", "sample",
     "time_mode", "distribution_mode",
     "range_always_active", "time_scale", "clip_strategy", "clip_margin",
-    "density", "distribution",
+    "density", "fill_factor", "distribution",
     "grain", "pointer", "pitch", "voices",
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
   ]);
+
+  /* Known keys inside the block nodes that serialize rebuilds in full
+   * (pointer/grain/pitch/voices). Anything else found inside those blocks is
+   * preserved under `<block>._extra` and re-emitted on serialize, so engine
+   * keys the editor doesn't model yet survive the round trip instead of
+   * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
+  const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "envelope", "reverse"]);
+  const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
+  const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
+
+  function collectExtras(block, known) {
+    if (!block || typeof block !== "object") return undefined;
+    const extras = {};
+    for (const k of Object.keys(block)) {
+      if (!known.has(k)) extras[k] = block[k];
+    }
+    return Object.keys(extras).length ? extras : undefined;
+  }
+
+  function mergeBlockExtras(blockY, extra) {
+    if (!extra || typeof extra !== "object") return;
+    for (const k of Object.keys(extra)) {
+      if (!(k in blockY) || blockY[k] === undefined) blockY[k] = extra[k];
+    }
+  }
 
   /* ---------- envelope helpers ---------- */
 
@@ -187,8 +228,12 @@
     if (s.clipStrategy && s.clipStrategy !== "overflow_margin") y.clip_strategy = s.clipStrategy;
     if (s.clipMargin != null && s.clipMargin !== 0)        y.clip_margin = s.clipMargin;
 
+    // fill_factor and density are mutually exclusive; the engine gives
+    // fill_factor priority when both are present, so emit exactly one.
+    const fillFactor = pickValueOrEnv(s.fillFactor, s.fillFactorEnv);
     const density = pickValueOrEnv(s.density, s.densityEnv);
-    if (density !== undefined) y.density = density;
+    if (fillFactor !== undefined) y.fill_factor = fillFactor;
+    else if (density !== undefined) y.density = density;
     const distribution = pickValueOrEnv(s.distribution, s.distributionEnv);
     if (distribution !== undefined) y.distribution = distribution;
 
@@ -199,6 +244,11 @@
       duration_range: (() => { const dr = pickValueOrEnv(grain.durationRange, grain.durationRangeEnv); return (dr !== undefined && dr !== 0) ? dr : undefined; })(),
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
+    // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
+    // = auto). The editor stores null for the bare key; emit it verbatim —
+    // null survives stripUndef and dumps as `reverse: null`.
+    if (grain.reverse !== undefined) grainY.reverse = grain.reverse;
+    mergeBlockExtras(grainY, grain._extra);
     if (Object.values(grainY).some(v => v !== undefined)) {
       y.grain = stripUndef(grainY);
     }
@@ -206,13 +256,19 @@
     const ptr = s.pointer || {};
     const ptrSp = pickValueOrEnv(ptr.speedRatio, ptr.speedRatioEnv);
     const ptrOffRange = pickValueOrEnv(ptr.offsetRange, ptr.offsetRangeEnv);
+    // loop_end and loop_dur are an exclusive group engine-side with loop_end
+    // taking priority — emit at most one of the two.
+    const loopEndOut = pickValueOrEnv(ptr.loopEnd, ptr.loopEndEnv);
     const ptrY = {
       start:         ptr.start ?? undefined,
       speed_ratio:   ptrSp,
       loop_start:    pickValueOrEnv(ptr.loopStart, ptr.loopStartEnv),
-      loop_duration: pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv),
+      loop_end:      loopEndOut,
+      loop_dur:      loopEndOut === undefined ? pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv) : undefined,
+      loop_unit:     ptr.loopUnit || undefined,
       offset_range:  ptrOffRange !== undefined && ptrOffRange !== 0 ? ptrOffRange : undefined,
     };
+    mergeBlockExtras(ptrY, ptr._extra);
     if (Object.values(ptrY).some(v => v !== undefined)) {
       y.pointer = stripUndef(ptrY);
     }
@@ -223,20 +279,24 @@
       const pitchVal = pickValueOrEnv(pi.value, pi.valueEnv);
       const hasValue = pitchVal !== undefined;
       const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
-      const hasRange = rangeVal !== undefined && rangeVal !== 0;
-      if (hasValue || hasRange) {
-        if (unit === "edo") {
-          y.pitch = stripUndef({
-            edo:   pi.edoDivisions ?? undefined,
-            value: pitchVal,
-            range: hasRange ? rangeVal : undefined,
-          });
-        } else {
-          y.pitch = stripUndef({
-            [unit]: pitchVal,
-            range:  hasRange ? rangeVal : undefined,
-          });
-        }
+      // Explicit `range: 0` is meaningful engine-side (it disables the
+      // implicit detune that dephase.pitch would otherwise apply) — emit it.
+      // Unset stays null in the editor state and is not emitted.
+      const hasRange = rangeVal !== undefined;
+      const pitchExtra = (pi._extra && typeof pi._extra === "object" && Object.keys(pi._extra).length) ? pi._extra : undefined;
+      if (hasValue || hasRange || pitchExtra) {
+        const py = unit === "edo"
+          ? {
+              edo:   pi.edoDivisions ?? undefined,
+              value: pitchVal,
+              range: hasRange ? rangeVal : undefined,
+            }
+          : {
+              [unit]: pitchVal,
+              range:  hasRange ? rangeVal : undefined,
+            };
+        mergeBlockExtras(py, pitchExtra);
+        y.pitch = stripUndef(py);
       }
     }
 
@@ -253,10 +313,11 @@
     const v = s.voices || {};
     const numOut = pickValueOrEnv(v.num, v.numEnv);
     const scatterOut = pickValueOrEnv(v.scatter, v.scatterEnv);
+    const voicesExtra = (v._extra && typeof v._extra === "object" && Object.keys(v._extra).length) ? v._extra : undefined;
     const hasVoiceCfg =
       (numOut !== undefined && numOut !== 1) ||
       scatterOut != null ||
-      v.pitch || v.onset_offset || v.pointer || v.pan;
+      v.pitch || v.onset_offset || v.pointer || v.pan || voicesExtra;
     if (hasVoiceCfg) {
       const vy = { num_voices: numOut !== undefined ? numOut : 1 };
       if (scatterOut != null) vy.scatter      = scatterOut;
@@ -264,10 +325,12 @@
       if (v.onset_offset)     vy.onset_offset = packStrategy(v.onset_offset);
       if (v.pointer)          vy.pointer      = packStrategy(v.pointer);
       if (v.pan)              vy.pan          = packStrategy(v.pan);
+      mergeBlockExtras(vy, voicesExtra);
       y.voices = vy;
     }
 
-    if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
+    if (s.dephase === DEPHASE_IMPLICIT) y.dephase = null; // dumps as `dephase: null`
+    else if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
 
     // Pass through any extra top-level keys we don't model explicitly.
     if (s._extra && typeof s._extra === "object") {
@@ -313,6 +376,10 @@
     const id = y.stream_id || ("stream" + (idx + 1));
 
     const dens = unpackValueOrEnv(y.density);
+    const ff   = unpackValueOrEnv(y.fill_factor ?? null);
+    // fill_factor wins over density engine-side; mirror that at parse so the
+    // Inspector shows the branch the engine will actually use.
+    const hasFF = ff.scalar != null || ff.env != null;
     const dist = unpackValueOrEnv(y.distribution);
     const pan  = unpackValueOrEnv(y.pan);
 
@@ -334,15 +401,21 @@
       sample: y.sample || "",
       color: colorForStream(id, idx),
       mute: false, solo: false,
-      timeMode: y.time_mode || "normalized",
+      // Engine default is "absolute" — do NOT inject a default here. Absence
+      // must round-trip as absence or saving a file rescales every envelope's
+      // time axis. New streams created by the UI write "normalized"
+      // explicitly (see createStreamFromSample in app.jsx).
+      timeMode: y.time_mode ?? undefined,
       distributionMode: y.distribution_mode || "uniform",
       rangeAlwaysActive: !!y.range_always_active,
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
       clipStrategy: y.clip_strategy || "overflow_margin",
       clipMargin:   y.clip_margin   != null ? y.clip_margin   : 0.0,
 
-      density:    dens.scalar,
-      densityEnv: dens.env,
+      density:    hasFF ? null : dens.scalar,
+      densityEnv: hasFF ? null : dens.env,
+      fillFactor:    ff.scalar,
+      fillFactorEnv: ff.env,
       distribution:    dist.scalar,
       distributionEnv: dist.env,
 
@@ -357,14 +430,31 @@
         durationEnv:   grDur.env,
         ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? 0); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),
         envelope:      parseGrainEnvelope(grain.envelope) || "hanning",
+        // Presence-keyed: `reverse:` bare (null) = forced, absent = auto.
+        // Keep the value verbatim — anything non-null is an engine error the
+        // user should still see round-trip.
+        ...("reverse" in grain ? { reverse: grain.reverse ?? null } : {}),
+        ...(() => { const ex = collectExtras(y.grain, GRAIN_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pointer: {
         start:         ptr.start ?? 0,
         speedRatio:    ptrSp.scalar,
         speedRatioEnv: ptrSp.env,
         ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),
-        ...(() => { const ld = unpackValueOrEnv(ptr.loop_duration ?? null); return { loopDur: ld.scalar, loopDurEnv: ld.env }; })(),
+        ...(() => {
+          const le = unpackValueOrEnv(ptr.loop_end ?? null);
+          const hasLE = le.scalar != null || le.env != null;
+          // loop_end wins over loop_dur engine-side (exclusive group): when
+          // both are in the file, keep only loop_end so the editor state
+          // matches what the engine will render.
+          // `loop_duration` is a legacy alias: older editor builds wrote it,
+          // but the engine only knows `loop_dur` — read both, emit `loop_dur`.
+          const ld = hasLE ? { scalar: null, env: null } : unpackValueOrEnv(ptr.loop_dur ?? ptr.loop_duration ?? null);
+          return { loopEnd: le.scalar, loopEndEnv: le.env, loopDur: ld.scalar, loopDurEnv: ld.env };
+        })(),
+        ...(ptr.loop_unit != null ? { loopUnit: ptr.loop_unit } : {}),
         ...(() => { const or = unpackValueOrEnv(ptr.offset_range ?? null); return or.scalar != null || or.env ? { offsetRange: or.scalar, offsetRangeEnv: or.env } : {}; })(),
+        ...(() => { const ex = collectExtras(y.pointer, POINTER_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pitch: (() => {
         const p = y.pitch;
@@ -379,6 +469,7 @@
           valueEnv:     env,
           edoDivisions: unit === "edo" ? (p.edo ?? null) : null,
           ...(() => { const rr = unpackValueOrEnv(p.range ?? null); return { range: rr.scalar, rangeEnv: rr.env }; })(),
+          ...(() => { const ex = collectExtras(p, PITCH_KNOWN); return ex ? { _extra: ex } : {}; })(),
         };
       })(),
       voices: (() => {
@@ -393,9 +484,13 @@
           onset_offset: unpackStrategy(y.voices?.onset_offset),
           pointer:      unpackStrategy(y.voices?.pointer),
           pan:          unpackStrategy(y.voices?.pan),
+          ...(() => { const ex = collectExtras(y.voices, VOICES_KNOWN); return ex ? { _extra: ex } : {}; })(),
         };
       })(),
-      dephase: y.dephase ?? undefined,
+      // Key present with null value = implicit 1% — distinct from key absent
+      // (= off). Per-param objects pass verbatim: a null INSIDE the object
+      // means "default prob for that key" and stays null.
+      dephase: ("dephase" in y) ? (y.dephase === null ? DEPHASE_IMPLICIT : y.dephase) : undefined,
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -525,5 +620,6 @@
     serialize:     dataToYaml,
     emptyProject,
     roundTripDiff,
+    DEPHASE_IMPLICIT,
   };
 })();

@@ -16,7 +16,7 @@ make serve            # python server.py --root ../PythonGranularEngine --port 7
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 ```
 
-There is **no test suite, no linter, no typechecker**. Verification is manual: open `PGE Editor.html` in a browser, switch the Settings panel backend to `local`, hit "test connection", render.
+`make tests-node` runs the node test suite for `yaml-bridge.js` round-trip fidelity (`tests/node/test-yaml-bridge.js`; engine configs in the sibling repo serve as fixtures when present). There is no linter or typechecker, and the React UI itself has no automated tests — UI verification is manual: open `PGE Editor.html` in a browser, switch the Settings panel backend to `local`, hit "test connection", render.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 
 
 ### YAML round-trip (`yaml-bridge.js`)
 
-Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model. `roundTripDiff(data)` returns the divergences; empty array means lossless.
+Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model; unknown keys *inside* `pointer`/`grain`/`pitch`/`voices` (blocks the serializer rebuilds in full) are preserved the same way under `<block>._extra`. `dephase: null` (engine: implicit 1% mode, distinct from key-absent = off) is stored in editor state as the sentinel `window.PGEYaml.DEPHASE_IMPLICIT` and serialized back to `dephase: null`. `roundTripDiff(data)` returns the divergences; empty array means lossless.
 
 ### Audio playback (`audio-engine.js`)
 

@@ -45,12 +45,14 @@ const DEPHASE_PARAMS = [
 ];
 
 function detectDephaseMode(d) {
-  if (d === false) return "off";
-  if (d == null) return "implicit";
+  if (d === window.PGEYaml.DEPHASE_IMPLICIT) return "implicit";
+  // Key absent = engine default off (StreamConfig.dephase = False) — same as
+  // explicit false. Only `dephase: null` (the sentinel) means implicit 1%.
+  if (d === false || d == null) return "off";
   if (typeof d === "number") return "global";
   if (Array.isArray(d)) return "global";
   if (typeof d === "object") return "perParam";
-  return "implicit";
+  return "off";
 }
 
 function DephaseSection({ stream, onChange, onFocusEnvParam }) {
@@ -60,7 +62,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
 
   function setMode(next) {
     if (next === "off")       return onChange({ dephase: false });
-    if (next === "implicit")  return onChange({ dephase: null });
+    if (next === "implicit")  return onChange({ dephase: window.PGEYaml.DEPHASE_IMPLICIT });
     if (next === "global")    return onChange({ dephase: typeof d === "number" ? d : (Array.isArray(d) ? d : 1) });
     if (next === "perParam")  return onChange({ dephase: (typeof d === "object" && !Array.isArray(d) && d) ? d : { volume: 50 } });
   }
@@ -146,7 +148,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                   <span className="v"><span className="pge-field" style={{width:70}}><span className="val">{val}</span><span className="unit">%</span></span></span>
                 )}
                 <button className="pge-icon-btn" title="Remove"
-                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : null }); }}>
+                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : window.PGEYaml.DEPHASE_IMPLICIT }); }}>
                   <Icon name="x" size={11} />
                 </button>
               </div>
@@ -323,6 +325,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "pitchRange"    && stream.pitch && stream.pitch.rangeEnv)           return "env";
     if (k === "durationRange" && stream.grain && stream.grain.durationRangeEnv)   return "env";
     if (k === "offsetRange"   && stream.pointer && stream.pointer.offsetRangeEnv) return "env";
+    if (k === "fillFactor"    && stream.fillFactorEnv)                            return "env";
+    if (k === "loopEnd"       && stream.pointer && stream.pointer.loopEndEnv)     return "env";
     return fallback || "scalar";
   };
 
@@ -330,9 +334,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
+    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
+      fillFactor:   { sk: "fillFactor",  ek: "fillFactorEnv" },
       distribution: { sk: "distribution",ek: "distributionEnv" },
       pan:          { sk: "pan",         ek: "panEnv" },
       volume:       { sk: "volume",      ek: "volumeEnv" },
@@ -378,6 +383,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
       } else {
         const v = (cur.loopDurEnv && cur.loopDurEnv[0] && cur.loopDurEnv[0][1]) || 1;
         onChange({ pointer: { ...cur, loopDur: v, loopDurEnv: null } });
+      }
+      return;
+    }
+    if (k === "loopEnd") {
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = cur.loopEnd != null ? cur.loopEnd : 1;
+        onChange({ pointer: { ...cur, loopEnd: null, loopEndEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = (cur.loopEndEnv && cur.loopEndEnv[0] && cur.loopEndEnv[0][1]) || 1;
+        onChange({ pointer: { ...cur, loopEnd: v, loopEndEnv: null } });
       }
       return;
     }
@@ -537,10 +553,12 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             <Section title="Identity"
                      right={<span className="mono" style={{fontSize:9, color:"var(--fg-4)"}}>stream context</span>}>
               <div className="pge-prow">
-                <span className="k" title="onset ∈ [0,1] of total duration">time_mode</span>
+                <span className="k" title="envelope time axis: normalized → x ∈ [0,1] of stream duration · absolute → x in seconds (engine default)">time_mode</span>
                 <span />
                 <span className="v">
-                  <span className="mono" style={{fontSize:10, color:"var(--fg-3)"}}>normalized</span>
+                  <span className="mono" style={{fontSize:10, color:"var(--fg-3)"}}>
+                    {stream.timeMode || "absolute"}{stream.timeMode ? "" : " (default)"}
+                  </span>
                 </span>
                 <span />
               </div>
@@ -593,8 +611,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
             </Section>
 
             <Section title="Overall density"
-                     badge={stream.fillFactor != null
-                       ? <span className="mono" style={{color:"var(--accent)"}}>fill_factor</span>
+                     badge={(stream.fillFactor != null || stream.fillFactorEnv != null)
+                       ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${stream.fillFactorEnv.length} bp` : "fill_factor"}</span>
                        : (stream.densityEnv
                            ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {stream.densityEnv.length} bp</span>
                            : <span className="mono">density</span>)}>
@@ -603,23 +621,28 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <span />
                 <span className="v">
                   <Seg size="xs"
-                       value={stream.fillFactor != null ? "fill_factor" : "density"}
+                       value={(stream.fillFactor != null || stream.fillFactorEnv != null) ? "fill_factor" : "density"}
                        onChange={(u) => {
                          if (u === "fill_factor") {
                            const ff = 2.0;
-                           onChange({ density: null, densityEnv: null, fillFactor: ff });
+                           onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null });
                          } else {
-                           onChange({ fillFactor: null, density: 8, densityEnv: null });
+                           onChange({ fillFactor: null, fillFactorEnv: null, density: 8, densityEnv: null });
                          }
                        }}
                        options={[{label:"density",value:"density"},{label:"fill_factor",value:"fill_factor"}]} />
                 </span>
                 <span />
               </div>
-              {stream.fillFactor != null ? (
-                <ParamRow name="fill_factor" mode="scalar" value={stream.fillFactor} unit="×"
+              {(stream.fillFactor != null || stream.fillFactorEnv != null) ? (
+                <ParamRow name="fill_factor"
+                  mode={getMode("fillFactor")} onMode={(m) => toggleMode("fillFactor", m)}
+                  value={stream.fillFactor != null ? stream.fillFactor : "—"} unit={stream.fillFactorEnv ? "" : "×"}
+                  accent={stream.fillFactorEnv != null}
+                  envValue={stream.fillFactorEnv}
+                  onEditEnv={focusEnv("fillFactor")}
                   onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"}
-                  onValue={(v) => onChange({fillFactor: v})} />
+                  onValue={(v) => onChange({fillFactor: Math.min(50, Math.max(0.001, v))})} />
               ) : (
                 <ParamRow name="density"
                           mode={getMode("density")} onMode={(m) => toggleMode("density", m)}
@@ -661,7 +684,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
+              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
@@ -673,39 +696,39 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
-                         value={stream.pointer.loopEnd != null ? "loop_end" : "loop_dur"}
+                         value={(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? "loop_end" : "loop_dur"}
                          onChange={(u) => {
                            if (u === "loop_end") {
                              const le = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
                                : (stream.pointer.loopStart || 0) + (stream.pointer.loopDur != null ? stream.pointer.loopDur : 1);
-                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopDur: null, loopDurEnv: null } });
+                             onChange({ pointer: { ...stream.pointer, loopEnd: le, loopEndEnv: null, loopDur: null, loopDurEnv: null } });
                            } else {
                              const ld = stream.pointer.loopDur != null ? stream.pointer.loopDur
                                : Math.max(0.01, (stream.pointer.loopEnd || 0) - (stream.pointer.loopStart || 0));
-                             onChange({ pointer: { ...stream.pointer, loopDur: ld, loopEnd: null } });
+                             onChange({ pointer: { ...stream.pointer, loopDur: ld, loopDurEnv: null, loopEnd: null, loopEndEnv: null } });
                            }
                          }}
                          options={[{label:"loop_dur",value:"loop_dur"},{label:"loop_end",value:"loop_end"}]} />
-                    {stream.pointer.loopEnd != null ? (
-                      <span className="v">
-                        <NumberField value={stream.pointer.loopEnd} unit="s" width={70} />
-                      </span>
-                    ) : (
-                      <span className="v">
-                        <NumberField value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? null : 0)} unit={stream.pointer.loopDurEnv ? "" : "s"} width={70} />
-                      </span>
-                    )}
+                    <span />
                     <span />
                   </div>
-                  {stream.pointer.loopEnd == null ? (
-                    <ParamRow name="loop_duration"
+                  {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
+                    <ParamRow name="loop_end"
+                              mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : "s"}
+                              accent={stream.pointer.loopEndEnv != null}
+                              envValue={stream.pointer.loopEndEnv}
+                              onEditEnv={focusEnv("loopEnd")}
+                              onValue={(v) => onChange({pointer: {...stream.pointer, loopEnd: v}})} />
+                  ) : (
+                    <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
                               value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
                               onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: v}})} />
-                  ) : null}
+                  )}
                   {stream.pointer.loopUnit ? (
                     <div className="pge-prow">
                       <span className="k">loop_unit</span><span />
@@ -739,9 +762,9 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   { key: "loopStart",   label: "loop_start",   desc: "loop window start (s)",
                     exists: stream.pointer.loopStart != null, def: 0 },
                   { key: "loopEnd",     label: "loop_end",     desc: "loop end (s) — mutex w/ loop_dur, has priority",
-                    exists: stream.pointer.loopEnd != null || stream.pointer.loopDur != null, def: 1 },
+                    exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
                   { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s)",
-                    exists: stream.pointer.loopDur != null || stream.pointer.loopEnd != null, def: 1 },
+                    exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
                   { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
                     exists: stream.pointer.loopUnit != null, def: "normalized" },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1]",
