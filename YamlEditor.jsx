@@ -16,6 +16,17 @@ function buildLines(stream, sampleRec) {
   const sampleMissing = !sampleRec;
   const lines = [];
   const push = (o) => lines.push(o);
+  // Re-emit unknown keys preserved by yaml-bridge under <block>._extra (and the
+  // stream-level _extra), mirroring serialize's mergeBlockExtras so the inline
+  // text view stays faithful to the canonical YAML. #51
+  const emitExtras = (extra, ind) => {
+    if (!extra || typeof extra !== "object") return;
+    for (const [k, v] of Object.entries(extra)) {
+      if (v === null || v === undefined) push({ ind, kind: "v", key: k, val: "null" });
+      else if (typeof v === "number")    push({ ind, kind: "v", key: k, val: fmtNum(v) });
+      else push({ ind, kind: "r", key: k, val: window.jsyaml.dump(v, { flowLevel: 0, lineWidth: -1 }).trim() });
+    }
+  };
   push({ ind: 0, kind: "comment", text: `# stream "${stream.id}" — auto-rendered from project` });
   push({ ind: 0, kind: "s", key: "stream_id", val: `"${stream.id}"` });
   if (stream.timeMode) push({ ind: 0, kind: "r", key: "time_mode", val: stream.timeMode });
@@ -37,24 +48,26 @@ function buildLines(stream, sampleRec) {
   push({ ind: 0, kind: "block", key: "pointer" });
   if (stream.pointer.speedRatioEnv) push({ ind: 1, kind: "raw", key: "speed_ratio", val: envInline(stream.pointer.speedRatioEnv) });
   else if (stream.pointer.speedRatio != null) push({ ind: 1, kind: "v", key: "speed_ratio", val: fmtNum(stream.pointer.speedRatio) });
-  if (stream.pointer.loopStart != null || stream.pointer.loopStartEnv) {
-    if (stream.pointer.loopStartEnv) push({ ind: 1, kind: "raw", key: "loop_start", val: envInline(stream.pointer.loopStartEnv) });
-    else push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
-    if (stream.pointer.loopEndEnv) {
-      push({ ind: 1, kind: "raw", key: "loop_end", val: envInline(stream.pointer.loopEndEnv) });
-    } else if (stream.pointer.loopEnd != null) {
-      push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
-        err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
-    } else if (stream.pointer.loopDurEnv) {
-      push({ ind: 1, kind: "raw", key: "loop_dur", val: envInline(stream.pointer.loopDurEnv) });
-    } else if (stream.pointer.loopDur != null) {
-      push({ ind: 1, kind: "v", key: "loop_dur", val: fmtNum(stream.pointer.loopDur),
-        err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
-    }
-    if (stream.pointer.loopUnit) push({ ind: 1, kind: "r", key: "loop_unit", val: stream.pointer.loopUnit });
+  // Loop keys emitted independently — no gating on loop_start — mirroring
+  // yaml-bridge serialize, with loop_end winning over loop_dur (engine
+  // exclusive group). #51
+  if (stream.pointer.loopStartEnv) push({ ind: 1, kind: "raw", key: "loop_start", val: envInline(stream.pointer.loopStartEnv) });
+  else if (stream.pointer.loopStart != null) push({ ind: 1, kind: "v", key: "loop_start", val: fmtNum(stream.pointer.loopStart) });
+  if (stream.pointer.loopEndEnv) {
+    push({ ind: 1, kind: "raw", key: "loop_end", val: envInline(stream.pointer.loopEndEnv) });
+  } else if (stream.pointer.loopEnd != null) {
+    push({ ind: 1, kind: "v", key: "loop_end", val: fmtNum(stream.pointer.loopEnd),
+      err: (sampleRec && stream.pointer.loopEnd > sampleRec.duration) ? `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
+  } else if (stream.pointer.loopDurEnv) {
+    push({ ind: 1, kind: "raw", key: "loop_dur", val: envInline(stream.pointer.loopDurEnv) });
+  } else if (stream.pointer.loopDur != null) {
+    push({ ind: 1, kind: "v", key: "loop_dur", val: fmtNum(stream.pointer.loopDur),
+      err: (sampleRec && stream.pointer.loopDur > sampleRec.duration) ? `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` : null });
   }
+  if (stream.pointer.loopUnit) push({ ind: 1, kind: "r", key: "loop_unit", val: stream.pointer.loopUnit });
   if (stream.pointer.offsetRangeEnv) push({ ind: 1, kind: "raw", key: "offset_range", val: envInline(stream.pointer.offsetRangeEnv) });
   else if (stream.pointer.offsetRange != null) push({ ind: 1, kind: "v", key: "offset_range", val: fmtNum(stream.pointer.offsetRange) });
+  emitExtras(stream.pointer._extra, 1);
 
   push({ ind: 0, kind: "block", key: "grain" });
   if (stream.grain.durationEnv) push({ ind: 1, kind: "raw", key: "duration", val: envInline(stream.grain.durationEnv) });
@@ -66,8 +79,9 @@ function buildLines(stream, sampleRec) {
     if (stream.grain.reverse === null) push({ ind: 1, kind: "flag", key: "reverse" });
     else push({ ind: 1, kind: "v", key: "reverse", val: String(stream.grain.reverse) });
   }
+  emitExtras(stream.grain._extra, 1);
 
-  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null || stream.pitch.rangeEnv || stream.pitch.range != null)) {
+  if (stream.pitch && (stream.pitch.valueEnv || stream.pitch.value != null || stream.pitch.rangeEnv || stream.pitch.range != null || (stream.pitch._extra && Object.keys(stream.pitch._extra).length))) {
     const pu = stream.pitch.unit || "semitones";
     const _safeNum = (n) => typeof n === "number" ? fmtNum(n) : fmtNum(0);
     push({ ind: 0, kind: "block", key: "pitch" });
@@ -82,6 +96,7 @@ function buildLines(stream, sampleRec) {
     if (stream.pitch.rangeEnv) push({ ind: 1, kind: "raw", key: "range", val: envInline(stream.pitch.rangeEnv) });
     // range: 0 is meaningful (disables implicit detune) — render explicit zeros too
     else if (stream.pitch.range != null) push({ ind: 1, kind: "v", key: "range", val: _safeNum(stream.pitch.range) });
+    emitExtras(stream.pitch._extra, 1);
   }
 
   if (stream.panEnv) push({ ind: 0, kind: "raw", key: "pan", val: envInline(stream.panEnv),
@@ -116,7 +131,7 @@ function buildLines(stream, sampleRec) {
 
   const vo = stream.voices || {};
   const voNum = vo.num != null ? vo.num : (vo.numEnv ? null : 1);
-  const hasVoices = (voNum != null && voNum > 1) || vo.numEnv || vo.scatterEnv || vo.scatter != null || vo.pitch || vo.onset_offset || vo.pointer || vo.pan;
+  const hasVoices = (voNum != null && voNum > 1) || vo.numEnv || vo.scatterEnv || vo.scatter != null || vo.pitch || vo.onset_offset || vo.pointer || vo.pan || (vo._extra && Object.keys(vo._extra).length);
   if (hasVoices) {
     push({ ind: 0, kind: "block", key: "voices" });
     if (vo.numEnv) push({ ind: 1, kind: "raw", key: "num_voices", val: envInline(vo.numEnv) });
@@ -152,7 +167,10 @@ function buildLines(stream, sampleRec) {
         }
       }
     }
+    emitExtras(vo._extra, 1);
   }
+
+  emitExtras(stream._extra, 0);
 
   return lines;
 }
@@ -323,6 +341,14 @@ function parseValue(s) {
   return s;
 }
 
+// Expose the pure (JSX-free) emitter/parser so node tests can compare them
+// against yaml-bridge serialize. Harmless in the browser. #51
+window.PGE = window.PGE || {};
+window.PGE.buildLines  = buildLines;
+window.PGE.linesToText = linesToText;
+window.PGE.parseYaml   = parseYaml;
+
+/* ==== node-test boundary: everything above is JSX-free and reusable ==== */
 function YamlEditor({ stream, onChange, samples }) {
   const { Icon } = window.PGE;
   const _samples = samples || [];
