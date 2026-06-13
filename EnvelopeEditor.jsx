@@ -50,7 +50,7 @@ function listEnvelopes(stream) {
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
       path: ["pointer", "offsetRangeEnv"], unit: "",
-      visMin: -1, visMax: 1, hardMin: PB.offsetRange.min, hardMax: PB.offsetRange.max });
+      visMin: 0, visMax: 1, hardMin: PB.offsetRange.min, hardMax: PB.offsetRange.max });
   }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",

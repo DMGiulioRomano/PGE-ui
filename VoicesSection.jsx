@@ -29,7 +29,6 @@ const CHORDS_4V = ["dom7","maj7","min7","dim7","minmaj7"];
 const CHORDS_5V = ["dom9","maj9","min9","9sus4"];
 const CHORDS_6V = ["dom9s11","maj9s11","min11"];
 const CHORDS_7V = ["dom13","min13","maj13s11","altered"];
-const CHORDS = [...CHORDS_3V, ...CHORDS_4V, ...CHORDS_5V, ...CHORDS_6V, ...CHORDS_7V];
 const CHORD_GROUPS = [
   { label: "3 voices", chords: CHORDS_3V },
   { label: "4 voices", chords: CHORDS_4V },

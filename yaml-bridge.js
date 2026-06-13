@@ -37,7 +37,7 @@
     pan:         { min: -3600, max: 3600 },
     panRange:    { min: 0, max: 360 },
     fillFactor:  { min: 0.001, max: 50 },
-    offsetRange: { min: -1, max: 1 },
+    offsetRange: { min: 0, max: 1 },
     pitch: {
       semitones:    { min: -36, max: 36, rangeMax: 36 },
       cents:        { min: -3600, max: 3600, rangeMax: 3600 },

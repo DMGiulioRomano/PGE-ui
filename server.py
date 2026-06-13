@@ -855,7 +855,7 @@ def make_app(root: Path) -> Flask:
             if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
             if visualize:
                 cmd += ["--visualize"]
-                if page_duration is not None:
+                if page_duration is not None and float(page_duration) != 15.0:
                     cmd += ["--page-duration", str(float(page_duration))]
             if reaper:     cmd += ["--reaper",
                                     "--reaper-path", str(output / f"{basename}.rpp")]
