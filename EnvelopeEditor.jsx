@@ -27,6 +27,11 @@ function listEnvelopes(stream) {
       path: ["densityEnv"], unit: "g/s",
       visMin: 0, visMax: 50, hardMin: 0.01, hardMax: 4000 });
   }
+  if (stream.fillFactorEnv) {
+    list.push({ key: "fillFactor", label: "fill_factor", group: "Overall density",
+      path: ["fillFactorEnv"], unit: "×",
+      visMin: 0.1, visMax: 20, hardMin: 0.001, hardMax: 50 });
+  }
   if (stream.distributionEnv) {
     list.push({ key: "distribution", label: "distribution", group: "Distribution",
       path: ["distributionEnv"], unit: "",
@@ -43,9 +48,14 @@ function listEnvelopes(stream) {
       visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
   }
   if (stream.pointer && stream.pointer.loopDurEnv) {
-    list.push({ key: "loopDur", label: "loop_duration", group: "Pointer",
+    list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
       path: ["pointer", "loopDurEnv"], unit: "s",
       visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
+  }
+  if (stream.pointer && stream.pointer.loopEndEnv) {
+    list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
+      path: ["pointer", "loopEndEnv"], unit: "s",
+      visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
   }
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
