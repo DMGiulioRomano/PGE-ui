@@ -20,6 +20,7 @@ function pitchEnvBounds(unit, semis, signed) {
 /* ---------- Envelope catalog ---------- */
 function listEnvelopes(stream) {
   if (!stream) return [];
+  const PB = window.PGE_BOUNDS;
   const list = [];
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
@@ -59,7 +60,7 @@ function listEnvelopes(stream) {
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
       path: ["pointer", "offsetRangeEnv"], unit: "",
-      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+      visMin: 0, visMax: 1, hardMin: PB.offsetRange.min, hardMax: PB.offsetRange.max });
   }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
@@ -79,7 +80,7 @@ function listEnvelopes(stream) {
   if (stream.panRangeEnv) {
     list.push({ key: "panRange", label: "pan_range", group: "Volume & Pan",
       path: ["panRangeEnv"], unit: "°",
-      visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
+      visMin: 0, visMax: 360, hardMin: PB.panRange.min, hardMax: PB.panRange.max });
   }
   if (stream.volumeEnv) {
     list.push({ key: "volume", label: "volume", group: "Volume & Pan",
@@ -89,17 +90,21 @@ function listEnvelopes(stream) {
   if (stream.volumeRangeEnv) {
     list.push({ key: "volumeRange", label: "volume_range", group: "Volume & Pan",
       path: ["volumeRangeEnv"], unit: "dB",
-      visMin: 0, visMax: 12, hardMin: 0, hardMax: 120 });
+      visMin: 0, visMax: 12, hardMin: PB.volumeRange.min, hardMax: PB.volumeRange.max });
   }
   if (stream.pitch && stream.pitch.valueEnv) {
     const pu = stream.pitch.unit || "semitones";
     const puLabel = pu === "ratio" ? "ratio" : pu;
     const puUnit  = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
-    const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, -3600, 3600]
-      : pu === "quarter_tone" ? [-12, 12, -72, 72]
-      : pu === "eighth_tone" ? [-24, 24, -144, 144]
-      : pu === "ratio"       ? [0.5, 2, 0.0625, 16]
-      : [-12, 12, -36, 36];
+    const edoN = stream.pitch.edoDivisions || 12;
+    const pb = pu === "edo"
+      ? { min: -(3 * edoN), max: 3 * edoN, rangeMax: 3 * edoN }
+      : (PB.pitch[pu] || PB.pitch.semitones);
+    const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, pb.min, pb.max]
+      : pu === "quarter_tone" ? [-12, 12, pb.min, pb.max]
+      : pu === "eighth_tone" ? [-24, 24, pb.min, pb.max]
+      : pu === "ratio"       ? [0.5, 2, pb.min, pb.max]
+      : [-12, 12, pb.min, pb.max];
     list.push({ key: "pitch", label: puLabel, group: "Pitch",
       path: ["pitch", "valueEnv"], unit: puUnit,
       integer: window.PGEEnv.pitchUnitIsInteger(pu),
@@ -108,11 +113,15 @@ function listEnvelopes(stream) {
   if (stream.pitch && stream.pitch.rangeEnv) {
     const pu = stream.pitch.unit || "semitones";
     const puUnit = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
-    const [prVis, prHard] = pu === "cents" ? [1200, 3600]
-      : pu === "quarter_tone" ? [12, 72]
-      : pu === "eighth_tone" ? [24, 144]
-      : pu === "ratio"       ? [2, 8]
-      : [12, 36];
+    const edoN2 = stream.pitch.edoDivisions || 12;
+    const prb = pu === "edo"
+      ? { min: -(3 * edoN2), max: 3 * edoN2, rangeMax: 3 * edoN2 }
+      : (PB.pitch[pu] || PB.pitch.semitones);
+    const [prVis, prHard] = pu === "cents" ? [1200, prb.rangeMax]
+      : pu === "quarter_tone" ? [12, prb.rangeMax]
+      : pu === "eighth_tone" ? [24, prb.rangeMax]
+      : pu === "ratio"       ? [2, prb.rangeMax]
+      : [12, prb.rangeMax];
     list.push({ key: "pitchRange", label: "range", group: "Pitch",
       path: ["pitch", "rangeEnv"], unit: puUnit,
       integer: window.PGEEnv.pitchUnitIsInteger(pu),

@@ -791,6 +791,7 @@ def make_app(root: Path) -> Flask:
         renderer = opts.get("renderer", "numpy")
         use_cache = bool(opts.get("useCache", True))
         visualize = bool(opts.get("visualize", False))
+        page_duration = opts.get("pageDuration")
         reaper    = bool(opts.get("reaper", False))
         preclean  = bool(opts.get("preclean", False))
         fmt       = opts.get("outputFormat", "aiff")
@@ -852,7 +853,10 @@ def make_app(root: Path) -> Flask:
                 "--format", fmt,
             ]
             if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
-            if visualize:  cmd += ["--visualize"]
+            if visualize:
+                cmd += ["--visualize"]
+                if page_duration is not None and float(page_duration) != 15.0:
+                    cmd += ["--page-duration", str(float(page_duration))]
             if reaper:     cmd += ["--reaper",
                                     "--reaper-path", str(output / f"{basename}.rpp")]
             if renderer == "csound":

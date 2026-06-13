@@ -166,6 +166,14 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             <span className="sp-k">pdf score</span>
             <SpToggle v={!!tweaks.renderVisualize} onChange={(v) => setTweak("renderVisualize", v)} />
           </div>
+          {tweaks.renderVisualize ? (
+            <div className="sp-row" style={{paddingLeft: 12}}>
+              <span className="sp-k">page duration (s)</span>
+              <input type="number" className="pge-mini-input" min={1} step={1} style={{width: 52}}
+                     value={tweaks.renderPageDuration ?? 15}
+                     onChange={e => setTweak("renderPageDuration", Math.max(1, +e.target.value || 15))} />
+            </div>
+          ) : null}
           <div className="sp-row">
             <span className="sp-k">reaper project</span>
             <SpToggle v={!!tweaks.renderReaper} onChange={(v) => setTweak("renderReaper", v)} />

@@ -24,7 +24,18 @@ const PAN_STRATEGIES = [
   { value: "random",     label: "random",     desc: "seeded random in ±spread/2" },
   { value: "additive",   label: "additive",   desc: "constant offset, no spread" },
 ];
-const CHORDS = ["maj","min","dom7","maj7","min7","dim","aug","sus2","sus4","dim7","minmaj7"];
+const CHORDS_3V = ["maj","min","dim","aug","sus2","sus4"];
+const CHORDS_4V = ["dom7","maj7","min7","dim7","minmaj7"];
+const CHORDS_5V = ["dom9","maj9","min9","9sus4"];
+const CHORDS_6V = ["dom9s11","maj9s11","min11"];
+const CHORDS_7V = ["dom13","min13","maj13s11","altered"];
+const CHORD_GROUPS = [
+  { label: "3 voices", chords: CHORDS_3V },
+  { label: "4 voices", chords: CHORDS_4V },
+  { label: "5 voices", chords: CHORDS_5V },
+  { label: "6 voices", chords: CHORDS_6V },
+  { label: "7 voices", chords: CHORDS_7V },
+];
 
 const STRATEGY_DEFAULTS = {
   pitch: {
@@ -273,7 +284,11 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                   <span className="v">
                     <select className="pge-mini-select" value={(v.pitch||{}).chord || "dom7"}
                             onChange={e => updateDim("pitch", { chord: e.target.value })}>
-                      {CHORDS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {CHORD_GROUPS.map(g => (
+                        <optgroup key={g.label} label={g.label}>
+                          {g.chords.map(c => <option key={c} value={c}>{c}</option>)}
+                        </optgroup>
+                      ))}
                     </select>
                   </span>
                   <span />

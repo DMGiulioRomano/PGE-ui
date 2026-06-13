@@ -65,6 +65,7 @@ const SHAPES = {
     if (x > 0.85) return (1 - x) / 0.15;
     return Math.exp(5 * (x - 0.85) / 0.85);
   },
+  all: (x) => Math.abs(Math.sin(x * Math.PI * 3)) * 0.7 + 0.15,
 };
 
 /* Ordered list of windows. Categories chosen to mirror the engine docs. */
@@ -79,6 +80,7 @@ const WINDOWS = [
   { name: "bartlett",        cat: "bell",     desc: "triangle window (alias: triangle)" },
   { name: "half_sine",       cat: "bell",     desc: "single half-cycle of sine" },
   // edges / specials
+  { name: "all",             cat: "special",  desc: "randomly pick from all registered windows" },
   { name: "rectangle",       cat: "special",  desc: "no fade — click-prone, raw grain" },
   { name: "sinc",            cat: "special",  desc: "oscillating sidelobes around peak" },
   // percussive decay

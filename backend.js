@@ -37,13 +37,24 @@
     return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
   }
 
+  // Ignored fields for fingerprint: UI-only (color, mute, solo) don't affect
+  // audio. onset is excluded intentionally — moving a clip on the timeline
+  // doesn't change the rendered stem audio, so it shouldn't mark the stem
+  // stale. The engine's SHA-256 includes onset (it hashes the full YAML dict),
+  // so this is a deliberate divergence for UX reasons.
+  const FP_IGNORE = new Set(["color", "mute", "solo", "onset"]);
+
+  function canonicalJSON(v, ignore) {
+    if (v === null || v === undefined) return "null";
+    if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
+    if (typeof v === "string") return JSON.stringify(v);
+    if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, ignore)).join(",") + "]";
+    const keys = Object.keys(v).filter(k => !ignore.has(k)).sort();
+    return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalJSON(v[k], ignore)).join(",") + "}";
+  }
+
   function fingerprintStream(stream, format) {
-    // Mirror python's stable hash: stringify with sorted keys, ignore UI-only
-    // fields (color, mute, solo — those don't affect audio).
-    // format is folded in so stems rendered with a different format are stale.
-    const ignore = new Set(["color", "mute", "solo", "onset"]);
-    const json = JSON.stringify(stream, (k, v) => (ignore.has(k) ? undefined : v))
-      + `|fmt:${format || "aiff"}`;
+    const json = canonicalJSON(stream, FP_IGNORE) + `|fmt:${format || "aiff"}`;
     return fnv1a(json);
   }
 

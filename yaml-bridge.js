@@ -36,6 +36,24 @@
     console.warn("js-yaml not loaded — yaml round-trip disabled");
   }
 
+  // Canonical engine bounds — single source of truth for the UI.
+  // Derived from parameter_definitions.py and pitch_unit.py.
+  window.PGE_BOUNDS = {
+    volume:      { min: -120, max: 12 },
+    volumeRange: { min: 0, max: 24 },
+    pan:         { min: -3600, max: 3600 },
+    panRange:    { min: 0, max: 360 },
+    fillFactor:  { min: 0.001, max: 50 },
+    offsetRange: { min: 0, max: 1 },
+    pitch: {
+      semitones:    { min: -36, max: 36, rangeMax: 36 },
+      cents:        { min: -3600, max: 3600, rangeMax: 3600 },
+      quarter_tone: { min: -72, max: 72, rangeMax: 72 },
+      eighth_tone:  { min: -144, max: 144, rangeMax: 144 },
+      ratio:        { min: 0.125, max: 8, rangeMax: 2 },
+    },
+  };
+
   const PALETTE = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
 
   /* Editor-state sentinel for `dephase: null` (key present, empty value),
