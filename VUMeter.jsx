@@ -45,9 +45,9 @@
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
-      const LABEL_W = 22;
-      const BAR_W   = 7;
-      const GAP     = 3;
+      const LABEL_W = 24;
+      const BAR_W   = 9;
+      const GAP     = 4;
       const now     = () => performance.now();
 
       function draw() {
@@ -56,7 +56,7 @@
         const barH = h - 4; // 2px padding top+bottom
 
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = "#111";
+        ctx.fillStyle = "#1a1a1a";
         ctx.fillRect(0, 0, w, h);
 
         const analysers = window.PGEAudio?.engine?.analysers;
@@ -79,7 +79,7 @@
 
         for (const [db, pkDb, x] of [[dbL, pk.L, xL], [dbR, pk.R, xR]]) {
           // background track
-          ctx.fillStyle = "#1e1e1e";
+          ctx.fillStyle = "#2a2a2a";
           ctx.fillRect(x, 2, BAR_W, barH);
 
           if (db > DB_MIN) {
@@ -97,16 +97,22 @@
           }
         }
 
-        // dB labels on left
-        ctx.fillStyle = "#666";
+        // L / R channel labels at bottom of each bar
+        ctx.fillStyle = "#777";
+        ctx.font = "8px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("L", xL + BAR_W / 2, h - 1);
+        ctx.fillText("R", xR + BAR_W / 2, h - 1);
+
+        // dB scale on left
         ctx.font = "8px monospace";
         ctx.textAlign = "right";
         for (const label of [0, -12, -24, -48]) {
           const py = 2 + Math.round((1 - dbToFrac(label)) * barH);
-          ctx.fillText(String(label), LABEL_W - 2, py + 3);
-          ctx.fillStyle = "#333";
+          ctx.fillStyle = "#3a3a3a";
           ctx.fillRect(LABEL_W, py, BAR_W * 2 + GAP, 1);
-          ctx.fillStyle = "#666";
+          ctx.fillStyle = "#999";
+          ctx.fillText(String(label), LABEL_W - 2, py + 3);
         }
 
         rafRef.current = requestAnimationFrame(draw);
@@ -118,10 +124,10 @@
 
     if (!open) return null;
 
-    const LABEL_W = 22;
-    const BAR_W   = 7;
-    const GAP     = 3;
-    const totalW  = LABEL_W + BAR_W * 2 + GAP + 2;
+    const LABEL_W = 24;
+    const BAR_W   = 9;
+    const GAP     = 4;
+    const totalW  = LABEL_W + BAR_W * 2 + GAP + 4;
 
     return (
       <canvas
