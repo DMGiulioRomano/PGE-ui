@@ -39,7 +39,7 @@ tests: tests-node tests-python
 	@echo "All tests passed."
 
 tests-node:
-	cd tests/node && npm install --silent && node test-yaml-bridge.js
+	cd tests/node && npm install --silent && node test-yaml-bridge.js && node test-grain-map.js
 
 tests-python:
 	$(VENV_BIN)/python -m pytest tests/python/ -v
