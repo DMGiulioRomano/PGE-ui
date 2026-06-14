@@ -53,7 +53,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 try:
@@ -619,14 +618,17 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         out_ext = _EXT[fmt]
 
         yaml_content = opts.get("yamlContent")
-        tmp_yml: Path | None = None
+        # Write the editor state to the canonical config (never a temp file): the
+        # engine's per-stream cache manifest is keyed by the YAML basename
+        # (cache/<basename>.json), so a random temp name would orphan the manifest
+        # every render and mark all streams DIRTY. Git is the versioning/rollback
+        # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
         yml = configs / f"{basename}.yml"
         if yaml_content:
             yml.write_text(yaml_content, encoding="utf-8")
-        else:
-            if not yml.exists():
-                return jsonify({"ok": False,
-                                "error": f"configs/{basename}.yml not found"}), 404
+        elif not yml.exists():
+            return jsonify({"ok": False,
+                            "error": f"configs/{basename}.yml not found"}), 404
 
         output_stem = output / f"{basename}{out_ext}"
 
@@ -710,20 +712,9 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 if watchdog is not None:
                     watchdog.cancel()
                 rs.clear()
-                if tmp_yml is not None:
-                    try: tmp_yml.unlink(missing_ok=True)
-                    except Exception: pass
 
         # mimetype "application/x-ndjson" is what the browser LocalBackend reads.
-        resp = Response(event_stream(), mimetype="application/x-ndjson")
-        # Guarantee the temp YAML is removed even if the client disconnects
-        # before the generator's finally runs (or it's never iterated). #43
-        if tmp_yml is not None:
-            def _cleanup_tmp(_p=tmp_yml):
-                try: _p.unlink(missing_ok=True)
-                except Exception: pass
-            resp.call_on_close(_cleanup_tmp)
-        return resp
+        return Response(event_stream(), mimetype="application/x-ndjson")
 
     # --------- static UI file serving ---------
     # Serves the PGE-ui directory so no separate http.server is needed.

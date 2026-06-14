@@ -57,6 +57,10 @@ fallback).
 
 `POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`. `server.py` parses `main.py` stdout (`[3/5] streamX rendering…` / `→ output/…`) into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` (`runLocalRender`-style flow) AND the React state in `app.jsx`.
 
+The request body carries `yamlContent` (the editor state serialized on every render, saved or not). `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* to a throwaway temp file. This matters for the cache: the engine's per-stream manifest is keyed by the YAML basename (`cache/<basename>.json`), so a render-time temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY — defeating incremental caching entirely. Writing the stable basename keeps the manifest persistent across renders, so only genuinely changed streams re-render.
+
+Consequence: a render persists the current editor state to the source config even if the user never hit Save (Save only additionally clears the in-UI `dirty` flag). There is no "draft" copy. **Git is the versioning/rollback mechanism**: to discard unsaved edits, reset `configs/<basename>.yml` to the last commit (`git checkout -- configs/<basename>.yml`). Keep `configs/` under version control for this reason.
+
 ### Fingerprint parity
 
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys, ignoring `color/mute/solo/onset`) is semantically aligned with python's per-stream hash. The algorithms differ (FNV-1a vs SHA-256) and `onset` is intentionally excluded on the JS side: moving a clip on the timeline doesn't change the rendered audio, so it shouldn't mark the stem stale. The engine includes `onset` in its hash because it hashes the full YAML dict. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
@@ -88,6 +92,6 @@ Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth
 ## Conventions
 
 - Stem filenames: `<basename>__<streamId>.aif` (double underscore separator).
-- Cache manifests: `cache/<basename>.json`, one file per project.
+- Cache manifests: `cache/<basename>.json`, one file per project. Keyed by the YAML basename — `/render` writes the editor state to the stable `configs/<basename>.yml` (never a temp file) so the manifest persists across renders and incremental caching works.
 - Editor opened via `file://` — there is no dev server for the frontend.
 - `requirements.txt` is for the bridge only. The engine has its own (and its own venv).
