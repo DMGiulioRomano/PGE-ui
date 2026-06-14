@@ -1136,7 +1136,7 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope, ErrorBoundary } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browserPanel = (
@@ -1158,6 +1158,7 @@ function App() {
     </div>
   );
   const timelineEl = (
+    <ErrorBoundary label="Timeline">
     <Timeline streams={data.streams} selected={selectedIds}
               onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
@@ -1170,13 +1171,16 @@ function App() {
               waveformFor={(id) => waveforms[id]}
               spectrogramFor={(id) => spectrograms[id]}
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
+    </ErrorBoundary>
   );
   const envelopeEl = (
+    <ErrorBoundary label="Envelope editor">
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
                     playhead={time}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
                     onLoopPanelChange={setLoopPanelOpen}
                     focusKey={envFocusKey} />
+    </ErrorBoundary>
   );
   const center = (
     <div className="pge-center" data-screen-label="01 Main · Timeline + Envelopes">
@@ -1189,6 +1193,7 @@ function App() {
     </div>
   );
   const inspectorEl = inspectorOpen ? (
+    <ErrorBoundary label="Inspector">
     <Inspector stream={selected() || null}
                onChange={(p) => selectedId && updateStream(selectedId, p)}
                onClose={closeInspector}
@@ -1200,6 +1205,7 @@ function App() {
                  if (tweaks.showEnvelopeEditor === false) setTweak("showEnvelopeEditor", true);
                  setEnvFocusKey(key + ":" + Date.now());
                }} />
+    </ErrorBoundary>
   ) : null;
 
   return (
