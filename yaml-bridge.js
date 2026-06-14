@@ -424,7 +424,11 @@
       // time axis. New streams created by the UI write "normalized"
       // explicitly (see createStreamFromSample in app.jsx).
       timeMode: y.time_mode ?? undefined,
-      distributionMode: y.distribution_mode || "uniform",
+      // Preserve absence (engine default is 'uniform'): injecting a default
+      // here would write it back on save, changing every stream's raw dict and
+      // busting the engine's per-stream content cache. UI falls back to display
+      // 'uniform' when unset (see Inspector). Same rationale as time_mode above.
+      distributionMode: y.distribution_mode ?? undefined,
       rangeAlwaysActive: !!y.range_always_active,
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
       clipStrategy: y.clip_strategy || "overflow_margin",
@@ -437,7 +441,9 @@
       distribution:    dist.scalar,
       distributionEnv: dist.env,
 
-      ...(() => { const v = unpackValueOrEnv(y.volume ?? 0); return { volume: v.scalar, volumeEnv: v.env }; })(),
+      // Preserve absence (engine default is 0 dB) — don't inject 0, or save
+      // writes `volume: 0` into every stream and busts the engine cache.
+      ...(() => { const v = unpackValueOrEnv(y.volume ?? null); return { volume: v.scalar, volumeEnv: v.env }; })(),
       ...(() => { const vr = unpackValueOrEnv(y.volume_range ?? 0); return { volumeRange: vr.scalar, volumeRangeEnv: vr.env }; })(),
       pan:    pan.scalar,
       panEnv: pan.env,
@@ -447,7 +453,10 @@
         duration:      grDur.scalar,
         durationEnv:   grDur.env,
         ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? 0); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),
-        envelope:      parseGrainEnvelope(grain.envelope) || "hanning",
+        // Preserve absence (engine default is 'hanning') — injecting it would
+        // write `envelope: hanning` on save and bust the engine cache. The
+        // EnvelopeSelector renders an unset value as 'hanning'.
+        envelope:      parseGrainEnvelope(grain.envelope) ?? undefined,
         // Presence-keyed: `reverse:` bare (null) = forced, absent = auto.
         // Keep the value verbatim — anything non-null is an engine error the
         // user should still see round-trip.
@@ -455,7 +464,10 @@
         ...(() => { const ex = collectExtras(y.grain, GRAIN_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pointer: {
-        start:         ptr.start ?? 0,
+        // Preserve absence: engine-side, an absent start means 0 (no loop) or
+        // "begin at loop_start" (with a loop). Injecting start: 0 here would
+        // both bust the cache AND, for looped streams, override that behaviour.
+        start:         ptr.start ?? undefined,
         speedRatio:    ptrSp.scalar,
         speedRatioEnv: ptrSp.env,
         ...(() => { const ls = unpackValueOrEnv(ptr.loop_start ?? null); return { loopStart: ls.scalar, loopStartEnv: ls.env }; })(),

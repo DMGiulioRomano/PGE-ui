@@ -868,6 +868,87 @@ console.log("\n── computeDuration: derived from streams ──");
 }
 
 /* ============================================================
+ * SECTION — open+save is a no-op (no engine-default injection)
+ * Cache-stability: parse→serialize must not add OR drop keys vs the source.
+ * The engine's per-stream content hash (and the UI stale dot) re-render every
+ * stem if a stream's raw dict changes on save. So: an ABSENT default stays
+ * absent; an explicitly PRESENT value (even at the default) is kept verbatim.
+ * ============================================================ */
+
+console.log("\n── serialize: open+save is a no-op ──");
+
+const _noop = "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: t.wav";
+function rawStream(yamlText) {
+  const obj = window.jsyaml.load(serialize(parse(yamlText)));
+  return ((obj || {}).streams || [])[0] || {};
+}
+
+{
+  // Headline regression: a minimal hand-authored stream round-trips through
+  // PGE-ui without gaining any default keys.
+  const s = rawStream(_noop + "\n    density: 100\n    grain:\n      duration: 0.05\n");
+  assert("minimal — distribution_mode not injected", !("distribution_mode" in s), JSON.stringify(s));
+  assert("minimal — volume not injected",            !("volume" in s),            JSON.stringify(s));
+  assert("minimal — grain.envelope not injected",    !("envelope" in (s.grain || {})), JSON.stringify(s.grain));
+  assert("minimal — pointer (start) not injected",   !("pointer" in s),           JSON.stringify(s));
+}
+
+{
+  // distribution_mode: absent stays absent (headline); explicit value (incl. the
+  // default 'uniform') is kept verbatim.
+  const sU = rawStream(_noop + "\n    distribution_mode: uniform\n");
+  assert("distribution_mode: explicit uniform kept", sU.distribution_mode === "uniform", JSON.stringify(sU));
+  const sG = rawStream(_noop + "\n    distribution_mode: gaussian\n");
+  assert("distribution_mode: gaussian kept", sG.distribution_mode === "gaussian", JSON.stringify(sG));
+}
+
+{
+  // volume: explicit 0 (the engine default) is kept verbatim; non-zero kept.
+  const s0 = rawStream(_noop + "\n    volume: 0\n");
+  assert("volume: explicit 0 kept", s0.volume === 0, JSON.stringify(s0));
+  const sN = rawStream(_noop + "\n    volume: -6\n");
+  assert("volume: -6 kept", sN.volume === -6, JSON.stringify(sN));
+}
+
+{
+  // grain.envelope: explicit 'hanning' (the default) is kept; the grain block
+  // survives when it carries other keys; other windows kept.
+  const sH = rawStream(_noop + "\n    grain:\n      duration: 0.05\n      envelope: hanning\n");
+  assert("grain.envelope: explicit hanning kept", sH.grain && sH.grain.envelope === "hanning", JSON.stringify(sH.grain));
+  const sD = rawStream(_noop + "\n    grain:\n      duration: 0.05\n");
+  assert("grain w/o envelope — none injected", sD.grain && !("envelope" in sD.grain), JSON.stringify(sD.grain));
+  const sE = rawStream(_noop + "\n    grain:\n      duration: 0.05\n      envelope: expodec\n");
+  assert("grain.envelope: expodec kept", sE.grain && sE.grain.envelope === "expodec", JSON.stringify(sE.grain));
+}
+
+{
+  // pointer.start — the rendering-critical case. A pointer block WITHOUT start
+  // must not gain `start: 0`: engine-side an absent start with a loop means
+  // "begin at loop_start", so injecting 0 would both bust the cache AND change
+  // the audio. Explicit start (any value, incl. 0) round-trips verbatim.
+  const sLoopNoStart = rawStream(_noop + "\n    pointer:\n      loop_start: 0.1\n      speed_ratio: 0.001\n");
+  assert("pointer w/o start — start not injected", !("start" in (sLoopNoStart.pointer || {})), JSON.stringify(sLoopNoStart.pointer));
+  assert("pointer w/o start — block intact", sLoopNoStart.pointer && sLoopNoStart.pointer.loop_start === 0.1, JSON.stringify(sLoopNoStart.pointer));
+  const s0 = rawStream(_noop + "\n    pointer:\n      start: 0\n      speed_ratio: 0.01\n");
+  assert("pointer explicit start:0 kept", s0.pointer && s0.pointer.start === 0, JSON.stringify(s0.pointer));
+  const sNZ = rawStream(_noop + "\n    pointer:\n      start: 0.5\n");
+  assert("pointer start:0.5 kept", sNZ.pointer && sNZ.pointer.start === 0.5, JSON.stringify(sNZ.pointer));
+}
+
+{
+  // Editor-level round trip stays lossless for all the above shapes.
+  for (const [label, extra] of [
+    ["minimal", ""],
+    ["explicit start:0 + loop", "\n    pointer:\n      start: 0\n      loop_start: 0.25\n"],
+    ["loop without start", "\n    pointer:\n      loop_start: 0.1\n      speed_ratio: 0.001\n"],
+    ["explicit defaults", "\n    distribution_mode: uniform\n    volume: 0\n    grain:\n      duration: 0.05\n      envelope: hanning\n"],
+  ]) {
+    const d = parse(_noop + extra + "\n");
+    assert(`roundtrip lossless — ${label}`, roundTripDiff(d).length === 0, JSON.stringify(roundTripDiff(d)));
+  }
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 
