@@ -79,22 +79,15 @@ function GrainScore({ open, height = 260, onHeightChange, onClose, streams, grai
       const laneY = idx * laneH;
       const gd = grainData[s.id];
       const grains = gd.grains || [];
-      const ptr = GM.pointerExtent(grains);
-      const pit = GM.pitchExtentCents(grains);
+      // Extents pre-calcolati all'arrivo del JSON (app.jsx); fallback se assenti.
+      const ext = gd._ext || GM.computeExtents(grains);
       const gctx = {
         pxPerSec: ppsFit, height: laneH,
-        ptrMin: ptr.min, ptrMax: ptr.max,
-        pitchLoCents: pit.lo, pitchHiCents: pit.hi,
+        ptrMin: ext.ptr.min, ptrMax: ext.ptr.max,
         grainHeight: GS_GRAIN_H,
       };
       const onsetX = (s.onset || 0) * ppsFit;
-      for (let k = 0; k < grains.length; k++) {
-        const r = GM.grainRect(grains[k], gctx);
-        const x = r.x + onsetX;
-        if (x > W || x + r.w < 0) continue;       // horizontal culling
-        ctx.fillStyle = r.fill;
-        ctx.fillRect(x, r.y + laneY, r.w, r.h);
-      }
+      GM.paintGrains(ctx, grains, gctx, ext.pit, { offsetX: onsetX, laneY, width: W });
     });
 
     if (!list.length) {

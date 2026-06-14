@@ -164,6 +164,124 @@ function maxChanDiff(c0, c1) {
 }
 
 /* ============================================================
+ * 8. computeExtents — cache ptr+pitch in un colpo (bottleneck 4)
+ * ============================================================ */
+{
+  const grains = [{ ptr: 1, pr: 1.0 }, { ptr: 9, pr: 2.0 }];
+  const ext = GM.computeExtents(grains);
+  assert("computeExtents — ptr coerente con pointerExtent",
+    ext.ptr.min === 1 && ext.ptr.max === 9, JSON.stringify(ext.ptr));
+  const pit = GM.pitchExtentCents(grains);
+  assert("computeExtents — pit coerente con pitchExtentCents",
+    ext.pit.lo === pit.lo && ext.pit.hi === pit.hi, JSON.stringify(ext.pit));
+}
+
+/* ============================================================
+ * 9. grainGeom — geometria senza colore (== grainRect senza fill)
+ * ============================================================ */
+{
+  const ctx = { pxPerSec: 36, height: 100, ptrMin: 0, ptrMax: 10, grainHeight: 2 };
+  const g = GM.grainGeom({ t: 2, dur: 0.5, ptr: 5 }, ctx);
+  const r = GM.grainRect({ t: 2, dur: 0.5, ptr: 5, pr: 1.0, vol: 0 },
+    { ...ctx, pitchLoCents: -30, pitchHiCents: 30 });
+  assert("grainGeom — x/y/w/h identici a grainRect",
+    g.x === r.x && g.y === r.y && g.w === r.w && g.h === r.h, JSON.stringify([g, r]));
+  assert("grainGeom — nessun campo fill", g.fill === undefined, JSON.stringify(g));
+}
+
+/* ============================================================
+ * 10. buildColorLUT + colorBin (bottleneck 1+2)
+ * ============================================================ */
+{
+  const lut = GM.buildColorLUT(-30, 30, 256, 64);
+  assert("buildColorLUT — dimensione fills = (nPitch+1)*nAlpha",
+    lut.fills.length === (256 + 1) * 64, String(lut.fills.length));
+  assert("buildColorLUT — ogni entry è una stringa rgba",
+    lut.fills.every(f => /^rgba\(\d+,\d+,\d+,[\d.]+\)$/.test(f)), lut.fills[0]);
+
+  // default bins: pr assente → riga di default (160,160,160).
+  const dBin = GM.colorBin(undefined, 0, lut);
+  assert("colorBin — pr assente → riga default", dBin >= 256 * 64 && dBin < 257 * 64, String(dBin));
+  assert("colorBin — riga default usa DEFAULT_PITCH_COLOR",
+    lut.fills[dBin].indexOf("160,160,160") === 5, lut.fills[dBin]);
+
+  // pr valido → riga non-default; pitch più alto → bin più alto.
+  const loBin = GM.colorBin(1.0, 0, lut);   // centro range (0 cents)
+  assert("colorBin — pr valido non finisce in riga default", loBin < 256 * 64, String(loBin));
+  const cents = (b) => Math.floor(b / 64);
+  const bA = GM.colorBin(0.5, 0, lut);   // -1200 cents → clamp basso
+  const bB = GM.colorBin(2.0, 0, lut);   // +1200 cents → clamp alto
+  assert("colorBin — pitch basso < pitch alto (pitch row)", cents(bA) < cents(bB),
+    cents(bA) + " vs " + cents(bB));
+
+  // volume più alto → alpha bin più alto (a parità di pitch).
+  const aLow = GM.colorBin(1.0, -60, lut) % 64;
+  const aHigh = GM.colorBin(1.0, 0, lut) % 64;
+  assert("colorBin — volume alto → alpha bin più alto", aHigh > aLow, aHigh + " vs " + aLow);
+
+  // clamp: nessun bin fuori range.
+  const huge = GM.colorBin(1000, 100, lut);
+  assert("colorBin — clamp dentro fills", huge >= 0 && huge < lut.fills.length, String(huge));
+
+  // default dei parametri.
+  const lut2 = GM.buildColorLUT(-30, 30);
+  assert("buildColorLUT — default nPitch/nAlpha",
+    lut2.nPitch === GM.LUT_PITCH_BINS && lut2.nAlpha === GM.LUT_ALPHA_BINS,
+    lut2.nPitch + "x" + lut2.nAlpha);
+}
+
+/* ============================================================
+ * 11. paintGrains — batching su ctx stub (bottleneck 1)
+ * ============================================================ */
+{
+  function makeStub() {
+    const calls = { fillStyle: [], beginPath: 0, rect: 0, fill: 0 };
+    let cur = null;
+    return {
+      calls,
+      set fillStyle(v) { cur = v; calls.fillStyle.push(v); },
+      get fillStyle() { return cur; },
+      beginPath() { calls.beginPath++; },
+      rect() { calls.rect++; },
+      fill() { calls.fill++; },
+    };
+  }
+  const gctx = { pxPerSec: 10, height: 100, ptrMin: 0, ptrMax: 1, grainHeight: 2 };
+  const pit = { lo: -30, hi: 30 };
+
+  // Tutti i grani con stesso colore quantizzato → un solo fillStyle/beginPath/fill.
+  const same = [];
+  for (let i = 0; i < 50; i++) same.push({ t: i * 0.01, dur: 0.001, ptr: 0.5, pr: 1.0, vol: 0 });
+  const stub1 = makeStub();
+  GM.paintGrains(stub1, same, gctx, pit, { width: 1000 });
+  assert("paintGrains — N grani stesso colore → 1 solo bin",
+    stub1.calls.fillStyle.length === 1 && stub1.calls.beginPath === 1 && stub1.calls.fill === 1,
+    JSON.stringify(stub1.calls));
+  assert("paintGrains — un rect per grano", stub1.calls.rect === 50, String(stub1.calls.rect));
+
+  // Colori diversi (pitch agli estremi) → bin distinti.
+  const diff = [
+    { t: 0, dur: 0.001, ptr: 0.5, pr: 0.5, vol: 0 },
+    { t: 0.1, dur: 0.001, ptr: 0.5, pr: 2.0, vol: 0 },
+  ];
+  const stub2 = makeStub();
+  GM.paintGrains(stub2, diff, gctx, pit, { width: 1000 });
+  assert("paintGrains — pitch diversi → 2 bin (2 fillStyle/beginPath/fill)",
+    stub2.calls.fillStyle.length === 2 && stub2.calls.beginPath === 2 && stub2.calls.fill === 2,
+    JSON.stringify(stub2.calls));
+
+  // Culling orizzontale: grano fuori vista non viene disegnato.
+  const stub3 = makeStub();
+  GM.paintGrains(stub3, [{ t: 100, dur: 0.001, ptr: 0.5, pr: 1.0, vol: 0 }], gctx, pit, { width: 50 });
+  assert("paintGrains — grano fuori vista cullato (nessun rect)", stub3.calls.rect === 0, String(stub3.calls.rect));
+
+  // Lista vuota → no-op.
+  const stub4 = makeStub();
+  GM.paintGrains(stub4, [], gctx, pit, { width: 50 });
+  assert("paintGrains — lista vuota → no-op", stub4.calls.beginPath === 0 && stub4.calls.fill === 0, JSON.stringify(stub4.calls));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 console.log(`\n${"─".repeat(50)}`);
