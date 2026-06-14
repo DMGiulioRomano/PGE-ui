@@ -560,6 +560,31 @@
     };
   }
 
+  /* ---------- per-stream (single source of truth for the raw editor) ----------
+   * The per-stream Raw tab in the Inspector routes through these so it can't
+   * drift from the project save path: both delegate to streamToYaml /
+   * streamFromYaml. serializeStream uses the EXACT dump options of dataToYaml,
+   * so the text matches what a full save would write (minus the `streams:`
+   * list indentation). parseStream returns the FULL stream shape; UI-only
+   * fields (color/mute/solo) are synthesized by streamFromYaml and the caller
+   * must preserve the live values — see YamlEditor.applyEdits. */
+  function serializeStream(stream) {
+    if (!window.jsyaml) return "";
+    return window.jsyaml.dump(streamToYaml(stream), {
+      indent: 2,
+      lineWidth: 120,
+      noRefs: true,
+      quotingType: '"',
+      forceQuotes: false,
+    }).replace(/\n$/, "");
+  }
+
+  function parseStream(text, idx = 0) {
+    if (!window.jsyaml) throw new Error("js-yaml not loaded");
+    const y = window.jsyaml.load(text) || {};
+    return streamFromYaml(y, idx);
+  }
+
   /* ---------- round-trip self-test ----------
    *
    * Serialise → parse → diff against original. UI-only fields (color, mute,
@@ -635,7 +660,9 @@
 
   window.PGEYaml = {
     parse,
-    serialize:     dataToYaml,
+    serialize:       dataToYaml,
+    serializeStream,
+    parseStream,
     emptyProject,
     roundTripDiff,
     DEPHASE_IMPLICIT,

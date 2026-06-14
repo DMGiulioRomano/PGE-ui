@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, roundTripDiff } = window.PGEYaml;
+const { parse, serialize, serializeStream, parseStream, roundTripDiff } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -718,64 +718,51 @@ if (fs.existsSync(configsDir)) {
 }
 
 /* ============================================================
- * SECTION 10 — YamlEditor inline view (buildLines) parity with serialize (#51)
+ * SECTION 10 — per-stream serializer unified on the bridge (#42)
  *
- * YamlEditor.jsx ships a second YAML emitter (buildLines) + inline parser
- * (parseYaml) for the per-stream text editor, previously untested and diverging
- * from yaml-bridge.serialize: loop keys were gated on loop_start, and loop_unit
- * / per-block _extra were never re-emitted. We load the JSX-free helpers
- * (everything above the node-test boundary in YamlEditor.jsx) and check parity
- * on the same streams that the bridge parses.
+ * The Raw tab used to ship a second YAML emitter (buildLines) + inline parser
+ * (parseYaml); both are removed. yaml-bridge now exposes serializeStream /
+ * parseStream as the single source of truth, and YamlEditor.jsx keeps only
+ * presentation helpers (tokenizeYamlLine, computeAnnotations). These tests pin
+ * the new contracts and the per-stream round trip.
  * ============================================================ */
 
-console.log("\n── YamlEditor.buildLines parity (#51) ──");
+console.log("\n── per-stream serializer unified on bridge (#42) ──");
 
 global.React = {};                                    // satisfies `const {…} = React`
-eval(fs.readFileSync(path.join(__dirname, "../../envelope-loops.js"), "utf8")); // window.PGEEnv
 const yeSrc = fs.readFileSync(path.join(__dirname, "../../YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
-// Read the helpers off window.PGE. (The direct eval above also leaks the
-// `function buildLines`/`linesToText`/`parseYaml` declarations into this scope;
-// we deliberately don't re-declare them with const to avoid a clash.)
-const _ye = window.PGE;
-const parseInline = _ye.parseYaml;
+// The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
+// declarations) into this scope; we call them directly rather than re-declaring
+// with const (which would clash). They're also exposed on window.PGE.
 
-const inlineText = (stream, rec) => _ye.linesToText(_ye.buildLines(stream, rec));
 const streamOf   = (yamlText) => parse(yamlText).streams[0];
+const stripColor = (s) => { const c = { ...s }; delete c.color; return c; };
 
-assert("#51 helpers loaded", typeof _ye.buildLines === "function" && typeof parseInline === "function",
-  JSON.stringify(Object.keys(_ye || {})));
+assert("#42 bridge exposes serializeStream/parseStream",
+  typeof serializeStream === "function" && typeof parseStream === "function");
+assert("#42 presentation helpers loaded",
+  typeof tokenizeYamlLine === "function" && typeof computeAnnotations === "function");
 
+// Round-trip serializeStream → parseStream is lossless (modulo UI-only color).
 {
-  // loop_dur + loop_unit WITHOUT loop_start — pre-fix both were swallowed by
-  // the `if (loopStart != null …)` gate.
-  const s = streamOf(pointerYaml(["loop_dur: 0.4", "loop_unit: normalized"]));
-  assert("#51 setup — loop without loop_start", s.pointer.loopStart == null && !s.pointer.loopStartEnv,
-    JSON.stringify(s.pointer));
-  const t = inlineText(s);
-  assert("#51 buildLines — loop_dur emitted without loop_start", /^\s*loop_dur:/m.test(t), t);
-  assert("#51 buildLines — loop_unit emitted without loop_start", /loop_unit: normalized/.test(t), t);
+  const fixtures = [
+    ["loop without loop_start", pointerYaml(["loop_dur: 0.4", "loop_unit: normalized"])],
+    ["loop_end exclusive",      pointerYaml(["loop_end: 2.5"])],
+    ["full loop",               pointerYaml(["loop_start: 0.2", "loop_dur: 0.4", "loop_unit: normalized"])],
+    ["top-level extra",         topLevelYaml(["mio_extra: 9"])],
+  ];
+  for (const [label, yamlText] of fixtures) {
+    const s = streamOf(yamlText);
+    const back = parseStream(serializeStream(s));
+    assert(`#42 round-trip serializeStream→parseStream — ${label}`,
+      eq(stripColor(s), stripColor(back)),
+      JSON.stringify({ before: stripColor(s), after: stripColor(back) }).slice(0, 400));
+  }
 }
 
 {
-  // loop_end WITHOUT loop_start; loop_end wins over loop_dur (exclusive group).
-  const s = streamOf(pointerYaml(["loop_end: 2.5"]));
-  const t = inlineText(s);
-  assert("#51 buildLines — loop_end emitted without loop_start", /^\s*loop_end:/m.test(t), t);
-  assert("#51 buildLines — loop_dur not emitted alongside loop_end", !/^\s*loop_dur:/m.test(t), t);
-}
-
-{
-  // Regression: full loop with loop_start still emits everything.
-  const s = streamOf(pointerYaml(["loop_start: 0.2", "loop_dur: 0.4", "loop_unit: normalized"]));
-  const t = inlineText(s);
-  assert("#51 buildLines — loop_start kept", /^\s*loop_start:/m.test(t), t);
-  assert("#51 buildLines — loop_dur kept", /^\s*loop_dur:/m.test(t), t);
-  assert("#51 buildLines — loop_unit kept", /loop_unit: normalized/.test(t), t);
-}
-
-{
-  // Per-block _extra re-emitted (pointer/grain/pitch/voices).
+  // Per-block _extra (pointer/grain/pitch/voices) survives the per-stream round trip.
   const yamlExtras = `streams:
   - stream_id: s1
     onset: 0
@@ -794,43 +781,66 @@ assert("#51 helpers loaded", typeof _ye.buildLines === "function" && typeof pars
       num_voices: 2
       nuova: 4
 `;
-  const s = parse(yamlExtras).streams[0];
-  const t = inlineText(s);
-  for (const frag of ["futuro_param: 7", "xkey: 1", "glide: 3", "nuova: 4"]) {
-    assert(`#51 buildLines — block extra re-emitted: ${frag}`, t.includes(frag), t);
+  const s = streamOf(yamlExtras);
+  const back = parseStream(serializeStream(s));
+  assert("#42 per-block _extra survives round trip", eq(stripColor(s), stripColor(back)),
+    JSON.stringify(stripColor(back)).slice(0, 400));
+}
+
+{
+  // dephase modes survive the per-stream round trip (implicit / false / number).
+  for (const dep of ["dephase:", "dephase: false", "dephase: 0.2"]) {
+    const s = streamOf(topLevelYaml([dep]));
+    const back = parseStream(serializeStream(s));
+    assert(`#42 dephase round trip — "${dep}"`, eq(stripColor(s), stripColor(back)),
+      JSON.stringify({ before: s.dephase, after: back.dephase }));
   }
 }
 
 {
-  // Top-level (stream-level) _extra re-emitted.
-  const s = parse(topLevelYaml(["mio_extra: 9"])).streams[0];
-  assert("#51 setup — top-level extra captured", s._extra && s._extra.mio_extra === 9, JSON.stringify(s._extra));
-  const t = inlineText(s);
-  assert("#51 buildLines — top-level extra re-emitted", /^mio_extra: 9$/m.test(t), t);
-}
-
-{
-  // Structural parity with serialize, scoped to the pointer loop keys + _extra
-  // (buildLines legitimately differs on start/volume/etc., so we don't deep-eq
-  // the whole stream).
+  // serializeStream(s) text equals the stream dict produced by full-project
+  // serialize — proving the Raw tab can't drift from the save path.
   const s = streamOf(pointerYaml(["loop_dur: 0.4", "loop_unit: normalized", "futuro: 5"]));
-  const inlinePtr = (window.jsyaml.load(inlineText(s)) || {}).pointer || {};
-  const canonObj  = window.jsyaml.load(serialize({ streams: [s], title: "", duration: 60, bpm: 120 }));
-  const canonPtr  = (canonObj.streams[0] || {}).pointer || {};
-  for (const k of ["loop_start", "loop_end", "loop_dur", "loop_unit", "futuro"]) {
-    assert(`#51 parity pointer.${k}`, eq(inlinePtr[k], canonPtr[k]),
-      JSON.stringify({ inline: inlinePtr[k], canon: canonPtr[k] }));
-  }
+  const single      = window.jsyaml.load(serializeStream(s));
+  const fromProject = window.jsyaml.load(serialize({ streams: [s], title: "", duration: 60, bpm: 120 })).streams[0];
+  assert("#42 serializeStream ≡ project serialize (per stream)", eq(single, fromProject),
+    JSON.stringify({ single, fromProject }).slice(0, 400));
 }
 
 {
-  // The inline parser reads back what the (fixed) inline emitter writes.
-  const s = streamOf(pointerYaml(["loop_dur: 0.4", "loop_unit: normalized"]));
-  const reparsed = parseInline(inlineText(s));
-  assert("#51 parseInline — loop_unit read back", reparsed.pointer.loopUnit === "normalized",
-    JSON.stringify(reparsed.pointer));
-  assert("#51 parseInline — loop_dur read back", reparsed.pointer.loopDur === 0.4,
-    JSON.stringify(reparsed.pointer));
+  // tokenizeYamlLine: presentation classification only (never re-derives YAML).
+  const t1 = tokenizeYamlLine("sample: test.wav");
+  assert("#42 tokenize key:value — key class", t1.key === "sample" && t1.spans[0].cls === "k", JSON.stringify(t1));
+  const t2 = tokenizeYamlLine("onset: 0");
+  assert("#42 tokenize numeric value class", t2.spans.some(sp => sp.cls === "v" && sp.text === "0"), JSON.stringify(t2));
+  const t3 = tokenizeYamlLine("  - - 0");
+  assert("#42 tokenize block-seq scalar", t3.spans.some(sp => sp.cls === "v" && sp.text === "0"), JSON.stringify(t3));
+  const t4 = tokenizeYamlLine("# a comment");
+  assert("#42 tokenize comment class", t4.spans.length === 1 && t4.spans[0].cls === "c", JSON.stringify(t4));
+  const t5 = tokenizeYamlLine("pointer:");
+  assert("#42 tokenize block header key", t5.key === "pointer", JSON.stringify(t5));
+}
+
+{
+  // computeAnnotations: the three validations, attached by yaml key.
+  const sNoRec = streamOf(minimalYaml(null));
+  const a1 = computeAnnotations(sNoRec, null);   // no sample record
+  assert("#42 annotate missing sample", a1.byKey.get("sample") && a1.byKey.get("sample").kind === "err",
+    JSON.stringify([...a1.byKey]));
+
+  const sLoop = streamOf(pointerYaml(["loop_end: 9"]));
+  const a2 = computeAnnotations(sLoop, { name: "test.wav", duration: 5 });
+  assert("#42 annotate loop_end over sample dur", a2.byKey.get("loop_end") && a2.byKey.get("loop_end").kind === "err",
+    JSON.stringify([...a2.byKey]));
+
+  const sOk = streamOf(pointerYaml(["loop_end: 3"]));
+  const a3 = computeAnnotations(sOk, { name: "test.wav", duration: 5 });
+  assert("#42 no annotation when loop_end within sample dur", !a3.byKey.has("loop_end"), JSON.stringify([...a3.byKey]));
+
+  const sPan = streamOf(topLevelYaml(["pan: [[0, 0], [5, 5000]]"]));
+  const a4 = computeAnnotations(sPan, { name: "test.wav", duration: 5 });
+  assert("#42 annotate pan env out of range", a4.byKey.get("pan") && a4.byKey.get("pan").kind === "warn",
+    JSON.stringify([...a4.byKey]));
 }
 
 /* ============================================================
