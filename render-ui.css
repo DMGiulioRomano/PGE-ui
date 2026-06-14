@@ -140,6 +140,32 @@
 .pge-render-split .rs-folder-btn:hover { color: var(--fg-1); border-color: var(--accent); }
 .pge-render-split .rs-folder-btn .fade { color: var(--fg-3); }
 
+/* ---------- Score-envelope filter (--plot-envelopes, issue #31) ---------- */
+.pge-render-split .rs-env-filter { display: block; }
+.pge-render-split .rs-env-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 4px;
+  margin: 4px 0 2px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.pge-render-split .rs-env-chk {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 5px 1px 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 2px;
+  font-size: 9.5px; color: var(--fg-3);
+  cursor: pointer; user-select: none;
+}
+.pge-render-split .rs-env-chk:hover { color: var(--fg-1); border-color: var(--accent); }
+.pge-render-split .rs-env-chk input { width: 10px; height: 10px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.pge-render-split .rs-env-chk.on {
+  color: var(--fg-1);
+  border-color: var(--accent);
+  background: var(--accent-soft, rgba(255,140,66,0.18));
+}
+
 .pge-render-split .rs-cmd {
   margin-top: 6px;
   padding-top: 8px;

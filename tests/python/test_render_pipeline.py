@@ -137,6 +137,21 @@ def test_build_cmd_reaper():
     assert cmd[cmd.index("--reaper-path") + 1].endswith("proj.rpp")
 
 
+def test_build_cmd_plot_envelopes_only_with_visualize():
+    # gated on --visualize: names without visualize emit nothing (issue #31)
+    assert "--plot-envelopes" not in _cmd(visualize=False, plot_envelopes=["pitch"])
+    # empty / None means "all envelopes" → flag omitted
+    assert "--plot-envelopes" not in _cmd(visualize=True, plot_envelopes=None)
+    assert "--plot-envelopes" not in _cmd(visualize=True, plot_envelopes=[])
+    cmd = _cmd(visualize=True, plot_envelopes=["pitch", "density"])
+    assert cmd[cmd.index("--plot-envelopes") + 1] == "pitch,density"
+
+
+def test_build_cmd_plot_envelopes_strips_blanks():
+    cmd = _cmd(visualize=True, plot_envelopes=[" pitch ", "", "  ", "pan"])
+    assert cmd[cmd.index("--plot-envelopes") + 1] == "pitch,pan"
+
+
 # ---------------------------------------------------------------------------
 # kill_process / watchdog
 # ---------------------------------------------------------------------------
@@ -223,3 +238,52 @@ def test_make_app_smoke(tmp_path):
     assert client.get("/file?kind=bogus&name=x").status_code == 400
     assert client.get("/file?kind=projects&name=../escape").status_code == 404
     assert client.get("/stems/proj").get_json()["stems"] == []
+    # no score_visualizer in this stub root → envelope filter unavailable
+    assert client.get("/envelope-keys").get_json() == {"ok": True, "keys": []}
+
+
+# ---------------------------------------------------------------------------
+# Score-envelope filter source — engine_envelope_keys + /envelope-keys (#31)
+# ---------------------------------------------------------------------------
+
+def _stub_score_visualizer(root):
+    """Write a minimal score_visualizer.py so engine_envelope_keys has an
+    ENVELOPE_COLORS literal to AST-parse (no matplotlib import needed)."""
+    sv = root / "src" / "rendering"
+    sv.mkdir(parents=True)
+    (sv / "score_visualizer.py").write_text(
+        "import matplotlib.pyplot as plt  # never imported by the parser\n"
+        "ENVELOPE_COLORS = {\n"
+        "    'volume': '#e41a1c',\n"
+        "    'pan': '#4daf4a',\n"
+        "    'pitch': '#984ea3',\n"
+        "}\n"
+        "PLOT_ENVELOPE_KEYS = frozenset(ENVELOPE_COLORS)\n",
+        encoding="utf-8",
+    )
+
+
+def test_engine_envelope_keys_parses_source_in_order(tmp_path):
+    import server
+    _stub_score_visualizer(tmp_path)
+    assert server.engine_envelope_keys(tmp_path) == ["volume", "pan", "pitch"]
+
+
+def test_engine_envelope_keys_missing_returns_empty(tmp_path):
+    import server
+    assert server.engine_envelope_keys(tmp_path / "nope") == []
+
+
+def test_envelope_keys_endpoint(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_score_visualizer(tmp_path)
+
+    app = server.make_app(tmp_path, render_timeout=600.0)
+    client = app.test_client()
+    body = client.get("/envelope-keys").get_json()
+    assert body["ok"] is True
+    assert body["keys"] == ["volume", "pan", "pitch"]
