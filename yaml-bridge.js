@@ -104,20 +104,50 @@
 
   /* ---------- envelope helpers ---------- */
 
+  // True when the editor-space curve still maps back to the original engine
+  // curve (within float tolerance) — i.e. the user hasn't edited it, so the
+  // verbatim engine copy can be re-emitted unchanged instead of round-tripping
+  // through the lossy *(n-1) / /(n-1) rescale. #59
+  function curveMatchesRaw(editorCurve, rawCurve, n) {
+    if (!Array.isArray(editorCurve) || !Array.isArray(rawCurve)) return false;
+    if (editorCurve.length !== rawCurve.length) return false;
+    for (let i = 0; i < editorCurve.length; i++) {
+      const e = editorCurve[i], r = rawCurve[i];
+      if (!Array.isArray(e) || !Array.isArray(r) || e.length < 2 || r.length < 2) {
+        if (JSON.stringify(e) !== JSON.stringify(r)) return false;
+        continue;
+      }
+      if (Math.abs(e[0] - r[0]) > 1e-9) return false;
+      const engineY = n <= 1 ? 0 : e[1] / (n - 1);
+      if (Math.abs(engineY - r[1]) > 1e-9) return false;
+    }
+    return true;
+  }
+
   function serializeGrainEnvelope(env) {
     if (!env || typeof env === "string" || Array.isArray(env)) return env;
     if ("from" in env && "to" in env) return env;
     if ("states" in env && Array.isArray(env.states)) {
       const n = env.states.length;
+      // Re-emit the explicit engine positions the editor preserved at parse;
+      // fall back to uniform i/(n-1) when absent or stale after a structural
+      // edit (statePositions length no longer matches the states). #59
+      const positions = (Array.isArray(env.statePositions) && env.statePositions.length === n)
+        ? env.statePositions : null;
       const engineStates = env.states.map((name, i) =>
-        [n === 1 ? 0.0 : i / (n - 1), name]
+        [positions ? positions[i] : (n === 1 ? 0.0 : i / (n - 1)), name]
       );
-      const engineCurve = (env.curve || [[0, 0], [1, 1]]).map(pt => {
-        if (Array.isArray(pt) && pt.length >= 2) {
-          return [pt[0], n <= 1 ? 0 : pt[1] / (n - 1)];
-        }
-        return pt;
-      });
+      // Re-emit the original engine curve verbatim while it's unedited; only a
+      // real edit recomputes it (and accepts the rescale). #59
+      const editorCurve = env.curve || [[0, 0], [1, 1]];
+      const engineCurve = (env._curveRaw && curveMatchesRaw(editorCurve, env._curveRaw, n))
+        ? env._curveRaw
+        : editorCurve.map(pt => {
+            if (Array.isArray(pt) && pt.length >= 2) {
+              return [pt[0], n <= 1 ? 0 : pt[1] / (n - 1)];
+            }
+            return pt;
+          });
       return { states: engineStates, curve: engineCurve };
     }
     return env;
@@ -130,14 +160,30 @@
       const raw = env.states;
       if (raw.length > 0 && Array.isArray(raw[0])) {
         const names = raw.map(([, w]) => w);
+        const positions = raw.map(([p]) => p);
         const n = names.length;
-        const editorCurve = (env.curve || [[0, 0], [1, 1]]).map(pt => {
+        const rawCurve = env.curve || [[0, 0], [1, 1]];
+        const editorCurve = rawCurve.map(pt => {
           if (Array.isArray(pt) && pt.length >= 2) {
             return [pt[0], pt[1] * (n - 1)];
           }
           return pt;
         });
-        return { states: names, curve: editorCurve };
+        const out = { states: names, curve: editorCurve };
+        // The editor models states as names with uniform spacing; keep the
+        // explicit engine positions when they diverge so serialize re-emits
+        // them (lossless no-op save, stable per-stream cache). The engine uses
+        // positions as thresholds in value-space, so forcing uniform spacing
+        // would also change the rendered audio. Excluded from the UI
+        // fingerprint (backend.js FP_IGNORE) so this preservation alone never
+        // marks an already-rendered stem stale. #59
+        if (positions.some((p, i) => p !== (n === 1 ? 0 : i / (n - 1)))) {
+          out.statePositions = positions;
+        }
+        // Keep the engine curve verbatim so the editor-space rescale doesn't
+        // introduce float drift on a no-op save. #59
+        out._curveRaw = rawCurve;
+        return out;
       }
       return env;
     }
@@ -614,7 +660,11 @@
    * difference records — empty array means lossless round-trip.
    */
 
-  const IGNORE_FIELDS = new Set(["color", "mute", "solo", "samples"]);
+  // statePositions / _curveRaw are editor-only multistate-envelope preservation
+  // fields (#59); the data they hold is also encoded in the serialized
+  // states/curve, so diffing them would just double-count (and flag noise after
+  // a curve/structure edit leaves the raw copy stale). Mirrors backend FP_IGNORE.
+  const IGNORE_FIELDS = new Set(["color", "mute", "solo", "samples", "statePositions", "_curveRaw"]);
 
   function deepDiff(a, b, path, out) {
     if (a === b) return;

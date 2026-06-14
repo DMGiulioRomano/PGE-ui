@@ -44,7 +44,14 @@
   // doesn't change the rendered stem audio, so it shouldn't mark the stem
   // stale. The engine's SHA-256 includes onset (it hashes the full YAML dict),
   // so this is a deliberate divergence for UX reasons.
-  const FP_IGNORE = new Set(["color", "mute", "solo", "onset"]);
+  // statePositions / _curveRaw (grain.envelope multistate) are editor-only
+  // preservation fields injected at parse to round-trip explicit positions and
+  // the verbatim curve (#59). They mirror data already encoded in the serialized
+  // states/curve, so hashing them too would double-count — and, more importantly,
+  // would mark every already-rendered multistate stem stale the moment this
+  // preservation shipped. Exclude them: only a real edit to a window name or the
+  // curve changes the fingerprint.
+  const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw"]);
 
   function canonicalJSON(v, ignore) {
     if (v === null || v === undefined) return "null";

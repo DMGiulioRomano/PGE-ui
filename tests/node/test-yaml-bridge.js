@@ -683,6 +683,96 @@ for (const f of dephaseFixtures) {
 }
 
 /* ============================================================
+ * SECTION 8e — multistate envelope: explicit state positions AND the curve
+ * survive the round trip. The editor lists only window NAMES and assumes uniform
+ * spacing i/(n-1); the engine stores explicit [position, name] pairs and uses the
+ * positions as thresholds in value-space (window_selection_strategy.py). Dropping
+ * them rewrote a deliberately non-uniform multistate as equispaced on a no-op
+ * save — changing the rendered audio AND busting the per-stream cache. The curve
+ * must also be re-emitted verbatim: the *(n-1) / /(n-1) rescale otherwise drifts
+ * 0.7 → 0.6999999999999998 at n=4. (#59)
+ * ============================================================ */
+
+console.log("\n── multistate envelope: positions + curve preserved (#59) ──");
+
+function multistateYaml(stateLines, curveLine) {
+  return topLevelYaml([
+    "grain:",
+    "  duration: 0.05",
+    "  envelope:",
+    "    states:",
+    ...stateLines.map(l => "      " + l),
+    "    " + curveLine,
+  ]);
+}
+const serEnv0 = (d) => window.jsyaml.load(serialize(d)).streams[0].grain.envelope;
+
+{
+  // non-uniform positions + a curve point that drifts under naive rescale (n=4)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.3, bartlett]", "- [0.7, expodec]", "- [1, blackman]"],
+    "curve: [[0, 0], [0.5, 0.7], [1, 1]]"));
+  const env = serEnv0(data);
+  assert("#59 non-uniform positions preserved",
+    eq(env.states, [[0, "hanning"], [0.3, "bartlett"], [0.7, "expodec"], [1, "blackman"]]),
+    JSON.stringify(env.states));
+  assert("#59 curve preserved verbatim (no FP drift)",
+    eq(env.curve, [[0, 0], [0.5, 0.7], [1, 1]]),
+    JSON.stringify(env.curve));
+  assert("#59 non-uniform multistate — roundTrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // uniform multistate (positions == i/(n-1)) round-trips with no extra state
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  const env = serEnv0(data);
+  assert("#59 uniform positions round-trip",
+    eq(env.states, [[0, "hanning"], [0.5, "bartlett"], [1, "blackman"]]),
+    JSON.stringify(env.states));
+}
+
+{
+  // editing a state NAME keeps the custom positions (rename != restructure)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.2, bartlett]", "- [0.9, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  data.streams[0].grain.envelope.states[1] = "gaussian";
+  const env = serEnv0(data);
+  assert("#59 rename keeps custom positions",
+    eq(env.states, [[0, "hanning"], [0.2, "gaussian"], [0.9, "blackman"]]),
+    JSON.stringify(env.states));
+}
+
+{
+  // editing the curve (editor space [0, n-1]) re-emits the engine-space curve,
+  // dropping the verbatim copy. n=3 → editor mid 1.0 == engine 0.5
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [0.5, 0.7], [1, 1]]"));
+  data.streams[0].grain.envelope.curve = [[0, 0], [0.5, 1.0], [1, 2]];
+  const env = serEnv0(data);
+  assert("#59 curve edit re-emitted in engine space",
+    eq(env.curve, [[0, 0], [0.5, 0.5], [1, 1]]),
+    JSON.stringify(env.curve));
+}
+
+{
+  // adding a state is a structural change: stale statePositions (wrong length)
+  // are ignored and spacing falls back to uniform i/(n-1)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.2, bartlett]", "- [0.9, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  data.streams[0].grain.envelope.states.push("expodec");  // 3 → 4 states
+  const env = serEnv0(data);
+  assert("#59 adding a state falls back to uniform spacing",
+    eq(env.states.map(s => s[0]), [0, 1 / 3, 2 / 3, 1]),
+    JSON.stringify(env.states));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 

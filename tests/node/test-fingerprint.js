@@ -80,6 +80,35 @@ assert("output format affects fingerprint", fp(base(), "aiff") !== fp(base(), "w
     JSON.stringify({ a: fp(a), b: fp(b) }));
 }
 
+console.log("\n── multistate envelope preservation fields are fingerprint-inert (#59) ──");
+{
+  // statePositions / _curveRaw are editor-only fields injected at parse to
+  // round-trip explicit positions + the verbatim curve. They must not move the
+  // fingerprint (or every already-rendered multistate stem would read stale),
+  // while a real edit to a window name or the curve still must.
+  const ms = () => ({
+    id: "s1", duration: 10, sample: "x.wav",
+    grain: { duration: 0.1, envelope: { states: ["hanning", "bartlett", "blackman"], curve: [[0, 0], [1, 2]] } },
+  });
+  const fpMs = fp(ms());
+  {
+    const s = ms(); s.grain.envelope.statePositions = [0, 0.2, 0.9];
+    assert("ignores grain.envelope.statePositions", fp(s) === fpMs, "fp changed");
+  }
+  {
+    const s = ms(); s.grain.envelope._curveRaw = [[0, 0], [1, 1]];
+    assert("ignores grain.envelope._curveRaw", fp(s) === fpMs, "fp changed");
+  }
+  {
+    const s = ms(); s.grain.envelope.states[1] = "gaussian";
+    assert("detects grain.envelope.states[i] rename", fp(s) !== fpMs, "fp unchanged");
+  }
+  {
+    const s = ms(); s.grain.envelope.curve = [[0, 0], [1, 1.5]];
+    assert("detects grain.envelope.curve edit", fp(s) !== fpMs, "fp unchanged");
+  }
+}
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
