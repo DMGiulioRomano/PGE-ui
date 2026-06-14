@@ -579,19 +579,39 @@ function App() {
     if (!backend.render.loadGrainData) return;
     const basename = activeProject.replace(/\.yml$/, "");
     let cancelled = false;
+    const GM = window.PGEGrainMap;
     (async () => {
+      // Streams senza stem: niente grani → rimuovili dalla mappa.
+      const withStem = [], withoutStem = [];
       for (const s of data.streams) {
-        if (cancelled) return;
         const last = lastRenderedFps[s.id];
         const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
-        if (!hasStem) {
-          setGrainData(m => { if (!(s.id in m)) return m; const n = { ...m }; delete n[s.id]; return n; });
-          continue;
-        }
+        (hasStem ? withStem : withoutStem).push(s);
+      }
+      if (withoutStem.length) {
+        setGrainData(m => {
+          let n = null;
+          for (const s of withoutStem) {
+            if (s.id in m) { n = n || { ...m }; delete n[s.id]; }
+          }
+          return n || m;
+        });
+      }
+      // Fetch dei sidecar in parallelo (issue #71, bottleneck 3): con N stream
+      // non si aspettano N round-trip in serie. Le extents (ptr/pitch) vengono
+      // pre-calcolate qui una volta (bottleneck 4), non ad ogni repaint.
+      const entries = await Promise.all(withStem.map(async s => {
+        if (cancelled) return null;
         try {
           const j = await backend.render.loadGrainData(basename, s.id);
-          if (!cancelled && j) setGrainData(m => ({ ...m, [s.id]: j }));
-        } catch (e) { /* sidecar missing / not yet rendered — leave clip without grains */ }
+          if (!j) return null;
+          if (GM) j._ext = GM.computeExtents(j.grains || []);
+          return [s.id, j];
+        } catch (e) { return null; /* sidecar missing / not yet rendered */ }
+      }));
+      if (!cancelled) {
+        const patch = Object.fromEntries(entries.filter(Boolean));
+        if (Object.keys(patch).length) setGrainData(m => ({ ...m, ...patch }));
       }
     })();
     return () => { cancelled = true; };

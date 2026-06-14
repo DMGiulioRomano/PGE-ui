@@ -181,21 +181,15 @@ function ClipGrains({ data, width, height }) {
     // px/s derived from the clip width and stream duration → X matches this
     // clip's timeline scale exactly (== PX_PER_S, but self-contained).
     const dur = data.duration || 0;
-    const ptr = GM.pointerExtent(grains);
-    const pit = GM.pitchExtentCents(grains);
+    // Extents pre-calcolati all'arrivo del JSON (app.jsx); fallback se assenti.
+    const ext = data._ext || GM.computeExtents(grains);
     const gctx = {
       pxPerSec: dur > 0 ? W / dur : 0,
       height: H,
-      ptrMin: ptr.min, ptrMax: ptr.max,
-      pitchLoCents: pit.lo, pitchHiCents: pit.hi,
+      ptrMin: ext.ptr.min, ptrMax: ext.ptr.max,
       grainHeight: 2,
     };
-    for (let i = 0; i < grains.length; i++) {
-      const r = GM.grainRect(grains[i], gctx);
-      if (r.x > W || r.x + r.w < 0) continue;  // horizontal culling
-      ctx.fillStyle = r.fill;
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-    }
+    GM.paintGrains(ctx, grains, gctx, ext.pit, { width: W });
   }, [data, width, height]);
   return <canvas className="grains" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
 }
