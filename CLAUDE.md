@@ -22,8 +22,10 @@ make tests            # full suite: tests-node + tests-python
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
-  (rescale/truncate math), and `test-fingerprint.js` (fingerprint parity: which
-  fields mark a stem stale).
+  (rescale/truncate math), `test-fingerprint.js` (fingerprint parity: which
+  fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
+  classification + render summary), and `test-history-core.js` (undo/redo stack
+  mechanics: 200-cap, gesture collapse, redo-clearing).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -65,6 +67,8 @@ Consequence: a render persists the current editor state to the source config eve
 
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys, ignoring `color/mute/solo/onset`) is semantically aligned with python's per-stream hash. The algorithms differ (FNV-1a vs SHA-256) and `onset` is intentionally excluded on the JS side: moving a clip on the timeline doesn't change the rendered audio, so it shouldn't mark the stem stale. The engine includes `onset` in its hash because it hashes the full YAML dict. If you change what affects the hash on one side, mirror it on the other or stems will read stale.
 
+The fresh/stale/never *classification* built on top of the hash (not the hash itself) — plus the aggregate render summary — lives in `render-status.js` (`window.PGERenderStatus`, node-tested in `test-render-status.js`). `app.jsx` keeps the render state (`lastRenderedFps`, `renderStatus`) and delegates the decision to it.
+
 ### YAML round-trip (`yaml-bridge.js`)
 
 Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model; unknown keys *inside* `pointer`/`grain`/`pitch`/`voices` (blocks the serializer rebuilds in full) are preserved the same way under `<block>._extra`. `dephase: null` (engine: implicit 1% mode, distinct from key-absent = off) is stored in editor state as the sentinel `window.PGEYaml.DEPHASE_IMPLICIT` and serialized back to `dephase: null`. `roundTripDiff(data)` returns the divergences; empty array means lossless.
@@ -77,13 +81,15 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 `setData(updater)` wraps every mutation. `beginGesture()` / `endGesture()` bracket continuous interactions (drag, knob spin) so they collapse into a single undo step. Free-form mutations outside a gesture push to `historyRef.past` each call. Cap is 200 entries. Anything mutating `data` must go through `setData`, not `_setDataRaw`, or undo breaks.
 
+The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearing) live in `history-core.js` (`window.PGEHistoryCore`, node-tested in `test-history-core.js`). `app.jsx` keeps the React glue — the `[data, _setDataRaw]` state, the `historyRef`, the `setHistVer` re-render bump, the `window.PGEHistory` publication, the keyboard shortcuts, and the freeze-on-resize confirm inside `endGesture` — and delegates the bookkeeping to it.
+
 ### EDITMODE block
 
 `app.jsx` has `/*EDITMODE-BEGIN*/{…}/*EDITMODE-END*/` around `TWEAK_DEFAULTS`. A sibling design tool rewrites this block from the Tweaks panel. Do not reformat or reorder keys inside it — keep one key per line, double-quoted, trailing-comma-free, or the external writer breaks.
 
 ## File-load order (matters)
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → `render-status.js` (needs `window.PGEBackend`) → `history-core.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 
