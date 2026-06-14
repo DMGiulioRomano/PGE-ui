@@ -50,11 +50,9 @@ Endpoints:
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 try:
@@ -63,187 +61,25 @@ try:
 except ImportError:
     sys.exit("Missing deps. Run:\n    pip install flask flask-cors")
 
+# Audio + render machinery extracted from this module (#43).
+from audio_pipeline import (
+    safe_resolve, soxi_duration, _resolve_audio, PEAK_BUCKETS,
+    transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
+)
+from render_pipeline import (
+    RenderState, parse_render_line, build_render_command, start_watchdog,
+)
+
 
 # -------------------------------------------------------------------------
 # Helpers
+#
+# Audio (sox transcode / peaks / spectrogram, path resolution) lives in
+# audio_pipeline.py and render orchestration (parse_render_line, RenderState,
+# command build, watchdog) in render_pipeline.py. Only the engine-venv
+# bootstrap stays here — it's used by /setup and the render route and is a
+# distinct concern. #43
 # -------------------------------------------------------------------------
-
-def soxi_duration(path: Path) -> "float | None":
-    """Get audio file duration via `soxi -D`. Returns None if soxi isn't
-    installed or the file is unreadable. Cheap — runs once per file at
-    list-time, results aren't cached server-side (the browser caches)."""
-    try:
-        out = subprocess.check_output(
-            ["soxi", "-D", str(path)],
-            stderr=subprocess.DEVNULL,
-            timeout=2.0,
-        ).decode().strip()
-        return float(out)
-    except Exception:
-        return None
-
-
-# Regexes for parsing main.py's stdout into structured UI events.
-#
-# Actual main.py output format (numpy renderer):
-#   "[CACHE] stream1: clean"   → stream is cached, will be skipped
-#   "[CACHE] stream1: DIRTY"   → stream will be rendered
-#   " Generazione completata! 5 file generati:"
-#   "    /abs/path/to/output/PGE_test__stream1.aif"
-#
-# Note: [CACHE] lines appear one per stream as each starts.
-# The absolute path lines appear all together at the end (summary block).
-_RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
-# Matches absolute path ending in __<streamId>.<aif|wav|flac>
-_RE_STEM_PATH  = re.compile(r"^\s+.+__(\w+)\.(aif|aiff|wav|flac)\s*$", re.IGNORECASE)
-
-
-def parse_render_line(line: str, state: dict) -> list:
-    """Turn a single stdout line into one or more browser-bound events."""
-    events = [{"type": "log", "line": line}]
-
-    # [CACHE] stream1: clean  → cached, emit start+done immediately
-    # [CACHE] stream1: DIRTY  → about to render, emit start only
-    m = _RE_CACHE_LINE.match(line)
-    if m:
-        sid   = m.group(1)
-        dirty = m.group(2).strip().upper() == "DIRTY"
-        total = state.get("total", 0)
-        idx   = state.get("index", 0)
-        state["index"] = idx + 1
-        # Previous DIRTY stream is done now that we're starting the next one
-        prev = state.get("streamId")
-        if prev:
-            events.append({"type": "stream-done", "streamId": prev, "cached": False})
-            state["streamId"] = None
-        events.append({"type": "stream-start",
-                        "streamId": sid, "index": idx, "total": total})
-        if not dirty:
-            events.append({"type": "stream-done", "streamId": sid, "cached": True})
-        else:
-            state["streamId"] = sid  # track: this stream is being rendered
-        return events
-
-    # Summary path lines: "    /abs/path/output/PGE_test__stream1.aif"
-    # Extract stream_id from filename to emit stream-done for the last DIRTY stream.
-    m2 = _RE_STEM_PATH.match(line)
-    if m2:
-        prev = state.get("streamId")
-        if prev:
-            sid = m2.group(1)
-            if sid == prev:
-                events.append({"type": "stream-done",
-                                "streamId": prev, "cached": False})
-                state["streamId"] = None
-    return events
-
-
-def safe_resolve(base: Path, name: str) -> "Path | None":
-    """Resolve `base/name` while rejecting traversal and absolute paths."""
-    if not name or "/" in name or "\\" in name or ".." in name:
-        return None
-    if name.startswith("."):
-        return None
-    return base / name
-
-
-_AUDIO_EXTS = (".aif", ".aiff", ".wav", ".flac", ".mp3")
-
-
-def _resolve_audio(base: Path, fname: str) -> "Path | None":
-    """Resolve an audio source under `base` by its stem, accepting any of the
-    known audio extensions (the browser may request `name.aif` for a `name.wav`
-    on disk, or vice versa). Rejects traversal via safe_resolve. Returns the
-    first existing match, else None."""
-    stem = Path(fname).stem
-    for ext in _AUDIO_EXTS:
-        cand = safe_resolve(base, stem + ext)
-        if cand is not None and cand.exists():
-            return cand
-    return None
-
-
-PEAK_BUCKETS = 32768
-
-# Spectrogram grid caps — keep the payload tiny regardless of file length.
-SPEC_NFFT = 2048
-SPEC_HOP = SPEC_NFFT // 4
-SPEC_MAX_COLS = 512
-SPEC_FREQ_BINS = 256
-SPEC_DB_FLOOR = -90.0
-
-
-def _compute_peaks(source: Path, buckets: int = PEAK_BUCKETS) -> bytes:
-    """Reduce an audio file to `buckets` max-abs amplitude values in 0..1,
-    returned as little-endian float32 bytes. Mirrors the browser-side
-    `_computePeaks` in audio-engine.js so the visual result is identical.
-    Raises ImportError if numpy/soundfile are missing."""
-    import numpy as np
-    import soundfile as sf
-
-    data, _sr = sf.read(str(source), dtype="float32", always_2d=True)
-    mono = np.abs(data).max(axis=1)            # max across channels → (frames,)
-    n = int(min(buckets, max(1, mono.shape[0])))
-    # Bucket boundaries, then max within each bucket via reduceat.
-    edges = (np.arange(n) * (mono.shape[0] / n)).astype(np.int64)
-    out = np.maximum.reduceat(mono, edges).astype("<f4")
-    return out.tobytes()
-
-
-def _compute_spectrogram(source: Path, scale: str = "linear") -> bytes:
-    """Compute a log-magnitude STFT spectrogram, returned as binary:
-    8-byte little-endian header (uint32 width=time cols, uint32 height=freq
-    bins) followed by width*height uint8 values (0..255). numpy-only — no
-    scipy/matplotlib. Heavy FFT work runs here so the browser only paints.
-
-    `scale` controls the FREQUENCY axis: "linear" buckets the rfft bins
-    evenly; "log" buckets them on a log-frequency (geometric) spacing so low
-    frequencies get more vertical room. Magnitude is always in dB either way.
-    Raises ImportError if numpy/soundfile are missing."""
-    import numpy as np
-    import soundfile as sf
-
-    data, _sr = sf.read(str(source), dtype="float32", always_2d=True)
-    mono = data.mean(axis=1)                    # downmix to mono
-    n = mono.shape[0]
-    if n < SPEC_NFFT:
-        mono = np.pad(mono, (0, SPEC_NFFT - n))
-        n = mono.shape[0]
-
-    # Frame the signal: one column per hop.
-    n_frames = 1 + (n - SPEC_NFFT) // SPEC_HOP
-    n_frames = max(1, n_frames)
-    window = np.hanning(SPEC_NFFT).astype("float32")
-    idx = np.arange(SPEC_NFFT)[None, :] + np.arange(n_frames)[:, None] * SPEC_HOP
-    frames = mono[idx] * window                 # (n_frames, nfft)
-
-    spec = np.abs(np.fft.rfft(frames, axis=1))  # (n_frames, nfft/2+1)
-    db = 20.0 * np.log10(spec + 1e-9)
-    db = np.clip(db, SPEC_DB_FLOOR, 0.0)
-    norm = ((db - SPEC_DB_FLOOR) / (-SPEC_DB_FLOOR) * 255.0)  # 0..255
-
-    # Downsample to the capped grid via max-pool (reduceat) on each axis.
-    # Linear edges are evenly spaced; log edges are geometric (low freq gets
-    # more bins). reduceat needs strictly increasing edges, so dedupe.
-    def _pool(arr, target, axis, log=False):
-        size = arr.shape[axis]
-        if size <= target and not log:
-            return arr
-        if log:
-            edges = np.unique(np.geomspace(1, size, target).astype(np.int64)) - 1
-            edges = np.clip(edges, 0, size - 1)
-        else:
-            edges = (np.arange(target) * (size / target)).astype(np.int64)
-        return np.maximum.reduceat(arr, edges, axis=axis)
-
-    norm = _pool(norm, SPEC_MAX_COLS, axis=0)   # time cols (always linear)
-    norm = _pool(norm, SPEC_FREQ_BINS, axis=1, log=(scale == "log"))  # freq bins
-    grid = norm.astype(np.uint8)                # (cols, bins)
-
-    width, height = grid.shape[0], grid.shape[1]
-    header = np.array([width, height], dtype="<u4").tobytes()
-    # Row-major by time column: column c, then its freq bins low→high.
-    return header + grid.tobytes()
 
 
 def _ensure_venv_events(root: Path):
@@ -337,7 +173,7 @@ def _ensure_venv_events(root: Path):
 # App factory
 # -------------------------------------------------------------------------
 
-def make_app(root: Path) -> Flask:
+def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     refs    = root / "refs"
     configs = root / "configs"
     output  = root / "output"
@@ -349,8 +185,10 @@ def make_app(root: Path) -> Flask:
     # CORS open — the browser is on the same machine, no security risk.
     CORS(app, resources={r"/*": {"origins": "*"}})
 
-    # Mutable state for the running render (only one at a time).
-    rs = {"proc": None, "cancelled": False, "lock": threading.Lock()}
+    # State for the running render (only one at a time); the shared lock
+    # serializes /render and /render/cancel. render_timeout is the hard cap
+    # (seconds) after which a stuck subprocess is killed (0 disables). #43
+    rs = RenderState()
 
     BASES = {"media": refs, "projects": configs, "output": output, "cache": cache}
 
@@ -554,22 +392,13 @@ def make_app(root: Path) -> Flask:
             return send_file(str(source), mimetype="audio/wav", conditional=True)
 
         wav_cache = output / (stem + ".transcoded.wav")
-        needs_transcode = (
-            not wav_cache.exists()
-            or wav_cache.stat().st_mtime < source.stat().st_mtime
-        )
-        if needs_transcode:
-            try:
-                subprocess.check_call(
-                    ["sox", str(source), str(wav_cache)],
-                    stderr=subprocess.DEVNULL,
-                    timeout=30,
-                )
-            except FileNotFoundError:
-                abort(500, "sox not found — needed to transcode AIFF→WAV "
-                           "for browser playback")
-            except subprocess.CalledProcessError as e:
-                abort(500, f"sox failed: {e}")
+        try:
+            transcode_wav(source, wav_cache, timeout=30)
+        except SoxNotFound:
+            abort(500, "sox not found — needed to transcode AIFF→WAV "
+                       "for browser playback")
+        except SoxFailed as e:
+            abort(500, f"sox failed: {e}")
         return send_file(str(wav_cache), mimetype="audio/wav", conditional=True)
 
     @app.get("/peaks/<path:fname>")
@@ -593,20 +422,16 @@ def make_app(root: Path) -> Flask:
             abort(404)
 
         peaks_dir = cache / "peaks"
-        peaks_dir.mkdir(parents=True, exist_ok=True)
         # Bucket count in the name so bumping PEAK_BUCKETS invalidates old
         # caches automatically (stale .f32 files just become orphaned).
         cache_file = peaks_dir / (stem + f".{PEAK_BUCKETS}.f32")
-        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
-        if not fresh:
-            try:
-                data = _compute_peaks(source)
-            except ImportError:
-                abort(500, "numpy/soundfile not installed — `pip install -r "
-                           "requirements.txt` for server-side waveforms")
-            except Exception as e:
-                abort(500, f"peak extraction failed: {e}")
-            cache_file.write_bytes(data)
+        try:
+            peaks_file(source, cache_file)
+        except ImportError:
+            abort(500, "numpy/soundfile not installed — `pip install -r "
+                       "requirements.txt` for server-side waveforms")
+        except Exception as e:
+            abort(500, f"peak extraction failed: {e}")
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)
 
@@ -631,19 +456,15 @@ def make_app(root: Path) -> Flask:
             scale = "linear"
 
         spec_dir = cache / "spec"
-        spec_dir.mkdir(parents=True, exist_ok=True)
         # scale in the filename so linear/log cache side-by-side.
         cache_file = spec_dir / (stem + f".{scale}.spec")
-        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
-        if not fresh:
-            try:
-                data = _compute_spectrogram(source, scale)
-            except ImportError:
-                abort(500, "numpy/soundfile not installed — `pip install -r "
-                           "requirements.txt` for server-side spectrograms")
-            except Exception as e:
-                abort(500, f"spectrogram failed: {e}")
-            cache_file.write_bytes(data)
+        try:
+            spectrogram_file(source, cache_file, scale)
+        except ImportError:
+            abort(500, "numpy/soundfile not installed — `pip install -r "
+                       "requirements.txt` for server-side spectrograms")
+        except Exception as e:
+            abort(500, f"spectrogram failed: {e}")
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)
 
@@ -662,18 +483,14 @@ def make_app(root: Path) -> Flask:
             return send_file(str(source), mimetype="audio/wav", conditional=True)
 
         wav_dir = cache / "media_wav"
-        wav_dir.mkdir(parents=True, exist_ok=True)
         wav_cache = wav_dir / (source.stem + ".wav")
-        fresh = wav_cache.exists() and wav_cache.stat().st_mtime >= source.stat().st_mtime
-        if not fresh:
-            try:
-                subprocess.check_call(["sox", str(source), str(wav_cache)],
-                                      stderr=subprocess.DEVNULL, timeout=60)
-            except FileNotFoundError:
-                abort(500, "sox not found — needed to transcode media for "
-                           "browser playback")
-            except subprocess.CalledProcessError as e:
-                abort(500, f"sox failed: {e}")
+        try:
+            transcode_wav(source, wav_cache, timeout=60)
+        except SoxNotFound:
+            abort(500, "sox not found — needed to transcode media for "
+                       "browser playback")
+        except SoxFailed as e:
+            abort(500, f"sox failed: {e}")
         return send_file(str(wav_cache), mimetype="audio/wav", conditional=True)
 
     @app.get("/media_peaks/<path:fname>")
@@ -684,18 +501,14 @@ def make_app(root: Path) -> Flask:
         if source is None:
             abort(404)
         peaks_dir = cache / "peaks_media"
-        peaks_dir.mkdir(parents=True, exist_ok=True)
         cache_file = peaks_dir / (source.stem + f".{PEAK_BUCKETS}.f32")
-        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
-        if not fresh:
-            try:
-                data = _compute_peaks(source)
-            except ImportError:
-                abort(500, "numpy/soundfile not installed — `pip install -r "
-                           "requirements.txt` for server-side waveforms")
-            except Exception as e:
-                abort(500, f"peak extraction failed: {e}")
-            cache_file.write_bytes(data)
+        try:
+            peaks_file(source, cache_file)
+        except ImportError:
+            abort(500, "numpy/soundfile not installed — `pip install -r "
+                       "requirements.txt` for server-side waveforms")
+        except Exception as e:
+            abort(500, f"peak extraction failed: {e}")
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)
 
@@ -708,18 +521,14 @@ def make_app(root: Path) -> Flask:
         if source is None:
             abort(404)
         spec_dir = cache / "spec_media"
-        spec_dir.mkdir(parents=True, exist_ok=True)
         cache_file = spec_dir / (source.stem + ".spec")
-        fresh = cache_file.exists() and cache_file.stat().st_mtime >= source.stat().st_mtime
-        if not fresh:
-            try:
-                data = _compute_spectrogram(source)
-            except ImportError:
-                abort(500, "numpy/soundfile not installed — `pip install -r "
-                           "requirements.txt` for server-side spectrograms")
-            except Exception as e:
-                abort(500, f"spectrogram failed: {e}")
-            cache_file.write_bytes(data)
+        try:
+            spectrogram_file(source, cache_file)
+        except ImportError:
+            abort(500, "numpy/soundfile not installed — `pip install -r "
+                       "requirements.txt` for server-side spectrograms")
+        except Exception as e:
+            abort(500, f"spectrogram failed: {e}")
         return send_file(str(cache_file), mimetype="application/octet-stream",
                          conditional=True)
 
@@ -772,11 +581,7 @@ def make_app(root: Path) -> Flask:
 
     @app.post("/render/cancel")
     def cancel_render():
-        with rs["lock"]:
-            rs["cancelled"] = True
-            proc = rs["proc"]
-            if proc and proc.poll() is None:
-                proc.terminate()
+        rs.cancel()
         return jsonify({"ok": True})
 
     @app.post("/render")
@@ -844,48 +649,28 @@ def make_app(root: Path) -> Flask:
                     return
 
             # Build the command using the engine venv python.
-            cmd = [
-                str(venv_py), str(root / "src" / "main.py"),
-                str(yml), str(output_stem),
-                "--renderer", renderer,
-                "--per-stream",
-                "--show-static",
-                "--format", fmt,
-            ]
-            if use_cache:  cmd += ["--cache", "--cache-dir", str(cache)]
-            if visualize:
-                cmd += ["--visualize"]
-                if page_duration is not None and float(page_duration) != 15.0:
-                    cmd += ["--page-duration", str(float(page_duration))]
-            if reaper:     cmd += ["--reaper",
-                                    "--reaper-path", str(output / f"{basename}.rpp")]
-            if renderer == "csound":
-                cmd += [
-                    "--orc-path", str(root / "csound" / "main.orc"),
-                    "--incdir",   str(root / "src"),
-                    "--ssdir",    str(refs),
-                    "--sfdir",    str(output),
-                    "--log-dir",  str(root / "logs"),
-                ]
+            cmd = build_render_command(
+                venv_py, root, yml, output_stem,
+                renderer=renderer, use_cache=use_cache, cache=cache,
+                visualize=visualize, page_duration=page_duration, reaper=reaper,
+                basename=basename, refs=refs, output=output, fmt=fmt,
+            )
 
             yield json.dumps({"type": "log",
                               "line": "$ " + " ".join(cmd)}) + "\n"
+            watchdog = None
             try:
-                with rs["lock"]:
-                    rs["cancelled"] = False
-                    rs["proc"] = subprocess.Popen(
-                        cmd, cwd=str(root),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
-                    )
+                proc = rs.start(cmd, root)
+                # Hard cap: kill a stuck main.py so it can't hold a worker
+                # thread forever (workers=1, threads=4). The kill closes the
+                # pipe → readline hits EOF → this loop ends normally. #43
+                watchdog = start_watchdog(proc, render_timeout)
                 n_streams = len(opts.get("streams") or [])
                 state = {"streamId": None, "total": n_streams, "index": 0}
-                proc = rs["proc"]
                 # Read line-by-line and stream to client.
                 for raw in iter(proc.stdout.readline, ""):
                     line = raw.rstrip("\n")
-                    if rs["cancelled"]:
+                    if rs.is_cancelled():
                         proc.terminate()
                         yield json.dumps({"type": "log",
                                           "line": "[ABORT] cancelled"}) + "\n"
@@ -915,14 +700,23 @@ def make_app(root: Path) -> Flask:
                 yield json.dumps({"type": "done", "ok": False,
                                   "error": str(e)}) + "\n"
             finally:
-                with rs["lock"]:
-                    rs["proc"] = None
+                if watchdog is not None:
+                    watchdog.cancel()
+                rs.clear()
                 if tmp_yml is not None:
                     try: tmp_yml.unlink(missing_ok=True)
                     except Exception: pass
 
         # mimetype "application/x-ndjson" is what the browser LocalBackend reads.
-        return Response(event_stream(), mimetype="application/x-ndjson")
+        resp = Response(event_stream(), mimetype="application/x-ndjson")
+        # Guarantee the temp YAML is removed even if the client disconnects
+        # before the generator's finally runs (or it's never iterated). #43
+        if tmp_yml is not None:
+            def _cleanup_tmp(_p=tmp_yml):
+                try: _p.unlink(missing_ok=True)
+                except Exception: pass
+            resp.call_on_close(_cleanup_tmp)
+        return resp
 
     # --------- static UI file serving ---------
     # Serves the PGE-ui directory so no separate http.server is needed.
@@ -956,6 +750,9 @@ def main():
                          "i.e. cloned side-by-side with PGE-ui)")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default: 127.0.0.1, localhost only)")
+    ap.add_argument("--render-timeout", type=float, default=600.0,
+                    help="hard cap in seconds on a single render before the "
+                         "subprocess is killed; 0 disables (default: 600)")
     args = ap.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -973,7 +770,7 @@ def main():
             f"    cd PGE-ui && python server.py\n"
         )
 
-    app = make_app(root)
+    app = make_app(root, render_timeout=args.render_timeout)
 
     def _check_cmd(cmd):
         try:
