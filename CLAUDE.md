@@ -14,9 +14,28 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 make install          # pip install -r requirements.txt  (flask + flask-cors only)
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
+make tests            # full suite: tests-node + tests-python
 ```
 
-`make tests-node` runs the node test suite for `yaml-bridge.js` round-trip fidelity (`tests/node/test-yaml-bridge.js`; engine configs in the sibling repo serve as fixtures when present). There is no linter or typechecker, and the React UI itself has no automated tests — UI verification is manual: open `PGE Editor.html` in a browser, switch the Settings panel backend to `local`, hit "test connection", render.
+`make tests` runs both halves of the suite:
+
+- **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
+  (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
+  engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
+  (rescale/truncate math), and `test-fingerprint.js` (fingerprint parity: which
+  fields mark a stem stale).
+- **`make tests-python`** (pytest) — `test_render_pipeline.py`
+  (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
+  and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
+  (path/security helpers), `test_yaml_structure.py`, and `test_engine_render.py`
+  (an engine render smoke test that skips when the sibling engine checkout/venv
+  is absent).
+
+CI runs both on push and PR (`.github/workflows/ci.yml`); the engine-dependent
+test skips there. There is no linter or typechecker, and the React UI itself has
+no component-level automated tests — UI verification is still manual: open
+`PGE Editor.html` in a browser, switch the Settings panel backend to `local`,
+hit "test connection", render.
 
 ## Architecture
 
