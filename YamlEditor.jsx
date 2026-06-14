@@ -100,15 +100,16 @@ function YamlEditor({ stream, onChange, samples }) {
 
   function applyEdits() {
     try {
-      // parseStream returns the FULL stream shape; UI-only fields are not in
-      // the YAML text, so preserve them from the live stream. updateStream in
-      // app.jsx does a shallow {...s, ...patch}, so a complete object is safe. #42
+      // parseStream returns the FULL stream shape. solo/mute now round-trip
+      // through the YAML (#63), so they come from `parsed` — editing them in the
+      // Raw tab takes effect. Only `color` (synthesized by streamFromYaml, never
+      // in the YAML) and `id` (identity, kept stable even if stream_id is
+      // blanked) are preserved from the live stream. updateStream in app.jsx
+      // does a shallow {...s, ...patch}, so a complete object is safe. #42
       const parsed = window.PGEYaml.parseStream(draft);
       onChange && onChange({
         ...parsed,
         color: stream.color,   // synthesized by streamFromYaml, never in YAML
-        mute:  stream.mute,     // UI-only
-        solo:  stream.solo,     // UI-only
         id:    stream.id,       // keep identity stable even if stream_id blanked
       });
       setParseErr(null);

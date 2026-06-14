@@ -74,6 +74,7 @@
     "grain", "pointer", "pitch", "voices",
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
+    "solo", "mute",
   ]);
 
   /* Known keys inside the block nodes that serialize rebuilds in full
@@ -396,6 +397,13 @@
       y.voices = vy;
     }
 
+    // solo/mute are presence-keyed engine-side: _filter_solo_mute (generator.py)
+    // checks key PRESENCE, not value, so a `solo: false` would still count as
+    // solo-active. Emit them ONLY when truthy and omit them otherwise — never
+    // `solo: false`. Mirrors the presence read in streamFromYaml. #63
+    if (s.solo) y.solo = true;
+    if (s.mute) y.mute = true;
+
     if (s.dephase === DEPHASE_IMPLICIT) y.dephase = null; // dumps as `dephase: null`
     else if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
 
@@ -467,7 +475,11 @@
       duration: y.duration ?? 5,
       sample: y.sample || "",
       color: colorForStream(id, idx),
-      mute: false, solo: false,
+      // Presence-keyed to match the engine's _filter_solo_mute: the key being
+      // present (any value, even `false`) means active, since the engine tests
+      // `'solo' in stream`, not its value. Absent → false. Serialized back out
+      // only when true (see streamToYaml). #63
+      mute: ("mute" in y), solo: ("solo" in y),
       // Engine default is "absolute" — do NOT inject a default here. Absence
       // must round-trip as absence or saving a file rescales every envelope's
       // time axis. New streams created by the UI write "normalized"
@@ -661,16 +673,22 @@
 
   /* ---------- round-trip self-test ----------
    *
-   * Serialise → parse → diff against original. UI-only fields (color, mute,
-   * solo, samples) are ignored. Returns an array of { path, before, after }
+   * Serialise → parse → diff against original. Fields that never reach the YAML
+   * (color, samples) are ignored. solo/mute now round-trip through the YAML
+   * (#63), so they ARE diffed. Returns an array of { path, before, after }
    * difference records — empty array means lossless round-trip.
    */
 
-  // statePositions / _curveRaw are editor-only multistate-envelope preservation
-  // fields (#59); the data they hold is also encoded in the serialized
-  // states/curve, so diffing them would just double-count (and flag noise after
-  // a curve/structure edit leaves the raw copy stale). Mirrors backend FP_IGNORE.
-  const IGNORE_FIELDS = new Set(["color", "mute", "solo", "samples", "statePositions", "_curveRaw"]);
+  // Ignore only fields that don't (and shouldn't) reach the YAML: UI-only color,
+  // the samples list, and the editor-only multistate preservation fields
+  // statePositions/_curveRaw (#59) — their data is already encoded in the
+  // serialized states/curve, so diffing them would double-count (and flag noise
+  // after a curve/structure edit leaves the raw copy stale).
+  // NOTE: solo/mute are intentionally NOT ignored here — they now round-trip
+  // through the YAML (#63). This diverges from backend FP_IGNORE, which still
+  // excludes them: serializing solo/mute changes WHICH streams render, not a
+  // single stem's audio, so it must not mark a rendered stem stale.
+  const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw"]);
 
   function deepDiff(a, b, path, out) {
     if (a === b) return;

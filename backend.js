@@ -425,10 +425,21 @@
       return { ok: checks.every(c => c.ok), checks };
     }
 
+    // Valid `--plot-envelopes` names, sourced from the engine (issue #31) so the
+    // render-options filter isn't hardcoded. Returns [] for an older server.py
+    // without the endpoint, or an older engine without the constant — the UI
+    // then simply hides the filter.
+    async function envelopeKeys() {
+      try {
+        const d = await jget("/envelope-keys");
+        return Array.isArray(d.keys) ? d.keys : [];
+      } catch { return []; }
+    }
+
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys };
   }
 
   window.PGEBackend = {

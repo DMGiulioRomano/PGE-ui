@@ -4,7 +4,7 @@ const { useState: useStateTB } = React;
 function TopBar({
   project, title, dirty,
   playing, onPlay, onStop, onSeekZero, loopEnabled, onToggleLoop,
-  onRender, onCancelRender, renderStatus, renderOptions, onRenderOptionsChange,
+  onRender, onCancelRender, renderStatus, renderOptions, onRenderOptionsChange, envelopeKeys,
   time, duration, status,
   onUndo, onRedo, canUndo, canRedo,
   browserOpen, onToggleBrowser,
@@ -83,6 +83,7 @@ function TopBar({
       <RenderButton
         options={renderOptions}
         onOptionsChange={onRenderOptionsChange}
+        envelopeKeys={envelopeKeys}
         onRender={onRender}
         onCancel={onCancelRender}
         status={renderStatus} />

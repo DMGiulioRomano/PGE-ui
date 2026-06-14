@@ -85,18 +85,56 @@
     });
   }
 
+  // dephase per-parameter envelope keys (mirror EnvelopeEditor.jsx listEnvelopes).
+  const DEPHASE_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "envelope"];
+
+  // dephase is stored verbatim (yaml-bridge passes it through): it can be the
+  // DEPHASE_IMPLICIT sentinel / false / a scalar prob, a global envelope array,
+  // or a per-param object whose values are scalar prob, null, or an envelope
+  // array. Only the array-form envelopes are time-domain — rescale those, keep
+  // every other key/value untouched so the round trip stays lossless.
+  function _applyDephase(dephase, fn) {
+    if (Array.isArray(dephase)) return fn(dephase);
+    if (dephase && typeof dephase === "object") {
+      return Object.fromEntries(Object.entries(dephase).map(([k, v]) =>
+        DEPHASE_PARAM_KEYS.includes(k) && Array.isArray(v) ? [k, fn(v)] : [k, v]));
+    }
+    return dephase;
+  }
+
+  // Collect every time-domain envelope array carried by a stream's dephase.
+  function _dephaseEnvs(dephase) {
+    if (Array.isArray(dephase)) return [dephase];
+    if (dephase && typeof dephase === "object")
+      return DEPHASE_PARAM_KEYS.map(k => dephase[k]).filter(Array.isArray);
+    return [];
+  }
+
   function _applyEnvFields(stream, fn) {
     const wf = (obj, key) => obj[key] != null ? { [key]: fn(obj[key]) } : {};
+    const dephaseWalk = Array.isArray(stream.dephase) || (stream.dephase && typeof stream.dephase === "object");
     return {
       ...stream,
       ...wf(stream, "densityEnv"),
       ...wf(stream, "fillFactorEnv"),
       ...wf(stream, "distributionEnv"),
       ...wf(stream, "panEnv"),
+      ...wf(stream, "panRangeEnv"),
       ...wf(stream, "volumeEnv"),
-      grain:   stream.grain   ? { ...stream.grain,   ...wf(stream.grain,   "durationEnv")   } : stream.grain,
-      pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv") } : stream.pointer,
-      pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "valueEnv")      } : stream.pitch,
+      ...wf(stream, "volumeRangeEnv"),
+      grain:   stream.grain   ? {
+        ...stream.grain,
+        ...wf(stream.grain, "durationEnv"),
+        ...wf(stream.grain, "durationRangeEnv"),
+        // grain.envelope.curve: blend/morph curve, array or {type,points} —
+        // both handled by rescaleEnvArray/truncateEnvArray.
+        ...(stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope)
+          ? { envelope: { ...stream.grain.envelope, ...wf(stream.grain.envelope, "curve") } }
+          : {}),
+      } : stream.grain,
+      pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv"), ...wf(stream.pointer, "offsetRangeEnv") } : stream.pointer,
+      pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "valueEnv"), ...wf(stream.pitch, "rangeEnv") } : stream.pitch,
+      ...(dephaseWalk ? { dephase: _applyDephase(stream.dephase, fn) } : {}),
       voices:  stream.voices  ? {
         ...stream.voices,
         ...wf(stream.voices, "numEnv"),
@@ -168,13 +206,19 @@
 
   function streamWouldTruncate(stream, ratio) {
     const fields = [
-      stream.densityEnv, stream.fillFactorEnv, stream.distributionEnv, stream.panEnv, stream.volumeEnv,
+      stream.densityEnv, stream.fillFactorEnv, stream.distributionEnv,
+      stream.panEnv, stream.panRangeEnv, stream.volumeEnv, stream.volumeRangeEnv,
       stream.grain    && stream.grain.durationEnv,
+      stream.grain    && stream.grain.durationRangeEnv,
+      stream.grain    && stream.grain.envelope && stream.grain.envelope.curve,
       stream.pointer  && stream.pointer.speedRatioEnv,
       stream.pointer  && stream.pointer.loopStartEnv,
       stream.pointer  && stream.pointer.loopDurEnv,
       stream.pointer  && stream.pointer.loopEndEnv,
+      stream.pointer  && stream.pointer.offsetRangeEnv,
       stream.pitch    && stream.pitch.valueEnv,
+      stream.pitch    && stream.pitch.rangeEnv,
+      ..._dephaseEnvs(stream.dephase),
       stream.voices   && stream.voices.numEnv,
       stream.voices   && stream.voices.scatterEnv,
       stream.voices && stream.voices.pitch        && stream.voices.pitch.stepEnv,

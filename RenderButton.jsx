@@ -3,10 +3,19 @@
 
 const { useState: useStateRB, useRef: useRefRB, useEffect: useEffectRB } = React;
 
-function RenderButton({ options, onOptionsChange, onRender, onCancel, status }) {
+function RenderButton({ options, onOptionsChange, onRender, onCancel, status, envelopeKeys }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = useStateRB(false);
   const rootRef = useRefRB(null);
+  const keys = Array.isArray(envelopeKeys) ? envelopeKeys : [];
+  const selectedEnv = Array.isArray(options.plotEnvelopes) ? options.plotEnvelopes : [];
+
+  function toggleEnv(name) {
+    const next = selectedEnv.includes(name)
+      ? selectedEnv.filter(n => n !== name)
+      : [...selectedEnv, name];
+    onOptionsChange({ ...options, plotEnvelopes: next });
+  }
 
   useEffectRB(() => {
     function onDoc(e) {
@@ -87,6 +96,25 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status }) 
               <span className="rs-hint">seconds per page</span>
             </div>
           ) : null}
+          {options.visualize && keys.length ? (
+            <div className="rs-row rs-env-filter" style={{paddingLeft: 18}}>
+              <span className="rs-k">plot envelopes</span>
+              <div className="rs-env-list">
+                {keys.map(name => (
+                  <label key={name} className={"rs-env-chk" + (selectedEnv.includes(name) ? " on" : "")}>
+                    <input type="checkbox" checked={selectedEnv.includes(name)}
+                           onChange={() => toggleEnv(name)} />
+                    <span className="mono">{name}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="rs-hint">
+                {selectedEnv.length
+                  ? `only these ${selectedEnv.length} · static params shown (show-static on)`
+                  : "none selected = all envelopes"}
+              </div>
+            </div>
+          ) : null}
           <RsToggle k="reaper project" v={options.reaper} onChange={(v) => toggle("reaper", v)}
                     hint="export a .rpp Reaper session" />
           <RsToggle k="preclean output" v={options.preclean} onChange={(v) => toggle("preclean", v)}
@@ -137,6 +165,9 @@ function buildCommand(o) {
   if (o.visualize) {
     parts.push("--visualize", "--show-static");
     if (o.pageDuration && o.pageDuration !== 15) parts.push("--page-duration", String(o.pageDuration));
+    if (Array.isArray(o.plotEnvelopes) && o.plotEnvelopes.length) {
+      parts.push("--plot-envelopes", o.plotEnvelopes.join(","));
+    }
   }
   if (o.reaper) parts.push("--reaper");
   return parts.join(" ");
