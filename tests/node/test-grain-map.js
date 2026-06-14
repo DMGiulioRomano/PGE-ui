@@ -282,6 +282,55 @@ function maxChanDiff(c0, c1) {
 }
 
 /* ============================================================
+ * N. selectGrainRefetch — quali stream rifetchare dopo un render (#73)
+ *   loaded = Set di stream con grani già in memoria
+ *   regen  = Set di stream rigenerati dal motore (cached=false → JSON riscritto)
+ *   regola: refetch sse  NON loaded  OPPURE  rigenerato
+ * ============================================================ */
+{
+  // Primo load: niente in memoria, nessun render → fetch di tutti gli stem.
+  const all = GM.selectGrainRefetch(["a", "b"], new Set(), new Set());
+  assert("selectGrainRefetch — mai caricati → fetch di tutti",
+    all.length === 2 && all.includes("a") && all.includes("b"), JSON.stringify(all));
+
+  // Tutti già caricati e nessun rigenerato (es. toggle vista, nessun render) →
+  // nessun fetch.
+  const clean = GM.selectGrainRefetch(["a", "b"], new Set(["a", "b"]), new Set());
+  assert("selectGrainRefetch — caricati e non rigenerati → nessun fetch",
+    clean.length === 0, JSON.stringify(clean));
+
+  // Cache ON, un solo stream rigenerato → refetch solo quello, i clean restano.
+  const one = GM.selectGrainRefetch(["a", "b"], new Set(["a", "b"]), new Set(["b"]));
+  assert("selectGrainRefetch — un rigenerato → solo quello",
+    one.length === 1 && one[0] === "b", JSON.stringify(one));
+
+  // Cache OFF: il motore rigenera tutto → tutti rifetchati anche se già caricati.
+  const allRegen = GM.selectGrainRefetch(["a", "b"], new Set(["a", "b"]), new Set(["a", "b"]));
+  assert("selectGrainRefetch — cache OFF (tutti rigenerati) → fetch di tutti",
+    allRegen.length === 2, JSON.stringify(allRegen));
+
+  // Misto: non-caricati + rigenerati, ordine preservato.
+  const mixed = GM.selectGrainRefetch(["a", "b", "c"], new Set(["a"]), new Set(["a"]));
+  assert("selectGrainRefetch — misto (rigenerato + mai caricati)",
+    mixed.length === 3 && mixed[0] === "a" && mixed[1] === "b" && mixed[2] === "c", JSON.stringify(mixed));
+
+  // Sottoinsieme: tutti caricati, solo uno rigenerato → solo quello.
+  const sub = GM.selectGrainRefetch(["a", "b", "c"], new Set(["a", "b", "c"]), new Set(["c"]));
+  assert("selectGrainRefetch — caricati, un rigenerato → sottoinsieme",
+    sub.length === 1 && sub[0] === "c", JSON.stringify(sub));
+
+  // Nessuno stream con stem → array vuoto.
+  const none = GM.selectGrainRefetch([], new Set(["a"]), new Set());
+  assert("selectGrainRefetch — nessuno stream → []", none.length === 0, JSON.stringify(none));
+
+  // Argomenti mancanti (difensivo): non deve lanciare; in dubbio rifetcha.
+  let threw = false, r = [];
+  try { r = GM.selectGrainRefetch(["a"], null, null); } catch (e) { threw = true; }
+  assert("selectGrainRefetch — loaded/regen null → fetch senza eccezioni",
+    !threw && r.length === 1 && r[0] === "a", JSON.stringify({ threw, r }));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 console.log(`\n${"─".repeat(50)}`);
