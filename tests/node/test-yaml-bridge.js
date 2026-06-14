@@ -773,6 +773,59 @@ const serEnv0 = (d) => window.jsyaml.load(serialize(d)).streams[0].grain.envelop
 }
 
 /* ============================================================
+ * SECTION 8f — explicit *_range: 0 is preserved (#50). Engine-side an explicit
+ * range (even 0) sets has_explicit_range and DISABLES the implicit jitter the
+ * dephase gate would otherwise apply (parameter.py _calculate_range: _mod_range
+ * is None -> default_jitter); absent means "use the implicit jitter". So 0 is
+ * NOT equivalent to absent — same rule already applied to pitch.range (#34).
+ * The old `!== 0` serialize guard dropped an explicit 0 (and parse coerced
+ * absent -> 0 for volume/pan/duration, hiding it). Fix: parse preserves absence
+ * as null; serialize omits only null/undefined.
+ * ============================================================ */
+
+console.log("\n── explicit *_range: 0 preserved, absent stays absent (#50) ──");
+
+const ser50 = (d) => window.jsyaml.load(serialize(d)).streams[0];
+
+{
+  const data = parse(topLevelYaml(["volume_range: 0", "pan_range: 0"]));
+  const y = ser50(data);
+  assert("#50 explicit volume_range: 0 preserved", y.volume_range === 0, JSON.stringify(y));
+  assert("#50 explicit pan_range: 0 preserved", y.pan_range === 0, JSON.stringify(y));
+  assert("#50 explicit volume/pan range 0 — roundtrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(topLevelYaml(["grain: {duration: 0.05, duration_range: 0}"]));
+  const g = ser50(data).grain || {};
+  assert("#50 explicit grain.duration_range: 0 preserved", g.duration_range === 0, JSON.stringify(g));
+}
+{
+  const data = parse(pointerYaml(["speed_ratio: 1", "offset_range: 0"]));
+  const p = ser50(data).pointer || {};
+  assert("#50 explicit pointer.offset_range: 0 preserved", p.offset_range === 0, JSON.stringify(p));
+}
+{
+  // absent ranges must NOT gain a spurious *_range: 0
+  const y = ser50(parse(topLevelYaml([])));
+  assert("#50 absent volume_range not emitted", !("volume_range" in y), JSON.stringify(y));
+  assert("#50 absent pan_range not emitted", !("pan_range" in y), JSON.stringify(y));
+  assert("#50 absent grain.duration_range not emitted",
+    !y.grain || !("duration_range" in y.grain), JSON.stringify(y.grain));
+}
+{
+  // non-zero ranges still round-trip
+  const data = parse(topLevelYaml(["volume_range: 3", "pan_range: 0.5",
+    "grain: {duration: 0.05, duration_range: 0.01}"]));
+  const y = ser50(data);
+  assert("#50 non-zero volume_range kept", y.volume_range === 3, JSON.stringify(y));
+  assert("#50 non-zero pan_range kept", y.pan_range === 0.5, JSON.stringify(y));
+  assert("#50 non-zero duration_range kept", (y.grain || {}).duration_range === 0.01, JSON.stringify(y.grain));
+  assert("#50 non-zero ranges — roundtrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 

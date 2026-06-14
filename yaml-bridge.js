@@ -305,7 +305,10 @@
     const grainDur = pickValueOrEnv(grain.duration, grain.durationEnv);
     const grainY = {
       duration:       grainDur,
-      duration_range: (() => { const dr = pickValueOrEnv(grain.durationRange, grain.durationRangeEnv); return (dr !== undefined && dr !== 0) ? dr : undefined; })(),
+      // Explicit 0 is meaningful: it disables the implicit jitter the dephase
+      // gate would otherwise apply (engine parameter.py), same as pitch.range —
+      // emit it. pickValueOrEnv returns undefined when truly unset (null). #50
+      duration_range: pickValueOrEnv(grain.durationRange, grain.durationRangeEnv),
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
     // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
@@ -330,7 +333,7 @@
       loop_end:      loopEndOut,
       loop_dur:      loopEndOut === undefined ? pickValueOrEnv(ptr.loopDur, ptr.loopDurEnv) : undefined,
       loop_unit:     ptr.loopUnit || undefined,
-      offset_range:  ptrOffRange !== undefined && ptrOffRange !== 0 ? ptrOffRange : undefined,
+      offset_range:  ptrOffRange,  // explicit 0 disables implicit jitter — keep it (#50)
     };
     mergeBlockExtras(ptrY, ptr._extra);
     if (Object.values(ptrY).some(v => v !== undefined)) {
@@ -367,12 +370,12 @@
     const pan = pickValueOrEnv(s.pan, s.panEnv);
     if (pan !== undefined) y.pan = pan;
     const panRange = pickValueOrEnv(s.panRange, s.panRangeEnv);
-    if (panRange !== undefined && panRange !== 0) y.pan_range = panRange;
+    if (panRange !== undefined) y.pan_range = panRange;  // explicit 0 kept (#50)
 
     const vol = pickValueOrEnv(s.volume, s.volumeEnv);
     if (vol !== undefined) y.volume = vol;
     const volRange = pickValueOrEnv(s.volumeRange, s.volumeRangeEnv);
-    if (volRange !== undefined && volRange !== 0) y.volume_range = volRange;
+    if (volRange !== undefined) y.volume_range = volRange;  // explicit 0 kept (#50)
 
     const v = s.voices || {};
     const numOut = pickValueOrEnv(v.num, v.numEnv);
@@ -490,15 +493,18 @@
       // Preserve absence (engine default is 0 dB) — don't inject 0, or save
       // writes `volume: 0` into every stream and busts the engine cache.
       ...(() => { const v = unpackValueOrEnv(y.volume ?? null); return { volume: v.scalar, volumeEnv: v.env }; })(),
-      ...(() => { const vr = unpackValueOrEnv(y.volume_range ?? 0); return { volumeRange: vr.scalar, volumeRangeEnv: vr.env }; })(),
+      // Preserve absence as null (engine: absent range = implicit jitter, distinct
+      // from explicit 0 = jitter off). `?? 0` here coerced both to 0, hiding the
+      // distinction and letting serialize drop an explicit 0. #50
+      ...(() => { const vr = unpackValueOrEnv(y.volume_range ?? null); return { volumeRange: vr.scalar, volumeRangeEnv: vr.env }; })(),
       pan:    pan.scalar,
       panEnv: pan.env,
-      ...(() => { const pr = unpackValueOrEnv(y.pan_range ?? 0); return { panRange: pr.scalar, panRangeEnv: pr.env }; })(),
+      ...(() => { const pr = unpackValueOrEnv(y.pan_range ?? null); return { panRange: pr.scalar, panRangeEnv: pr.env }; })(),  // preserve absence (#50)
 
       grain: {
         duration:      grDur.scalar,
         durationEnv:   grDur.env,
-        ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? 0); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),
+        ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? null); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),  // preserve absence (#50)
         // Preserve absence (engine default is 'hanning') — injecting it would
         // write `envelope: hanning` on save and bust the engine cache. The
         // EnvelopeSelector renders an unset value as 'hanning'.
