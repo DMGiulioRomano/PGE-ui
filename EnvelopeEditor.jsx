@@ -430,7 +430,7 @@ function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
   });
 }
 
-function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey }) {
+function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey, arrowOwnerRef }) {
   const { Icon } = window.PGE;
   const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
   const [selectedKey, setSelectedKey] = useStateEE(null);
@@ -445,8 +445,17 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const [hoverSeg, setHoverSeg] = useStateEE(null); // index into segHitPaths
   const bodyRef = useRefEE(null);
   const svgRef = useRefEE(null);
+  const rootRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
   const [envClipboard, setEnvClipboard] = useStateEE(_envClipboard);
+
+  /* Arrow-key nudge coordination with the timeline clip-nudge (app.jsx). Both
+     live on window keydown; this shared ref lets app.jsx defer Left/Right when
+     the envelope editor owns the interaction, independent of listener order.
+     `arrowGestureRef` collapses a held-key run into one undo step. */
+  const arrowGestureRef = useRefEE(false);
+  const _localArrowState = useRefEE({ focused: false, singleBPSelected: false });
+  const arrowState = arrowOwnerRef || _localArrowState;
 
   /* undo/redo handled globally (TopBar + ⌘Z) — gestures bracket via window.PGEHistory */
 
@@ -558,6 +567,79 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     window.addEventListener("keyup", onUp);
     return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
   }, []);
+
+  /* ---- arrow-nudge focus: the editor "owns" the arrows after a pointerdown
+     inside it, and loses them once the pointer goes to the timeline/elsewhere.
+     Capture phase so we see the event before any stopPropagation in handlers. */
+  useEffectEE(() => {
+    function onPointerDown(e) {
+      arrowState.current.focused = !!(rootRef.current && rootRef.current.contains(e.target));
+    }
+    window.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      // release ownership on unmount so a hidden editor never keeps app.jsx
+      // deferring the timeline clip-nudge.
+      arrowState.current.focused = false;
+      arrowState.current.singleBPSelected = false;
+    };
+  }, []);
+
+  /* publish "exactly one standalone breakpoint is selected" for app.jsx */
+  useEffectEE(() => {
+    arrowState.current.singleBPSelected =
+      selectedBP != null && selectedBlock == null && selectedPattern == null;
+  }, [selectedBP, selectedBlock, selectedPattern]);
+
+  /* ---- keyboard: arrow keys nudge the selected breakpoint ----
+     ↑/↓ = value, ←/→ = time; step 0.1 (default) · 1 (shift) · 0.01 (alt),
+     mirroring the timeline clip-nudge. Time clamps to the neighbouring BPs,
+     value to the parameter range; the whole held-key run is one undo step. */
+  useEffectEE(() => {
+    function onKey(e) {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (!arrowState.current.focused) return;
+      if (selectedBP == null || selectedBlock != null || selectedPattern != null) return;
+      if (!stream) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      const PGEEnv = window.PGEEnv;
+      const envs = listEnvelopes(stream);
+      const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
+      if (!e2) return;
+      const { items, interp } = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      if (!PGEEnv.isBreakpoint(items[selectedBP])) return;
+
+      // We own this key — block the timeline clip-nudge even at a clamp boundary.
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : e.altKey ? 0.01 : 0.1;
+      const axis = (e.key === "ArrowLeft" || e.key === "ArrowRight") ? "time" : "value";
+      const delta = (e.key === "ArrowLeft" || e.key === "ArrowDown") ? -step : step;
+      const yPrec = e2.integer ? 0 : (e2.unit === "s" ? 4 : 2);
+      const next = window.PGEEnvUtils.nudgeBreakpoint(items, selectedBP, axis, delta, {
+        hardMin: e2.hardMin, hardMax: e2.hardMax, xPrec: 4, yPrec,
+      });
+      if (next === items) return; // clamped to no movement → no commit, no undo entry
+      if (!arrowGestureRef.current) {
+        arrowGestureRef.current = true;
+        if (window.PGEHistory) window.PGEHistory.beginGesture();
+      }
+      onChange(patchForPath(stream, e2.path, PGEEnv.wrapEnv(next, interp)));
+    }
+    function onKeyUp(e) {
+      if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+          arrowGestureRef.current) {
+        arrowGestureRef.current = false;
+        if (window.PGEHistory) window.PGEHistory.endGesture();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [stream, selectedKey, selectedBP, selectedBlock, selectedPattern]);
 
   /* ============ Envelope model — computed before early returns so hook count is stable ============ */
   const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];
@@ -1486,7 +1568,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const hasLoop = exp.blocks.length > 0;
 
   return (
-    <div className="pge-envedit" data-screen-label="04 Envelope Editor">
+    <div className="pge-envedit" data-screen-label="04 Envelope Editor" ref={rootRef}>
       {/* ============ TOP HEADER ============ */}
       <header className="ee-head">
         <Icon name="sliders" size={12} />

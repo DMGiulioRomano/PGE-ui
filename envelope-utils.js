@@ -147,6 +147,54 @@
     };
   }
 
+  /* ---------- keyboard nudge of a single standard breakpoint ----------
+     Move items[index] (a [t, v] / [t, v, interp] breakpoint) by `delta` along
+     one axis, mirroring the pointer-drag clamps used in EnvelopeEditor:
+       - axis "time"  → x in [0,1], clamped just inside the neighbouring BPs
+                        (loop blocks are skipped, so a BP clamps to the nearest
+                        standalone breakpoint, never the inside of a loop);
+       - axis "value" → y clamped to the parameter range [hardMin, hardMax].
+     Pure: never mutates `items`. Returns the SAME array reference when the move
+     resolves to no change (clamped to a boundary, or the rounded delta is below
+     one precision step) so callers can skip a redundant commit / undo entry.
+     opts: { hardMin, hardMax, xPrec=4, yPrec=2, xStep=0.001, xMin=0, xMax=1 }. */
+  function nudgeBreakpoint(items, index, axis, delta, opts) {
+    opts = opts || {};
+    const xPrec   = opts.xPrec   != null ? opts.xPrec   : 4;
+    const yPrec   = opts.yPrec   != null ? opts.yPrec   : 2;
+    const xStep   = opts.xStep   != null ? opts.xStep   : 0.001;
+    const xMin    = opts.xMin    != null ? opts.xMin    : 0;
+    const xMax    = opts.xMax    != null ? opts.xMax    : 1;
+    const hardMin = opts.hardMin != null ? opts.hardMin : -Infinity;
+    const hardMax = opts.hardMax != null ? opts.hardMax :  Infinity;
+    if (!Array.isArray(items)) return items;
+    const bp = items[index];
+    if (!PGEEnv.isBreakpoint(bp)) return items;
+
+    // neighbours in the FLAT list of standalone breakpoints (loop blocks skipped)
+    const flatBPIndices = [];
+    items.forEach((it, i) => { if (PGEEnv.isBreakpoint(it)) flatBPIndices.push(i); });
+    const myPos  = flatBPIndices.indexOf(index);
+    const prevBP = myPos > 0 ? items[flatBPIndices[myPos - 1]] : null;
+    const nextBP = myPos < flatBPIndices.length - 1 ? items[flatBPIndices[myPos + 1]] : null;
+
+    let newX = bp[0], newVal = bp[1];
+    if (axis === "time") {
+      const lo = prevBP ? prevBP[0] + xStep : xMin;
+      const hi = nextBP ? nextBP[0] - xStep : xMax;
+      newX = Math.max(lo, Math.min(hi, bp[0] + delta));
+    } else {
+      newVal = Math.max(hardMin, Math.min(hardMax, bp[1] + delta));
+    }
+    newX = +newX.toFixed(xPrec);
+    newVal = +newVal.toFixed(yPrec);
+    if (newX === bp[0] && newVal === bp[1]) return items; // clamped → no movement
+
+    const moved = [newX, newVal];
+    if (bp.length >= 3) moved.push(bp[2]); // preserve per-point interpolation
+    return items.map((it, i) => i === index ? moved : it);
+  }
+
   function rescaleStreamEnvelopes(stream, oldDur, newDur) {
     const ratio = oldDur / newDur;
     return _applyEnvFields(stream, arr => rescaleEnvArray(arr, ratio));
@@ -193,5 +241,6 @@
     rescaleStreamEnvelopes,
     truncateStreamEnvelopes,
     streamWouldTruncate,
+    nudgeBreakpoint,
   };
 })();

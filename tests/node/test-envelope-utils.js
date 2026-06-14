@@ -24,9 +24,9 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 7 helpers",
+assert("PGEEnvUtils exposes the 8 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
-   "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate"]
+   "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -81,6 +81,70 @@ console.log("\n── stream-level helpers ──");
   assert("truncateStreamEnvelopes truncates env field", eq(t.panEnv, [[0, 0], [1, 0.6667]]));
   assert("truncateStreamEnvelopes leaves a stream without over-long env alone",
     eq(U.truncateStreamEnvelopes({ id: "s3", volumeEnv: [[0, 0], [1, 1]] }).volumeEnv, [[0, 0], [1, 1]]));
+}
+
+console.log("\n── nudgeBreakpoint — value axis ──");
+{
+  const bps = [[0, 0], [0.5, 0.5], [1, 1]];
+  assert("value up by step",
+    eq(U.nudgeBreakpoint(bps, 1, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0, 0], [0.5, 0.6], [1, 1]]));
+  assert("value down by step",
+    eq(U.nudgeBreakpoint(bps, 1, "value", -0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0, 0], [0.5, 0.4], [1, 1]]));
+  assert("value clamps at hardMax",
+    eq(U.nudgeBreakpoint([[0, 0.95]], 0, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0, 1]]));
+  assert("value clamps at hardMin",
+    eq(U.nudgeBreakpoint([[0, 0.05]], 0, "value", -0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0, 0]]));
+  assert("value leaves time untouched",
+    eq(U.nudgeBreakpoint([[0.3, 0.5]], 0, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0.3, 0.6]]));
+  assert("value preserves per-point interp (3-tuple)",
+    eq(U.nudgeBreakpoint([[0, 0], [0.5, 0.5, "exp"], [1, 1]], 1, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }),
+       [[0, 0], [0.5, 0.6, "exp"], [1, 1]]));
+  assert("integer param (yPrec 0): coarse step moves by 1",
+    eq(U.nudgeBreakpoint([[0, 5]], 0, "value", 1, { hardMin: 0, hardMax: 10, yPrec: 0 }),
+       [[0, 6]]));
+}
+
+console.log("\n── nudgeBreakpoint — time axis ──");
+{
+  assert("time right by step",
+    eq(U.nudgeBreakpoint([[0, 0], [0.3, 0.5], [1, 1]], 1, "time", 0.1, { yPrec: 2 }),
+       [[0, 0], [0.4, 0.5], [1, 1]]));
+  assert("time clamps just before next neighbour",
+    eq(U.nudgeBreakpoint([[0, 0], [0.3, 0.5], [0.35, 0.7], [1, 1]], 1, "time", 0.1, { yPrec: 2 }),
+       [[0, 0], [0.349, 0.5], [0.35, 0.7], [1, 1]]));
+  assert("time clamps just after prev neighbour",
+    eq(U.nudgeBreakpoint([[0, 0], [0.28, 0.3], [0.3, 0.5], [1, 1]], 2, "time", -0.1, { yPrec: 2 }),
+       [[0, 0], [0.28, 0.3], [0.281, 0.5], [1, 1]]));
+  assert("time clamps at envelope start (no prev)",
+    eq(U.nudgeBreakpoint([[0.05, 0.2], [1, 1]], 0, "time", -0.1, { yPrec: 2 }),
+       [[0, 0.2], [1, 1]]));
+  assert("time clamps at envelope end (no next)",
+    eq(U.nudgeBreakpoint([[0, 0], [0.95, 0.8]], 1, "time", 0.1, { yPrec: 2 }),
+       [[0, 0], [1, 0.8]]));
+  assert("neighbour clamp skips loop blocks",
+    eq(U.nudgeBreakpoint([[0, 0.2], [[[0, 0], [100, 1]], 0.4, 2], [0.6, 0.8]], 2, "time", -0.1, { yPrec: 2 }),
+       [[0, 0.2], [[[0, 0], [100, 1]], 0.4, 2], [0.5, 0.8]]));
+}
+
+console.log("\n── nudgeBreakpoint — guards & purity ──");
+{
+  const items = [[0, 0], [[[0, 0], [100, 1]], 0.4, 2], [1, 1]];
+  assert("index pointing at a loop block → unchanged (same ref)",
+    U.nudgeBreakpoint(items, 1, "value", 0.1, { hardMin: 0, hardMax: 1 }) === items);
+  const noMove = [[0, 1]];
+  assert("clamped-to-no-movement returns the input array (same ref)",
+    U.nudgeBreakpoint(noMove, 0, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 }) === noMove);
+  assert("integer sub-unit step returns same ref (no movement)",
+    (() => { const a = [[0, 5]]; return U.nudgeBreakpoint(a, 0, "value", 0.1, { hardMin: 0, hardMax: 10, yPrec: 0 }) === a; })());
+  assert("non-array input passthrough", U.nudgeBreakpoint(5, 0, "value", 0.1, {}) === 5);
+  const src = [[0, 0], [0.5, 0.5], [1, 1]];
+  const out = U.nudgeBreakpoint(src, 1, "value", 0.1, { hardMin: 0, hardMax: 1, yPrec: 2 });
+  assert("does not mutate input", eq(src, [[0, 0], [0.5, 0.5], [1, 1]]) && out !== src);
 }
 
 console.log("\n── range / curve envelopes (issue #61) ──");

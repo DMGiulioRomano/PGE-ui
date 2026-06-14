@@ -211,6 +211,10 @@ function App() {
   const [previewSample, setPreviewSample] = useStateApp(null);
   const tickRef = useRefApp();
   const arrowGestureRef = useRefApp(false);
+  // Shared with EnvelopeEditor: when it owns the arrow keys (a breakpoint is
+  // selected and the pointer last landed inside the editor), the timeline
+  // clip-nudge below defers so ←/→ moves the breakpoint, not the clip.
+  const envArrowRef = useRefApp({ focused: false, singleBPSelected: false });
   const clipboardRef = React.useRef([]);
   const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: [], error: null });
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
@@ -643,6 +647,9 @@ function App() {
         return;
       }
       if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selectedIds.length > 0) {
+        // Defer to the envelope editor when it owns the arrows (a breakpoint is
+        // selected and the pointer last landed inside it) — ←/→ nudges the BP.
+        if (envArrowRef.current && envArrowRef.current.focused && envArrowRef.current.singleBPSelected) return;
         const targets = data.streams.filter(s => selectedIds.includes(s.id));
         if (targets.length) {
           e.preventDefault();
@@ -1242,7 +1249,8 @@ function App() {
                     playhead={time}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
                     onLoopPanelChange={setLoopPanelOpen}
-                    focusKey={envFocusKey} />
+                    focusKey={envFocusKey}
+                    arrowOwnerRef={envArrowRef} />
     </ErrorBoundary>
   );
   const center = (
