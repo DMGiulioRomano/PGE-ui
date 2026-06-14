@@ -42,6 +42,7 @@ Endpoints:
     GET  /output/<fname>        — serve a rendered .aif for browser playback
     GET  /audio/<fname>         — same but transcoded to WAV (Firefox-friendly)
     GET  /spectrogram/<fname>   — STFT spectrogram for a rendered stem
+    GET  /grains/<basename>/<streamId> — per-stream grain JSON sidecar
     GET  /media_audio/<fname>   — serve a refs/ media file as WAV for playback
     GET  /media_peaks/<fname>   — waveform peaks for a refs/ media file
     GET  /media_spectrogram/<fname> — STFT spectrogram for a refs/ media file
@@ -560,6 +561,18 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 seen.add(sid)
                 stream_ids.append({"streamId": sid, "mtime": p.stat().st_mtime})
         return jsonify({"basename": basename, "stems": stream_ids})
+
+    @app.get("/grains/<basename>/<streamId>")
+    def serve_grains(basename, streamId):
+        """Serve the per-stream grain JSON sidecar produced by the engine's
+        --grain-json flag: output/<basename>__<streamId>__grains.json.
+        The editor draws these grains inside clips and in the score panel."""
+        if "/" in basename or ".." in basename: abort(400)
+        if "/" in streamId or ".." in streamId: abort(400)
+        path = safe_resolve(output, f"{basename}__{streamId}__grains.json")
+        if not path or not path.exists():
+            abort(404)
+        return send_file(str(path), mimetype="application/json", conditional=True)
 
     # --------- engine setup ---------
 

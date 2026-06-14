@@ -40,6 +40,7 @@
       // streamId → { el?, mediaSource?, gainNode?, gainBase?, source?, timers: [] }
       this.activeNodes = new Map();
       this.streamMuteSolo = new Map();    // streamId → { mute, solo }
+      this.trackAnalysers = new Map();    // streamId → AnalyserNode (tap post-gain)
       this.anySolo = false;
       this.playing = false;
       this.startedAtCtx = 0;              // audioContext time at last play()
@@ -76,6 +77,8 @@
       if (!this._analyserL) return null;
       return { left: this._analyserL, right: this._analyserR };
     }
+
+    trackAnalyser(id) { return this.trackAnalysers.get(id) || null; }
 
     // -------- buffer cache --------
 
@@ -120,6 +123,8 @@
       this.buffers.delete(id);
       this.bufferKeys.delete(id);
       this.peaks.delete(id);
+      const ta = this.trackAnalysers.get(id);
+      if (ta) { try { ta.disconnect(); } catch {} this.trackAnalysers.delete(id); }
     }
     invalidateAll() {
       this.buffers.clear();
@@ -256,6 +261,7 @@
       const gainBase = this._dbToLin(s.volume);
       gainNode.gain.value = gainBase * this._effectiveMuteSoloGain(s, anySolo);
       source.connect(gainNode).connect(this.master);
+      this._tapTrackAnalyser(s.id, gainNode);
 
       const whenCtx = this.startedAtCtx + Math.max(0, onset - fromTime);
       const offset = Math.max(0, fromTime - onset);
@@ -284,6 +290,7 @@
         const gainNode = this.ctx.createGain();
         gainNode.gain.value = entry.gainBase * this._effectiveMuteSoloGain(s, this.anySolo);
         mediaSource.connect(gainNode).connect(this.master);
+        this._tapTrackAnalyser(s.id, gainNode);
         entry.el = el; entry.mediaSource = mediaSource; entry.gainNode = gainNode;
 
         const go = () => { try { el.currentTime = offset; } catch {} el.play().catch(() => {}); };
@@ -299,6 +306,17 @@
         const stopMs = Math.max(0, (onset + dur - fromTime) * 1000);
         entry.timers.push(setTimeout(() => this._teardownNode(s.id), stopMs));
       }
+    }
+
+    _tapTrackAnalyser(id, gainNode) {
+      let ta = this.trackAnalysers.get(id);
+      if (!ta) {
+        ta = this.ctx.createAnalyser();
+        ta.fftSize = 1024;
+        ta.smoothingTimeConstant = 0.3;
+        this.trackAnalysers.set(id, ta);
+      }
+      gainNode.connect(ta);
     }
 
     _dbToLin(db) { return Math.pow(10, (typeof db === "number" ? db : 0) / 20); }

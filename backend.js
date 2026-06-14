@@ -19,6 +19,8 @@
  *     onEvent({type, line?, streamId?, progress?})
  *   render.cancel()
  *   render.loadCache(yamlBasename)→ Promise<{[streamId]: fingerprint}>
+ *   render.grainsUrl(yamlBasename, streamId)     → string (grain JSON sidecar URL)
+ *   render.loadGrainData(yamlBasename, streamId) → Promise<grainData | null>
  *
  * "kind" is "media" (refs/) or "projects" (configs/) or "output" or "cache".
  * ===========================================================================*/
@@ -311,6 +313,23 @@
       spectrogramUrl(yamlBasename, streamId, scale) {
         const q = scale === "log" ? "?scale=log" : "";
         return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif${q}`;
+      },
+      // Per-stream grain JSON sidecar (engine --grain-json). basename and
+      // streamId are separate path segments because the file is
+      // <basename>__<streamId>__grains.json, not an audio stem.
+      grainsUrl(yamlBasename, streamId) {
+        return `${baseUrl}/grains/${encodeURIComponent(yamlBasename)}/${encodeURIComponent(streamId)}`;
+      },
+      // Fetch + parse the grain JSON; null on 404 / error / server down so the
+      // caller can simply skip drawing (no grains = solid clip, as before).
+      async loadGrainData(yamlBasename, streamId) {
+        try {
+          const r = await fetch(this.grainsUrl(yamlBasename, streamId));
+          if (!r.ok) return null;
+          return await r.json();
+        } catch (e) {
+          return null;
+        }
       },
     };
 

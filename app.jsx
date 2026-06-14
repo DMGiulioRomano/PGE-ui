@@ -8,6 +8,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showWaveforms": true,
   "showSpectrograms": false,
   "spectrogramScale": "linear",
+  "showGrains": false,
   "showClipLabels": true,
   "showEnvOverlay": true,
   "browserWidth": 240,
@@ -50,7 +51,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "outputFormat": "wav",
   "scopeOpen": false,
   "scopeHeight": 200,
-  "shortcutScope": "v"
+  "shortcutScope": "v",
+  "grainScoreOpen": false,
+  "grainScoreHeight": 260,
+  "shortcutGrainScore": "g"
 }/*EDITMODE-END*/;
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize) ----
@@ -62,7 +66,7 @@ const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate } =
 
 // Blank in-memory project used as the editor's initial state before the real
 // project is loaded from the server (server.py lists configs/*.yml on boot).
-const EMPTY_PROJECT = { project: "", title: "", duration: 60, bpm: 120, streams: [], samples: [] };
+const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
 function App() {
   const t = window.useTweaks ? window.useTweaks(TWEAK_DEFAULTS) : [TWEAK_DEFAULTS, () => {}];
@@ -77,8 +81,9 @@ function App() {
     document.documentElement.style.setProperty("--browser-w", tweaks.browserWidth + "px");
     document.documentElement.style.setProperty("--inspector-w", tweaks.inspectorWidth + "px");
     document.documentElement.style.setProperty("--terminal-h", (tweaks.terminalHeight || 220) + "px");
+    document.documentElement.style.setProperty("--grainscore-h", (tweaks.grainScoreHeight || 260) + "px");
     document.body.dataset.density = tweaks.density;
-  }, [tweaks.accent, tweaks.laneHeight, tweaks.browserWidth, tweaks.inspectorWidth, tweaks.density, tweaks.terminalHeight]);
+  }, [tweaks.accent, tweaks.laneHeight, tweaks.browserWidth, tweaks.inspectorWidth, tweaks.density, tweaks.terminalHeight, tweaks.grainScoreHeight]);
 
   /* ============ History-aware data state ============ */
   const [data, _setDataRaw] = useStateApp(EMPTY_PROJECT);
@@ -215,8 +220,10 @@ function App() {
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
+  const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
+  const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
   const [logLines, setLogLines] = useStateApp([]);
   const [renderStatus, setRenderStatus] = useStateApp({
     running: false, total: 0, done: 0, currentStreamId: null, streamProgress: 0,
@@ -382,6 +389,13 @@ function App() {
     return out;
   }, [data.streams, tweaks.outputFormat]);
 
+  /* Composition length is derived from the streams (furthest edge + silent tail),
+     not the stored data.duration which goes stale after edits. Single source of
+     truth lives in yaml-bridge.computeDuration. */
+  const compDuration = useMemoApp(
+    () => window.PGEYaml ? window.PGEYaml.computeDuration(data.streams) : data.duration,
+    [data.streams]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(() => {
     const basename = activeProject.replace(/\.yml$/, "");
@@ -422,13 +436,13 @@ function App() {
 
   // Auto-stop when audio reaches duration (skip if looping)
   useEffectApp(() => {
-    if (playing && time >= data.duration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
+    if (playing && time >= compDuration && !(loopEnabled && loopRegion.end > loopRegion.start)) {
       const engine = window.PGEAudio?.engine;
       if (engine) engine.stop();
       setPlaying(false);
       setTime(0);
     }
-  }, [time, playing, data.duration, loopEnabled, loopRegion.start, loopRegion.end]);
+  }, [time, playing, compDuration, loopEnabled, loopRegion.start, loopRegion.end]);
 
   // Loop-back when playhead reaches loop region end
   useEffectApp(() => {
@@ -540,6 +554,34 @@ function App() {
     return () => { cancelled = true; };
   }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
 
+  // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
+  // canvas inside clips and the score panel. Same lazy trigger as peaks/spectro:
+  // refetches on fingerprint change (each stream-done). Gated by either the
+  // in-clip toggle or the score panel being open.
+  useEffectApp(() => {
+    if (!tweaks.showGrains && !grainScoreOpen) return;
+    const backend = window.PGEBackend.current;
+    if (!backend.render.loadGrainData) return;
+    const basename = activeProject.replace(/\.yml$/, "");
+    let cancelled = false;
+    (async () => {
+      for (const s of data.streams) {
+        if (cancelled) return;
+        const last = lastRenderedFps[s.id];
+        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        if (!hasStem) {
+          setGrainData(m => { if (!(s.id in m)) return m; const n = { ...m }; delete n[s.id]; return n; });
+          continue;
+        }
+        try {
+          const j = await backend.render.loadGrainData(basename, s.id);
+          if (!cancelled && j) setGrainData(m => ({ ...m, [s.id]: j }));
+        } catch (e) { /* sidecar missing / not yet rendered — leave clip without grains */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+
   useEffectApp(() => {
     function onSeek(e) {
       const t = Math.max(0, e.detail);
@@ -549,7 +591,7 @@ function App() {
     }
     window.addEventListener("pge-seek", onSeek);
     return () => window.removeEventListener("pge-seek", onSeek);
-  }, [data.duration]);
+  }, [compDuration]);
 
   useEffectApp(() => {
     function onKey(e) {
@@ -573,6 +615,7 @@ function App() {
       if (matchShortcut(e, tweaks.shortcutStop || "c"))        { e.preventDefault(); doStop();    return; }
       if (matchShortcut(e, tweaks.shortcutLog || "l")) { e.preventDefault(); const v = !terminalOpen; setTerminalOpen(v); setTweak("terminalOpen", v); if (v) dismissErrToasts(); return; }
       if (matchShortcut(e, tweaks.shortcutScope || "v")) { e.preventDefault(); const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); if (v && !browserOpen) { setBrowserOpen(true); } return; }
+      if (matchShortcut(e, tweaks.shortcutGrainScore || "g")) { e.preventDefault(); const v = !grainScoreOpen; setGrainScoreOpen(v); setTweak("grainScoreOpen", v); return; }
       if (matchShortcut(e, tweaks.shortcutToggleLabels || "h")) { e.preventDefault(); setTweak("showClipLabels", tweaks.showClipLabels === false); return; }
       if (matchShortcut(e, tweaks.shortcutToggleSpectrogram || "t")) { e.preventDefault(); setTweak("showSpectrograms", !tweaks.showSpectrograms); return; }
       if (matchShortcut(e, tweaks.shortcutMute || "m") && selectedIds.length > 0) {
@@ -744,6 +787,7 @@ function App() {
     setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
     setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
     setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
+    setGrainData(g => { const n = { ...g }; delete n[id]; return n; });
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
@@ -848,7 +892,7 @@ function App() {
     const basename = name.replace(/\.yml$/i, "");
     const fullName = basename + ".yml";
     const empty = window.PGEYaml ? window.PGEYaml.emptyProject(basename)
-                                 : { project: basename, title: "", duration: 60, streams: [], samples: [] };
+                                 : { project: basename, title: "", duration: 10, streams: [], samples: [] };
     const backend = window.PGEBackend.current;
     try {
       await backend.fs.writeFile("projects", fullName, window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n");
@@ -1095,7 +1139,7 @@ function App() {
     // Fallback: empty/unreadable file → synthesize a minimal blank project.
     // Same as above: intentional _setDataRaw + resetHistory (atomic load, not
     // an undoable edit). #44
-    const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 60 };
+    const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 10 };
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
@@ -1136,7 +1180,7 @@ function App() {
 
   const terminalDotState = renderStatus.running ? "run" : (renderStatus.lastOk === false ? "err" : (logLines.length ? "idle-ok" : null));
 
-  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope, ErrorBoundary } = window.PGE;
+  const { TopBar, SampleBrowser, Timeline, Inspector, SplitPane, EnvelopeEditor, Terminal, Toast, SettingsPanel, MediaPreview, Stereoscope, ErrorBoundary, VUMeter, GrainScore } = window.PGE;
   const gestures = { zoom: tweaks.gestureZoom, laneHeight: tweaks.gestureLaneHeight, hScroll: tweaks.gestureHScroll };
 
   const browserPanel = (
@@ -1151,10 +1195,13 @@ function App() {
                      showWaveform={tweaks.showWaveformBrowser}
                      onChooseMediaFolder={onChooseMediaFolder}
                      onChooseProjectsFolder={onChooseProjectsFolder} />
-      <Stereoscope open={scopeOpen}
-                   height={tweaks.scopeHeight || 180}
-                   onHeightChange={(h) => setTweak("scopeHeight", h)}
-                   onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
+      <div className="scope-row">
+        <Stereoscope open={scopeOpen}
+                     height={tweaks.scopeHeight || 180}
+                     onHeightChange={(h) => setTweak("scopeHeight", h)}
+                     onClose={() => { setScopeOpen(false); setTweak("scopeOpen", false); }} />
+        {VUMeter && <VUMeter mode="master" open={scopeOpen} height={tweaks.scopeHeight || 180} />}
+      </div>
     </div>
   );
   const timelineEl = (
@@ -1162,20 +1209,22 @@ function App() {
     <Timeline streams={data.streams} selected={selectedIds}
               onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
               onCreateStream={createStreamFromSample}
-              playhead={time} duration={data.duration}
-              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showClipLabels={tweaks.showClipLabels !== false}
+              playhead={time} duration={compDuration}
+              pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showGrains={!!tweaks.showGrains} showClipLabels={tweaks.showClipLabels !== false}
               laneHeight={tweaks.laneHeight} gestures={gestures}
               onZoom={(v) => setTweak("zoom", v)}
               onLaneHeight={(v) => setTweak("laneHeight", v)}
               renderStatusFor={renderStatusForStream}
               waveformFor={(id) => waveforms[id]}
               spectrogramFor={(id) => spectrograms[id]}
-              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion} />
+              grainsFor={(id) => grainData[id]}
+              loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
+              analyserFor={(id) => window.PGEAudio?.engine?.trackAnalyser(id)} />
     </ErrorBoundary>
   );
   const envelopeEl = (
     <ErrorBoundary label="Envelope editor">
-    <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={data.duration}
+    <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={compDuration}
                     playhead={time}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
                     onLoopPanelChange={setLoopPanelOpen}
@@ -1209,7 +1258,7 @@ function App() {
   ) : null;
 
   return (
-    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "")}>
+    <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "") + (grainScoreOpen ? " with-grainscore" : "")}>
       <TopBar project={data.project} title={data.title} dirty={dirty}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
@@ -1218,7 +1267,7 @@ function App() {
               onRender={onRender} onCancelRender={onCancelRender}
               renderStatus={renderStatus}
               renderOptions={renderOptions} onRenderOptionsChange={setRenderOptions}
-              time={time} duration={data.duration}
+              time={time} duration={compDuration}
               onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
               browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen(o => !o)}
               onSave={onSave} onSaveAs={onSaveAs}
@@ -1228,6 +1277,8 @@ function App() {
               terminalDotState={terminalDotState}
               scopeOpen={scopeOpen}
               onToggleScope={() => { const v = !scopeOpen; setScopeOpen(v); setTweak("scopeOpen", v); if (v && !browserOpen) { setBrowserOpen(true); } }}
+              grainScoreOpen={grainScoreOpen}
+              onToggleGrainScore={() => { const v = !grainScoreOpen; setGrainScoreOpen(v); setTweak("grainScoreOpen", v); }}
               playReadiness={playReadiness} />
       <div className={"pge-main split"}>
         {browserOpen ? (
@@ -1257,6 +1308,17 @@ function App() {
                 height={tweaks.terminalHeight || 220}
                 onHeightChange={(h) => setTweak("terminalHeight", h)}
                 status={renderStatus} />
+      {GrainScore ? (
+        <GrainScore open={grainScoreOpen}
+                    onClose={() => { setGrainScoreOpen(false); setTweak("grainScoreOpen", false); }}
+                    height={tweaks.grainScoreHeight || 260}
+                    onHeightChange={(h) => setTweak("grainScoreHeight", h)}
+                    streams={data.streams}
+                    grainData={grainData}
+                    duration={compDuration}
+                    playhead={time}
+                    pxPerSec={tweaks.zoom} />
+      ) : null}
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
@@ -1326,6 +1388,8 @@ function App() {
               onChange={(v) => setTweak("showWaveforms", v)} />
             <window.TweakToggle label="spettrogramma nei clip" value={!!tweaks.showSpectrograms}
               onChange={(v) => setTweak("showSpectrograms", v)} />
+            <window.TweakToggle label="grani nei clip" value={!!tweaks.showGrains}
+              onChange={(v) => setTweak("showGrains", v)} />
             <window.TweakToggle label="envelope overlay" value={tweaks.showEnvOverlay}
               onChange={(v) => setTweak("showEnvOverlay", v)} />
             <window.TweakToggle label="envelope editor pane" value={tweaks.showEnvelopeEditor !== false}

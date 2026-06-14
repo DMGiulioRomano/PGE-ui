@@ -116,6 +116,7 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
         str(yml), str(output_stem),
         "--renderer", renderer,
         "--per-stream",
+        "--grain-json",
         "--format", fmt,
     ]
     if use_cache:

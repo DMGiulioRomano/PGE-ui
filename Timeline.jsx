@@ -154,6 +154,52 @@ function ClipSpectrogram({ buf, width, height }) {
   return <canvas className="wave spec" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
 }
 
+/* ---------- ClipGrains ---------- */
+/* Draws the stream's grains "score-visualizer style" onto a <canvas> overlaid
+ * on the clip: X=time, Y=pointer position (normalized per-stream, max on top),
+ * color=pitch (turbo, autozoom in cents), alpha=volume. `data` is the engine's
+ * grain JSON sidecar ({duration, grains:[{t,dur,vol,ptr,pr,v}], …}). Immediate-
+ * mode canvas so tens of thousands of grains stay cheap; the .grains CSS sets
+ * pointer-events:none so the overlay never steals the clip's drag/resize. The
+ * mapping math lives in window.PGEGrainMap (shared with the GrainScore panel). */
+function ClipGrains({ data, width, height }) {
+  const canvasRef = useRefTL(null);
+  useEffTL(() => {
+    const cvs = canvasRef.current;
+    const GM = window.PGEGrainMap;
+    if (!cvs || !data || !GM || width < 2 || height < 2) return;
+    const grains = data.grains || [];
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.floor(width));
+    const H = Math.max(1, Math.floor(height));
+    cvs.width = Math.floor(W * dpr);
+    cvs.height = Math.floor(H * dpr);
+    const ctx = cvs.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    if (!grains.length) return;
+    // px/s derived from the clip width and stream duration → X matches this
+    // clip's timeline scale exactly (== PX_PER_S, but self-contained).
+    const dur = data.duration || 0;
+    const ptr = GM.pointerExtent(grains);
+    const pit = GM.pitchExtentCents(grains);
+    const gctx = {
+      pxPerSec: dur > 0 ? W / dur : 0,
+      height: H,
+      ptrMin: ptr.min, ptrMax: ptr.max,
+      pitchLoCents: pit.lo, pitchHiCents: pit.hi,
+      grainHeight: 2,
+    };
+    for (let i = 0; i < grains.length; i++) {
+      const r = GM.grainRect(grains[i], gctx);
+      if (r.x > W || r.x + r.w < 0) continue;  // horizontal culling
+      ctx.fillStyle = r.fill;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+    }
+  }, [data, width, height]);
+  return <canvas className="grains" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
+}
+
 function gestureMatches(rule, e) {
   // rule examples: "wheel", "shift+wheel", "alt+wheel", "cmd+wheel", "ctrl+wheel"
   if (!rule) return false;
@@ -169,9 +215,10 @@ function gestureMatches(rule, e) {
 
 function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
-  pxPerSec, showWaveforms, showSpectrograms, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
-  renderStatusFor, waveformFor, spectrogramFor,
-  loopEnabled, loopRegion, onLoopRegionChange }) {
+  pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
+  renderStatusFor, waveformFor, spectrogramFor, grainsFor,
+  loopEnabled, loopRegion, onLoopRegionChange,
+  analyserFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
@@ -620,7 +667,8 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               onReorderStart={(e) => startReorder(e, i)}
               onSelect={(multi) => onSelect(s.id, multi)} onRangeSelect={() => onRangeSelect && onRangeSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
               onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
-              effMuted={isEffMuted(s)} anySolo={anySolo} />
+              effMuted={isEffMuted(s)} anySolo={anySolo}
+              analyser={analyserFor ? analyserFor(s.id) : null} />
             )}
           </div>
         </div>
@@ -742,6 +790,9 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               showWaveforms !== false && waveformFor && waveformFor(s.id) ?
               <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} color={s.color} /> :
               null}
+                {showGrains && grainsFor && grainsFor(s.id) ?
+              <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} /> :
+              null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, s.id)} title="drag to resize this track" />
               </div>
@@ -765,7 +816,9 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
 
 }
 
-function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo }) {
+function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo, analyser }) {
+  const VUMeter = window.PGE?.VUMeter;
+  const laneH = typeof height === "number" ? height : 56;
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
     style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }}
@@ -782,6 +835,7 @@ function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect
         </div>
         <span className="sub">{stream.sample}</span>
       </div>
+      {VUMeter && <VUMeter mode="track" analyser={analyser} height={laneH} />}
       <div className="track-head-resize" onPointerDown={onResizeStart} onClick={(e) => e.stopPropagation()} />
     </div>);
 

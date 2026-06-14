@@ -97,6 +97,7 @@ def test_build_cmd_base_shape():
     cmd = _cmd()
     assert cmd[:2] == ["/venv/python", str(Path("/engine/src/main.py"))]
     assert "--per-stream" in cmd
+    assert "--grain-json" in cmd          # grain JSON sidecar (merged from main)
     assert cmd[cmd.index("--renderer") + 1] == "numpy"
     assert cmd[cmd.index("--format") + 1] == "aiff"
 
