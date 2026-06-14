@@ -108,6 +108,12 @@ function maxChanDiff(c0, c1) {
   assert("ratioToCents — 2.0 → 1200 cents", approx(GM.ratioToCents(2.0), 1200, 1e-9));
   assert("ratioToCents — ratio non valido → null", GM.ratioToCents(0) === null && GM.ratioToCents(undefined) === null);
 
+  // reverse: pr negativo → colorato per |pr| (parità con score_visualizer.py, che usa abs).
+  assert("ratioToCents — pr negativo (reverse) → |pr| in cents", approx(GM.ratioToCents(-2.0), 1200, 1e-9));
+  assert("ratioToCents — reverse a ratio 1 → 0 cents", GM.ratioToCents(-1.0) === 0);
+  assert("ratioToCents — 0 resta null (guard, no log2(0))", GM.ratioToCents(0) === null);
+  assert("ratioToCents — -Infinity resta null (guard)", GM.ratioToCents(-Infinity) === null);
+
   // floor 50 cents: due grani quasi identici → colori vicini (no arcobaleno).
   // Verifica relativa: col floor i colori sono molto più vicini che senza floor
   // (dove 1.7 cents di scarto coprirebbero l'intera colormap).
@@ -126,6 +132,16 @@ function maxChanDiff(c0, c1) {
   // estensione vuota → range simmetrico di default, niente crash.
   const extEmpty = GM.pitchExtentCents([]);
   assert("pitchExtentCents — vuoto → range finito simmetrico", isFinite(extEmpty.lo) && isFinite(extEmpty.hi) && extEmpty.lo < extEmpty.hi, JSON.stringify(extEmpty));
+
+  // reverse: i grani con pr<0 entrano nel range via |pr| (prima venivano scartati →
+  // fallback simmetrico). |−2| → 1200 cents deve cadere dentro l'estensione.
+  const extRev = GM.pitchExtentCents([{ pr: -2.0 }]);
+  assert("pitchExtentCents — reverse incluso via |pr| (1200c nel range)",
+    isFinite(extRev.lo) && isFinite(extRev.hi) && extRev.hi > extRev.lo &&
+    1200 >= extRev.lo && 1200 <= extRev.hi, JSON.stringify(extRev));
+  const revCol = GM.pitchColor(-1.5, extRev.lo, extRev.hi);
+  assert("pitchColor — reverse NON è il grigio di default",
+    !(revCol[0] === 160 && revCol[1] === 160 && revCol[2] === 160), JSON.stringify(revCol));
 }
 
 /* ============================================================
@@ -222,6 +238,10 @@ function maxChanDiff(c0, c1) {
   // clamp: nessun bin fuori range.
   const huge = GM.colorBin(1000, 100, lut);
   assert("colorBin — clamp dentro fills", huge >= 0 && huge < lut.fills.length, String(huge));
+
+  // reverse: pr negativo → riga NON di default (colorato per |pr|, non grigio).
+  const revBin = GM.colorBin(-1.5, 0, lut);
+  assert("colorBin — pr negativo (reverse) non finisce in riga default", revBin < 256 * 64, String(revBin));
 
   // default dei parametri.
   const lut2 = GM.buildColorLUT(-30, 30);

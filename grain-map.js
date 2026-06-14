@@ -60,10 +60,15 @@
     return [122, 4, 3];
   }
 
-  // pitch_ratio → cents (1200*log2). null se ratio non valido (≤0 / non numero).
+  // pitch_ratio → cents (1200*log2 su |pr|). I grani reverse hanno pr negativo
+  // (lettura backward) ma un pitch percepito valido → colore per modulo, come
+  // score_visualizer.py (_pitch_to_color usa abs). null solo se pr è assente/
+  // non-numerico/non-finito o esattamente 0 (retrocompat: resta grigio).
   function ratioToCents(pr) {
-    if (typeof pr !== "number" || !(pr > 0) || !isFinite(pr)) return null;
-    return 1200.0 * Math.log2(pr);
+    if (typeof pr !== "number" || !isFinite(pr)) return null;
+    const a = Math.abs(pr);
+    if (!(a > 0)) return null;
+    return 1200.0 * Math.log2(a);
   }
 
   // Range colore pitch auto-zoomato in cents (replica _compute_pitch_color_range):
