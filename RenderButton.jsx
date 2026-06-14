@@ -87,6 +87,13 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
                     hint="only re-renders streams whose YAML changed" />
           <RsToggle k="pdf score" v={options.visualize} onChange={(v) => toggle("visualize", v)}
                     hint="generate a graphic score alongside audio" />
+          <RsToggle k="grain data" v={options.grainJson !== false} onChange={(v) => toggle("grainJson", v)}
+                    hint="per-stream grain JSON for the grain view (heavy on dense scores)" />
+          {options.grainJson === false && (options.showGrains || options.grainScoreOpen) ? (
+            <div className="rs-row" style={{paddingLeft: 18}}>
+              <span className="rs-hint">grain view is open — will render with grain data anyway</span>
+            </div>
+          ) : null}
           {options.visualize ? (
             <div className="rs-row" style={{paddingLeft: 18}}>
               <span className="rs-k">page duration</span>
@@ -161,6 +168,8 @@ function buildCommand(o) {
     "--renderer", "numpy",
     "--per-stream",
   ];
+  // grain data forced on while the grain view is open (matches onRender payload)
+  if (o.grainJson !== false || o.showGrains || o.grainScoreOpen) parts.push("--grain-json");
   if (o.useCache) parts.push("--cache", "--cache-dir", "cache");
   if (o.visualize) {
     parts.push("--visualize", "--show-static");

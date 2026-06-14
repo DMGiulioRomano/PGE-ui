@@ -30,6 +30,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "outputPath": "output",
   "renderUseCache": true,
   "renderVisualize": false,
+  "renderGrainJson": true,
   "renderPageDuration": 15,
   "renderReaper": false,
   "renderPreclean": false,
@@ -925,12 +926,17 @@ function App() {
   const renderOptions = {
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
+    grainJson: tweaks.renderGrainJson !== false,
     pageDuration: tweaks.renderPageDuration ?? 15,
     plotEnvelopes: Array.isArray(tweaks.renderPlotEnvelopes) ? tweaks.renderPlotEnvelopes : [],
     reaper: !!tweaks.renderReaper,
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
     projectBasename: activeProject.replace(/\.yml$/, ""),
+    // surfaced so the render popover can warn when grain data is off but the
+    // grain view (in-clip or score panel) is open — see onRender forcing below.
+    showGrains: !!tweaks.showGrains,
+    grainScoreOpen: grainScoreOpen,
   };
   function setRenderOptions(next) {
     if (next._chooseOutput) {
@@ -940,6 +946,7 @@ function App() {
     }
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
+    setTweak("renderGrainJson", next.grainJson);
     setTweak("renderPageDuration", next.pageDuration);
     setTweak("renderPlotEnvelopes", Array.isArray(next.plotEnvelopes) ? next.plotEnvelopes : []);
     setTweak("renderReaper",    next.reaper);
@@ -968,6 +975,9 @@ function App() {
       renderer: "numpy",
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
+      // Force the grain sidecar on when the grain view is open, otherwise the
+      // user would be "looking at grains" with no data to draw (issue #68).
+      grainJson: renderOptions.grainJson || !!tweaks.showGrains || grainScoreOpen,
       pageDuration: renderOptions.visualize ? renderOptions.pageDuration : undefined,
       plotEnvelopes: renderOptions.visualize && renderOptions.plotEnvelopes.length
         ? renderOptions.plotEnvelopes : undefined,
