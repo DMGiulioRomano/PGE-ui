@@ -32,6 +32,7 @@ can read events incrementally. All other endpoints are plain JSON.
 Endpoints:
     GET  /health                — sanity check + resolved paths
     GET  /config                — same payload as /health
+    GET  /envelope-keys         — valid --plot-envelopes names (from engine src)
     GET  /media                 — list refs/ contents with durations
     GET  /projects              — list configs/*.yml
     GET  /file?kind=…&name=…    — read a file (kind: projects|media|cache|output)
@@ -49,6 +50,7 @@ Endpoints:
 """
 
 import argparse
+import ast
 import json
 import os
 import subprocess
@@ -80,6 +82,45 @@ from render_pipeline import (
 # bootstrap stays here — it's used by /setup and the render route and is a
 # distinct concern. #43
 # -------------------------------------------------------------------------
+
+
+_ENVELOPE_KEYS_CACHE: dict = {}
+
+
+def engine_envelope_keys(root: Path) -> list:
+    """Valid `--plot-envelopes` names = keys of the engine's `ENVELOPE_COLORS`
+    dict in src/rendering/score_visualizer.py (issue #31).
+
+    We AST-parse the source rather than importing the module: it pulls in
+    matplotlib/numpy/soundfile and may live in the engine's own venv, neither
+    of which this bridge process has. Parsing the literal needs only stdlib and
+    works even when the engine venv isn't set up yet. The UI fetches these to
+    populate the score-envelope filter so the list is never hardcoded.
+
+    Returns the keys in source order, or [] if the file/constant is missing (an
+    older engine without the feature) — in which case the filter stays hidden
+    and the flag is never sent. Result is cached per resolved root."""
+    key = str(root)
+    if key in _ENVELOPE_KEYS_CACHE:
+        return _ENVELOPE_KEYS_CACHE[key]
+    keys: list = []
+    src = root / "src" / "rendering" / "score_visualizer.py"
+    try:
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "ENVELOPE_COLORS" not in names or not isinstance(node.value, ast.Dict):
+                continue
+            for k in node.value.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    keys.append(k.value)
+            break
+    except Exception:
+        keys = []
+    _ENVELOPE_KEYS_CACHE[key] = keys
+    return keys
 
 
 def _ensure_venv_events(root: Path):
@@ -299,6 +340,13 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     @app.get("/config")
     def config():
         return jsonify({"paths": _resolved_paths()})
+
+    @app.get("/envelope-keys")
+    def envelope_keys():
+        """Valid `--plot-envelopes` names, read from the engine source so the
+        UI score-envelope filter isn't hardcoded (issue #31). Empty list = the
+        engine predates the feature; the UI then hides the filter."""
+        return jsonify({"ok": True, "keys": engine_envelope_keys(root)})
 
     # --------- listing ---------
 
@@ -609,6 +657,16 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         use_cache = bool(opts.get("useCache", True))
         visualize = bool(opts.get("visualize", False))
         page_duration = opts.get("pageDuration")
+        # Selective score-envelope filter (issue #31). Keep only names the engine
+        # actually knows: an unknown name makes main.py exit 1 and aborts the
+        # render. If the engine predates the feature (no valid keys) we drop the
+        # list entirely so the legacy engine never sees the unsupported flag.
+        plot_envelopes = opts.get("plotEnvelopes")
+        if plot_envelopes:
+            valid = set(engine_envelope_keys(root))
+            plot_envelopes = [n for n in plot_envelopes if n in valid] or None
+        else:
+            plot_envelopes = None
         reaper    = bool(opts.get("reaper", False))
         preclean  = bool(opts.get("preclean", False))
         fmt       = opts.get("outputFormat", "aiff")
@@ -663,6 +721,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 renderer=renderer, use_cache=use_cache, cache=cache,
                 visualize=visualize, page_duration=page_duration, reaper=reaper,
                 basename=basename, refs=refs, output=output, fmt=fmt,
+                plot_envelopes=plot_envelopes,
             )
 
             yield json.dumps({"type": "log",

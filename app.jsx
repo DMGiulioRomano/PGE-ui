@@ -237,6 +237,9 @@ function App() {
   // surface it (Settings footer, diagnose label) — it never changes now.
   const backendKind = "local";
   const [serverDown, setServerDown] = useStateApp(false);
+  // Valid score-envelope names for the --plot-envelopes filter, fetched from
+  // the engine via server.py (issue #31). [] = feature unavailable → filter hidden.
+  const [envelopeKeys, setEnvelopeKeys] = useStateApp([]);
   const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
   const [envFocusKey, setEnvFocusKey] = useStateApp(null);
 
@@ -289,6 +292,13 @@ function App() {
         _syncPathsFromServer(baseUrl, tweaks);
         refreshMedia();
         refreshProjects();
+        // Pull the valid score-envelope names so the render-options filter can
+        // offer them (issue #31). Best-effort: empty list just hides the filter.
+        if (window.PGEBackend.current.envelopeKeys) {
+          window.PGEBackend.current.envelopeKeys()
+            .then(keys => setEnvelopeKeys(Array.isArray(keys) ? keys : []))
+            .catch(() => {});
+        }
         // Run setup in background so the engine venv is ready.
         setTimeout(async () => {
           const backend = window.PGEBackend.current;
@@ -909,6 +919,7 @@ function App() {
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
     pageDuration: tweaks.renderPageDuration ?? 15,
+    plotEnvelopes: Array.isArray(tweaks.renderPlotEnvelopes) ? tweaks.renderPlotEnvelopes : [],
     reaper: !!tweaks.renderReaper,
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
@@ -923,6 +934,7 @@ function App() {
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
     setTweak("renderPageDuration", next.pageDuration);
+    setTweak("renderPlotEnvelopes", Array.isArray(next.plotEnvelopes) ? next.plotEnvelopes : []);
     setTweak("renderReaper",    next.reaper);
     setTweak("renderPreclean",  next.preclean);
   }
@@ -950,6 +962,8 @@ function App() {
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
       pageDuration: renderOptions.visualize ? renderOptions.pageDuration : undefined,
+      plotEnvelopes: renderOptions.visualize && renderOptions.plotEnvelopes.length
+        ? renderOptions.plotEnvelopes : undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
@@ -1267,6 +1281,7 @@ function App() {
               onRender={onRender} onCancelRender={onCancelRender}
               renderStatus={renderStatus}
               renderOptions={renderOptions} onRenderOptionsChange={setRenderOptions}
+              envelopeKeys={envelopeKeys}
               time={time} duration={compDuration}
               onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
               browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen(o => !o)}
