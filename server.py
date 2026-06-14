@@ -620,16 +620,10 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
 
         yaml_content = opts.get("yamlContent")
         tmp_yml: Path | None = None
+        yml = configs / f"{basename}.yml"
         if yaml_content:
-            tf = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".yml", dir=configs, delete=False, encoding="utf-8"
-            )
-            tf.write(yaml_content)
-            tf.close()
-            yml = Path(tf.name)
-            tmp_yml = yml
+            yml.write_text(yaml_content, encoding="utf-8")
         else:
-            yml = configs / f"{basename}.yml"
             if not yml.exists():
                 return jsonify({"ok": False,
                                 "error": f"configs/{basename}.yml not found"}), 404
