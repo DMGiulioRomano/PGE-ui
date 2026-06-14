@@ -826,6 +826,94 @@ const ser50 = (d) => window.jsyaml.load(serialize(d)).streams[0];
 }
 
 /* ============================================================
+ * SECTION 8g — solo/mute propagated through parse + serialize, presence-keyed
+ * to match the engine (#63). The engine's _filter_solo_mute (generator.py) keys
+ * off KEY PRESENCE, not value: `solo: false` still counts as solo-active. So
+ * serialize must emit the key ONLY when true (omit when false — never
+ * `solo: false`), and parse must read presence-of-key as true. Both used to be
+ * UI-only: streamToYaml never emitted them, streamFromYaml forced them to false,
+ * and the round-trip diff ignored them — a solo set in the editor never reached
+ * the engine, and a solo in a loaded file was dropped.
+ * ============================================================ */
+
+console.log("\n── solo/mute presence-keyed (#63) ──");
+
+{
+  // parse: presence of the key → true (mirrors the engine presence-based
+  // filter), regardless of the YAML value.
+  const sTrue = parse(topLevelYaml(["solo: true", "mute: true"])).streams[0];
+  assert("#63 parse solo: true → solo true", sTrue.solo === true, JSON.stringify(sTrue.solo));
+  assert("#63 parse mute: true → mute true", sTrue.mute === true, JSON.stringify(sTrue.mute));
+
+  // presence vs false: `solo: false` is still PRESENT, so the engine treats it
+  // as solo-active — the editor must read it as true, not false.
+  const sFalse = parse(topLevelYaml(["solo: false", "mute: false"])).streams[0];
+  assert("#63 parse solo: false (present) → solo true", sFalse.solo === true, JSON.stringify(sFalse.solo));
+  assert("#63 parse mute: false (present) → mute true", sFalse.mute === true, JSON.stringify(sFalse.mute));
+
+  // absent → false
+  const sNone = parse(topLevelYaml([])).streams[0];
+  assert("#63 absent solo → false", sNone.solo === false, JSON.stringify(sNone.solo));
+  assert("#63 absent mute → false", sNone.mute === false, JSON.stringify(sNone.mute));
+}
+
+{
+  // solo/mute are modelled keys now, not _extra leftovers (KNOWN_STREAM_KEYS).
+  const s = parse(topLevelYaml(["solo: true", "mute: true"])).streams[0];
+  assert("#63 solo/mute not captured in _extra",
+    !s._extra || (!("solo" in s._extra) && !("mute" in s._extra)), JSON.stringify(s._extra));
+}
+
+{
+  // serialize: emit ONLY when true (presence-keyed). false/absent → key omitted,
+  // never `solo: false` (which the engine would misread as solo-active).
+  const dOn = parse(topLevelYaml([]));
+  dOn.streams[0].solo = true;
+  dOn.streams[0].mute = true;
+  const yOn = serialize(dOn);
+  assert("#63 serialize solo true → 'solo: true' emitted", /^\s*solo: true$/m.test(yOn), yOn.slice(0, 400));
+  assert("#63 serialize mute true → 'mute: true' emitted", /^\s*mute: true$/m.test(yOn), yOn.slice(0, 400));
+
+  const dOff = parse(topLevelYaml([]));   // solo=false, mute=false from streamFromYaml
+  const yOff = serialize(dOff);
+  assert("#63 serialize solo false → key omitted (never 'solo: false')", !/solo:/.test(yOff), yOff.slice(0, 400));
+  assert("#63 serialize mute false → key omitted (never 'mute: false')", !/mute:/.test(yOff), yOff.slice(0, 400));
+}
+
+{
+  // editor→YAML→editor round trip is lossless once solo/mute are set (the path
+  // roundTripDiff guards, and the one IGNORE_FIELDS used to hide).
+  const d = parse(topLevelYaml([]));
+  d.streams[0].solo = true;
+  d.streams[0].mute = true;
+  assert("#63 roundtrip solo+mute true — no diffs", roundTripDiff(d).length === 0, JSON.stringify(roundTripDiff(d)));
+}
+
+{
+  // presence-vs-false round trip: a file with `solo: false` parses to solo-true
+  // and re-serializes as `solo: true` (semantically identical to the engine),
+  // stable on a second pass.
+  const data = parse(topLevelYaml(["solo: false"]));
+  const y = ser50(data);
+  assert("#63 'solo: false' re-serialized as solo: true (presence-keyed)", y.solo === true, JSON.stringify(y));
+  assert("#63 presence-vs-false — roundtrip lossless", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // per-stream round trip (Raw tab path): solo/mute survive as top-level flags,
+  // not _extra. serializeStream/parseStream are the single source of truth (#42).
+  const s = parse(topLevelYaml([])).streams[0];
+  s.solo = true;
+  s.mute = true;
+  const back = parseStream(serializeStream(s));
+  assert("#63 per-stream round trip — solo preserved", back.solo === true, JSON.stringify(back.solo));
+  assert("#63 per-stream round trip — mute preserved", back.mute === true, JSON.stringify(back.mute));
+  assert("#63 per-stream round trip — not in _extra",
+    !back._extra || (!("solo" in back._extra) && !("mute" in back._extra)), JSON.stringify(back._extra));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 
