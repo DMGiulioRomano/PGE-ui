@@ -166,6 +166,10 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             <span className="sp-k">pdf score</span>
             <SpToggle v={!!tweaks.renderVisualize} onChange={(v) => setTweak("renderVisualize", v)} />
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="genera il sidecar JSON dei grani per stream (pesante su scene dense)">grain data</span>
+            <SpToggle v={tweaks.renderGrainJson !== false} onChange={(v) => setTweak("renderGrainJson", v)} />
+          </div>
           {tweaks.renderVisualize ? (
             <div className="sp-row" style={{paddingLeft: 12}}>
               <span className="sp-k">page duration (s)</span>

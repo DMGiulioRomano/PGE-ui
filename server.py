@@ -669,6 +669,9 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
             plot_envelopes = None
         reaper    = bool(opts.get("reaper", False))
         preclean  = bool(opts.get("preclean", False))
+        # Per-stream grain sidecar (issue #68). Default True = historical
+        # always-on behavior (#13); the UI can disable it to skip the heavy JSON.
+        grain_json = bool(opts.get("grainJson", True))
         fmt       = opts.get("outputFormat", "aiff")
         if fmt not in {"aiff", "wav", "flac"}:
             abort(400, f"invalid format: {fmt!r}")
@@ -721,7 +724,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 renderer=renderer, use_cache=use_cache, cache=cache,
                 visualize=visualize, page_duration=page_duration, reaper=reaper,
                 basename=basename, refs=refs, output=output, fmt=fmt,
-                plot_envelopes=plot_envelopes,
+                plot_envelopes=plot_envelopes, grain_json=grain_json,
             )
 
             yield json.dumps({"type": "log",

@@ -102,6 +102,14 @@ def test_build_cmd_base_shape():
     assert cmd[cmd.index("--format") + 1] == "aiff"
 
 
+def test_build_cmd_grain_json_default_on_and_toggleable():
+    # default ON preserves the historical always-on behavior (issue #68 / #13)
+    assert "--grain-json" in _cmd()
+    assert "--grain-json" in _cmd(grain_json=True)
+    # can now be disabled to skip the heavy per-stream sidecar
+    assert "--grain-json" not in _cmd(grain_json=False)
+
+
 def test_build_cmd_show_static_only_with_visualize():
     assert "--show-static" not in _cmd(visualize=False)
     vis = _cmd(visualize=True)

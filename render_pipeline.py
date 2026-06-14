@@ -107,7 +107,8 @@ class RenderState:
 
 def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache,
                          cache, visualize, page_duration, reaper, basename,
-                         refs, output, fmt, plot_envelopes=None) -> list:
+                         refs, output, fmt, plot_envelopes=None,
+                         grain_json=True) -> list:
     """Build the `python src/main.py …` argv. Pure (no spawning) so it is unit
     testable. `--show-static` is appended only with `--visualize` — it has no
     effect otherwise (engine docs/reference/cli.md). #43
@@ -117,15 +118,20 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
     `--page-duration` it only makes sense with `--visualize`, so it is gated
     inside the visualize block; empty/None means "all envelopes" (flag omitted).
     Names are passed through verbatim — the caller (server.py) already filters
-    to the engine's valid keys."""
+    to the engine's valid keys.
+
+    `grain_json` (issue #68) toggles the per-stream `--grain-json` sidecar the
+    UI uses to draw grains. Default True keeps the historical always-on behavior
+    (#13); set False to skip the heavy JSON on dense compositions."""
     cmd = [
         str(venv_py), str(root / "src" / "main.py"),
         str(yml), str(output_stem),
         "--renderer", renderer,
         "--per-stream",
-        "--grain-json",
         "--format", fmt,
     ]
+    if grain_json:
+        cmd += ["--grain-json"]
     if use_cache:
         cmd += ["--cache", "--cache-dir", str(cache)]
     if visualize:
