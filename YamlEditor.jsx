@@ -74,7 +74,7 @@ function buildLines(stream, sampleRec) {
   else if (stream.grain.duration != null) push({ ind: 1, kind: "v", key: "duration", val: fmtNum(stream.grain.duration) });
   if (stream.grain.durationRangeEnv) push({ ind: 1, kind: "raw", key: "duration_range", val: envInline(stream.grain.durationRangeEnv) });
   else if (stream.grain.durationRange) push({ ind: 1, kind: "v", key: "duration_range", val: fmtNum(stream.grain.durationRange) });
-  push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
+  if (stream.grain.envelope != null) push({ ind: 1, kind: "r", key: "envelope", val: fmtEnvelope(stream.grain.envelope) });
   if (stream.grain.reverse !== undefined) {
     if (stream.grain.reverse === null) push({ ind: 1, kind: "flag", key: "reverse" });
     else push({ ind: 1, kind: "v", key: "reverse", val: String(stream.grain.reverse) });
@@ -106,7 +106,7 @@ function buildLines(stream, sampleRec) {
   else if (stream.panRange) push({ ind: 0, kind: "v", key: "pan_range", val: fmtNum(stream.panRange) });
 
   if (stream.volumeEnv) push({ ind: 0, kind: "raw", key: "volume", val: envInline(stream.volumeEnv) });
-  else push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
+  else if (stream.volume != null) push({ ind: 0, kind: "v", key: "volume", val: fmtNum(stream.volume) });
   if (stream.volumeRangeEnv) push({ ind: 0, kind: "raw", key: "volume_range", val: envInline(stream.volumeRangeEnv) });
   else if (stream.volumeRange) push({ ind: 0, kind: "v", key: "volume_range", val: fmtNum(stream.volumeRange) });
 
