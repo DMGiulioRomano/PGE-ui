@@ -24,6 +24,11 @@
  * ===========================================================================*/
 
 (function () {
+  // Cap on decoded AudioBuffers kept in memory. Real stems stream via <audio>
+  // (see setStreamUrls), so this map is usually small; the cap bounds the
+  // fallback decode path over a long session (~20 MB/min per stereo 48k stem).
+  const MAX_DECODED_BUFFERS = 16;
+
   class AudioEngine {
     constructor() {
       this.ctx = null;
@@ -86,7 +91,10 @@
       this._ensureContext();
       if (!spec.url) return;            // no rendered stem → stays silent
       const key = spec.url + "#" + (spec.fingerprint || "");
-      if (this.bufferKeys.get(streamId) === key && this.buffers.has(streamId)) return;
+      if (this.bufferKeys.get(streamId) === key && this.buffers.has(streamId)) {
+        this._touchBuffer(streamId);    // mark most-recently-used
+        return;
+      }
 
       const res = await fetch(spec.url);
       if (!res.ok) throw new Error(`audio fetch failed: HTTP ${res.status}`);
@@ -94,6 +102,8 @@
       const buffer = await this.ctx.decodeAudioData(ab);
       this.buffers.set(streamId, buffer);
       this.bufferKeys.set(streamId, key);
+      this._touchBuffer(streamId);
+      this._capBuffers();               // evict LRU non-active buffers past the cap
     }
 
     /**
@@ -120,6 +130,25 @@
       this.buffers.clear();
       this.bufferKeys.clear();
       this.peaks.clear();
+    }
+
+    // LRU upkeep for decoded AudioBuffers. this.buffers preserves insertion
+    // order, so re-inserting on access makes the first key the least-recently
+    // used; _capBuffers evicts from the front, never a currently-sounding clip. #45
+    _touchBuffer(id) {
+      const b = this.buffers.get(id);
+      if (b === undefined) return;
+      this.buffers.delete(id);
+      this.buffers.set(id, b);
+    }
+    _capBuffers() {
+      if (this.buffers.size <= MAX_DECODED_BUFFERS) return;
+      for (const id of [...this.buffers.keys()]) {
+        if (this.buffers.size <= MAX_DECODED_BUFFERS) break;
+        if (this.activeNodes.has(id)) continue;   // never evict a sounding clip
+        this.buffers.delete(id);
+        this.bufferKeys.delete(id);
+      }
     }
 
     // -------- waveform peaks --------

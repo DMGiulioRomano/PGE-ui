@@ -39,7 +39,7 @@ tests: tests-node tests-python
 	@echo "All tests passed."
 
 tests-node:
-	cd tests/node && npm install --silent && node test-yaml-bridge.js && node test-grain-map.js
+	cd tests/node && npm install --silent && for f in test-*.js; do echo "▶ $$f"; node "$$f" || exit 1; done
 
 tests-python:
 	$(VENV_BIN)/python -m pytest tests/python/ -v

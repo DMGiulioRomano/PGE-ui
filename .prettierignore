@@ -1,0 +1,14 @@
+# This repo has no build step: .jsx/.js are transpiled in-browser by Babel and
+# are not meant to be auto-formatted. This file guards against a stray prettier
+# run (e.g. an editor "format on save") silently rewriting source.
+#
+# Critically, app.jsx contains the EDITMODE block
+#   /*EDITMODE-BEGIN*/ { … TWEAK_DEFAULTS … } /*EDITMODE-END*/
+# which a sibling design tool rewrites line-by-line (one key per line, double
+# quoted, no trailing comma). Reformatting it — merging lines, re-quoting, or
+# adding trailing commas — breaks that external writer. See CLAUDE.md › EDITMODE.
+app.jsx
+
+# Vendored / generated — never format.
+tests/node/node_modules/
+.venv/

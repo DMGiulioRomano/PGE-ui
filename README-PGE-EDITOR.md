@@ -1,80 +1,15 @@
-# PGE Editor — local setup
+# PGE Editor — operational deep-dive
 
-The PGE Editor is a single-page browser app. It edits the `configs/*.yml`
-files of [`PythonGranularEngine`](https://github.com/DMGiulioRomano/PythonGranularEngine)
-visually and launches `python src/main.py …` for you via a tiny local bridge.
+Setup and quick start live in **[README.md](README.md)**. This document is the
+operational reference for the bridge: how the local backend maps to HTTP, the
+full endpoint list, the NDJSON render protocol, troubleshooting and security.
 
-You don't need to "install" the editor. You need three things on disk:
-
-1. The editor source (this folder — `PGE Editor.html` + the `.jsx`/`.css`/`.js` files)
-2. A local clone of `PythonGranularEngine` (the actual renderer)
-3. Python with `flask` + `flask-cors` (the bridge)
-
-The bridge is `server.py` in this folder. **You copy or symlink it into the
-PythonGranularEngine repo root and run it from there.**
-
----
-
-## Quick start
-
-### 1) Set up `PythonGranularEngine` (one-time)
-
-Follow that repo's README — `make setup` after the system-deps step.
-
-### 2) Install the bridge deps in this repo (PGE-ui)
-
-```bash
-cd /path/to/PGE-ui
-pip install -r requirements.txt
-```
-
-(Use the engine's venv if you want, or any python ≥ 3.10 — the bridge only depends on flask + flask-cors.)
-
-### 3) Start the bridge
-
-If the two repos are cloned side-by-side (`~/projects/PythonGranularEngine` and `~/projects/PGE-ui`):
-
-```bash
-make serve
-# or
-python server.py
-```
-
-Otherwise point at the engine explicitly:
-
-```bash
-python server.py --root /path/to/PythonGranularEngine
-```
-
-You'll see:
-
-```
-PGE bridge
-  root:    /path/to/PythonGranularEngine
-  refs/:   /path/to/PythonGranularEngine/refs
-  configs/: /path/to/PythonGranularEngine/configs
-  output/: /path/to/PythonGranularEngine/output
-  cache/:  /path/to/PythonGranularEngine/cache
-  listen:  http://127.0.0.1:7878
-```
-
-The bridge serves only on `127.0.0.1`. CORS is open for all origins so the
-editor (which you open as a `file://` URL) can talk to it.
-
-### 4) Open the editor
-
-Just open `PGE Editor.html` in Chrome, Firefox, Safari, anything. On launch the
-editor probes the server, lists the real contents of `refs/` and `configs/`, and
-auto-opens the last project (or the first on disk). Then:
-
-1. If the server moved, open the **⚙ gear icon → Server** and set the URL
-   (default `http://localhost:7878`); **"test connection"** turns green and
-   shows the root path.
-2. Hit **Render**. The progress bar in the top-bar, the per-clip status dots,
-   and the embedded **log** terminal are all live output from `main.py`.
-
-If the server isn't running, the editor flags it (gear panel + a notice) and
-can't list or load anything — there is no offline mode.
+The bridge is `server.py` in this repo. It runs **from PGE-ui** and points at a
+separately-cloned `PythonGranularEngine` via `--root` (default
+`../PythonGranularEngine`) — it never copies itself into or mutates the engine
+repo, only reading/writing inside that repo's `refs/`, `configs/`, `output/`,
+`cache/`. It binds `127.0.0.1` only; CORS is open so the editor (a `file://`
+page) can reach it.
 
 ---
 
@@ -95,20 +30,40 @@ can't list or load anything — there is no offline mode.
 ## Endpoints exposed by `server.py`
 
 ```
-GET  /health                — sanity check + resolved repo paths
-GET  /media                 — list refs/ (returns { path, files:[{name,duration?}] })
-GET  /projects              — list configs/*.yml
-GET  /file?kind=…&name=…    — read a project file
-PUT  /file?kind=…&name=…    — write a project file
-GET  /cache_manifest/<base> — read cache/<base>.json
-POST /render                — start a render, returns NDJSON stream of events
-POST /render/cancel         — terminate the running subprocess
-GET  /output/<file>.aif     — serve a rendered stem
+# introspection / config
+GET  /health                     — sanity check + resolved repo paths
+GET  /config                     — resolved repo paths
+GET  /diagnose                   — system checks (sox, soxi, numpy, venv, …)
+
+# listing + file I/O
+GET  /media                      — list refs/ ({ path, files:[{name,duration?}] })
+GET  /projects                   — list configs/*.yml
+GET  /file?kind=…&name=…         — read a file
+PUT  /file?kind=…&name=…         — write a file
+GET  /stems/<base>               — stream IDs with a rendered stem on disk
+GET  /cache_manifest/<base>      — read cache/<base>.json
+
+# render
+POST /render                     — start a render, returns NDJSON stream of events
+POST /render/cancel              — terminate the running subprocess
+POST /setup                      — create the engine venv (NDJSON stream)
+
+# rendered-stem audio / analysis (output/)
+GET  /output/<file>              — serve a rendered stem (raw)
+GET  /audio/<file>               — stem transcoded to WAV via sox (Firefox-friendly)
+GET  /peaks/<file>               — waveform peaks (float32) for a stem
+GET  /spectrogram/<file>?scale=  — STFT spectrogram (scale=linear|log) for a stem
+
+# refs/ media preview
+GET  /media_audio/<file>         — refs/ media as WAV (sox transcode)
+GET  /media_peaks/<file>         — waveform peaks for a refs/ media file
+GET  /media_spectrogram/<file>   — STFT spectrogram for a refs/ media file
 ```
 
 The `kind` parameter is one of `media | projects | output | cache` and is
 resolved against the repo's `refs / configs / output / cache` folders. Path
-traversal is rejected.
+traversal is rejected; derived audio artifacts (WAV/peaks/spectrogram) are
+cached under `cache/` and never written into `refs/`.
 
 ---
 

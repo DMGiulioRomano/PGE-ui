@@ -60,6 +60,22 @@
     return fnv1a(json);
   }
 
+  // fetch with an AbortController timeout so a hung server.py can't leave a
+  // promise pending forever (the boot probe in app.jsx uses the same pattern at
+  // a tighter 1.5s). Data ops default to 10s. #45
+  async function fetchWithTimeout(url, opts = {}, timeoutMs = 10000) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...opts, signal: ctrl.signal });
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error(`request timed out after ${timeoutMs}ms: ${url}`);
+      throw e;
+    } finally {
+      clearTimeout(tid);
+    }
+  }
+
   /* =========================================================================
    * LOCAL BACKEND — pure HTTP, talks to server.py.
    * Works in any browser (Chrome, Firefox, Safari, …) because the server
@@ -71,12 +87,12 @@
     let cancelAbort = null;
 
     async function jget(path) {
-      const r = await fetch(baseUrl + path);
+      const r = await fetchWithTimeout(baseUrl + path);
       if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
       return await r.json();
     }
     async function jput(path, body) {
-      const r = await fetch(baseUrl + path, {
+      const r = await fetchWithTimeout(baseUrl + path, {
         method: "PUT",
         headers: { "Content-Type": "text/plain" },
         body,
@@ -85,7 +101,7 @@
       return await r.json();
     }
     async function getText(path) {
-      const r = await fetch(baseUrl + path);
+      const r = await fetchWithTimeout(baseUrl + path);
       if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
       return await r.text();
     }
@@ -131,7 +147,7 @@
       },
       async fileExists(kind, name) {
         try {
-          const r = await fetch(baseUrl + `/file?kind=${kind}&name=${encodeURIComponent(name)}`, { method: "HEAD" });
+          const r = await fetchWithTimeout(baseUrl + `/file?kind=${kind}&name=${encodeURIComponent(name)}`, { method: "HEAD" }, 5000);
           return r.ok;
         } catch { return false; }
       },

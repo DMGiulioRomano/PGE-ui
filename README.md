@@ -24,7 +24,7 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
     ├── Makefile                 ← convenience targets
     ├── backend.js               ← local HTTP adapter (browser side)
     ├── app.jsx, TopBar.jsx, …   ← editor UI (React + Babel-in-browser)
-    └── README-PGE-EDITOR.md     ← detailed setup + troubleshooting
+    └── README-PGE-EDITOR.md     ← operational deep-dive (endpoints, NDJSON, troubleshooting)
 ```
 
 **Why two repos?** `PythonGranularEngine` is a pure compositional CLI in the spirit of Truax's DMX-1000. The web UI and its bridge are deliberately kept out of it, alongside the existing sibling tool [`PGE-ls`](https://github.com/DMGiulioRomano/PGE-ls). The engine has no flask dependency, no UI assumptions, no opinions about JSON event formats.
