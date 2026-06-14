@@ -83,6 +83,62 @@ console.log("\n── stream-level helpers ──");
     eq(U.truncateStreamEnvelopes({ id: "s3", volumeEnv: [[0, 0], [1, 1]] }).volumeEnv, [[0, 0], [1, 1]]));
 }
 
+console.log("\n── range / curve envelopes (issue #61) ──");
+{
+  const stream = {
+    id: "s4",
+    volumeRangeEnv: [[0, 0], [1, 1]],
+    panRangeEnv:    [[0, 0], [1, 1]],
+    grain:   { durationRangeEnv: [[0, 0], [1, 1]],
+               envelope: { states: ["hann", "gauss"], curve: [[0, 0], [1, 1]] } },
+    pointer: { offsetRangeEnv: [[0, 0], [1, 1]] },
+    pitch:   { rangeEnv: [[0, 0], [1, 1]] },
+  };
+  const r = U.rescaleStreamEnvelopes(stream, 10, 20); // ratio 0.5
+  assert("rescale top-level volumeRangeEnv",   eq(r.volumeRangeEnv,         [[0, 0], [0.5, 1]]));
+  assert("rescale top-level panRangeEnv",      eq(r.panRangeEnv,            [[0, 0], [0.5, 1]]));
+  assert("rescale grain.durationRangeEnv",     eq(r.grain.durationRangeEnv, [[0, 0], [0.5, 1]]));
+  assert("rescale pointer.offsetRangeEnv",     eq(r.pointer.offsetRangeEnv, [[0, 0], [0.5, 1]]));
+  assert("rescale pitch.rangeEnv",             eq(r.pitch.rangeEnv,         [[0, 0], [0.5, 1]]));
+  assert("rescale grain.envelope.curve",       eq(r.grain.envelope.curve,   [[0, 0], [0.5, 1]]));
+  assert("grain.envelope keeps sibling keys",  eq(r.grain.envelope.states,  ["hann", "gauss"]));
+
+  assert("streamWouldTruncate true on volumeRangeEnv",
+    U.streamWouldTruncate({ volumeRangeEnv: [[0, 0], [1, 1]] }, 2) === true);
+  assert("streamWouldTruncate true on pitch.rangeEnv",
+    U.streamWouldTruncate({ pitch: { rangeEnv: [[0, 0], [1, 1]] } }, 2) === true);
+  assert("streamWouldTruncate true on pointer.offsetRangeEnv",
+    U.streamWouldTruncate({ pointer: { offsetRangeEnv: [[0, 0], [1, 1]] } }, 2) === true);
+  assert("streamWouldTruncate true on grain.durationRangeEnv",
+    U.streamWouldTruncate({ grain: { durationRangeEnv: [[0, 0], [1, 1]] } }, 2) === true);
+  assert("streamWouldTruncate true on grain.envelope.curve",
+    U.streamWouldTruncate({ grain: { envelope: { curve: [[0, 0], [1, 1]] } } }, 2) === true);
+  assert("streamWouldTruncate false on range env at ratio 1",
+    U.streamWouldTruncate({ volumeRangeEnv: [[0, 0], [1, 1]] }, 1) === false);
+}
+
+console.log("\n── dephase envelopes (issue #61) ──");
+{
+  // global probability envelope (array form)
+  const arrStream = { id: "s5", dephase: [[0, 0], [1, 1]] };
+  const ra = U.rescaleStreamEnvelopes(arrStream, 10, 20);
+  assert("rescale dephase array form", eq(ra.dephase, [[0, 0], [0.5, 1]]));
+  assert("streamWouldTruncate true on dephase array", U.streamWouldTruncate(arrStream, 2) === true);
+
+  // per-param object: array params rescaled, scalar/null params preserved verbatim
+  const objStream = { id: "s6", dephase: { volume: [[0, 0], [1, 1]], pan: 0.5, pitch: null } };
+  const ro = U.rescaleStreamEnvelopes(objStream, 10, 20);
+  assert("rescale dephase.volume (array param)", eq(ro.dephase.volume, [[0, 0], [0.5, 1]]));
+  assert("dephase.pan scalar param preserved",   ro.dephase.pan === 0.5);
+  assert("dephase.pitch null param preserved",   ro.dephase.pitch === null);
+  assert("streamWouldTruncate true on dephase.volume env", U.streamWouldTruncate(objStream, 2) === true);
+  assert("rescaleStreamEnvelopes does not mutate dephase input", eq(objStream.dephase.volume, [[0, 0], [1, 1]]));
+
+  // scalar / false dephase left untouched (not a time-domain envelope)
+  assert("dephase scalar untouched", U.rescaleStreamEnvelopes({ dephase: 0.01 }, 10, 20).dephase === 0.01);
+  assert("dephase false untouched",  U.rescaleStreamEnvelopes({ dephase: false }, 10, 20).dephase === false);
+}
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
