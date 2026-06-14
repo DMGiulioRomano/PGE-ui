@@ -683,6 +683,149 @@ for (const f of dephaseFixtures) {
 }
 
 /* ============================================================
+ * SECTION 8e — multistate envelope: explicit state positions AND the curve
+ * survive the round trip. The editor lists only window NAMES and assumes uniform
+ * spacing i/(n-1); the engine stores explicit [position, name] pairs and uses the
+ * positions as thresholds in value-space (window_selection_strategy.py). Dropping
+ * them rewrote a deliberately non-uniform multistate as equispaced on a no-op
+ * save — changing the rendered audio AND busting the per-stream cache. The curve
+ * must also be re-emitted verbatim: the *(n-1) / /(n-1) rescale otherwise drifts
+ * 0.7 → 0.6999999999999998 at n=4. (#59)
+ * ============================================================ */
+
+console.log("\n── multistate envelope: positions + curve preserved (#59) ──");
+
+function multistateYaml(stateLines, curveLine) {
+  return topLevelYaml([
+    "grain:",
+    "  duration: 0.05",
+    "  envelope:",
+    "    states:",
+    ...stateLines.map(l => "      " + l),
+    "    " + curveLine,
+  ]);
+}
+const serEnv0 = (d) => window.jsyaml.load(serialize(d)).streams[0].grain.envelope;
+
+{
+  // non-uniform positions + a curve point that drifts under naive rescale (n=4)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.3, bartlett]", "- [0.7, expodec]", "- [1, blackman]"],
+    "curve: [[0, 0], [0.5, 0.7], [1, 1]]"));
+  const env = serEnv0(data);
+  assert("#59 non-uniform positions preserved",
+    eq(env.states, [[0, "hanning"], [0.3, "bartlett"], [0.7, "expodec"], [1, "blackman"]]),
+    JSON.stringify(env.states));
+  assert("#59 curve preserved verbatim (no FP drift)",
+    eq(env.curve, [[0, 0], [0.5, 0.7], [1, 1]]),
+    JSON.stringify(env.curve));
+  assert("#59 non-uniform multistate — roundTrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // uniform multistate (positions == i/(n-1)) round-trips with no extra state
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  const env = serEnv0(data);
+  assert("#59 uniform positions round-trip",
+    eq(env.states, [[0, "hanning"], [0.5, "bartlett"], [1, "blackman"]]),
+    JSON.stringify(env.states));
+}
+
+{
+  // editing a state NAME keeps the custom positions (rename != restructure)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.2, bartlett]", "- [0.9, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  data.streams[0].grain.envelope.states[1] = "gaussian";
+  const env = serEnv0(data);
+  assert("#59 rename keeps custom positions",
+    eq(env.states, [[0, "hanning"], [0.2, "gaussian"], [0.9, "blackman"]]),
+    JSON.stringify(env.states));
+}
+
+{
+  // editing the curve (editor space [0, n-1]) re-emits the engine-space curve,
+  // dropping the verbatim copy. n=3 → editor mid 1.0 == engine 0.5
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [0.5, 0.7], [1, 1]]"));
+  data.streams[0].grain.envelope.curve = [[0, 0], [0.5, 1.0], [1, 2]];
+  const env = serEnv0(data);
+  assert("#59 curve edit re-emitted in engine space",
+    eq(env.curve, [[0, 0], [0.5, 0.5], [1, 1]]),
+    JSON.stringify(env.curve));
+}
+
+{
+  // adding a state is a structural change: stale statePositions (wrong length)
+  // are ignored and spacing falls back to uniform i/(n-1)
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.2, bartlett]", "- [0.9, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  data.streams[0].grain.envelope.states.push("expodec");  // 3 → 4 states
+  const env = serEnv0(data);
+  assert("#59 adding a state falls back to uniform spacing",
+    eq(env.states.map(s => s[0]), [0, 1 / 3, 2 / 3, 1]),
+    JSON.stringify(env.states));
+}
+
+/* ============================================================
+ * SECTION 8f — explicit *_range: 0 is preserved (#50). Engine-side an explicit
+ * range (even 0) sets has_explicit_range and DISABLES the implicit jitter the
+ * dephase gate would otherwise apply (parameter.py _calculate_range: _mod_range
+ * is None -> default_jitter); absent means "use the implicit jitter". So 0 is
+ * NOT equivalent to absent — same rule already applied to pitch.range (#34).
+ * The old `!== 0` serialize guard dropped an explicit 0 (and parse coerced
+ * absent -> 0 for volume/pan/duration, hiding it). Fix: parse preserves absence
+ * as null; serialize omits only null/undefined.
+ * ============================================================ */
+
+console.log("\n── explicit *_range: 0 preserved, absent stays absent (#50) ──");
+
+const ser50 = (d) => window.jsyaml.load(serialize(d)).streams[0];
+
+{
+  const data = parse(topLevelYaml(["volume_range: 0", "pan_range: 0"]));
+  const y = ser50(data);
+  assert("#50 explicit volume_range: 0 preserved", y.volume_range === 0, JSON.stringify(y));
+  assert("#50 explicit pan_range: 0 preserved", y.pan_range === 0, JSON.stringify(y));
+  assert("#50 explicit volume/pan range 0 — roundtrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+{
+  const data = parse(topLevelYaml(["grain: {duration: 0.05, duration_range: 0}"]));
+  const g = ser50(data).grain || {};
+  assert("#50 explicit grain.duration_range: 0 preserved", g.duration_range === 0, JSON.stringify(g));
+}
+{
+  const data = parse(pointerYaml(["speed_ratio: 1", "offset_range: 0"]));
+  const p = ser50(data).pointer || {};
+  assert("#50 explicit pointer.offset_range: 0 preserved", p.offset_range === 0, JSON.stringify(p));
+}
+{
+  // absent ranges must NOT gain a spurious *_range: 0
+  const y = ser50(parse(topLevelYaml([])));
+  assert("#50 absent volume_range not emitted", !("volume_range" in y), JSON.stringify(y));
+  assert("#50 absent pan_range not emitted", !("pan_range" in y), JSON.stringify(y));
+  assert("#50 absent grain.duration_range not emitted",
+    !y.grain || !("duration_range" in y.grain), JSON.stringify(y.grain));
+}
+{
+  // non-zero ranges still round-trip
+  const data = parse(topLevelYaml(["volume_range: 3", "pan_range: 0.5",
+    "grain: {duration: 0.05, duration_range: 0.01}"]));
+  const y = ser50(data);
+  assert("#50 non-zero volume_range kept", y.volume_range === 3, JSON.stringify(y));
+  assert("#50 non-zero pan_range kept", y.pan_range === 0.5, JSON.stringify(y));
+  assert("#50 non-zero duration_range kept", (y.grain || {}).duration_range === 0.01, JSON.stringify(y.grain));
+  assert("#50 non-zero ranges — roundtrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+/* ============================================================
  * SECTION 9 — corpus: every engine config round-trips
  * ============================================================ */
 
