@@ -11,6 +11,14 @@ PYTHON    = os.path.join(PGE_ROOT, ".venv/bin/python")
 MAIN      = os.path.join(PGE_ROOT, "src/main.py")
 SHOWCASE  = os.path.join(PGE_ROOT, "configs/PGE_pitch_units_showcase.yml")
 
+# Integration test: shells out to the engine. Skip cleanly when the sibling
+# engine repo or its venv isn't present (e.g. CI without the checkout) instead
+# of erroring with FileNotFoundError. #46
+pytestmark = pytest.mark.skipif(
+    not (os.path.exists(PYTHON) and os.path.exists(MAIN)),
+    reason="PythonGranularEngine venv/main.py not available",
+)
+
 
 def test_render_pitch_units_showcase():
     with tempfile.NamedTemporaryFile(suffix=".aif", delete=False) as tmp:
