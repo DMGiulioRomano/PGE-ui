@@ -396,6 +396,87 @@ body.pge-resizing-terminal * { cursor: ns-resize !important; user-select: none !
 .pge-terminal .t-line.muted .t-text { color: var(--fg-3); }
 .pge-terminal .t-line.blank { min-height: 6px; }
 
+/* ---------- Grain score (full-width bottom drawer, like the terminal) ---------- */
+.pge-grainscore {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: var(--grainscore-h, 260px);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-default);
+  display: flex; flex-direction: column;
+  z-index: 49;
+  box-shadow: 0 -8px 24px rgba(0,0,0,0.35);
+}
+/* Keep app content + footer clear of the drawer; stack above the terminal when
+ * both are open. */
+.pge-app.with-grainscore { padding-bottom: var(--grainscore-h, 260px); }
+.pge-app.with-grainscore .pge-footer { bottom: var(--grainscore-h, 260px); }
+.pge-app.with-terminal .pge-grainscore { bottom: var(--terminal-h, 220px); }
+.pge-app.with-terminal.with-grainscore { padding-bottom: calc(var(--terminal-h, 220px) + var(--grainscore-h, 260px)); }
+.pge-app.with-terminal.with-grainscore .pge-footer { bottom: calc(var(--terminal-h, 220px) + var(--grainscore-h, 260px)); }
+
+.pge-grainscore .gs-resize {
+  position: absolute;
+  top: -3px; left: 0; right: 0;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 2;
+  background: transparent;
+  touch-action: none;
+}
+.pge-grainscore .gs-resize:focus { outline: none; }
+.pge-grainscore .gs-resize::after {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 36px; height: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--fg-4);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.pge-grainscore .gs-resize:hover::after,
+.pge-grainscore .gs-resize:focus-visible::after,
+.pge-grainscore.is-resizing .gs-resize::after { opacity: 0.7; }
+.pge-grainscore.is-resizing .gs-resize::after { background: var(--accent); opacity: 1; }
+.pge-grainscore.is-resizing { user-select: none; }
+body.pge-resizing-grainscore,
+body.pge-resizing-grainscore * { cursor: ns-resize !important; user-select: none !important; }
+
+.pge-grainscore .gs-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+.pge-grainscore .gs-title { font-size: 11px; color: var(--fg-1); }
+.pge-grainscore .gs-btn {
+  appearance: none; background: transparent; border: 0;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--fg-3); cursor: pointer; border-radius: 2px;
+}
+.pge-grainscore .gs-btn:hover { color: var(--fg-1); background: var(--bg-app); }
+
+.pge-grainscore .gs-body {
+  flex: 1; position: relative; overflow: hidden;
+  background: var(--bg-app);
+}
+.pge-grainscore .gs-canvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+}
+.pge-grainscore .gs-playhead {
+  position: absolute; top: 0; bottom: 0;
+  width: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* ---------- Stereoscope (inline in sidebar, not fixed overlay) ---------- */
 .pge-scope {
   background: #0a0a0a;
