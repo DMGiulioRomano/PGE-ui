@@ -226,6 +226,13 @@ function App() {
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
+  // Refetch selettivo dei grani (#73): grainLoadedRef = stream con grani già in
+  // grainData (mirror, evita lo stale-closure su grainData nell'effetto);
+  // grainRegenRef = stream rigenerati dall'ultimo render (cached=false → JSON
+  // riscritto dal motore) ancora da rifetchare. Solo questi due insiemi guidano
+  // il refetch — i clean restano intatti.
+  const grainLoadedRef = useRefApp(new Set());
+  const grainRegenRef = useRefApp(new Set());
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
@@ -391,6 +398,12 @@ function App() {
   useEffectApp(() => {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
+    // Cambio progetto: i grani in memoria sono del progetto precedente. Svuota la
+    // cache UI e gli insiemi loaded/regen così il nuovo progetto riparte pulito e
+    // il primo fetch (tutti "non loaded") non viene saltato (#73).
+    setGrainData({});
+    grainLoadedRef.current = new Set();
+    grainRegenRef.current = new Set();
     backend.render.loadCache(basename).then(cache => {
       setLastRenderedFps(cache || {});
     });
@@ -596,11 +609,22 @@ function App() {
           }
           return n || m;
         });
+        for (const s of withoutStem) { grainLoadedRef.current.delete(s.id); grainRegenRef.current.delete(s.id); }
       }
-      // Fetch dei sidecar in parallelo (issue #71, bottleneck 3): con N stream
-      // non si aspettano N round-trip in serie. Le extents (ptr/pitch) vengono
-      // pre-calcolate qui una volta (bottleneck 4), non ad ogni repaint.
-      const entries = await Promise.all(withStem.map(async s => {
+      // Rifetcha solo gli stream rigenerati dal motore nell'ultimo render
+      // (cached=false → grain JSON riscritto su disco) o mai caricati: i clean
+      // tengono i dati già in grainData — niente fetch, niente computeExtents,
+      // niente repaint (#73). Con cache disattivata tutti gli stream risultano
+      // rigenerati, quindi tutti vengono rifetchati.
+      const ids = withStem.map(s => s.id);
+      const dirtyIds = GM && GM.selectGrainRefetch
+        ? new Set(GM.selectGrainRefetch(ids, grainLoadedRef.current, grainRegenRef.current))
+        : new Set(ids);  // fallback difensivo: senza l'helper, rifetcha tutto
+      const toFetch = withStem.filter(s => dirtyIds.has(s.id));
+      // Fetch dei sidecar dirty in parallelo (issue #71, bottleneck 3): con N
+      // stream non si aspettano N round-trip in serie. Le extents (ptr/pitch)
+      // vengono pre-calcolate qui una volta (bottleneck 4), non ad ogni repaint.
+      const entries = await Promise.all(toFetch.map(async s => {
         if (cancelled) return null;
         try {
           const j = await backend.render.loadGrainData(basename, s.id);
@@ -610,8 +634,18 @@ function App() {
         } catch (e) { return null; /* sidecar missing / not yet rendered */ }
       }));
       if (!cancelled) {
-        const patch = Object.fromEntries(entries.filter(Boolean));
-        if (Object.keys(patch).length) setGrainData(m => ({ ...m, ...patch }));
+        const ok = entries.filter(Boolean);
+        if (ok.length) {
+          setGrainData(m => {
+            const n = { ...m };
+            for (const e of ok) n[e[0]] = e[1];
+            return n;
+          });
+          // Aggiorna gli insiemi solo per i fetch riusciti: marca come caricato e
+          // consuma il flag "rigenerato". Un fetch fallito (sidecar assente) resta
+          // marcato e verrà ritentato al prossimo giro.
+          for (const e of ok) { grainLoadedRef.current.add(e[0]); grainRegenRef.current.delete(e[0]); }
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -826,6 +860,7 @@ function App() {
     setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
     setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
     setGrainData(g => { const n = { ...g }; delete n[id]; return n; });
+    grainLoadedRef.current.delete(id); grainRegenRef.current.delete(id);  // ref allineati a grainData (#73)
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
@@ -1017,7 +1052,9 @@ function App() {
         setRenderStatus(s => ({ ...s, streamProgress: e.progress }));
       } else if (e.type === "stream-done") {
         if (e.cached) cacheHits++;
-        else generated++;
+        // cached=false → il motore ha riscritto il grain JSON: marcalo per il
+        // refetch selettivo dei grani (#73).
+        else { generated++; grainRegenRef.current.add(e.streamId); }
         setStreamProgress(p => ({ ...p, [e.streamId]: 1 }));
         setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
         // bump fp for this stream (so UI marks it fresh)

@@ -123,6 +123,28 @@
     return { ptr: pointerExtent(grains), pit: pitchExtentCents(grains) };
   }
 
+  /* Decide quali stream necessitano un refetch del sidecar grani dopo un render
+   * (issue #73). Il motore riscrive il grain JSON SOLO per gli stream davvero
+   * (ri)generati: l'evento `stream-done` lo segnala con `cached=false`. Quindi si
+   * rifetcha sse lo stream è stato rigenerato (JSON cambiato su disco) o non è
+   * ancora in memoria (primo load). Gli stream clean (cache hit) tengono i dati
+   * già in `grainData` — nessun fetch, nessun `computeExtents`, nessun repaint.
+   * Con cache disattivata tutti gli stream sono rigenerati → tutti rifetchati.
+   *   streamIds : array di id di stream con stem
+   *   loaded    : Set di id i cui grani sono già in `grainData`
+   *   regen     : Set di id rigenerati nell'ultimo render (cached=false)
+   * → array di id da rifetchare (sottoinsieme di streamIds, ordine preservato) */
+  function selectGrainRefetch(streamIds, loaded, regen) {
+    const out = [];
+    for (let i = 0; i < streamIds.length; i++) {
+      const id = streamIds[i];
+      const isLoaded = loaded && loaded.has ? loaded.has(id) : false;
+      const isRegen = regen && regen.has ? regen.has(id) : false;
+      if (!isLoaded || isRegen) out.push(id);
+    }
+    return out;
+  }
+
   /* Geometria di un grano in coordinate canvas, senza colore (parte "calda" del
    * loop: nessuna allocazione di stringhe).
    * ctx: { pxPerSec, height, ptrMin, ptrMax, grainHeight? }
@@ -260,6 +282,7 @@
     pitchExtentCents,
     pointerExtent,
     computeExtents,
+    selectGrainRefetch,
     volToAlpha,
     pitchColor,
     grainGeom,
