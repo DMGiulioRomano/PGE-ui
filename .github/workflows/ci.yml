@@ -6,7 +6,7 @@ on:
 
 jobs:
   node:
-    name: node tests (yaml round-trip · envelope utils · fingerprint parity)
+    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,17 +17,37 @@ jobs:
         run: make tests-node
 
   python:
-    name: python tests (render_pipeline · audio_pipeline)
+    name: python tests (render_pipeline · audio_pipeline · engine render)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout PGE-ui
+        uses: actions/checkout@v4
+        with:
+          path: PGE-ui
+      # The engine lives in a sibling repo; test_engine_render shells out to its
+      # venv/main.py. Check it out next to PGE-ui (the layout that test derives
+      # from its own path) so the engine smoke test runs here instead of skipping.
+      # If PythonGranularEngine is private, add an ENGINE_REPO_TOKEN secret (a PAT
+      # with read access); for a public repo the default GITHUB_TOKEN is enough.
+      - name: checkout PythonGranularEngine
+        uses: actions/checkout@v4
+        with:
+          repository: DMGiulioRomano/PythonGranularEngine
+          path: PythonGranularEngine
+          token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: install bridge + test deps
+        working-directory: PGE-ui
         run: pip install flask flask-cors pytest PyYAML
-      # The engine-dependent test (test_engine_render) skips itself when the
-      # sibling PythonGranularEngine checkout / venv is absent (#46), so the
-      # whole suite runs green without the engine here.
+      # Build the engine's own venv so test_engine_render runs (instead of
+      # skipping on a missing .venv/main.py). numpy renderer needs numpy+soundfile.
+      - name: set up engine venv
+        working-directory: PythonGranularEngine
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
       - name: run python test suite
+        working-directory: PGE-ui
         run: python -m pytest tests/python/ -v

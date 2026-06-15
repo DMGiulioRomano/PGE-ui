@@ -88,7 +88,12 @@ function App() {
 
   /* ============ History-aware data state ============ */
   const [data, _setDataRaw] = useStateApp(EMPTY_PROJECT);
-  const historyRef = useRefApp({ past: [], future: [], snapshotBeforeGesture: null, inGesture: false });
+  // Pure stack mechanics (cap 200, gesture collapse, undo/redo) live in
+  // history-core.js (window.PGEHistoryCore), node-tested in test-history-core.js.
+  // The React glue — _setDataRaw, the setHistVer re-render bump, the freeze-on-
+  // resize confirm and window.PGEHistory — stays here and delegates to it. #58
+  const HC = window.PGEHistoryCore;
+  const historyRef = useRefApp(HC.create());
   const [, setHistVer] = useStateApp(0);
   const freezeOriginRef = useRefApp(null);   // {id, stream} captured at gesture start when freeze ON
   const pendingTruncateRef = useRefApp(null); // {id} set during gesture if shrink would truncate
@@ -97,32 +102,15 @@ function App() {
     _setDataRaw(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       if (next === prev) return prev;
-      const h = historyRef.current;
-      if (h.inGesture) {
-        if (h.snapshotBeforeGesture == null) h.snapshotBeforeGesture = prev;
-      } else {
-        h.past.push(prev);
-        if (h.past.length > 200) h.past.shift();
-        h.future = [];
-        setHistVer(v => v + 1);
-      }
+      if (HC.record(historyRef.current, prev)) setHistVer(v => v + 1);
       return next;
     });
   }
   function beginGesture() {
-    historyRef.current.inGesture = true;
-    historyRef.current.snapshotBeforeGesture = null;
+    HC.beginGesture(historyRef.current);
   }
   function endGesture() {
-    const h = historyRef.current;
-    if (h.snapshotBeforeGesture != null) {
-      h.past.push(h.snapshotBeforeGesture);
-      if (h.past.length > 200) h.past.shift();
-      h.future = [];
-      setHistVer(v => v + 1);
-    }
-    h.inGesture = false;
-    h.snapshotBeforeGesture = null;
+    if (HC.commitGesture(historyRef.current)) setHistVer(v => v + 1);
     freezeOriginRef.current = null;
 
     const pending = pendingTruncateRef.current;
@@ -142,38 +130,29 @@ function App() {
   }
   function undo() {
     _setDataRaw(cur => {
-      const h = historyRef.current;
-      if (!h.past.length) return cur;
-      const prev = h.past.pop();
-      h.future.push(cur);
-      setHistVer(v => v + 1);
-      return prev;
+      const r = HC.undo(historyRef.current, cur);
+      if (r.bumped) setHistVer(v => v + 1);
+      return r.data;
     });
   }
   function redo() {
     _setDataRaw(cur => {
-      const h = historyRef.current;
-      if (!h.future.length) return cur;
-      const nxt = h.future.pop();
-      h.past.push(cur);
-      setHistVer(v => v + 1);
-      return nxt;
+      const r = HC.redo(historyRef.current, cur);
+      if (r.bumped) setHistVer(v => v + 1);
+      return r.data;
     });
   }
   function resetHistory() {
-    historyRef.current.past = [];
-    historyRef.current.future = [];
-    historyRef.current.snapshotBeforeGesture = null;
-    historyRef.current.inGesture = false;
+    HC.reset(historyRef.current);
     setHistVer(v => v + 1);
   }
-  const canUndo = historyRef.current.past.length > 0;
-  const canRedo = historyRef.current.future.length > 0;
+  const canUndo = HC.canUndo(historyRef.current);
+  const canRedo = HC.canRedo(historyRef.current);
 
   useEffectApp(() => {
     window.PGEHistory = { beginGesture, endGesture, undo, redo,
-                          get canUndo() { return historyRef.current.past.length > 0; },
-                          get canRedo() { return historyRef.current.future.length > 0; } };
+                          get canUndo() { return HC.canUndo(historyRef.current); },
+                          get canRedo() { return HC.canRedo(historyRef.current); } };
     return () => { if (window.PGEHistory) delete window.PGEHistory; };
   }, []);
 
@@ -409,13 +388,12 @@ function App() {
     });
   }, [activeProject]);
 
-  /* Current fingerprint per stream — recomputed when data changes */
-  const currentFps = useMemoApp(() => {
-    const out = {};
-    const fmt = tweaks.outputFormat || "wav";
-    for (const s of data.streams) out[s.id] = window.PGEBackend.fingerprintStream(s, fmt);
-    return out;
-  }, [data.streams, tweaks.outputFormat]);
+  /* Current fingerprint per stream — recomputed when data changes. The
+     stale/fresh/never classification + summary live in render-status.js
+     (window.PGERenderStatus), node-tested in test-render-status.js. #58 */
+  const currentFps = useMemoApp(
+    () => window.PGERenderStatus.fingerprintAll(data.streams, tweaks.outputFormat || "wav"),
+    [data.streams, tweaks.outputFormat]);
 
   /* Composition length is derived from the streams (furthest edge + silent tail),
      not the stored data.duration which goes stale after edits. Single source of
@@ -424,34 +402,27 @@ function App() {
     () => window.PGEYaml ? window.PGEYaml.computeDuration(data.streams) : data.duration,
     [data.streams]);
 
-  /* Aggregate render summary: counts of fresh / stale / never */
-  const renderSummary = useMemoApp(() => {
+  // hasStem(id): does this stream have a stem on disk? Falls back to "we have a
+  // last-rendered fingerprint for it" when the backend can't answer. Closes over
+  // the live lastRenderedFps so the per-stream fallback stays correct.
+  const hasStemFor = (id) => {
     const basename = activeProject.replace(/\.yml$/, "");
     const backend = window.PGEBackend.current;
-    let fresh = 0, stale = 0, never = 0;
-    for (const s of data.streams) {
-      const cur = currentFps[s.id];
-      const last = lastRenderedFps[s.id];
-      const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
-      if (!last || !hasStem) never++;
-      else if (last === cur) fresh++;
-      else stale++;
-    }
-    return { fresh, stale, never, total: data.streams.length };
-  }, [data.streams, currentFps, lastRenderedFps, activeProject]);
+    return backend.render.hasStem ? backend.render.hasStem(basename, id) : !!lastRenderedFps[id];
+  };
+
+  /* Aggregate render summary: counts of fresh / stale / never */
+  const renderSummary = useMemoApp(
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor),
+    [data.streams, currentFps, lastRenderedFps, activeProject]);
 
   function renderStatusForStream(streamId) {
-    const cur = currentFps[streamId];
-    const last = lastRenderedFps[streamId];
-    const basename = activeProject.replace(/\.yml$/, "");
-    const backend = window.PGEBackend.current;
-    const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, streamId) : !!last;
-    if (renderStatus.running && renderStatus.currentStreamId === streamId) {
-      return { state: "running", progress: streamProgress[streamId] || 0, tooltip: "rendering this stream…" };
-    }
-    if (!last || !hasStem) return { state: "never", tooltip: "this stream has never been rendered" };
-    if (last === cur) return { state: "fresh", tooltip: "rendered and up-to-date with the YAML" };
-    return { state: "stale", tooltip: "YAML changed since last render — re-render to update" };
+    return window.PGERenderStatus.statusForStream(streamId, {
+      currentFps, lastRenderedFps, hasStem: hasStemFor,
+      running: renderStatus.running,
+      currentStreamId: renderStatus.currentStreamId,
+      streamProgress,
+    });
   }
 
   /* ============ Playback (Web Audio driven) ============ */
@@ -535,7 +506,7 @@ function App() {
       for (const s of data.streams) {
         if (cancelled) return;
         const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         if (!hasStem) {
           setWaveforms(w => { if (!(s.id in w)) return w; const m = { ...w }; delete m[s.id]; return m; });
           continue;
@@ -565,8 +536,7 @@ function App() {
     (async () => {
       for (const s of data.streams) {
         if (cancelled) return;
-        const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         if (!hasStem) {
           setSpectrograms(m => { if (!(s.id in m)) return m; const n = { ...m }; delete n[s.id]; return n; });
           continue;
@@ -597,8 +567,7 @@ function App() {
       // Streams senza stem: niente grani → rimuovili dalla mappa.
       const withStem = [], withoutStem = [];
       for (const s of data.streams) {
-        const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         (hasStem ? withStem : withoutStem).push(s);
       }
       if (withoutStem.length) {
@@ -793,7 +762,7 @@ function App() {
     if (freezeEnvOnResize && patch.duration != null) {
       const cur = data.streams.find(s => s.id === id);
       if (cur && patch.duration !== cur.duration) {
-        const inGesture = historyRef.current.inGesture;
+        const inGesture = HC.isInGesture(historyRef.current);
 
         if (inGesture) {
           // Capture origin once per gesture (first frame that changes duration)
@@ -1139,7 +1108,7 @@ function App() {
     const preloads = [];
     for (const s of data.streams) {
       const last = lastRenderedFps[s.id];
-      const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+      const hasStem = hasStemFor(s.id);
       if (!hasStem) continue;
       const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
       if (url) {
