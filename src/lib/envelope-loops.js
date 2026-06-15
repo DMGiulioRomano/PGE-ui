@@ -382,21 +382,55 @@
     const u = normalizePitchUnit(unit);
     return u.kind !== "ratio";
   }
+  // safety bounds for a pitch unit, mirroring the engine's PitchUnit.value_bounds.
+  // Reads window.PGE_BOUNDS.pitch (defined in yaml-bridge.js, loaded earlier);
+  // edo derives its bounds from the divisions (±3 octaves). Returns
+  // { min, max, rangeMax } in the unit's own scale.
+  function pitchUnitBounds(unit, edoDivisions) {
+    const u = normalizePitchUnit(unit, edoDivisions);
+    if (u.kind === "edo") {
+      const bound = 3 * (u.edo || 12);
+      return { min: -bound, max: bound, rangeMax: bound };
+    }
+    const PB = (typeof window !== "undefined" && window.PGE_BOUNDS && window.PGE_BOUNDS.pitch) || null;
+    if (PB && PB[u.kind]) return PB[u.kind];
+    return (PB && PB.semitones) || { min: -36, max: 36, rangeMax: 36 };
+  }
+  // clamp a numeric value into [bounds.min, bounds.max]. Non-finite inputs
+  // (e.g. 12*log2(0) = -Infinity when converting a ratio range of 0) collapse
+  // to the nearest bound rather than escaping the range.
+  function clampToBounds(v, bounds) {
+    if (!bounds || typeof v !== "number") return v;
+    if (bounds.min != null && v < bounds.min) return bounds.min;
+    if (bounds.max != null && v > bounds.max) return bounds.max;
+    return v;
+  }
   // convert a single scalar between two pitch units, applying the integer
-  // rule of the destination unit
-  function convertPitchValue(value, fromUnit, toUnit, fromEdoDiv, toEdoDiv) {
+  // rule of the destination unit. With `bounds` ({min,max}) the converted
+  // value is clamped into the destination unit's safe range so a change of
+  // unit can never leave a value outside its bounds (e.g. cents 3600 → ratio 8
+  // stays valid, but a range of 3600¢ → 8× is clamped to the ratio rangeMax).
+  function convertPitchValue(value, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds) {
     if (value == null) return value;
     const st = pitchToSemitones(value, fromUnit, fromEdoDiv);
     let out = semitonesToPitch(st, toUnit, toEdoDiv);
     if (pitchUnitIsInteger(toUnit)) out = Math.round(out);
     else out = +out.toFixed(4);
-    return out;
+    return clampToBounds(out, bounds);
   }
-  // remap envelope y-values (the pitch value) into the new unit; x (time) is
-  // untouched. Handles all three voices env shapes: plain breakpoint array,
-  // typed `{type, points}`, and compact loop blocks (nested breakpoints).
-  function convertPitchEnv(env, fromUnit, toUnit, fromEdoDiv, toEdoDiv) {
-    const conv = y => convertPitchValue(y, fromUnit, toUnit, fromEdoDiv, toEdoDiv);
+  // convert a *range* (detune width / ± amount, never an absolute pitch). A
+  // range of 0 means "no detune" in every unit, so it maps to 0 regardless of
+  // family — bypassing the value math (which would send ratio 0 through
+  // 12*log2(0) = -Infinity). Non-zero ranges convert like a value and clamp
+  // into [0, rangeMax] of the destination unit.
+  function convertPitchRange(value, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds) {
+    if (value == null) return value;
+    if (value === 0) return 0;
+    return convertPitchValue(value, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds);
+  }
+  // walk an envelope (plain breakpoint array, typed `{type, points}`, or compact
+  // loop block) applying `conv` to each y-value; x (time) is untouched.
+  function _mapPitchEnv(env, conv) {
     function mapItem(item) {
       if (isCompactBlock(item)) {
         // [ [[x,y],…], end_time, n_reps, interp_in, interp_out ]
@@ -413,6 +447,16 @@
     if (!Array.isArray(env)) return env;
     return env.map(mapItem);
   }
+  // remap envelope y-values (the pitch value) into the new unit; optional
+  // `bounds` clamps each breakpoint into the destination range.
+  function convertPitchEnv(env, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds) {
+    return _mapPitchEnv(env, y => convertPitchValue(y, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds));
+  }
+  // remap a *range* envelope's y-values, with the range semantics of
+  // convertPitchRange (0 → 0, clamp into [0, rangeMax]).
+  function convertPitchRangeEnv(env, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds) {
+    return _mapPitchEnv(env, y => convertPitchRange(y, fromUnit, toUnit, fromEdoDiv, toEdoDiv, bounds));
+  }
 
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
@@ -423,6 +467,8 @@
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,
     normalizePitchUnit, pitchToSemitones, semitonesToPitch,
-    pitchUnitIsInteger, convertPitchValue, convertPitchEnv,
+    pitchUnitIsInteger, pitchUnitBounds, clampToBounds,
+    convertPitchValue, convertPitchEnv,
+    convertPitchRange, convertPitchRangeEnv,
   };
 })();

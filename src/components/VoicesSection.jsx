@@ -210,14 +210,28 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                       const fromEdo = isEdo ? curUnit.edo : 12;
                       const toEdo = u === "edo" ? edoN : 12;
                       const patch = { unit: newUnit };
+                      // destination bounds: clamp so a change of unit can't push
+                      // a value past the new unit's safe range. `step` is a
+                      // signed pitch (full [min,max]); `pitch_range` is a width
+                      // (0 stays 0, clamp into [0, rangeMax]).
+                      const nb = E.pitchUnitBounds(newUnit, toEdo);
+                      const bounds = {
+                        step:        { min: nb.min, max: nb.max },
+                        pitch_range: { min: 0, max: nb.rangeMax },
+                      };
                       // convert scalars + envelope breakpoints for both pitch params
                       ["step", "pitch_range"].forEach(key => {
+                        const isRange = key === "pitch_range";
                         if (p[key] != null) {
-                          patch[key] = E.convertPitchValue(p[key], curUnit, newUnit, fromEdo, toEdo);
+                          patch[key] = isRange
+                            ? E.convertPitchRange(p[key], curUnit, newUnit, fromEdo, toEdo, bounds[key])
+                            : E.convertPitchValue(p[key], curUnit, newUnit, fromEdo, toEdo, bounds[key]);
                         }
                         const envKey = key + "Env";
                         if (Array.isArray(p[envKey])) {
-                          patch[envKey] = E.convertPitchEnv(p[envKey], curUnit, newUnit, fromEdo, toEdo);
+                          patch[envKey] = isRange
+                            ? E.convertPitchRangeEnv(p[envKey], curUnit, newUnit, fromEdo, toEdo, bounds[key])
+                            : E.convertPitchEnv(p[envKey], curUnit, newUnit, fromEdo, toEdo, bounds[key]);
                         }
                       });
                       updateDim("pitch", patch);

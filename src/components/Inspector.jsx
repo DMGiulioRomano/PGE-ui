@@ -847,14 +847,29 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 const newEDivs = isNewEdo ? (pi.edoDivisions || 12) : null;
                 const fromDiv = edoN;            // current edo divisions (null if not edo)
                 const toDiv = isNewEdo ? newEDivs : null;
+                // destination bounds: a change of unit must never leave a value
+                // (or range) outside the new unit's safe range — e.g. a 3600¢
+                // range becomes 8× under absolute conversion but is clamped to
+                // the ratio rangeMax (2×).
+                const nb = E.pitchUnitBounds(newU, newEDivs);
+                const valBounds = { min: nb.min, max: nb.max };
+                const rangeBounds = { min: 0, max: nb.rangeMax };
                 const patch = { ...pi, unit: newU, edoDivisions: newEDivs };
+                // value (scalar or envelope)
                 if (pi.valueEnv) {
                   // keep env mode, remap breakpoints into the new unit
-                  patch.valueEnv = E.convertPitchEnv(pi.valueEnv, pu, newU, fromDiv, toDiv);
+                  patch.valueEnv = E.convertPitchEnv(pi.valueEnv, pu, newU, fromDiv, toDiv, valBounds);
                 } else {
                   const curVal = pi.value ?? (pu === "ratio" ? 1.0 : 0);
-                  patch.value = E.convertPitchValue(curVal, pu, newU, fromDiv, toDiv);
+                  patch.value = E.convertPitchValue(curVal, pu, newU, fromDiv, toDiv, valBounds);
                   patch.valueEnv = null;
+                }
+                // range (scalar or envelope) — must also be remapped, with range
+                // semantics (0 stays 0, clamp into [0, rangeMax])
+                if (pi.rangeEnv) {
+                  patch.rangeEnv = E.convertPitchRangeEnv(pi.rangeEnv, pu, newU, fromDiv, toDiv, rangeBounds);
+                } else if (pi.range != null) {
+                  patch.range = E.convertPitchRange(pi.range, pu, newU, fromDiv, toDiv, rangeBounds);
                 }
                 onChange({ pitch: patch });
               }
