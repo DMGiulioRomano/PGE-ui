@@ -482,6 +482,9 @@
     if (data.title)    payload.title    = data.title;
     payload.duration = computeDuration(data.streams);
     if (data.bpm)      payload.bpm      = data.bpm;
+    // seed (engine #81): emit on presence, not truthiness — seed: 0 is a valid
+    // seed and must survive. Absent/null stays absent (open+save no-op).
+    if (data.seed !== undefined && data.seed !== null) payload.seed = data.seed;
     payload.streams = (data.streams || []).map(streamToYaml);
 
     // Preserve any project-level extras we don't model.
@@ -644,7 +647,7 @@
     return out;
   }
 
-  const KNOWN_PROJECT_KEYS = new Set(["title", "duration", "bpm", "streams", "project"]);
+  const KNOWN_PROJECT_KEYS = new Set(["title", "duration", "bpm", "streams", "project", "seed"]);
 
   function parse(text, opts = {}) {
     if (!window.jsyaml) throw new Error("js-yaml not loaded");
@@ -675,6 +678,10 @@
       streams,
       samples:  opts.samples || [],
     };
+    // seed: optional top-level key for reproducible NumPy renders (engine #81).
+    // Modelled first-class (not _extra). Accept integers (incl. 0 and negatives)
+    // and strings; a missing or null seed means "unseeded" and stays unmodelled.
+    if (y.seed !== undefined && y.seed !== null) data.seed = y.seed;
     if (Object.keys(extras).length) data._extra = extras;
     return data;
   }
@@ -789,8 +796,8 @@
     // Compare project-level fields
     // duration is derived from streams, not round-tripped — skip it here.
     deepDiff(
-      { title: data.title || "", bpm: data.bpm || 0 },
-      { title: back.title || "",  bpm: back.bpm || 0 },
+      { title: data.title || "", bpm: data.bpm || 0, seed: data.seed ?? null },
+      { title: back.title || "",  bpm: back.bpm || 0, seed: back.seed ?? null },
       ["project"], diffs
     );
     // Compare each stream by id
