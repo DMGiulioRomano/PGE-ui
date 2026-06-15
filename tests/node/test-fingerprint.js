@@ -17,7 +17,7 @@ const path = require("path");
 global.window = {};
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.fetch = () => Promise.reject(new Error("no network in test"));
-eval(fs.readFileSync(path.join(__dirname, "../../backend.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8"));
 
 const { fingerprintStream } = window.PGEBackend;
 

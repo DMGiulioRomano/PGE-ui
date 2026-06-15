@@ -24,8 +24,9 @@ make tests            # full suite: tests-node + tests-python
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
   (rescale/truncate math), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary), and `test-history-core.js` (undo/redo stack
-  mechanics: 200-cap, gesture collapse, redo-clearing).
+  classification + render summary), `test-history-core.js` (undo/redo stack
+  mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
+  (preferences `applyEdit` merge + a guard against the removed design-tool residue).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -85,13 +86,11 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearing) live in `history-core.js` (`window.PGEHistoryCore`, node-tested in `test-history-core.js`). `app.jsx` keeps the React glue — the `[data, _setDataRaw]` state, the `historyRef`, the `setHistVer` re-render bump, the `window.PGEHistory` publication, the keyboard shortcuts, and the freeze-on-resize confirm inside `endGesture` — and delegates the bookkeeping to it.
 
-### EDITMODE block
+## File layout & load order (matters)
 
-`app.jsx` has `/*EDITMODE-BEGIN*/{…}/*EDITMODE-END*/` around `TWEAK_DEFAULTS`. A sibling design tool rewrites this block from the Tweaks panel. Do not reformat or reorder keys inside it — keep one key per line, double-quoted, trailing-comma-free, or the external writer breaks.
+Sources live under `src/lib/` (the `.js` logic — `window.*` globals, no modules), `src/components/` (the `.jsx` UI), and `styles/` (the `.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all, so the same relative paths work over `file://` and over the bridge. Node tests in `tests/node/` load the libs via relative paths (`../../src/lib/…`, `../../src/components/…`).
 
-## File-load order (matters)
-
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → `grain-map.js` → `render-status.js` (needs `window.PGEBackend`) → `history-core.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/envelope-loops.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

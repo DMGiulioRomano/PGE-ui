@@ -10,7 +10,7 @@ const path = require("path");
 
 // Shim: grain-map.js fa `window.PGEGrainMap = {...}` dentro una IIFE.
 global.window = {};
-eval(fs.readFileSync(path.join(__dirname, "../../grain-map.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/grain-map.js"), "utf8"));
 
 const GM = window.PGEGrainMap;
 
