@@ -13,7 +13,7 @@ const fs   = require("fs");
 const path = require("path");
 
 global.window = {};
-eval(fs.readFileSync(path.join(__dirname, "../../history-core.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/history-core.js"), "utf8"));
 
 const H = window.PGEHistoryCore;
 

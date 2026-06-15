@@ -22,8 +22,9 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
     ├── server.py                ← local HTTP bridge to the renderer
     ├── requirements.txt         ← flask + flask-cors
     ├── Makefile                 ← convenience targets
-    ├── backend.js               ← local HTTP adapter (browser side)
-    ├── app.jsx, TopBar.jsx, …   ← editor UI (React + Babel-in-browser)
+    ├── src/lib/                 ← browser-side logic (backend.js, yaml-bridge.js, …)
+    ├── src/components/          ← editor UI (app.jsx, TopBar.jsx, … — React + Babel)
+    ├── styles/                  ← css (editor.css, colors_and_type.css, …)
     └── README-PGE-EDITOR.md     ← operational deep-dive (endpoints, NDJSON, troubleshooting)
 ```
 
@@ -138,27 +139,43 @@ PGE-ui/
 ├── README.md                    this file
 ├── README-PGE-EDITOR.md         deep dive: endpoints, NDJSON protocol, troubleshooting
 │
-├── app.jsx                      root React component, glue + history + render orchestration
-├── backend.js                   PGEBackend abstraction (local HTTP to server.py)
-├── envelope-loops.js            envelope math + gesture-bracketed undo
+├── src/
+│   ├── lib/                     browser-side logic (window.* globals, no modules)
+│   │   ├── backend.js             PGEBackend abstraction (local HTTP to server.py)
+│   │   ├── yaml-bridge.js         YAML ⇄ editor-shape round-trip
+│   │   ├── envelope-loops.js      envelope math + gesture-bracketed undo
+│   │   ├── envelope-utils.js      envelope rescale / truncate helpers
+│   │   ├── audio-engine.js        master clock + stem playback
+│   │   ├── grain-map.js           grain colouring / LUT
+│   │   ├── render-status.js       fresh/stale/never classification + summary
+│   │   └── history-core.js        undo/redo stack mechanics (200-cap, gestures)
+│   │
+│   └── components/              React UI (Babel-in-browser .jsx)
+│       ├── app.jsx                root component, glue + history + render orchestration
+│       ├── primitives.jsx         Button, Icon, Switch, Tag, Section, SplitPane, …
+│       ├── TopBar.jsx             topbar with split-button render
+│       ├── RenderButton.jsx       split-button + popover + progress
+│       ├── Terminal.jsx           embedded log panel + toast surface
+│       ├── SettingsPanel.jsx      gear-icon dialog
+│       ├── SampleBrowser.jsx      Media / Projects panels with folder picker
+│       ├── MediaPreview.jsx       sample waveform preview
+│       ├── Timeline.jsx           lanes, clips, per-clip render-status dots
+│       ├── GrainScore.jsx         grain score view
+│       ├── Stereoscope.jsx        stereo field view
+│       ├── VUMeter.jsx            output level meter
+│       ├── EnvelopeEditor.jsx     envelope + loop sub-language
+│       ├── EnvelopeSelector.jsx   envelope preset picker
+│       ├── VoicesSection.jsx      voices section in Inspector
+│       ├── Inspector.jsx          Preview / Raw tabs
+│       ├── YamlEditor.jsx         Raw tab text editor
+│       └── ErrorBoundary.jsx      React error boundary
 │
-├── primitives.jsx               Button, Icon, Switch, Tag, Section, SplitPane, …
-├── TopBar.jsx                   topbar with split-button render
-├── RenderButton.jsx             split-button + popover + progress
-├── Terminal.jsx                 embedded log panel + toast surface
-├── SettingsPanel.jsx            gear-icon dialog
-├── SampleBrowser.jsx            Media / Projects panels with folder picker
-├── Timeline.jsx                 lanes, clips, per-clip render-status dots
-├── EnvelopeEditor.jsx           envelope + loop sub-language
-├── VoicesSection.jsx            voices section in Inspector
-├── Inspector.jsx                Preview / Raw tabs
-├── YamlEditor.jsx               Raw tab text editor
-├── tweaks-panel.jsx             host's Tweaks panel (only visible in the design tool)
-│
-├── editor.css                   core layout + tokens
-├── colors_and_type.css          design system tokens (accent, accent-2, fg, bg, …)
-├── envelope_editor.css          envelope pane scoped styles
-└── render-ui.css                styles for render button / settings / terminal / toasts
+└── styles/
+    ├── editor.css                core layout + tokens
+    ├── colors_and_type.css       design system tokens (accent, accent-2, fg, bg, …)
+    ├── envelope_editor.css       envelope pane scoped styles
+    ├── envelope-selector.css     envelope selector scoped styles
+    └── render-ui.css             styles for render button / settings / terminal / toasts
 ```
 
 ---

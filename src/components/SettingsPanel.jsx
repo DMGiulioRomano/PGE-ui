@@ -170,6 +170,16 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             <span className="sp-k" title="genera il sidecar JSON dei grani per stream (pesante su scene dense)">grain data</span>
             <SpToggle v={tweaks.renderGrainJson !== false} onChange={(v) => setTweak("renderGrainJson", v)} />
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="formato dei file audio renderizzati">output format</span>
+            <select className="sp-select mono"
+                    value={tweaks.outputFormat || "wav"}
+                    onChange={(e) => setTweak("outputFormat", e.target.value)}>
+              <option value="aiff">AIFF</option>
+              <option value="wav">WAV (default)</option>
+              <option value="flac">FLAC</option>
+            </select>
+          </div>
           {tweaks.renderVisualize ? (
             <div className="sp-row" style={{paddingLeft: 12}}>
               <span className="sp-k">page duration (s)</span>
@@ -279,6 +289,34 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             Passa su un rettangolo e aspetta 0.5s → si attiva. Poi muovi su/giù per cambiare il valore.
             Una volta attivato, il passo rimane selezionato anche uscendo dal rettangolino.
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="gesture per lo zoom della timeline">gesture · zoom</span>
+            <select className="sp-select mono" value={tweaks.gestureZoom || "wheel"}
+                    onChange={(e) => setTweak("gestureZoom", e.target.value)}>
+              <option value="wheel">wheel</option>
+              <option value="cmd+wheel">⌘ + wheel</option>
+              <option value="alt+wheel">⌥ + wheel</option>
+              <option value="ctrl+wheel">ctrl + wheel</option>
+            </select>
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="gesture per l'altezza delle lane">gesture · lane height</span>
+            <select className="sp-select mono" value={tweaks.gestureLaneHeight || "shift+wheel"}
+                    onChange={(e) => setTweak("gestureLaneHeight", e.target.value)}>
+              <option value="shift+wheel">⇧ + wheel</option>
+              <option value="shift+cmd+wheel">⇧⌘ + wheel</option>
+              <option value="shift+alt+wheel">⇧⌥ + wheel</option>
+            </select>
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="gesture per lo scroll orizzontale">gesture · h-scroll</span>
+            <select className="sp-select mono" value={tweaks.gestureHScroll || "alt+wheel"}
+                    onChange={(e) => setTweak("gestureHScroll", e.target.value)}>
+              <option value="alt+wheel">⌥ + wheel</option>
+              <option value="cmd+wheel">⌘ + wheel</option>
+              <option value="shift+wheel">shift + wheel</option>
+            </select>
+          </div>
         </div>
 
         <div className="sp-section">
@@ -307,6 +345,30 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
           <div className="sp-row">
             <span className="sp-k" title="nome, sample, densità e voci sopra i clip">clip labels</span>
             <SpToggle v={tweaks.showClipLabels !== false} onChange={(v) => setTweak("showClipLabels", v)} />
+          </div>
+        </div>
+
+        <div className="sp-section">
+          <div className="sp-sec-head">View</div>
+          <div className="sp-row">
+            <span className="sp-k" title="mostra le waveform dentro i clip">waveforms in clips</span>
+            <SpToggle v={tweaks.showWaveforms !== false} onChange={(v) => setTweak("showWaveforms", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="mostra lo spettrogramma dentro i clip (scorciatoia: t)">spettrogramma nei clip</span>
+            <SpToggle v={!!tweaks.showSpectrograms} onChange={(v) => setTweak("showSpectrograms", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="mostra i grani dentro i clip">grani nei clip</span>
+            <SpToggle v={!!tweaks.showGrains} onChange={(v) => setTweak("showGrains", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="mostra l'overlay degli envelope sui clip">envelope overlay</span>
+            <SpToggle v={tweaks.showEnvOverlay !== false} onChange={(v) => setTweak("showEnvOverlay", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="mostra le miniature waveform nel browser dei sample">waveform thumbnails</span>
+            <SpToggle v={tweaks.showWaveformBrowser !== false} onChange={(v) => setTweak("showWaveformBrowser", v)} />
           </div>
         </div>
 
