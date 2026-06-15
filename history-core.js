@@ -87,6 +87,10 @@
 
   function canUndo(h) { return h.past.length > 0; }
   function canRedo(h) { return h.future.length > 0; }
+  // Whether a gesture is currently open. app.jsx reads this from updateStream
+  // (the freeze-on-resize path) instead of poking historyRef.current.inGesture,
+  // so the history object's shape stays owned by this module.
+  function isInGesture(h) { return h.inGesture; }
 
   window.PGEHistoryCore = {
     CAP,
@@ -99,5 +103,6 @@
     reset,
     canUndo,
     canRedo,
+    isInGesture,
   };
 })();

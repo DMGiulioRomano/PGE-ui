@@ -33,8 +33,10 @@ make tests            # full suite: tests-node + tests-python
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 
-CI runs both on push and PR (`.github/workflows/ci.yml`); the engine-dependent
-test skips there. There is no linter or typechecker, and the React UI itself has
+CI runs both on push and PR (`.github/workflows/ci.yml`). The python job checks
+out the sibling engine and builds its venv, so the engine-dependent
+`test_engine_render` runs there too — it only skips when the engine checkout is
+absent (e.g. locally). There is no linter or typechecker, and the React UI itself has
 no component-level automated tests — UI verification is still manual: open
 `PGE Editor.html` in a browser, switch the Settings panel backend to `local`,
 hit "test connection", render.
@@ -89,7 +91,7 @@ The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearin
 
 ## File-load order (matters)
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → `render-status.js` (needs `window.PGEBackend`) → `history-core.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → `grain-map.js` → `render-status.js` (needs `window.PGEBackend`) → `history-core.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

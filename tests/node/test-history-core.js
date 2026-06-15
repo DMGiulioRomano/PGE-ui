@@ -133,10 +133,22 @@ console.log("\n── reset() / canUndo() / canRedo() ──");
   h.past = ["A", "B"]; h.future = ["C"]; h.snapshotBeforeGesture = "S"; h.inGesture = true;
   assert("canUndo true when past non-empty", H.canUndo(h) === true);
   assert("canRedo true when future non-empty", H.canRedo(h) === true);
+  assert("isInGesture true mid-gesture", H.isInGesture(h) === true);
   H.reset(h);
   assert("reset clears everything", eq(h, { past: [], future: [], snapshotBeforeGesture: null, inGesture: false }));
   assert("canUndo false after reset", H.canUndo(h) === false);
   assert("canRedo false after reset", H.canRedo(h) === false);
+  assert("isInGesture false after reset", H.isInGesture(h) === false);
+}
+
+console.log("\n── isInGesture() ──");
+{
+  const h = H.create();
+  assert("false on fresh history", H.isInGesture(h) === false);
+  H.beginGesture(h);
+  assert("true after beginGesture", H.isInGesture(h) === true);
+  H.commitGesture(h);
+  assert("false after commitGesture", H.isInGesture(h) === false);
 }
 
 console.log(`\n${"─".repeat(50)}`);

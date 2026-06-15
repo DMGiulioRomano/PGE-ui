@@ -506,7 +506,7 @@ function App() {
       for (const s of data.streams) {
         if (cancelled) return;
         const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         if (!hasStem) {
           setWaveforms(w => { if (!(s.id in w)) return w; const m = { ...w }; delete m[s.id]; return m; });
           continue;
@@ -536,8 +536,7 @@ function App() {
     (async () => {
       for (const s of data.streams) {
         if (cancelled) return;
-        const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         if (!hasStem) {
           setSpectrograms(m => { if (!(s.id in m)) return m; const n = { ...m }; delete n[s.id]; return n; });
           continue;
@@ -568,8 +567,7 @@ function App() {
       // Streams senza stem: niente grani → rimuovili dalla mappa.
       const withStem = [], withoutStem = [];
       for (const s of data.streams) {
-        const last = lastRenderedFps[s.id];
-        const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+        const hasStem = hasStemFor(s.id);
         (hasStem ? withStem : withoutStem).push(s);
       }
       if (withoutStem.length) {
@@ -764,7 +762,7 @@ function App() {
     if (freezeEnvOnResize && patch.duration != null) {
       const cur = data.streams.find(s => s.id === id);
       if (cur && patch.duration !== cur.duration) {
-        const inGesture = historyRef.current.inGesture;
+        const inGesture = HC.isInGesture(historyRef.current);
 
         if (inGesture) {
           // Capture origin once per gesture (first frame that changes duration)
@@ -1110,7 +1108,7 @@ function App() {
     const preloads = [];
     for (const s of data.streams) {
       const last = lastRenderedFps[s.id];
-      const hasStem = backend.render.hasStem ? backend.render.hasStem(basename, s.id) : !!last;
+      const hasStem = hasStemFor(s.id);
       if (!hasStem) continue;
       const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
       if (url) {
