@@ -50,7 +50,7 @@
       cents:        { min: -3600, max: 3600, rangeMax: 3600 },
       quarter_tone: { min: -72, max: 72, rangeMax: 72 },
       eighth_tone:  { min: -144, max: 144, rangeMax: 144 },
-      ratio:        { min: 0.125, max: 8, rangeMax: 2 },
+      ratio:        { min: 0.001, max: 8, rangeMax: 2 },
     },
   };
 
