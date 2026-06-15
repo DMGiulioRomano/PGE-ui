@@ -3,6 +3,32 @@ const { useState: useStateTL, useRef: useRefTL, useEffect: useEffTL } = React;
 
 const LOOP_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='17 1 21 5 17 9'/%3E%3Cpath d='M3 11V9a4 4 0 0 1 4-4h14'/%3E%3Cpolyline points='7 23 3 19 7 15'/%3E%3Cpath d='M21 13v2a4 4 0 0 1-4 4H3'/%3E%3C/svg%3E\") 8 8, pointer";
 
+/* Max canvas backing-store dimension (device px). A long clip zoomed in
+ * (duration * PX_PER_S, up to 200 px/s) times devicePixelRatio easily exceeds
+ * the browser's per-side canvas limit (Firefox 32767, Safari ~16384), which
+ * throws "Canvas exceeds max size" and crashes the Timeline. 16384 is safe
+ * across browsers and well within their area limits at clip heights. */
+const MAX_CANVAS_PX = 16384;
+
+/* Size a clip canvas' backing store at devicePixelRatio, but clamped so it
+ * never exceeds MAX_CANVAS_PX on either side. The canvas is displayed via CSS
+ * (width/height 100%) so a clamped backing store is just drawn lower-res and
+ * stretched — never a crash. setTransform maps CSS-pixel draw coords (0..W,
+ * 0..H) onto the (possibly clamped) backing store, so callers keep drawing in
+ * CSS pixels. Returns the 2d context plus the CSS-pixel W/H to draw against. */
+function setupClipCanvas(cvs, width, height) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(1, Math.floor(width));
+  const H = Math.max(1, Math.floor(height));
+  const bw = Math.min(Math.floor(W * dpr), MAX_CANVAS_PX);
+  const bh = Math.min(Math.floor(H * dpr), MAX_CANVAS_PX);
+  cvs.width = bw;
+  cvs.height = bh;
+  const ctx = cvs.getContext("2d");
+  ctx.setTransform(bw / W, 0, 0, bh / H, 0, 0);
+  return { ctx, W, H };
+}
+
 /* ---------- ClipRenderStatus ---------- */
 /* tiny status pill sitting in the bottom-left of a clip.
  * states:
@@ -42,13 +68,7 @@ function ClipWaveform({ peaks, width, height, color }) {
   useEffTL(() => {
     const cvs = canvasRef.current;
     if (!cvs || !peaks || width < 2 || height < 2) return;
-    const dpr = window.devicePixelRatio || 1;
-    const W = Math.max(1, Math.floor(width));
-    const H = Math.max(1, Math.floor(height));
-    cvs.width = Math.floor(W * dpr);
-    cvs.height = Math.floor(H * dpr);
-    const ctx = cvs.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { ctx, W, H } = setupClipCanvas(cvs, width, height);
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "rgba(255,255,255,.55)";
     const mid = H / 2;
@@ -140,13 +160,7 @@ function ClipSpectrogram({ buf, width, height }) {
       }
     }
     octx.putImageData(img, 0, 0);
-    const dpr = window.devicePixelRatio || 1;
-    const W = Math.max(1, Math.floor(width));
-    const H = Math.max(1, Math.floor(height));
-    cvs.width = Math.floor(W * dpr);
-    cvs.height = Math.floor(H * dpr);
-    const ctx = cvs.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { ctx, W, H } = setupClipCanvas(cvs, width, height);
     ctx.imageSmoothingEnabled = true;
     ctx.clearRect(0, 0, W, H);
     ctx.drawImage(off, 0, 0, cols, bins, 0, 0, W, H);
@@ -169,13 +183,7 @@ function ClipGrains({ data, width, height }) {
     const GM = window.PGEGrainMap;
     if (!cvs || !data || !GM || width < 2 || height < 2) return;
     const grains = data.grains || [];
-    const dpr = window.devicePixelRatio || 1;
-    const W = Math.max(1, Math.floor(width));
-    const H = Math.max(1, Math.floor(height));
-    cvs.width = Math.floor(W * dpr);
-    cvs.height = Math.floor(H * dpr);
-    const ctx = cvs.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { ctx, W, H } = setupClipCanvas(cvs, width, height);
     ctx.clearRect(0, 0, W, H);
     if (!grains.length) return;
     // px/s derived from the clip width and stream duration → X matches this
