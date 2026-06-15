@@ -934,15 +934,18 @@ if (fs.existsSync(configsDir)) {
     const diffs = roundTripDiff(data);
     assert(`corpus ${f} — roundTripDiff []`, diffs.length === 0,
       diffs.slice(0, 4).map(d => JSON.stringify(d)).join("; "));
-    let back;
+    let back, stext;
     try {
-      back = parse(serialize(data));
+      stext = serialize(data);
+      back = parse(stext);
     } catch (e) {
       assert(`corpus ${f} — reparse`, false, e.message);
       continue;
     }
     assert(`corpus ${f} — stream count stable`, back.streams.length === data.streams.length,
       `${data.streams.length} → ${back.streams.length}`);
+    assert(`corpus ${f} — envelopes inline (no '- -')`, !/^[ \t]*- -/m.test(stext),
+      (stext.match(/^[ \t]*- -.*/m) || [""])[0]);
   }
 } else {
   console.log("  SKIP corpus (engine configs dir not found)");
@@ -1187,6 +1190,118 @@ function rawStream(yamlText) {
     const d = parse(_noop + extra + "\n");
     assert(`roundtrip lossless — ${label}`, roundTripDiff(d).length === 0, JSON.stringify(roundTripDiff(d)));
   }
+}
+
+/* ============================================================
+ * SECTION 11 — envelopes serialized inline (flow style)
+ *
+ * Breakpoint lists — and the points/states/curve/spread arrays inside the
+ * dict-form envelopes — are emitted in flow style on a single line
+ * (`[[t, v], [t, v], …]`) instead of block-style nested dashes (`- - t`).
+ * Pure formatting: the parsed structure is identical, so parse() and the round
+ * trip are unaffected; only how the saved file reads changes. The dict wrapper
+ * (type/strategy/…) keeps block style; only the numeric lists go inline.
+ * ============================================================ */
+
+console.log("\n── envelopes inline / flow style ──");
+
+const envHeavyYaml = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 10
+    sample: test.wav
+    time_mode: normalized
+    density: [[0, 110.13], [0.0423, 57.96], [0.1262, 208.37, cubic], [1, 8]]
+    distribution:
+      type: cubic
+      points: [[0, 0], [0.10221, 0.99], [0.57069, 0]]
+    grain:
+      duration: [[0, 0.05], [0.57069, 0.05]]
+      envelope:
+        states:
+          - [0, hanning]
+          - [0.5, bartlett]
+          - [1, blackman]
+        curve: [[0, 0], [1, 1]]
+    pointer:
+      speed_ratio: [[0.00228, 0.07], [0.56687, -0.09]]
+    pan: [[0, 0], [0.3577, 0], [1, 0]]
+    voices:
+      num_voices:
+        type: step
+        points: [[0, 1], [0.5, 4], [1, 1]]
+      pan:
+        spread: [[0, 60], [0.27, 155], [1, 60]]
+        strategy: random
+    dephase: [[0, 100], [0.4047, 100], [1, 1]]
+`;
+
+{
+  const data = parse(envHeavyYaml);
+  const y = serialize(data);
+
+  // Headline guarantee: no block-style nested sequence anywhere.
+  assert("inline — no block nested seq ('- -')", !/^[ \t]*- -/m.test(y),
+    (y.match(/^[ \t]*- -.*/m) || [""])[0]);
+
+  // Bare-array envelopes go inline as [[t, v], …].
+  assert("inline — density bracket form",      /^\s*density: \[\[0, 110\.13\], /m.test(y),     y.slice(0, 700));
+  assert("inline — pan bracket form",          /^\s*pan: \[\[0, 0\], /m.test(y),               y.slice(0, 900));
+  assert("inline — pointer.speed_ratio inline",/^\s*speed_ratio: \[\[0\.00228, 0\.07\], /m.test(y), y);
+  assert("inline — grain.duration inline",     /^\s*duration: \[\[0, 0\.05\], /m.test(y),      y);
+  assert("inline — dephase inline",            /^\s*dephase: \[\[0, 100\], /m.test(y),         y);
+
+  // Per-point interp triple preserved inside the inline list.
+  assert("inline — per-point interp kept inline", /\[0\.1262, 208\.37, cubic\]/.test(y), y.slice(0, 700));
+
+  // Dict-form envelopes: wrapper keeps block style, the points list goes inline.
+  assert("inline — distribution keeps 'type: cubic' block key", /^\s*type: cubic$/m.test(y),      y);
+  assert("inline — distribution points inline",                 /^\s*points: \[\[0, 0\], /m.test(y), y);
+  assert("inline — num_voices keeps 'type: step'",              /^\s*type: step$/m.test(y),       y);
+  assert("inline — num_voices points inline",                   /^\s*points: \[\[0, 1\], /m.test(y), y);
+  assert("inline — voices.pan keeps 'strategy: random'",        /^\s*strategy: random$/m.test(y), y);
+  assert("inline — voices.pan spread inline",                   /^\s*spread: \[\[0, 60\], /m.test(y), y);
+
+  // Grain multistate envelope: states and curve both inline.
+  assert("inline — grain.envelope states inline", /^\s*states: \[\[0, hanning\], /m.test(y), y);
+  assert("inline — grain.envelope curve inline",  /^\s*curve: \[\[0, 0\], /m.test(y),        y);
+
+  // Formatting only: round trip stays lossless.
+  assert("inline — envelope-heavy round trip lossless", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)).slice(0, 600));
+}
+
+{
+  // serializeStream (Raw tab) inlines envelopes too AND stays identical to the
+  // project save path (#42 parity preserved).
+  const s  = parse(envHeavyYaml).streams[0];
+  const sy = serializeStream(s);
+  assert("inline — serializeStream inlines (no '- -')", !/^[ \t]*- -/m.test(sy),
+    (sy.match(/^[ \t]*- -.*/m) || [""])[0]);
+  assert("inline — serializeStream density inline", /density: \[\[0, 110\.13\]/.test(sy), sy.slice(0, 400));
+  const single      = window.jsyaml.load(sy);
+  const fromProject = window.jsyaml.load(serialize({ streams: [s], title: "", duration: 60, bpm: 120 })).streams[0];
+  assert("inline — serializeStream ≡ project serialize", eq(single, fromProject),
+    JSON.stringify({ single, fromProject }).slice(0, 400));
+}
+
+{
+  // Compact loop blocks (bare form: [pattern, end, n, interp, dist]) also go
+  // inline on a single line.
+  const loopYaml = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 5
+    sample: test.wav
+    density: [[[0, 1], [50, 8], [100, 1]], 1, 4, linear, linear]
+`;
+  const data = parse(loopYaml);
+  const y = serialize(data);
+  assert("inline — compact loop block single line", !/^[ \t]*- -/m.test(y),
+    (y.match(/^[ \t]*- -.*/m) || [""])[0]);
+  assert("inline — compact loop block inline form", /density: \[\[\[0, 1\], /.test(y), y.slice(0, 400));
+  assert("inline — compact loop block round trip", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)).slice(0, 400));
 }
 
 /* ============================================================

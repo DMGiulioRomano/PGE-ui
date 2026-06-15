@@ -416,6 +416,66 @@
     return stripUndef(y);
   }
 
+  /* ---------- inline-envelope dump ----------
+   * js-yaml has no per-node flow-style switch, so we mask every envelope
+   * (breakpoint list / dict-form points / states / curve / spread / compact
+   * loop block) with a unique scalar token, dump the rest in block style, then
+   * splice each envelope back in as a single-line flow array `[[t, v], …]`.
+   * Flow vs block is the same YAML once parsed — parse()/round-trip are
+   * unaffected; this only changes how the saved file reads. */
+
+  const DUMP_OPTS = {
+    indent: 2,
+    lineWidth: 120,
+    noRefs: true,
+    quotingType: '"',
+    forceQuotes: false,
+  };
+
+  function isBreakpointEntry(el) {
+    // A breakpoint inside an envelope: array form ([t, v], the per-point interp
+    // triple [t, v, "cubic"], or a wrapped compact block) OR the per-point dict
+    // form ({t, v, type?}). The t/v signature excludes stream objects, so the
+    // top-level `streams` list never matches.
+    return Array.isArray(el) || (el != null && typeof el === "object" && "t" in el && "v" in el);
+  }
+
+  function isInlineEnvelope(node) {
+    if (!Array.isArray(node) || node.length === 0) return false;
+    // A list of breakpoints (array and/or dict form), e.g. density, points,
+    // states, curve, spread, dephase. Excludes `streams` (objects without t/v).
+    if (node.every(isBreakpointEntry)) return true;
+    // Bare single compact loop block: [pattern, end_time, n_reps, interp?, dist?]
+    if (Array.isArray(node[0]) && node[0].length > 0 && Array.isArray(node[0][0]) &&
+        typeof node[1] === "number" && typeof node[2] === "number") return true;
+    return false;
+  }
+
+  function dumpWithInlineEnvelopes(payload) {
+    if (!window.jsyaml) return "";
+    const tokens = [];
+    const mask = (node) => {
+      if (isInlineEnvelope(node)) {
+        const flow = window.jsyaml
+          .dump(node, { ...DUMP_OPTS, flowLevel: 0, lineWidth: -1 })
+          .replace(/\n$/, "");
+        tokens.push(flow);
+        return `__PGE_ENV_INLINE_${tokens.length - 1}__`;
+      }
+      if (Array.isArray(node)) return node.map(mask);
+      if (node && typeof node === "object") {
+        const out = {};
+        for (const k of Object.keys(node)) out[k] = mask(node[k]);
+        return out;
+      }
+      return node;
+    };
+    const text = window.jsyaml.dump(mask(payload), DUMP_OPTS);
+    // The tokens are plain scalars js-yaml emits unquoted; each sits as the
+    // value after `key: `, so splicing the flow form back in keeps indentation.
+    return text.replace(/__PGE_ENV_INLINE_(\d+)__/g, (_, i) => tokens[+i]);
+  }
+
   function dataToYaml(data) {
     if (!window.jsyaml) return "";
     const payload = {};
@@ -436,13 +496,7 @@
       `# saved:   ${new Date().toISOString()}\n` +
       `# editor:  PGE-ui\n` +
       `\n`;
-    return head + window.jsyaml.dump(payload, {
-      indent: 2,
-      lineWidth: 120,
-      noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-    });
+    return head + dumpWithInlineEnvelopes(payload);
   }
 
   /* ---------- yaml → editor ---------- */
@@ -646,13 +700,7 @@
    * must preserve the live values — see YamlEditor.applyEdits. */
   function serializeStream(stream) {
     if (!window.jsyaml) return "";
-    return window.jsyaml.dump(streamToYaml(stream), {
-      indent: 2,
-      lineWidth: 120,
-      noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-    }).replace(/\n$/, "");
+    return dumpWithInlineEnvelopes(streamToYaml(stream)).replace(/\n$/, "");
   }
 
   function parseStream(text, idx = 0) {
