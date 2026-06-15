@@ -11,7 +11,7 @@ const path = require("path");
 
 // Shim: provide window.jsyaml so yaml-bridge.js can load without a browser.
 global.window = { jsyaml: require("js-yaml") };
-eval(fs.readFileSync(path.join(__dirname, "../../yaml-bridge.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 
 const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration } = window.PGEYaml;
 
@@ -961,7 +961,7 @@ if (fs.existsSync(configsDir)) {
 console.log("\n── per-stream serializer unified on bridge (#42) ──");
 
 global.React = {};                                    // satisfies `const {…} = React`
-const yeSrc = fs.readFileSync(path.join(__dirname, "../../YamlEditor.jsx"), "utf8");
+const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
 // The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
 // declarations) into this scope; we call them directly rather than re-declaring

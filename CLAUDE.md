@@ -89,9 +89,11 @@ The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearin
 
 `app.jsx` has `/*EDITMODE-BEGIN*/{…}/*EDITMODE-END*/` around `TWEAK_DEFAULTS`. A sibling design tool rewrites this block from the Tweaks panel. Do not reformat or reorder keys inside it — keep one key per line, double-quoted, trailing-comma-free, or the external writer breaks.
 
-## File-load order (matters)
+## File layout & load order (matters)
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `yaml-bridge.js` → `envelope-loops.js` → `backend.js` → `audio-engine.js` → `grain-map.js` → `render-status.js` (needs `window.PGEBackend`) → `history-core.js` → JSX files → `app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+Sources live under `src/lib/` (the `.js` logic — `window.*` globals, no modules), `src/components/` (the `.jsx` UI), and `styles/` (the `.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all, so the same relative paths work over `file://` and over the bridge. Node tests in `tests/node/` load the libs via relative paths (`../../src/lib/…`, `../../src/components/…`).
+
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/envelope-loops.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

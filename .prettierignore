@@ -7,7 +7,7 @@
 # which a sibling design tool rewrites line-by-line (one key per line, double
 # quoted, no trailing comma). Reformatting it — merging lines, re-quoting, or
 # adding trailing commas — breaks that external writer. See CLAUDE.md › EDITMODE.
-app.jsx
+src/components/app.jsx
 
 # Vendored / generated — never format.
 tests/node/node_modules/

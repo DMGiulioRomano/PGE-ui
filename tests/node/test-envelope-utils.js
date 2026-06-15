@@ -11,8 +11,8 @@ const path = require("path");
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
 // window.PGEEnv at IIFE time. js-yaml is provided in case envelope-loops needs it.
 global.window = { jsyaml: require("js-yaml") };
-eval(fs.readFileSync(path.join(__dirname, "../../envelope-loops.js"), "utf8"));
-eval(fs.readFileSync(path.join(__dirname, "../../envelope-utils.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const U = window.PGEEnvUtils;
 
