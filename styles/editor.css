@@ -58,6 +58,43 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 @media (max-width: 1080px) { .pge-topbar .hide-sm { display: none; } .pge-topbar .pge-btn.ghost { padding: 0 8px; } }
 @media (max-width: 980px) { .pge-topbar .proj { max-width: 160px; } .pge-topbar .dur { display: none; } }
 
+/* ---------- Seed control (top-level `seed`, engine #81) ---------- */
+.pge-topbar .seed-ctl { position: relative; display: inline-flex; flex: 0 0 auto; }
+.pge-topbar .seed-btn {
+  height: 20px; padding: 0 7px; display: inline-flex; align-items: center;
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-radius: 4px; color: var(--fg-3); cursor: pointer;
+  font-family: var(--font-mono); font-size: 10px; line-height: 1;
+}
+.pge-topbar .seed-btn:hover { background: var(--bg-hover); color: var(--fg-1); }
+.pge-topbar .seed-btn.on { color: var(--accent); border-color: var(--accent); }
+.pge-topbar .seed-btn .seed-lbl { letter-spacing: .02em; }
+@media (max-width: 1080px) { .pge-topbar .seed-btn .seed-lbl { font-size: 9.5px; } }
+
+.pge-topbar .seed-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; width: 248px;
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-radius: 4px; padding: 10px 12px 12px; z-index: 1000;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+  display: flex; flex-direction: column; gap: 6px; white-space: normal;
+}
+.pge-topbar .seed-pop-head { padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 2px; }
+.pge-topbar .seed-pop-title { font-size: 11px; font-weight: 600; color: var(--fg-1); text-transform: lowercase; }
+.pge-topbar .seed-input {
+  width: 100%; box-sizing: border-box; height: 24px; padding: 0 8px;
+  background: var(--bg-panel); border: 1px solid var(--border-default);
+  border-radius: 4px; color: var(--fg-1); font-size: 12px;
+}
+.pge-topbar .seed-input:focus { outline: none; border-color: var(--accent); }
+.pge-topbar .seed-hint { font-size: 9.5px; color: var(--fg-4); line-height: 1.35; }
+.pge-topbar .seed-hint.fade { color: var(--fg-4); opacity: .75; }
+.pge-topbar .seed-clear {
+  align-self: flex-start; margin-top: 2px; padding: 2px 6px;
+  background: transparent; border: 1px solid var(--border-default); border-radius: 4px;
+  color: var(--fg-3); cursor: pointer; font-size: 10px;
+}
+.pge-topbar .seed-clear:hover { color: var(--status-warn); border-color: var(--status-warn); }
+
 /* ---------- Main: browser | center | inspector ---------- */
 
 /* ---------- Sample browser ---------- */

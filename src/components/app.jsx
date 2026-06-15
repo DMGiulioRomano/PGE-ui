@@ -820,6 +820,19 @@ function App() {
     setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? { ...s, ...patch } : s) }));
     setDirty(true);
   }
+  // Top-level `seed` (engine #81): project-wide, NOT per-stream — it never
+  // enters the per-stream fingerprint, so changing it doesn't mark stems stale.
+  // Empty/null clears it (key omitted on save = current unseeded behaviour).
+  function setSeed(v) {
+    const norm = (v === undefined || v === null || v === "") ? undefined : v;
+    setData(d => {
+      if (norm === d.seed) return d;            // no-op: skip history churn
+      const n = { ...d };
+      if (norm === undefined) delete n.seed; else n.seed = norm;
+      return n;
+    });
+    setDirty(true);
+  }
   function reorderStreams(srcIdx, dstIdx) {
     if (srcIdx === dstIdx) return;
     setData(d => {
@@ -1327,6 +1340,7 @@ function App() {
   return (
     <div className={"pge-app" + (tweaks.showFooter ? "" : " no-footer") + (terminalOpen ? " with-terminal" : "") + (grainScoreOpen ? " with-grainscore" : "")}>
       <TopBar project={data.project} title={data.title} dirty={dirty}
+              seed={data.seed} onSeedChange={setSeed}
               playing={playing} onPlay={doPlay}
               onStop={doStop}
               loopEnabled={loopEnabled} onToggleLoop={() => setLoopEnabled(v => !v)}

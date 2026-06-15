@@ -1305,6 +1305,80 @@ const envHeavyYaml = `streams:
 }
 
 /* ============================================================
+ * SECTION — top-level `seed` (#79)
+ * Engine-side reproducible NumPy renders. `seed` is a top-level key (sibling of
+ * `streams`), modelled first-class on `data.seed` (NOT swallowed by `_extra`).
+ * Absent → key not emitted (behaviour unchanged). Integers (incl. 0 and
+ * negatives) and strings are all valid; 0 must NOT be treated as falsy/absent.
+ * ============================================================ */
+
+console.log("\n── top-level seed (#79) ──");
+
+// seed at document top level (sibling of streams), not nested in a stream.
+function seedYaml(seedLine) {
+  return `${seedLine}\nstreams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n`;
+}
+const noSeedYaml = "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n";
+
+{
+  // parse: seed exposed first-class on data.seed, NOT swallowed by _extra.
+  const d = parse(seedYaml("seed: 42"));
+  assert("#79 parse — data.seed === 42", d.seed === 42, JSON.stringify(d.seed));
+  assert("#79 parse — seed not in _extra", !d._extra || !("seed" in d._extra), JSON.stringify(d._extra));
+}
+{
+  // seed: 0 is valid and must survive (not treated as falsy/absent).
+  const d = parse(seedYaml("seed: 0"));
+  assert("#79 parse — seed 0 kept first-class", d.seed === 0, JSON.stringify(d.seed));
+}
+{
+  const d = parse(seedYaml("seed: -7"));
+  assert("#79 parse — negative seed kept", d.seed === -7, JSON.stringify(d.seed));
+}
+{
+  const d = parse(seedYaml('seed: "abc"'));
+  assert("#79 parse — string seed kept", d.seed === "abc", JSON.stringify(d.seed));
+}
+{
+  // absent seed → data.seed undefined, nothing leaked into _extra.
+  const d = parse(noSeedYaml);
+  assert("#79 parse — seed absent → undefined", d.seed === undefined, JSON.stringify(d.seed));
+  assert("#79 parse — absent seed not in _extra", !d._extra || !("seed" in d._extra), JSON.stringify(d._extra));
+}
+{
+  // serialize: emits seed at top level when present (incl. 0).
+  const obj = window.jsyaml.load(serialize(parse(seedYaml("seed: 42"))));
+  assert("#79 serialize — seed emitted", obj.seed === 42, JSON.stringify(obj.seed));
+}
+{
+  const obj = window.jsyaml.load(serialize(parse(seedYaml("seed: 0"))));
+  assert("#79 serialize — seed 0 emitted (not dropped as falsy)", obj.seed === 0, JSON.stringify(obj.seed));
+}
+{
+  // absent seed → key not emitted (open+save no-op preserved).
+  const obj = window.jsyaml.load(serialize(parse(noSeedYaml)));
+  assert("#79 serialize — absent seed not emitted", !("seed" in obj), JSON.stringify(obj));
+}
+{
+  // round trip lossless for int / 0 / negative / string.
+  for (const sl of ["seed: 42", "seed: 0", "seed: -7", 'seed: "abc"']) {
+    const before = parse(seedYaml(sl)).seed;
+    const after  = parse(serialize(parse(seedYaml(sl)))).seed;
+    assert(`#79 round trip — ${sl}`, before === after, JSON.stringify({ before, after }));
+  }
+}
+{
+  // roundTripDiff (the editor's lossy-save self-test) stays clean with a seed
+  // set, and clean with no seed — seed is now a compared project-level field.
+  for (const sl of ["seed: 42", "seed: 0", "seed: -7", 'seed: "abc"']) {
+    const diffs = roundTripDiff(parse(seedYaml(sl)));
+    assert(`#79 roundTripDiff clean — ${sl}`, diffs.length === 0, JSON.stringify(diffs));
+  }
+  assert("#79 roundTripDiff clean — no seed", roundTripDiff(parse(noSeedYaml)).length === 0,
+    JSON.stringify(roundTripDiff(parse(noSeedYaml))));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 
