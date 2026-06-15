@@ -1,7 +1,7 @@
 /* @jsx React.createElement */
 const { useState: useStateApp, useEffect: useEffectApp, useRef: useRefApp, useMemo: useMemoApp, useCallback: useCallbackApp } = React;
 
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+const TWEAK_DEFAULTS = {
   "accent": "#FF8C42",
   "zoom": 36,
   "laneHeight": 56,
@@ -56,7 +56,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "grainScoreOpen": false,
   "grainScoreHeight": 260,
   "shortcutGrainScore": "g"
-}/*EDITMODE-END*/;
+};
 
 /* ---- Envelope rescale + truncate utilities (freeze-on-resize) ----
    Pure math extracted to envelope-utils.js (window.PGEEnvUtils), loaded before
@@ -69,10 +69,19 @@ const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate } =
 // project is loaded from the server (server.py lists configs/*.yml on boot).
 const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
+// Preferences store. Was provided by the design-tool tweaks-panel (removed);
+// now a thin local hook over the node-tested merge in tweaks-store.js. Keeps the
+// setTweak(key, val) / setTweak({ ... }) signature used across this file.
+function useTweaks(defaults) {
+  const [values, setValues] = useStateApp(defaults);
+  const setTweak = useCallbackApp(
+    (keyOrEdits, val) => setValues((prev) => window.PGETweaks.applyEdit(prev, keyOrEdits, val)),
+    []);
+  return [values, setTweak];
+}
+
 function App() {
-  const t = window.useTweaks ? window.useTweaks(TWEAK_DEFAULTS) : [TWEAK_DEFAULTS, () => {}];
-  const tweaks = Array.isArray(t) ? t[0] : t.tweaks;
-  const setTweak = Array.isArray(t) ? t[1] : t.setTweak;
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
   useEffectApp(() => { window.PGE_TWEAKS = tweaks; }, [tweaks]);
 
@@ -1413,78 +1422,6 @@ function App() {
           <span className="sep" />
           <span className="mono">{prettyGesture(tweaks.gestureZoom)} ▸ zoom · {prettyGesture(tweaks.gestureLaneHeight)} ▸ lane h</span>
         </footer>
-      ) : null}
-      {window.TweaksPanel ? (
-        <window.TweaksPanel title="Preferences">
-          <window.TweakSection label="Appearance">
-            <window.TweakColor label="accent" value={tweaks.accent}
-              options={["#FF8C42","#6E9CFF","#3DB87A","#E5484D","#B89241"]}
-              onChange={(v) => setTweak("accent", v)} />
-            <window.TweakRadio label="density" value={tweaks.density}
-              options={[{label:"compact",value:"compact"},{label:"comfy",value:"comfortable"}]}
-              onChange={(v) => setTweak("density", v)} />
-            <window.TweakToggle label="status footer" value={tweaks.showFooter}
-              onChange={(v) => setTweak("showFooter", v)} />
-          </window.TweakSection>
-          <window.TweakSection label="Backend">
-            <div className="twk-hint">local server (server.py) on {tweaks.serverUrl || "http://localhost:7878"}</div>
-            <window.TweakSelect label="output format" value={tweaks.outputFormat || "wav"}
-              options={[
-                {label:"AIFF", value:"aiff"},
-                {label:"WAV (default)", value:"wav"},
-                {label:"FLAC", value:"flac"}]}
-              onChange={(v) => setTweak("outputFormat", v)} />
-            <window.TweakText label="media path" value={tweaks.mediaPath} onChange={(v) => setTweak("mediaPath", v)} />
-            <window.TweakText label="projects path" value={tweaks.projectsPath} onChange={(v) => setTweak("projectsPath", v)} />
-            <window.TweakText label="output path" value={tweaks.outputPath} onChange={(v) => setTweak("outputPath", v)} />
-          </window.TweakSection>
-          <window.TweakSection label="Timeline">
-            <window.TweakSlider label="zoom" value={tweaks.zoom} min={0.5} max={200} step={0.5} unit=" px/s"
-              onChange={(v) => setTweak("zoom", v)} />
-            <window.TweakSlider label="lane height" value={tweaks.laneHeight} min={36} max={120} step={4} unit="px"
-              onChange={(v) => setTweak("laneHeight", v)} />
-            <window.TweakToggle label="waveforms in clips" value={tweaks.showWaveforms}
-              onChange={(v) => setTweak("showWaveforms", v)} />
-            <window.TweakToggle label="spettrogramma nei clip" value={!!tweaks.showSpectrograms}
-              onChange={(v) => setTweak("showSpectrograms", v)} />
-            <window.TweakToggle label="grani nei clip" value={!!tweaks.showGrains}
-              onChange={(v) => setTweak("showGrains", v)} />
-            <window.TweakToggle label="envelope overlay" value={tweaks.showEnvOverlay}
-              onChange={(v) => setTweak("showEnvOverlay", v)} />
-            <window.TweakToggle label="envelope editor pane" value={tweaks.showEnvelopeEditor !== false}
-              onChange={(v) => setTweak("showEnvelopeEditor", v)} />
-          </window.TweakSection>
-          <window.TweakSection label="Gestures">
-            <window.TweakSelect label="zoom" value={tweaks.gestureZoom}
-              options={[
-                {label:"wheel", value:"wheel"},
-                {label:"⌘ + wheel", value:"cmd+wheel"},
-                {label:"⌥ + wheel", value:"alt+wheel"},
-                {label:"ctrl + wheel", value:"ctrl+wheel"}]}
-              onChange={(v) => setTweak("gestureZoom", v)} />
-            <window.TweakSelect label="lane height" value={tweaks.gestureLaneHeight}
-              options={[
-                {label:"⇧ + wheel", value:"shift+wheel"},
-                {label:"⇧⌘ + wheel", value:"shift+cmd+wheel"},
-                {label:"⇧⌥ + wheel", value:"shift+alt+wheel"}]}
-              onChange={(v) => setTweak("gestureLaneHeight", v)} />
-            <window.TweakSelect label="h-scroll" value={tweaks.gestureHScroll}
-              options={[
-                {label:"⌥ + wheel", value:"alt+wheel"},
-                {label:"⌘ + wheel", value:"cmd+wheel"},
-                {label:"shift + wheel", value:"shift+wheel"}]}
-              onChange={(v) => setTweak("gestureHScroll", v)} />
-            <div className="twk-hint">vertical track scroll: hover the track header column · drag clip = move · drag right edge = resize</div>
-          </window.TweakSection>
-          <window.TweakSection label="Panels">
-            <window.TweakSlider label="browser width" value={tweaks.browserWidth} min={180} max={360} step={10} unit="px"
-              onChange={(v) => setTweak("browserWidth", v)} />
-            <window.TweakSlider label="inspector width" value={tweaks.inspectorWidth} min={260} max={520} step={10} unit="px"
-              onChange={(v) => setTweak("inspectorWidth", v)} />
-            <window.TweakToggle label="waveform thumbnails" value={tweaks.showWaveformBrowser}
-              onChange={(v) => setTweak("showWaveformBrowser", v)} />
-          </window.TweakSection>
-        </window.TweaksPanel>
       ) : null}
     </div>
   );

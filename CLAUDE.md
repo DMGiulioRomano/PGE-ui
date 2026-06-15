@@ -24,8 +24,9 @@ make tests            # full suite: tests-node + tests-python
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
   (rescale/truncate math), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary), and `test-history-core.js` (undo/redo stack
-  mechanics: 200-cap, gesture collapse, redo-clearing).
+  classification + render summary), `test-history-core.js` (undo/redo stack
+  mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
+  (preferences `applyEdit` merge + a guard against the removed design-tool residue).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -84,10 +85,6 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 `setData(updater)` wraps every mutation. `beginGesture()` / `endGesture()` bracket continuous interactions (drag, knob spin) so they collapse into a single undo step. Free-form mutations outside a gesture push to `historyRef.past` each call. Cap is 200 entries. Anything mutating `data` must go through `setData`, not `_setDataRaw`, or undo breaks.
 
 The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearing) live in `history-core.js` (`window.PGEHistoryCore`, node-tested in `test-history-core.js`). `app.jsx` keeps the React glue — the `[data, _setDataRaw]` state, the `historyRef`, the `setHistVer` re-render bump, the `window.PGEHistory` publication, the keyboard shortcuts, and the freeze-on-resize confirm inside `endGesture` — and delegates the bookkeeping to it.
-
-### EDITMODE block
-
-`app.jsx` has `/*EDITMODE-BEGIN*/{…}/*EDITMODE-END*/` around `TWEAK_DEFAULTS`. A sibling design tool rewrites this block from the Tweaks panel. Do not reformat or reorder keys inside it — keep one key per line, double-quoted, trailing-comma-free, or the external writer breaks.
 
 ## File layout & load order (matters)
 

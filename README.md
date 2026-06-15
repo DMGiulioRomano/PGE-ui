@@ -168,8 +168,7 @@ PGE-ui/
 │       ├── VoicesSection.jsx      voices section in Inspector
 │       ├── Inspector.jsx          Preview / Raw tabs
 │       ├── YamlEditor.jsx         Raw tab text editor
-│       ├── ErrorBoundary.jsx      React error boundary
-│       └── tweaks-panel.jsx       host's Tweaks panel (only visible in the design tool)
+│       └── ErrorBoundary.jsx      React error boundary
 │
 └── styles/
     ├── editor.css                core layout + tokens
