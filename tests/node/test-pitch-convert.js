@@ -33,12 +33,18 @@ assert("PGEEnv exposes the new helpers",
   JSON.stringify(Object.keys(E)));
 
 console.log("\n── pitchUnitBounds ──");
-assert("ratio bounds match engine value_bounds",
-  eq(E.pitchUnitBounds("ratio"), { min: 0.125, max: 8, rangeMax: 2 }));
-assert("cents bounds match engine value_bounds",
-  eq(E.pitchUnitBounds("cents"), { min: -3600, max: 3600, rangeMax: 3600 }));
-assert("semitones bounds match engine value_bounds",
-  eq(E.pitchUnitBounds("semitones"), { min: -36, max: 36, rangeMax: 36 }));
+// preset units return the engine bounds verbatim (source of truth =
+// window.PGE_BOUNDS.pitch, so the test tracks any future bound change in
+// yaml-bridge.js rather than pinning literals).
+const PB = window.PGE_BOUNDS.pitch;
+assert("ratio bounds === PGE_BOUNDS.pitch.ratio",
+  eq(E.pitchUnitBounds("ratio"), PB.ratio), JSON.stringify(E.pitchUnitBounds("ratio")));
+assert("cents bounds === PGE_BOUNDS.pitch.cents",
+  eq(E.pitchUnitBounds("cents"), PB.cents));
+assert("semitones bounds === PGE_BOUNDS.pitch.semitones",
+  eq(E.pitchUnitBounds("semitones"), PB.semitones));
+assert("ratio rangeMax is the 2× cap (drives range clamp)",
+  E.pitchUnitBounds("ratio").rangeMax === 2);
 assert("edo string + divisions → ±3 octaves",
   eq(E.pitchUnitBounds("edo", 31), { min: -93, max: 93, rangeMax: 93 }));
 assert("edo object form → ±3 octaves",
@@ -56,9 +62,9 @@ assert("cents 3600 → ratio 8.0 (top of cents = top of ratio)",
 assert("ratio 2.0 → semitones 12 (integer rounding)",
   E.convertPitchValue(2.0, "ratio", "semitones") === 12);
 assert("clamp: absurd value clamps to ratio max",
-  near(E.convertPitchValue(9999, "ratio", "ratio", null, null, { min: 0.125, max: 8 }), 8));
+  near(E.convertPitchValue(9999, "ratio", "ratio", null, null, PB.ratio), PB.ratio.max));
 assert("clamp: tiny value clamps to ratio min",
-  near(E.convertPitchValue(0.0001, "ratio", "ratio", null, null, { min: 0.125, max: 8 }), 0.125));
+  near(E.convertPitchValue(1e-9, "ratio", "ratio", null, null, PB.ratio), PB.ratio.min));
 
 console.log("\n── convertPitchRange (detune width) ──");
 assert("range 0 → 0 in any unit (cents → ratio)",
