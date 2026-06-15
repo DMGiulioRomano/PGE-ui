@@ -221,6 +221,14 @@ function App() {
   // il refetch — i clean restano intatti.
   const grainLoadedRef = useRefApp(new Set());
   const grainRegenRef = useRefApp(new Set());
+  // Revisione per-stream incrementata a ogni rigenerazione reale dello stem
+  // (stream-done con cached=false). Il fingerprint dei peaks esclude `onset`
+  // (FP_IGNORE), ma spostare un clip sulla timeline fa rigenerare lo stem dal
+  // motore con audio DIVERSO: senza questo token la cache peaks (url#fingerprint
+  // in audio-engine) non si invaliderebbe e il waveform resterebbe vecchio.
+  // Lo includiamo nella chiave peaks così solo gli stream rigenerati rifetchano
+  // (spettrogramma e grani si aggiornano già, non avendo questa cache).
+  const stemRevRef = useRefApp({});
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
@@ -392,6 +400,7 @@ function App() {
     setGrainData({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
+    stemRevRef.current = {};
     backend.render.loadCache(basename).then(cache => {
       setLastRenderedFps(cache || {});
     });
@@ -522,8 +531,14 @@ function App() {
         }
         const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
         const peaksUrl = backend.render.peaksUrl ? backend.render.peaksUrl(basename, s.id) : null;
+        // La revisione stem fa parte della chiave peaks così una rigenerazione
+        // che non muove il fingerprint (onset escluso) rinfresca comunque il
+        // waveform — l'effetto rigira a ogni stream-done (lastRenderedFps cambia
+        // riferimento) e qui rilegge il valore aggiornato del ref.
+        const rev = stemRevRef.current[s.id] || 0;
+        const peaksFp = (last || currentFps[s.id]) + "#r" + rev;
         try {
-          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: last || currentFps[s.id], url, peaksUrl });
+          const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: peaksFp, url, peaksUrl });
           if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
         } catch (e) { /* stem missing or undecodable — leave clip flat */ }
       }
@@ -1045,7 +1060,13 @@ function App() {
         if (e.cached) cacheHits++;
         // cached=false → il motore ha riscritto il grain JSON: marcalo per il
         // refetch selettivo dei grani (#73).
-        else { generated++; grainRegenRef.current.add(e.streamId); }
+        else {
+          generated++;
+          grainRegenRef.current.add(e.streamId);
+          // Stem rigenerato → invalida la cache peaks anche quando il fingerprint
+          // non cambia (es. spostamento clip: onset escluso dal fingerprint).
+          stemRevRef.current[e.streamId] = (stemRevRef.current[e.streamId] || 0) + 1;
+        }
         setStreamProgress(p => ({ ...p, [e.streamId]: 1 }));
         setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
         // bump fp for this stream (so UI marks it fresh)
