@@ -491,12 +491,18 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envelopes.find((e) => e.key === selectedKey)) setSelectedKey(envelopes[0].key);
   }, [stream && stream.id, envelopes.map((e) => e.key).join(",")]);
 
-  /* ---- external focus request from Inspector ---- */
+  /* ---- external focus request from Inspector ----
+     React only to focusKey changes, NOT to envelopes. focusKey carries a
+     unique Date.now() suffix per Inspector click, so it changes exactly when
+     the user requests a focus. Keeping `envelopes` in the deps re-ran this on
+     every stream edit (envelopes is memoized on [stream]); since focusKey is
+     never cleared, editing an envelope reached via the side-head selector
+     would snap selection back to the last Inspector-focused param. */
   useEffectEE(() => {
     if (!focusKey) return;
     const key = focusKey.split(":")[0];
     if (envelopes.find((e) => e.key === key)) setSelectedKey(key);
-  }, [focusKey, envelopes]);
+  }, [focusKey]);
 
   /* clear selected block/bp on stream/env switch */
   useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}, [stream && stream.id, selectedKey]);
