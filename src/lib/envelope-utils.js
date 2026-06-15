@@ -89,24 +89,30 @@
   const DEPHASE_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "envelope"];
 
   // dephase is stored verbatim (yaml-bridge passes it through): it can be the
-  // DEPHASE_IMPLICIT sentinel / false / a scalar prob, a global envelope array,
-  // or a per-param object whose values are scalar prob, null, or an envelope
-  // array. Only the array-form envelopes are time-domain — rescale those, keep
-  // every other key/value untouched so the round trip stays lossless.
+  // DEPHASE_IMPLICIT sentinel / false / a scalar prob, a GLOBAL envelope (array
+  // [[t,v],…] OR the typed {type, points} object form wrapEnv emits for a
+  // non-linear global interp), or a per-param object whose values are scalar
+  // prob, null, or an envelope (array or typed). Rescale every time-domain
+  // envelope (window.PGEDephase.isEnvValue is the single discriminator, shared
+  // with the Inspector/EnvelopeEditor); keep all other keys/values untouched so
+  // the round trip stays lossless. rescaleEnvArray/truncateEnvArray already
+  // handle the {type, points} object form.
   function _applyDephase(dephase, fn) {
-    if (Array.isArray(dephase)) return fn(dephase);
+    const isEnv = window.PGEDephase.isEnvValue;
+    if (isEnv(dephase)) return fn(dephase);
     if (dephase && typeof dephase === "object") {
       return Object.fromEntries(Object.entries(dephase).map(([k, v]) =>
-        DEPHASE_PARAM_KEYS.includes(k) && Array.isArray(v) ? [k, fn(v)] : [k, v]));
+        DEPHASE_PARAM_KEYS.includes(k) && isEnv(v) ? [k, fn(v)] : [k, v]));
     }
     return dephase;
   }
 
-  // Collect every time-domain envelope array carried by a stream's dephase.
+  // Collect every time-domain envelope (array or typed) carried by a dephase.
   function _dephaseEnvs(dephase) {
-    if (Array.isArray(dephase)) return [dephase];
+    const isEnv = window.PGEDephase.isEnvValue;
+    if (isEnv(dephase)) return [dephase];
     if (dephase && typeof dephase === "object")
-      return DEPHASE_PARAM_KEYS.map(k => dephase[k]).filter(Array.isArray);
+      return DEPHASE_PARAM_KEYS.map(k => dephase[k]).filter(isEnv);
     return [];
   }
 
