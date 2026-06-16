@@ -105,15 +105,47 @@
 
   /* ---------- envelope helpers ---------- */
 
+  // A grain-envelope blend curve is EITHER a plain breakpoint array [[t, v], …]
+  // OR the typed dict form {type, points} the editor emits (via wrapEnv) when
+  // the user picks a non-linear global interpolation (step/cubic). The helpers
+  // below normalize access so the multistate rescale below works on either
+  // shape — otherwise `.map` on the dict throws (the step/cubic crash).
+  function curvePoints(curve) {
+    if (Array.isArray(curve)) return curve;
+    if (curve && typeof curve === "object" && Array.isArray(curve.points)) return curve.points;
+    return null;
+  }
+  // Rescale a curve's Y values by `factor`, preserving its shape: the {type,
+  // points} wrapper, plain [t, v] breakpoints, and per-point [t, v, interp]
+  // triples (the per-point interp is kept). Non-breakpoint entries (e.g. compact
+  // loop blocks) pass through verbatim.
+  function rescaleCurveY(curve, factor) {
+    const mapPts = (pts) => pts.map((pt) =>
+      (Array.isArray(pt) && typeof pt[0] === "number" && typeof pt[1] === "number")
+        ? (pt.length >= 3 ? [pt[0], pt[1] * factor, pt[2]] : [pt[0], pt[1] * factor])
+        : pt
+    );
+    if (Array.isArray(curve)) return mapPts(curve);
+    if (curve && typeof curve === "object" && Array.isArray(curve.points)) {
+      return { ...curve, points: mapPts(curve.points) };
+    }
+    return curve;
+  }
+
   // True when the editor-space curve still maps back to the original engine
   // curve (within float tolerance) — i.e. the user hasn't edited it, so the
   // verbatim engine copy can be re-emitted unchanged instead of round-tripping
-  // through the lossy *(n-1) / /(n-1) rescale. #59
+  // through the lossy *(n-1) / /(n-1) rescale. Handles both the plain-array and
+  // the {type, points} dict shape, and compares the per-point interp. #59
   function curveMatchesRaw(editorCurve, rawCurve, n) {
-    if (!Array.isArray(editorCurve) || !Array.isArray(rawCurve)) return false;
-    if (editorCurve.length !== rawCurve.length) return false;
-    for (let i = 0; i < editorCurve.length; i++) {
-      const e = editorCurve[i], r = rawCurve[i];
+    const ePts = curvePoints(editorCurve), rPts = curvePoints(rawCurve);
+    if (!ePts || !rPts) return false;
+    const eType = Array.isArray(editorCurve) ? null : (editorCurve.type || null);
+    const rType = Array.isArray(rawCurve)    ? null : (rawCurve.type || null);
+    if (eType !== rType) return false; // global interp wrapper must match
+    if (ePts.length !== rPts.length) return false;
+    for (let i = 0; i < ePts.length; i++) {
+      const e = ePts[i], r = rPts[i];
       if (!Array.isArray(e) || !Array.isArray(r) || e.length < 2 || r.length < 2) {
         if (JSON.stringify(e) !== JSON.stringify(r)) return false;
         continue;
@@ -121,6 +153,7 @@
       if (Math.abs(e[0] - r[0]) > 1e-9) return false;
       const engineY = n <= 1 ? 0 : e[1] / (n - 1);
       if (Math.abs(engineY - r[1]) > 1e-9) return false;
+      if ((e[2] || null) !== (r[2] || null)) return false; // per-point interp
     }
     return true;
   }
@@ -141,14 +174,12 @@
       // Re-emit the original engine curve verbatim while it's unedited; only a
       // real edit recomputes it (and accepts the rescale). #59
       const editorCurve = env.curve || [[0, 0], [1, 1]];
+      // editor value-space [0, n-1] → engine [0, 1]; rescaleCurveY preserves the
+      // {type, points} dict and per-point interp, so a step/cubic curve no longer
+      // crashes here (was: editorCurve.map on a dict → "map is not a function").
       const engineCurve = (env._curveRaw && curveMatchesRaw(editorCurve, env._curveRaw, n))
         ? env._curveRaw
-        : editorCurve.map(pt => {
-            if (Array.isArray(pt) && pt.length >= 2) {
-              return [pt[0], n <= 1 ? 0 : pt[1] / (n - 1)];
-            }
-            return pt;
-          });
+        : rescaleCurveY(editorCurve, n <= 1 ? 0 : 1 / (n - 1));
       return { states: engineStates, curve: engineCurve };
     }
     return env;
@@ -164,12 +195,9 @@
         const positions = raw.map(([p]) => p);
         const n = names.length;
         const rawCurve = env.curve || [[0, 0], [1, 1]];
-        const editorCurve = rawCurve.map(pt => {
-          if (Array.isArray(pt) && pt.length >= 2) {
-            return [pt[0], pt[1] * (n - 1)];
-          }
-          return pt;
-        });
+        // engine [0, 1] → editor value-space [0, n-1]; preserves a {type, points}
+        // dict and per-point interp instead of crashing on rawCurve.map.
+        const editorCurve = rescaleCurveY(rawCurve, n - 1);
         const out = { states: names, curve: editorCurve };
         // The editor models states as names with uniform spacing; keep the
         // explicit engine positions when they diverge so serialize re-emits
