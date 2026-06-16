@@ -5,7 +5,7 @@ pure / I/O helpers — no Flask, no global state. The route handlers in server.p
 import these and keep their exact decorators, status codes and abort messages.
 
   - path resolution: safe_resolve, _resolve_audio (+ _AUDIO_EXTS)
-  - sample duration: soxi_duration
+  - sample duration: audio_duration (soundfile-first, soxi fallback)
   - DSP: _compute_peaks, _compute_spectrogram (+ PEAK_BUCKETS / SPEC_* consts)
   - cached derivations: transcode_wav, peaks_file, spectrogram_file
     (each takes the exact cache_file path the route wants, so cache layout is
@@ -50,8 +50,8 @@ def _resolve_audio(base: Path, fname: str) -> "Path | None":
 
 def soxi_duration(path: Path) -> "float | None":
     """Get audio file duration via `soxi -D`. Returns None if soxi isn't
-    installed or the file is unreadable. Cheap — runs once per file at
-    list-time, results aren't cached server-side (the browser caches)."""
+    installed or the file is unreadable. Kept as the fallback for audio_duration
+    (and for the rare format soundfile's libsndfile build can't read)."""
     try:
         out = subprocess.check_output(
             ["soxi", "-D", str(path)],
@@ -61,6 +61,37 @@ def soxi_duration(path: Path) -> "float | None":
         return float(out)
     except Exception:
         return None
+
+
+def _soundfile_duration(path: Path) -> "float | None":
+    """Duration via soundfile (libsndfile): a HEADER-ONLY read — no subprocess,
+    no full decode (sub-millisecond). soundfile is a declared bridge dep
+    (requirements.txt) already used for /peaks + /spectrogram. Returns None if
+    soundfile is missing, or the file is unreadable / an unsupported format
+    (e.g. mp3 on libsndfile < 1.1.0)."""
+    try:
+        import soundfile as sf
+        return float(sf.info(str(path)).duration)
+    except Exception:
+        return None
+
+
+def audio_duration(path: Path) -> "float | None":
+    """Audio file duration in seconds — soundfile-first, with a soxi fallback.
+
+    soundfile needs no external binary and only reads the header, so durations
+    work wherever the bridge's own deps are installed (no hard `soxi`
+    requirement). `soxi -D` is tried only when soundfile can't read the file
+    (missing dep, or a format its libsndfile build doesn't support). None when
+    neither can read it. Cheap — runs once per file at list-time; the browser
+    caches the result.
+
+    Note: sox/soxi is still used elsewhere for the AIFF→WAV playback transcode;
+    only the *duration* no longer depends on it."""
+    dur = _soundfile_duration(path)
+    if dur is not None and dur > 0:
+        return dur
+    return soxi_duration(path)
 
 
 # -------------------------------------------------------------------------

@@ -499,6 +499,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   const sampleDur = (_sampleList.find(s => s.name === stream.sample) || {}).duration;
   const sampleMissing = !sampleDur;
 
+  // loop_start/end/dur can't address past the sample's end — clamp scalar edits
+  // to it (1.0 in normalized mode), unit-aware via loopEnvMax. A null cap (the
+  // duration is unknown) keeps the static PGE_BOUNDS max. Mirrors the
+  // sample-driven hardMax the EnvelopeEditor applies to the same params.
+  const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
+  const clampLoop = (key, v) => {
+    const b = window.PGE_BOUNDS[key];
+    const hi = loopMax != null ? loopMax : (b ? b.max : Infinity);
+    return Math.max(b ? b.min : 0, Math.min(hi, v));
+  };
+
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
       <header className="ihead">
@@ -695,7 +706,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             accent={stream.pointer.loopStartEnv != null}
                             envValue={stream.pointer.loopStartEnv}
                             onEditEnv={focusEnv("loopStart")}
-                            onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: v}})} />
+                            onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: clampLoop("loopStart", v)}})} />
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
@@ -722,7 +733,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                               accent={stream.pointer.loopEndEnv != null}
                               envValue={stream.pointer.loopEndEnv}
                               onEditEnv={focusEnv("loopEnd")}
-                              onValue={(v) => onChange({pointer: {...stream.pointer, loopEnd: v}})} />
+                              onValue={(v) => onChange({pointer: {...stream.pointer, loopEnd: clampLoop("loopEnd", v)}})} />
                   ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
@@ -730,7 +741,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
-                              onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: v}})} />
+                              onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: clampLoop("loopDur", v)}})} />
                   )}
                   {stream.pointer.loopUnit ? (
                     <div className="pge-prow">

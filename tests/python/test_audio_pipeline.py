@@ -42,6 +42,48 @@ def test_resolve_audio_rejects_traversal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# audio_duration — soundfile-first, soxi fallback (no hard soxi dependency)
+# ---------------------------------------------------------------------------
+
+def test_soundfile_duration_unreadable_returns_none(tmp_path):
+    # garbage / non-existent file → None (whether soundfile is installed or not)
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"not actually audio")
+    assert ap._soundfile_duration(bad) is None
+    assert ap._soundfile_duration(tmp_path / "nope.wav") is None
+
+
+def test_audio_duration_via_soundfile(tmp_path):
+    np = pytest.importorskip("numpy")
+    sf = pytest.importorskip("soundfile")
+    p = tmp_path / "tone.wav"
+    sr = 22050
+    sf.write(str(p), (0.1 * np.sin(2 * np.pi * 220 * np.arange(int(sr * 0.5)) / sr)).astype("float32"), sr)
+    dur = ap.audio_duration(p)               # no soxi needed for this path
+    assert dur is not None and abs(dur - 0.5) < 1e-3
+
+
+def test_audio_duration_prefers_soundfile_over_soxi(tmp_path, monkeypatch):
+    # soundfile yields a value → soxi must not override it
+    monkeypatch.setattr(ap, "_soundfile_duration", lambda p: 2.5)
+    monkeypatch.setattr(ap, "soxi_duration", lambda p: 99.0)
+    assert ap.audio_duration(tmp_path / "x.wav") == 2.5
+
+
+def test_audio_duration_falls_back_to_soxi(tmp_path, monkeypatch):
+    # soundfile can't read it (None) → fall back to soxi
+    monkeypatch.setattr(ap, "_soundfile_duration", lambda p: None)
+    monkeypatch.setattr(ap, "soxi_duration", lambda p: 3.0)
+    assert ap.audio_duration(tmp_path / "x.wav") == 3.0
+
+
+def test_audio_duration_none_when_both_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, "_soundfile_duration", lambda p: None)
+    monkeypatch.setattr(ap, "soxi_duration", lambda p: None)
+    assert ap.audio_duration(tmp_path / "x.wav") is None
+
+
+# ---------------------------------------------------------------------------
 # Cached derivations — freshness rule (regenerate only when source is newer)
 # ---------------------------------------------------------------------------
 

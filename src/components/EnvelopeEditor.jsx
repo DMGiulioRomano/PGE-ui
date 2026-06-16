@@ -18,9 +18,13 @@ function pitchEnvBounds(unit, semis, signed) {
 }
 
 /* ---------- Envelope catalog ---------- */
-function listEnvelopes(stream) {
+function listEnvelopes(stream, sampleDur) {
   if (!stream) return [];
   const PB = window.PGE_BOUNDS;
+  // loop_start/end/dur can't address past the sample's end — clamp to it
+  // (or to 1.0 in normalized mode). null when the duration is unknown, in
+  // which case we fall back to the static PGE_BOUNDS cap. See loopEnvMax.
+  const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
   const list = [];
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
@@ -45,17 +49,20 @@ function listEnvelopes(stream) {
   if (stream.pointer && stream.pointer.loopStartEnv) {
     list.push({ key: "loopStart", label: "loop_start", group: "Pointer",
       path: ["pointer", "loopStartEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: PB.loopStart.min, hardMax: PB.loopStart.max });
+      visMin: 0, visMax: loopMax != null ? loopMax : 10,
+      hardMin: PB.loopStart.min, hardMax: loopMax != null ? loopMax : PB.loopStart.max });
   }
   if (stream.pointer && stream.pointer.loopDurEnv) {
     list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
       path: ["pointer", "loopDurEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: PB.loopDur.min, hardMax: PB.loopDur.max });
+      visMin: 0, visMax: loopMax != null ? loopMax : 10,
+      hardMin: PB.loopDur.min, hardMax: loopMax != null ? loopMax : PB.loopDur.max });
   }
   if (stream.pointer && stream.pointer.loopEndEnv) {
     list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
       path: ["pointer", "loopEndEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: PB.loopEnd.min, hardMax: PB.loopEnd.max });
+      visMin: 0, visMax: loopMax != null ? loopMax : 10,
+      hardMin: PB.loopEnd.min, hardMax: loopMax != null ? loopMax : PB.loopEnd.max });
   }
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
@@ -439,9 +446,15 @@ function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
   });
 }
 
-function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey, arrowOwnerRef }) {
+function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey, arrowOwnerRef, samples }) {
   const { Icon } = window.PGE;
-  const envelopes = useMemoEE(() => listEnvelopes(stream), [stream]);
+  // Chosen sample's duration drives the loop-window clamps (loop_* can't reach
+  // past the sample's end). Same lookup the Inspector uses; undefined when the
+  // sample isn't found or durations aren't available (file:// / server down).
+  const sampleDur = (stream && samples)
+    ? (samples.find((s) => s.name === stream.sample) || {}).duration
+    : undefined;
+  const envelopes = useMemoEE(() => listEnvelopes(stream, sampleDur), [stream, sampleDur]);
   const [selectedKey, setSelectedKey] = useStateEE(null);
   const [dragging, setDragging] = useStateEE(null);
   const [hoverBP, setHoverBP] = useStateEE(null);
@@ -539,7 +552,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
       if (selectedBP == null && selectedBlock == null && selectedPattern == null) return;
       if (!stream) return;
-      const envs = listEnvelopes(stream);
+      const envs = listEnvelopes(stream, sampleDur);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
       const cur = (getNested(stream, e2.path) || []).slice();
@@ -577,7 +590,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [stream, selectedKey, selectedBP, selectedBlock, selectedPattern]);
+  }, [stream, sampleDur, selectedKey, selectedBP, selectedBlock, selectedPattern]);
 
   useEffectEE(() => {
     function onDown(e) { if (e.key === "Shift") setShiftHeld(true); }
@@ -623,7 +636,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
       const PGEEnv = window.PGEEnv;
-      const envs = listEnvelopes(stream);
+      const envs = listEnvelopes(stream, sampleDur);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
       const { items, interp } = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
@@ -658,7 +671,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [stream, selectedKey, selectedBP, selectedBlock, selectedPattern]);
+  }, [stream, sampleDur, selectedKey, selectedBP, selectedBlock, selectedPattern]);
 
   /* ============ Envelope model — computed before early returns so hook count is stable ============ */
   const env = envelopes.find((e) => e.key === selectedKey) || envelopes[0];

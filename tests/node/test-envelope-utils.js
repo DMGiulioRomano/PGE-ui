@@ -26,10 +26,10 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 9 helpers",
+assert("PGEEnvUtils exposes the 10 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit"]
+   "computeYFit", "loopEnvMax"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -273,6 +273,44 @@ console.log("\n── dephase typed {type,points} envelopes (cubic global interp
   assert("dephase.pan scalar preserved alongside typed param", rp.dephase.pan === 0.5);
   assert("streamWouldTruncate true on typed per-param dephase env",
     U.streamWouldTruncate(ppStream, 2) === true);
+}
+
+// ---------------------------------------------------------------------------
+// loopEnvMax — sample-driven upper bound for loop_start/end/dur. The engine's
+// max_val for these is None (the real cap is sample_dur_sec, injected at render
+// time); the editor mirrors that. Unit follows PointerController:
+// pointer.loopUnit || stream.timeMode (engine default "absolute").
+// ---------------------------------------------------------------------------
+console.log("\n── loopEnvMax (sample-driven loop bound) ──");
+{
+  const ptr = (extra) => ({ pointer: Object.assign({ loopStartEnv: [[0, 0], [1, 1]] }, extra || {}) });
+
+  // absolute/seconds (default): cap is the sample duration
+  assert("absolute (no unit/timeMode) → cap = sampleDur",
+    U.loopEnvMax(ptr(), 12.5) === 12.5);
+  assert("explicit timeMode absolute → cap = sampleDur",
+    U.loopEnvMax(Object.assign({ timeMode: "absolute" }, ptr()), 8) === 8);
+
+  // normalized: loop coords live in [0,1] → cap 1, regardless of sampleDur
+  assert("loopUnit normalized → cap = 1",
+    U.loopEnvMax(ptr({ loopUnit: "normalized" }), 30) === 1);
+  assert("timeMode normalized (no loopUnit) → cap = 1",
+    U.loopEnvMax(Object.assign({ timeMode: "normalized" }, ptr()), 30) === 1);
+  assert("loopUnit overrides timeMode (absolute unit wins over normalized stream)",
+    U.loopEnvMax(Object.assign({ timeMode: "normalized" }, ptr({ loopUnit: "absolute" })), 9) === 9);
+
+  // unknown / invalid sample duration → null so callers keep the static cap
+  assert("undefined sampleDur → null (keep static fallback)",
+    U.loopEnvMax(ptr(), undefined) === null);
+  assert("zero sampleDur → null", U.loopEnvMax(ptr(), 0) === null);
+  assert("non-finite sampleDur → null", U.loopEnvMax(ptr(), Infinity) === null);
+  assert("negative sampleDur → null", U.loopEnvMax(ptr(), -3) === null);
+  // ...but normalized still caps at 1 even with an unknown duration
+  assert("normalized + unknown sampleDur → still 1",
+    U.loopEnvMax(ptr({ loopUnit: "normalized" }), undefined) === 1);
+
+  // null/empty stream is tolerated (no throw); absolute with no duration → null
+  assert("null stream → null", U.loopEnvMax(null, undefined) === null);
 }
 
 console.log(`\n${"─".repeat(50)}`);

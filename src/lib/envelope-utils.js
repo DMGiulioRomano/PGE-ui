@@ -273,6 +273,27 @@
     return { ymin: lo, ymax: hi };
   }
 
+  // Dynamic upper bound for the loop-window envelopes (loop_start / loop_end /
+  // loop_dur), driven by the chosen sample's duration. The engine declares
+  // their max_val as None precisely because the real cap is sample_dur_sec,
+  // injected at render time (parameter_definitions.get_parameter_definition);
+  // the static PGE_BOUNDS cap (3600 s) is only a placeholder. A loop window can
+  // never address past the end of the sample, so the editor clamps to it.
+  // Mirrors PointerController._pre_normalize_loop_params unit resolution:
+  //   unit = pointer.loopUnit || stream.timeMode (engine default "absolute")
+  //   "normalized" → loop coords live in [0,1] (the engine scales them by the
+  //                  sample duration) → cap = 1
+  //   otherwise (absolute seconds) → cap = sampleDur
+  // Returns null when the sample duration is unknown (file:// / server down /
+  // unreadable file / sample not found) so callers keep the static fallback cap.
+  function loopEnvMax(stream, sampleDur) {
+    const unit = (stream && stream.pointer && stream.pointer.loopUnit)
+      || (stream && stream.timeMode) || "absolute";
+    if (unit === "normalized") return 1;
+    return (typeof sampleDur === "number" && isFinite(sampleDur) && sampleDur > 0)
+      ? sampleDur : null;
+  }
+
   window.PGEEnvUtils = {
     rescaleEnvArray,
     truncateEnvArray,
@@ -283,5 +304,6 @@
     streamWouldTruncate,
     nudgeBreakpoint,
     computeYFit,
+    loopEnvMax,
   };
 })();
