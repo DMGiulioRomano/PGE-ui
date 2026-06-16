@@ -450,7 +450,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const { Icon } = window.PGE;
   // Chosen sample's duration drives the loop-window clamps (loop_* can't reach
   // past the sample's end). Same lookup the Inspector uses; undefined when the
-  // sample isn't found or durations aren't available (no soxi / file://).
+  // sample isn't found or durations aren't available (file:// / server down).
   const sampleDur = (stream && samples)
     ? (samples.find((s) => s.name === stream.sample) || {}).duration
     : undefined;

@@ -65,7 +65,7 @@ except ImportError:
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
-    safe_resolve, soxi_duration, _resolve_audio, PEAK_BUCKETS,
+    safe_resolve, audio_duration, _resolve_audio, PEAK_BUCKETS,
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
@@ -493,26 +493,31 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         except Exception as e:
             add("sox", False, str(e))
 
-        # soxi (used to read sample durations). soxi has no --version flag of
-        # its own (it exits non-zero), so probe by running it bare: a missing
-        # binary raises FileNotFoundError, anything else means it's installed.
+        # soxi: now only a *fallback* for sample durations (soundfile is the
+        # primary source) and still the binary behind the AIFF→WAV transcode.
+        # soxi has no --version flag of its own (it exits non-zero), so probe by
+        # running it bare: a missing binary raises FileNotFoundError.
         try:
             subprocess.run(["soxi"], capture_output=True, timeout=2)
-            add("soxi", True, "available — sample durations enabled")
+            add("soxi", True, "available — duration fallback + AIFF→WAV transcode")
         except FileNotFoundError:
-            add("soxi", False, "not installed — sample list will lack durations")
+            add("soxi", False, "not installed — optional (durations come from "
+                               "soundfile; sox/soxi only for AIFF→WAV playback)")
         except Exception as e:
-            add("soxi", False, f"not available — sample list will lack durations ({e})")
+            add("soxi", False, f"not available ({e}) — optional, durations use soundfile")
 
-        # numpy + soundfile (server-side waveform peak extraction)
+        # numpy + soundfile: server-side waveform peaks/spectrogram AND the
+        # primary source of sample durations (sf.info, header-only).
         try:
             import numpy  # noqa: F401
             import soundfile  # noqa: F401
             add("waveform deps", True,
-                f"numpy {numpy.__version__} · soundfile {soundfile.__version__}")
+                f"numpy {numpy.__version__} · soundfile {soundfile.__version__} "
+                f"— peaks, spectrogram & sample durations")
         except ImportError as e:
             add("waveform deps", False,
-                f"{e} — `pip install -r requirements.txt` for /peaks waveforms")
+                f"{e} — `pip install -r requirements.txt` for /peaks waveforms "
+                f"and sample durations (durations then fall back to soxi)")
 
         # engine venv
         venv_py = root / ".venv" / "bin" / "python"
@@ -578,7 +583,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 continue
             files.append({
                 "name": p.name,
-                "duration": soxi_duration(p),
+                "duration": audio_duration(p),
                 "size": p.stat().st_size,
             })
         return jsonify({"path": str(refs), "files": files})
@@ -1065,6 +1070,11 @@ def main():
             return True
     sox_ok  = _check_cmd(["sox", "--version"])
     soxi_ok = _binary_present("soxi")
+    try:
+        import soundfile  # noqa: F401
+        sf_ok = True
+    except Exception:
+        sf_ok = False
 
     print(f"PGE bridge")
     print(f"  root:    {root}")
@@ -1073,7 +1083,8 @@ def main():
     print(f"  output/: {root / 'output'}")
     print(f"  cache/:  {root / 'cache'}")
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
-    print(f"  soxi:    {'ok' if soxi_ok else 'MISSING (sample durations will be blank)'}")
+    print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
+    print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")
     print(f"  listen:  http://{args.host}:{args.port}")
     print(f"")
     print(f"Open in browser:  http://{args.host}:{args.port}/")

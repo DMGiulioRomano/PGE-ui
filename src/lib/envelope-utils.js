@@ -285,7 +285,7 @@
   //                  sample duration) → cap = 1
   //   otherwise (absolute seconds) → cap = sampleDur
   // Returns null when the sample duration is unknown (file:// / server down /
-  // soxi missing / sample not found) so callers keep the static fallback cap.
+  // unreadable file / sample not found) so callers keep the static fallback cap.
   function loopEnvMax(stream, sampleDur) {
     const unit = (stream && stream.pointer && stream.pointer.loopUnit)
       || (stream && stream.timeMode) || "absolute";
