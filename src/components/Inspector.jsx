@@ -514,6 +514,19 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     return Math.max(b ? b.min : 0, Math.min(hi, v));
   };
 
+  // Loop semantics (issue #97): with a loop active the engine confines the grain
+  // read position — base + offset_range + voice pointer offsets — to
+  // [loop_start, loop_end) via modular wrap (previously the deviation could read
+  // the whole file). A degenerate static window (loop_end <= loop_start) is
+  // rejected at render (InvalidFieldValueError) → warn pre-render. loopActive
+  // gates the offset_range confinement note; loopEndMode the loop_dur hint.
+  const loopBoundsErr = window.PGEEnvUtils.loopBoundsError(stream.pointer);
+  const loopActive = !!(stream.pointer && (
+    stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
+    stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
+    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null));
+  const loopEndMode = !!(stream.pointer && (stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null));
+
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
       <header className="ihead">
@@ -766,6 +779,24 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                       </button>
                     </div>
                   ) : null}
+                  {loopBoundsErr ? (
+                    <div className="pge-prow" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+                        loop_end ({loopBoundsErr.loopEnd}) ≤ loop_start ({loopBoundsErr.loopStart}): finestra di loop non valida.
+                        Per un loop a cavallo della fine del file usa loop_dur.
+                      </span>
+                      <span />
+                    </div>
+                  ) : loopEndMode ? (
+                    <div className="pge-prow hint" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                        loop_end ∈ [0, sample_dur] · per un loop oltre la fine del file usa loop_dur
+                      </span>
+                      <span />
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <div className="pge-prow"><span className="k" style={{color:"var(--fg-3)"}}>loop</span><span /><span className="v" style={{color:"var(--fg-3)"}}>—</span><span /></div>
@@ -784,17 +815,26 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             <Icon name="x" size={11} />
                           </button>} />
               ) : null}
+              {(stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null) && loopActive ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                    con loop attivo la deviazione resta dentro [loop_start, loop_end)
+                  </span>
+                  <span />
+                </div>
+              ) : null}
               <AddParamMenu
                 options={[
-                  { key: "loopStart",   label: "loop_start",   desc: "loop window start (s)",
+                  { key: "loopStart",   label: "loop_start",   desc: "loop window start (s) — confines the read to [loop_start, loop_end)",
                     exists: stream.pointer.loopStart != null, def: 0 },
-                  { key: "loopEnd",     label: "loop_end",     desc: "loop end (s) — mutex w/ loop_dur, has priority",
+                  { key: "loopEnd",     label: "loop_end",     desc: "loop end (s) ∈ [0, sample_dur], must be > loop_start — mutex w/ loop_dur, has priority",
                     exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
-                  { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s)",
+                  { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s) — loop_start+loop_dur > sample_dur ⇒ loop straddling the file end",
                     exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
                   { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
                     exists: stream.pointer.loopUnit != null, def: "normalized" },
-                  { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1]",
+                  { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
                 ]}
                 onAdd={(o) => {
