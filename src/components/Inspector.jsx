@@ -44,27 +44,24 @@ const DEPHASE_PARAMS = [
   { key: "envelope", desc: "switch window when grain.envelope is a list" },
 ];
 
-function detectDephaseMode(d) {
-  if (d === window.PGEYaml.DEPHASE_IMPLICIT) return "implicit";
-  // Key absent = engine default off (StreamConfig.dephase = False) — same as
-  // explicit false. Only `dephase: null` (the sentinel) means implicit 1%.
-  if (d === false || d == null) return "off";
-  if (typeof d === "number") return "global";
-  if (Array.isArray(d)) return "global";
-  if (typeof d === "object") return "perParam";
-  return "off";
-}
-
 function DephaseSection({ stream, onChange, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Icon, Tag } = window.PGE;
+  const PGEDephase = window.PGEDephase, PGEEnv = window.PGEEnv;
   const d = stream.dephase;
-  const mode = detectDephaseMode(d);
+  // Classification lives in the shared window.PGEDephase (single source of
+  // truth, mirrors the engine's GateFactory._classify_dephase). `dIsEnv` is
+  // true when the global value is an envelope — array [[t,v],…] OR the typed
+  // {type, points} object form the EnvelopeEditor emits for a non-linear global
+  // interpolation (cubic/exp). Treating the typed form as a global env is what
+  // stops "cubic" from collapsing the envelope and flipping mode to per-param.
+  const mode = PGEDephase.mode(d);          // off | implicit | global | perParam
+  const dIsEnv = PGEDephase.isEnvValue(d);
 
   function setMode(next) {
     if (next === "off")       return onChange({ dephase: false });
     if (next === "implicit")  return onChange({ dephase: window.PGEYaml.DEPHASE_IMPLICIT });
-    if (next === "global")    return onChange({ dephase: typeof d === "number" ? d : (Array.isArray(d) ? d : 1) });
-    if (next === "perParam")  return onChange({ dephase: (typeof d === "object" && !Array.isArray(d) && d) ? d : { volume: 50 } });
+    if (next === "global")    return onChange({ dephase: typeof d === "number" ? d : (dIsEnv ? d : 1) });
+    if (next === "perParam")  return onChange({ dephase: mode === "perParam" ? d : { volume: 50 } });
   }
 
   // Mini-badge mostra mode + sintesi numerica
@@ -72,7 +69,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
     if (mode === "off")       return <span className="mono" style={{color:"var(--fg-3)"}}>off</span>;
     if (mode === "implicit")  return <span className="mono" style={{color:"var(--fg-3)"}}>implicit · 1%</span>;
     if (mode === "global")    {
-      if (Array.isArray(d)) return <span className="mono" style={{color:"var(--accent)"}}>env · {d.length} bp</span>;
+      if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.unwrapEnv(d).items.length} bp</span>;
       return <span className="mono" style={{color:"var(--accent)"}}>{d}%</span>;
     }
     const n = Object.keys(d || {}).length;
@@ -107,20 +104,21 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
 
       {mode === "global" ? (
         <ParamRow name="probability"
-                  mode={Array.isArray(d) ? "env" : "scalar"}
+                  mode={dIsEnv ? "env" : "scalar"}
                   onMode={(m) => {
                     if (m === "env") {
                       const v = typeof d === "number" ? d : 1;
                       onChange({ dephase: [[0, v], [1, v]] });
                     } else {
-                      const v = Array.isArray(d) ? (d[0] && d[0][1]) || 1 : 1;
+                      const items = dIsEnv ? PGEEnv.unwrapEnv(d).items : null;
+                      const v = (items && items[0] && items[0][1]) || 1;
                       onChange({ dephase: v });
                     }
                   }}
-                  value={Array.isArray(d) ? "—" : d}
-                  unit={Array.isArray(d) ? "" : "%"}
-                  accent={Array.isArray(d)}
-                  envValue={Array.isArray(d) ? d : null}
+                  value={dIsEnv ? "—" : d}
+                  unit={dIsEnv ? "" : "%"}
+                  accent={dIsEnv}
+                  envValue={dIsEnv ? PGEEnv.unwrapEnv(d).items : null}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("dephase") : undefined}
                   onValue={(v) => onChange({dephase: v})} />
       ) : null}
@@ -129,20 +127,23 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
         <>
           {DEPHASE_PARAMS.filter(p => (d && d[p.key] != null)).map(p => {
             const val = d[p.key];
-            const isEnv = Array.isArray(val);
+            // Same typed-env handling per parameter: a per-param value can also
+            // take the {type, points} form (cubic on a per-param dephase env).
+            const isEnv = PGEDephase.isEnvValue(val);
+            const items = isEnv ? PGEEnv.unwrapEnv(val).items : null;
             return (
               <div key={p.key} className="pge-prow">
                 <span className="k">{p.key}</span>
                 <Seg size="xs" value={isEnv ? "env" : "scalar"}
                      onChange={(m) => {
-                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : (isEnv && val[0] ? val[0][1] : 1);
+                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : ((items && items[0] && items[0][1]) || 1);
                        onChange({ dephase: { ...d, [p.key]: nv } });
                      }}
                      options={[{label:"scalar",value:"scalar"},{label:"env",value:"env"}]} />
                 {isEnv ? (
                   <span className="v env" onClick={onFocusEnvParam ? () => onFocusEnvParam("dephase_" + p.key) : undefined} style={onFocusEnvParam ? {cursor:"pointer"} : undefined}>
-                    <span className="env-mini"><svg viewBox="0 0 100 16" preserveAspectRatio="none"><polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={val.map((q,i) => `${(q[0]/(val[val.length-1][0]||1)*100).toFixed(1)},${(14 - q[1]/100*12).toFixed(1)}`).join(" ")} /></svg></span>
-                    <span className="env-label">{val.length} bp</span>
+                    <span className="env-mini"><svg viewBox="0 0 100 16" preserveAspectRatio="none"><polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={items.map((q,i) => `${(q[0]/(items[items.length-1][0]||1)*100).toFixed(1)},${(14 - q[1]/100*12).toFixed(1)}`).join(" ")} /></svg></span>
+                    <span className="env-label">{items.length} bp</span>
                   </span>
                 ) : (
                   <span className="v"><span className="pge-field" style={{width:70}}><span className="val">{val}</span><span className="unit">%</span></span></span>

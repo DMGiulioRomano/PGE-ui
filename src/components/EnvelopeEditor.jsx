@@ -177,15 +177,20 @@ function listEnvelopes(stream) {
     list.push({ key: "voicesPanSpread", label: "pan · spread", group: "Voices",
       path: ["voices", "pan", "spreadEnv"], unit: "°",
       visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
-  if (Array.isArray(stream.dephase)) {
+  // dephase env detection goes through the shared classifier (window.PGEDephase),
+  // so the typed {type, points} form (cubic global interp) registers as the
+  // global env — not silently dropped. isEnvValue is true for [[t,v],…] and
+  // {type, points}; the per-param branch only runs when the value is NOT itself
+  // an env (i.e. a real per-param dict).
+  const PGEDephase = window.PGEDephase;
+  if (PGEDephase.isEnvValue(stream.dephase)) {
     list.push({ key: "dephase", label: "probability", group: "Dephase",
       path: ["dephase"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
-  }
-  if (stream.dephase && typeof stream.dephase === "object" && !Array.isArray(stream.dephase)) {
+  } else if (PGEDephase.mode(stream.dephase) === "perParam") {
     const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","envelope"];
     for (const pk of DEPHASE_PARAM_KEYS) {
-      if (Array.isArray(stream.dephase[pk])) {
+      if (PGEDephase.isEnvValue(stream.dephase[pk])) {
         list.push({ key: "dephase_" + pk, label: pk, group: "Dephase",
           path: ["dephase", pk], unit: "%",
           visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
