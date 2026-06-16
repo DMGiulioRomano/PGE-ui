@@ -706,7 +706,16 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                             accent={stream.pointer.loopStartEnv != null}
                             envValue={stream.pointer.loopStartEnv}
                             onEditEnv={focusEnv("loopStart")}
-                            onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: clampLoop("loopStart", v)}})} />
+                            onValue={(v) => onChange({pointer: {...stream.pointer, loopStart: clampLoop("loopStart", v)}})}
+                            right={<button className="pge-icon-btn" title="Remove loop"
+                              onClick={() => { const np = { ...stream.pointer };
+                                delete np.loopStart; delete np.loopStartEnv;
+                                delete np.loopEnd; delete np.loopEndEnv;
+                                delete np.loopDur; delete np.loopDurEnv;
+                                delete np.loopUnit;
+                                onChange({ pointer: np }); }}>
+                              <Icon name="x" size={11} />
+                            </button>} />
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
