@@ -11,7 +11,7 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 ## Common commands
 
 ```bash
-make install          # pip install -r requirements.txt  (flask + flask-cors only)
+make install          # pip install -r requirements.txt  (flask, flask-cors, gunicorn, numpy, soundfile)
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make tests            # full suite: tests-node + tests-python
@@ -68,7 +68,7 @@ Consequence: a render persists the current editor state to the source config eve
 
 ### Dynamic parameter bounds
 
-The UI's clamps (min/max/range for every control + envelope, and the pitch-unit bounds) are sourced from the engine rather than hardcoded. `GET /bounds` in `server.py` **AST-parses** the engine's `src/parameters/parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` (EDO `edoFactor` + `RatioUnit`) — same venv-less trick as `/envelope-keys`, so it works before the engine venv exists; returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested in `test-bounds.js`) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param **and** whether it reads the value bounds (`min_val/max_val`) or the range bounds (`min_range/max_range`, e.g. `offsetRange`←`pointer_deviation`, `durationRange`←`grain_duration`). `window.PGE_BOUNDS` in `yaml-bridge.js` is now just the **static fallback** (used on `file://` / server down); the dynamic path overrides it. A `null` engine `max_val` (loop_* is sample-driven) keeps the fallback cap; UI controls with no engine counterpart (voices onset_offset, pan spread, dephase %, grain-env curve) stay static. **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
+The UI's clamps (min/max/range for every control + envelope, and the pitch-unit bounds) are sourced from the engine rather than hardcoded. `GET /bounds` in `server.py` **AST-parses** the engine's `src/parameters/parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` (EDO `edoFactor` + `RatioUnit`) — same venv-less trick as `/envelope-keys`, so it works before the engine venv exists; returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested in `test-bounds.js`) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param **and** whether it reads the value bounds (`min_val/max_val`) or the range bounds (`min_range/max_range`, e.g. `offsetRange`←`pointer_deviation`, `durationRange`←`grain_duration`). `window.PGE_BOUNDS` in `yaml-bridge.js` is now just the **static fallback** (used on `file://` / server down); the dynamic path overrides it. A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose engine `max_val` is `null` precisely because the real cap is the **chosen sample's duration** (`sample_dur_sec`). `loopEnvMax` in `envelope-utils.js` (node-tested) drives the EnvelopeEditor `hardMax` + the Inspector scalar clamp from that duration (the sample's `duration` from `GET /media`), unit-aware like the engine's `PointerController` (`loop_unit || time_mode`: seconds → `sample_dur`, normalized → `1`), and falls back to the static cap only when the duration is unknown (`file://` / server down / unreadable file / sample not found). UI controls with no engine counterpart (voices onset_offset, pan spread, dephase %, grain-env curve) stay static. **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
 
 The EnvelopeEditor Y window **auto-fits the point values** for readability (`computeYFit` in `envelope-utils.js`, node-tested): it fits min..max of the breakpoints + 10% margin, clamped into the dynamic `[hardMin,hardMax]` — not the old `[visMin,visMax]` union, which could only grow and left points squashed against an edge. The fit is live while idle and **frozen during a drag** (a `useRef` snapshot) so the grabbed point can't slide under a rescaling axis; `visMin/visMax` are only the no-points fallback window.
 
@@ -84,7 +84,7 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 ### Audio playback (`audio-engine.js`)
 
-`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. It fetches `GET /audio/<basename>__<sid>.wav` from `server.py`. **Stems are stored as `.aif`** but `server.py` transcodes to WAV via sox at `/audio/` because Firefox can't decode AIFF natively. `/output/<file>.aif` still serves raw. Streams without a rendered stem stay silent (no procedural fallback).
+`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. The render output format is a Settings preference (`tweaks.outputFormat`, **default `wav`**, also `aiff`/`flac`), forwarded to the engine as `--format`. `backend.js` `stemUrl` routes playback by format: `wav`/`flac` → `GET /output/<basename>__<sid>.<ext>` served **raw** (browsers decode these natively — no sox); `aiff` → `GET /audio/<basename>__<sid>.aif`, which `server.py` transcodes to WAV via sox because Firefox can't decode AIFF natively. So with the default WAV, playback needs no sox at all; the `/audio` transcode is only the AIFF path. Sample durations in `GET /media` come from `soundfile` (`sf.info`, header-only), with `soxi -D` as fallback. Streams without a rendered stem stay silent (no procedural fallback).
 
 ### History / undo (`app.jsx`)
 
@@ -104,7 +104,7 @@ Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth
 
 ## Conventions
 
-- Stem filenames: `<basename>__<streamId>.aif` (double underscore separator).
+- Stem filenames: `<basename>__<streamId>.<ext>` (double underscore separator); `<ext>` follows the Settings output format (`tweaks.outputFormat`, default `wav` → `.wav`; `aiff` → `.aif`, `flac` → `.flac`).
 - Cache manifests: `cache/<basename>.json`, one file per project. Keyed by the YAML basename — `/render` writes the editor state to the stable `configs/<basename>.yml` (never a temp file) so the manifest persists across renders and incremental caching works.
 - Editor opened via `file://` — there is no dev server for the frontend.
 - `requirements.txt` is for the bridge only. The engine has its own (and its own venv).
