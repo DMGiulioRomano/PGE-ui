@@ -24,9 +24,10 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 8 helpers",
+assert("PGEEnvUtils exposes the 9 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
-   "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint"]
+   "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
+   "computeYFit"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -201,6 +202,47 @@ console.log("\n── dephase envelopes (issue #61) ──");
   // scalar / false dephase left untouched (not a time-domain envelope)
   assert("dephase scalar untouched", U.rescaleStreamEnvelopes({ dephase: 0.01 }, 10, 20).dephase === 0.01);
   assert("dephase false untouched",  U.rescaleStreamEnvelopes({ dephase: false }, 10, 20).dephase === false);
+}
+
+// ---------------------------------------------------------------------------
+// computeYFit — auto-fit the envelope Y window to the actual point values
+// (readability), clamped into [hardMin, hardMax]. Unlike the old behaviour it
+// fits the POINTS, not the static [visMin,visMax]; visMin/visMax are only the
+// no-points fallback window.
+// ---------------------------------------------------------------------------
+function near(a, b, eps) { return Math.abs(a - b) <= (eps == null ? 1e-6 : eps); }
+
+console.log("\n── computeYFit ──");
+{
+  // density-like: points small, vis window wide → window must hug the points,
+  // NOT stretch to visMax (the bug this fixes).
+  const r = U.computeYFit([0, 8], { visMin: 0, visMax: 50, hardMin: 0.01, hardMax: 4000, unit: "g/s" });
+  assert("fits points (ymax≈8.8), ignores wide visMax", near(r.ymax, 8.8), JSON.stringify(r));
+  assert("clamps ymin to hardMin (0.01, not -0.8)", r.ymin === 0.01, JSON.stringify(r));
+
+  // points blow past hardMax → window capped at hardMax.
+  const r2 = U.computeYFit([0, 5000], { visMin: 0, visMax: 50, hardMin: 0.01, hardMax: 4000, unit: "g/s" });
+  assert("clamps ymax to hardMax", r2.ymax === 4000, JSON.stringify(r2));
+
+  // no points → fall back to the default [visMin,visMax] window (+pad, clamped).
+  const r3 = U.computeYFit([], { visMin: 0, visMax: 50, hardMin: 0, hardMax: 4000, unit: "" });
+  assert("no points → uses visMin/visMax window", r3.ymin === 0 && near(r3.ymax, 55), JSON.stringify(r3));
+
+  // constant envelope (all equal) → open a minimal window around the value.
+  const r4 = U.computeYFit([3, 3, 3], { visMin: 0, visMax: 10, hardMin: 0, hardMax: 100, unit: "" });
+  assert("constant value → window straddles it", r4.ymin < 3 && r4.ymax > 3, JSON.stringify(r4));
+
+  // constant in seconds uses the finer 0.01 minimum span.
+  const r5 = U.computeYFit([0.5, 0.5], { visMin: 0, visMax: 1, hardMin: 0, hardMax: 10, unit: "s" });
+  assert("constant (s) opens a fine window", r5.ymax > 0.5 && r5.ymin < 0.5 && (r5.ymax - r5.ymin) < 0.1, JSON.stringify(r5));
+
+  // signed values (pan-like): window hugs [-30,40], not the ±360 vis window.
+  const r6 = U.computeYFit([-30, 40], { visMin: -360, visMax: 360, hardMin: -3600, hardMax: 3600, unit: "°" });
+  assert("signed points fit tightly (≈[-37,47])", near(r6.ymin, -37) && near(r6.ymax, 47), JSON.stringify(r6));
+
+  // result is always a proper interval.
+  assert("ymax strictly above ymin in every case",
+    [r, r2, r3, r4, r5, r6].every(x => x.ymax > x.ymin));
 }
 
 console.log(`\n${"─".repeat(50)}`);

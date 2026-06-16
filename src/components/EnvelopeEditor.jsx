@@ -25,37 +25,37 @@ function listEnvelopes(stream) {
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
       path: ["densityEnv"], unit: "g/s",
-      visMin: 0, visMax: 50, hardMin: 0.01, hardMax: 4000 });
+      visMin: 0, visMax: 50, hardMin: PB.density.min, hardMax: PB.density.max });
   }
   if (stream.fillFactorEnv) {
     list.push({ key: "fillFactor", label: "fill_factor", group: "Overall density",
       path: ["fillFactorEnv"], unit: "×",
-      visMin: 0.1, visMax: 20, hardMin: 0.001, hardMax: 50 });
+      visMin: 0.1, visMax: 20, hardMin: PB.fillFactor.min, hardMax: PB.fillFactor.max });
   }
   if (stream.distributionEnv) {
     list.push({ key: "distribution", label: "distribution", group: "Distribution",
       path: ["distributionEnv"], unit: "",
-      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+      visMin: 0, visMax: 1, hardMin: PB.distribution.min, hardMax: PB.distribution.max });
   }
   if (stream.pointer && stream.pointer.speedRatioEnv) {
     list.push({ key: "speedRatio", label: "speed_ratio", group: "Pointer",
       path: ["pointer", "speedRatioEnv"], unit: "×",
-      visMin: -1, visMax: 1, hardMin: -100, hardMax: 100 });
+      visMin: -1, visMax: 1, hardMin: PB.speedRatio.min, hardMax: PB.speedRatio.max });
   }
   if (stream.pointer && stream.pointer.loopStartEnv) {
     list.push({ key: "loopStart", label: "loop_start", group: "Pointer",
       path: ["pointer", "loopStartEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
+      visMin: 0, visMax: 10, hardMin: PB.loopStart.min, hardMax: PB.loopStart.max });
   }
   if (stream.pointer && stream.pointer.loopDurEnv) {
     list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
       path: ["pointer", "loopDurEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: 0.005, hardMax: 3600 });
+      visMin: 0, visMax: 10, hardMin: PB.loopDur.min, hardMax: PB.loopDur.max });
   }
   if (stream.pointer && stream.pointer.loopEndEnv) {
     list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
       path: ["pointer", "loopEndEnv"], unit: "s",
-      visMin: 0, visMax: 10, hardMin: 0, hardMax: 3600 });
+      visMin: 0, visMax: 10, hardMin: PB.loopEnd.min, hardMax: PB.loopEnd.max });
   }
   if (stream.pointer && stream.pointer.offsetRangeEnv) {
     list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
@@ -65,17 +65,17 @@ function listEnvelopes(stream) {
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
       path: ["grain", "durationEnv"], unit: "s",
-      visMin: 0.001, visMax: 0.1, hardMin: 0.001, hardMax: 10 });
+      visMin: 0.001, visMax: 0.1, hardMin: PB.grainDur.min, hardMax: PB.grainDur.max });
   }
   if (stream.grain && stream.grain.durationRangeEnv) {
     list.push({ key: "durationRange", label: "duration_range", group: "Grain",
       path: ["grain", "durationRangeEnv"], unit: "s",
-      visMin: 0, visMax: 0.5, hardMin: 0, hardMax: 10 });
+      visMin: 0, visMax: 0.5, hardMin: PB.durationRange.min, hardMax: PB.durationRange.max });
   }
   if (stream.panEnv) {
     list.push({ key: "pan", label: "pan", group: "Volume & Pan",
       path: ["panEnv"], unit: "°",
-      visMin: -360, visMax: 360, hardMin: -3600, hardMax: 3600 });
+      visMin: -360, visMax: 360, hardMin: PB.pan.min, hardMax: PB.pan.max });
   }
   if (stream.panRangeEnv) {
     list.push({ key: "panRange", label: "pan_range", group: "Volume & Pan",
@@ -85,7 +85,7 @@ function listEnvelopes(stream) {
   if (stream.volumeEnv) {
     list.push({ key: "volume", label: "volume", group: "Volume & Pan",
       path: ["volumeEnv"], unit: "dB",
-      visMin: -40, visMax: 0, hardMin: -120, hardMax: 12 });
+      visMin: -40, visMax: 0, hardMin: PB.volume.min, hardMax: PB.volume.max });
   }
   if (stream.volumeRangeEnv) {
     list.push({ key: "volumeRange", label: "volume_range", group: "Volume & Pan",
@@ -97,9 +97,8 @@ function listEnvelopes(stream) {
     const puLabel = pu === "ratio" ? "ratio" : pu;
     const puUnit  = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
     const edoN = stream.pitch.edoDivisions || 12;
-    const pb = pu === "edo"
-      ? { min: -(3 * edoN), max: 3 * edoN, rangeMax: 3 * edoN }
-      : (PB.pitch[pu] || PB.pitch.semitones);
+    // engine-driven: pitchUnitBounds reads PB.pitch (presets) / edoFactor (edo)
+    const pb = window.PGEEnv.pitchUnitBounds(pu, edoN);
     const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, pb.min, pb.max]
       : pu === "quarter_tone" ? [-12, 12, pb.min, pb.max]
       : pu === "eighth_tone" ? [-24, 24, pb.min, pb.max]
@@ -114,9 +113,8 @@ function listEnvelopes(stream) {
     const pu = stream.pitch.unit || "semitones";
     const puUnit = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
     const edoN2 = stream.pitch.edoDivisions || 12;
-    const prb = pu === "edo"
-      ? { min: -(3 * edoN2), max: 3 * edoN2, rangeMax: 3 * edoN2 }
-      : (PB.pitch[pu] || PB.pitch.semitones);
+    // engine-driven: pitchUnitBounds reads PB.pitch (presets) / edoFactor (edo)
+    const prb = window.PGEEnv.pitchUnitBounds(pu, edoN2);
     const [prVis, prHard] = pu === "cents" ? [1200, prb.rangeMax]
       : pu === "quarter_tone" ? [12, prb.rangeMax]
       : pu === "eighth_tone" ? [24, prb.rangeMax]
@@ -130,16 +128,16 @@ function listEnvelopes(stream) {
   if (stream.voices && stream.voices.numEnv) {
     list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
       path: ["voices", "numEnv"], unit: "",
-      visMin: 1, visMax: 16, hardMin: 1, hardMax: 64 });
+      visMin: 1, visMax: 16, hardMin: PB.voicesNum.min, hardMax: PB.voicesNum.max });
   }
   if (stream.voices && stream.voices.scatterEnv) {
     list.push({ key: "scatter", label: "scatter", group: "Voices",
       path: ["voices", "scatterEnv"], unit: "",
-      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+      visMin: 0, visMax: 1, hardMin: PB.scatter.min, hardMax: PB.scatter.max });
   }
   if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv) {
     const vpu = (stream.voices.pitch || {}).unit;
-    const b = pitchEnvBounds(vpu, { vis: 12, hard: 48 }, true);
+    const b = pitchEnvBounds(vpu, { vis: 12, hard: PB.voicePitchOffset.max }, true);
     list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
       path: ["voices", "pitch", "stepEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
       integer: window.PGEEnv.pitchUnitIsInteger(vpu),
@@ -168,11 +166,11 @@ function listEnvelopes(stream) {
   if (stream.voices && stream.voices.pointer && stream.voices.pointer.stepEnv)
     list.push({ key: "voicesPointerStep", label: "pointer · step", group: "Voices",
       path: ["voices", "pointer", "stepEnv"], unit: "",
-      visMin: -1, visMax: 1, hardMin: -1, hardMax: 1 });
+      visMin: -1, visMax: 1, hardMin: PB.voicePointerOffset.min, hardMax: PB.voicePointerOffset.max });
   if (stream.voices && stream.voices.pointer && stream.voices.pointer.pointer_rangeEnv)
     list.push({ key: "voicesPointerRange", label: "pointer · range", group: "Voices",
       path: ["voices", "pointer", "pointer_rangeEnv"], unit: "",
-      visMin: 0, visMax: 1, hardMin: 0, hardMax: 1 });
+      visMin: 0, visMax: 1, hardMin: PB.voicePointerRange.min, hardMax: PB.voicePointerRange.max });
   if (stream.voices && stream.voices.pan && stream.voices.pan.spreadEnv)
     list.push({ key: "voicesPanSpread", label: "pan · spread", group: "Voices",
       path: ["voices", "pan", "spreadEnv"], unit: "°",
@@ -447,6 +445,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const svgRef = useRefEE(null);
   const rootRef = useRefEE(null);
   const zoneReorderRef = useRefEE(null); // tracks toIdx during zone-reorder drag
+  // Last Y-fit window computed while NOT dragging; reused (frozen) during a drag
+  // so the grabbed point doesn't slide under a rescaling axis. See the autofit
+  // block in the render body.
+  const yFitFrozenRef = useRefEE(null);
   const [envClipboard, setEnvClipboard] = useStateEE(_envClipboard);
 
   /* Arrow-key nudge coordination with the timeline clip-nudge (app.jsx). Both
@@ -776,16 +778,18 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const innerW = Math.max(40, totalW - PAD_L - PAD_R);
 
   /* Y autofit — fit all expanded points + raw breakpoints */
-  let ymin = env.visMin,ymax = env.visMax;
-  if (exp.points.length) {
-    const ys = exp.points.map((p) => p[1]);
-    ymin = Math.min(ymin, ...ys);
-    ymax = Math.max(ymax, ...ys);
-  }
-  if (ymin === ymax) ymax = ymin + (env.unit === "s" ? 0.01 : 1);
-  const yRange = ymax - ymin;
-  ymax = Math.min(env.hardMax, ymax + yRange * 0.10);
-  ymin = Math.max(env.hardMin, ymin - yRange * 0.10);
+  // Fit the Y window to the actual point values (readability), clamped to the
+  // dynamic [hardMin,hardMax]. computeYFit lives in envelope-utils.js (node-
+  // tested). Live while idle — so opening a param or a discrete edit refits at
+  // once — and frozen to the last idle window for the duration of a drag.
+  const _yVals = exp.points.length ? exp.points.map((p) => p[1]) : [];
+  const _liveFit = window.PGEEnvUtils.computeYFit(_yVals, {
+    visMin: env.visMin, visMax: env.visMax,
+    hardMin: env.hardMin, hardMax: env.hardMax, unit: env.unit,
+  });
+  if (!dragging) yFitFrozenRef.current = _liveFit;
+  const _fit = (dragging && yFitFrozenRef.current) ? yFitFrozenRef.current : _liveFit;
+  let ymin = _fit.ymin, ymax = _fit.ymax;
 
   function xOf(bpX) {return PAD_L + bpX * innerW;}
   function bpXofXPx(xPx) {return (xPx - PAD_L) / innerW;}

@@ -295,3 +295,132 @@ def test_envelope_keys_endpoint(tmp_path):
     body = client.get("/envelope-keys").get_json()
     assert body["ok"] is True
     assert body["keys"] == ["volume", "pan", "pitch"]
+
+
+# ---------------------------------------------------------------------------
+# Dynamic parameter bounds — engine_parameter_bounds + /bounds (PGE-ui)
+# ---------------------------------------------------------------------------
+
+def _stub_parameter_files(root):
+    """Write minimal parameter_definitions.py + pitch_unit.py so
+    engine_parameter_bounds has the GRANULAR_PARAMETERS dict + the pitch
+    classes/presets to AST-parse. The `import` lines would explode if the
+    parser ever executed the module instead of parsing it (mirrors the
+    score_visualizer stub trick)."""
+    p = root / "src" / "parameters"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "parameter_definitions.py").write_text(
+        "import definitely_not_a_real_module_zzz  # never imported by the parser\n"
+        "from dataclasses import dataclass\n"
+        "\n"
+        "@dataclass(frozen=True)\n"
+        "class ParameterBounds:\n"
+        "    min_val: float\n"
+        "    max_val: float | None\n"
+        "    min_range: float = 0.0\n"
+        "    max_range: float = 0.0\n"
+        "    default_jitter: float = 0.0\n"
+        "    variation_mode: str = 'additive'\n"
+        "\n"
+        "GRANULAR_PARAMETERS: dict = {\n"
+        "    'density': ParameterBounds(min_val=0.01, max_val=4000.0),\n"
+        "    'grain_duration': ParameterBounds(min_val=0.001, max_val=10.0,\n"
+        "        min_range=0.0, max_range=1.0, default_jitter=0.01,\n"
+        "        variation_mode='additive'),\n"
+        "    'pointer_speed_ratio': ParameterBounds(min_val=-100.0, max_val=100.0),\n"
+        "    'loop_dur': ParameterBounds(min_val=0.005, max_val=None),\n"
+        "    'volume': ParameterBounds(min_val=-120.0, max_val=12.0,\n"
+        "        min_range=0.0, max_range=24.0, default_jitter=3),\n"
+        "    'reverse': ParameterBounds(min_val=0, max_val=1, min_range=0,\n"
+        "        max_range=1, variation_mode='invert'),\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (p / "pitch_unit.py").write_text(
+        "import definitely_not_a_real_module_zzz  # never imported by the parser\n"
+        "\n"
+        "class EdoUnit:\n"
+        "    def value_bounds(self):\n"
+        "        bound = 3.0 * self.divisions\n"
+        "        return ParameterBounds(min_val=-bound, max_val=bound,\n"
+        "            min_range=0.0, max_range=bound, variation_mode='quantized')\n"
+        "\n"
+        "class RatioUnit:\n"
+        "    def value_bounds(self):\n"
+        "        return ParameterBounds(min_val=0.001, max_val=8.0,\n"
+        "            min_range=0.0, max_range=2.0, default_jitter=0.005)\n"
+        "\n"
+        "PITCH_UNIT_PRESETS: dict = {\n"
+        "    'semitones':    lambda: EdoUnit(12, name='semitones', symbol='st'),\n"
+        "    'cents':        lambda: EdoUnit(1200, name='cents', symbol='c'),\n"
+        "    'quarter_tone': lambda: EdoUnit(24, name='quarter_tone', symbol='qt'),\n"
+        "    'eighth_tone':  lambda: EdoUnit(48, name='eighth_tone', symbol='et'),\n"
+        "    'ratio':        lambda: RatioUnit(),\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+
+def test_engine_parameter_bounds_parses_registry(tmp_path):
+    import server
+    _stub_parameter_files(tmp_path)
+    params = server.engine_parameter_bounds(tmp_path)["params"]
+    # full record with dataclass defaults applied for unspecified fields
+    assert params["density"] == {
+        "min_val": 0.01, "max_val": 4000.0, "min_range": 0.0,
+        "max_range": 0.0, "default_jitter": 0.0, "variation_mode": "additive",
+    }
+    assert params["grain_duration"]["max_range"] == 1.0
+    assert params["grain_duration"]["default_jitter"] == 0.01
+    # negative literal (ast UnaryOp) survives
+    assert params["pointer_speed_ratio"]["min_val"] == -100.0
+    # max_val=None stays None (loop bound is sample-driven, dynamic)
+    assert params["loop_dur"]["max_val"] is None
+    assert params["volume"]["max_range"] == 24.0
+    assert params["reverse"]["variation_mode"] == "invert"
+
+
+def test_engine_parameter_bounds_pitch(tmp_path):
+    import server
+    _stub_parameter_files(tmp_path)
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert pitch["edoFactor"] == 3.0
+    assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}
+    assert pitch["cents"] == {"min": -3600.0, "max": 3600.0, "rangeMax": 3600.0}
+    assert pitch["quarter_tone"] == {"min": -72.0, "max": 72.0, "rangeMax": 72.0}
+    assert pitch["eighth_tone"] == {"min": -144.0, "max": 144.0, "rangeMax": 144.0}
+    assert pitch["ratio"] == {"min": 0.001, "max": 8.0, "rangeMax": 2.0}
+
+
+def test_engine_parameter_bounds_missing_returns_empty(tmp_path):
+    import server
+    assert server.engine_parameter_bounds(tmp_path / "nope") == {}
+
+
+def test_bounds_endpoint(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_parameter_files(tmp_path)
+
+    app = server.make_app(tmp_path, render_timeout=600.0)
+    client = app.test_client()
+    body = client.get("/bounds").get_json()
+    assert body["ok"] is True
+    assert body["bounds"]["params"]["density"]["max_val"] == 4000.0
+    assert body["bounds"]["pitch"]["edoFactor"] == 3.0
+
+
+def test_bounds_endpoint_empty_when_engine_absent(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    # no parameters/ stubs → empty bounds, UI falls back to static defaults
+    app = server.make_app(tmp_path, render_timeout=600.0)
+    client = app.test_client()
+    body = client.get("/bounds").get_json()
+    assert body == {"ok": True, "bounds": {}}
