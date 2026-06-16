@@ -414,7 +414,7 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
               </span>
               <span />
             </div>
-            <div className="voice-meta">offset in s · sums onto base pointer + grain jitter</div>
+            <div className="voice-meta">offset in s · sums onto base pointer + grain jitter · with a loop, confined to [loop_start, loop_end)</div>
           </>
         )}
       </VoiceGroup>

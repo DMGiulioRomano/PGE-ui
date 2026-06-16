@@ -294,6 +294,30 @@
       ? sampleDur : null;
   }
 
+  // Mirror of the engine's static loop-window validation (PGE issue #97 / engine
+  // ec61242). With a loop active the engine now confines the grain read position
+  // — base + pointer.offset_range + voice pointer offsets — to [loop_start,
+  // loop_end) via modular wrap (previously it could read the whole file), and
+  // rejects a degenerate window at parse time: loop_end <= loop_start raises
+  // InvalidFieldValueError. Only the SCALAR (static-bound) form is checked: an
+  // envelope on either endpoint is evaluated per-grain and is exempt, exactly as
+  // the engine exempts dynamic bounds. loop_dur mode is intentionally
+  // unconstrained here — it is the ONLY way to express a window that straddles
+  // the end of the file (loop_start + loop_dur > sample_dur); loop_end stays
+  // bound to [0, sample_dur]. loop_start absent defaults to 0 (engine default).
+  // Returns null when valid / not applicable, else { loopStart, loopEnd } so the
+  // caller can build the message. Pure — no DOM, no engine call.
+  function loopBoundsError(pointer) {
+    if (!pointer) return null;
+    // dynamic endpoint → exempt (engine evaluates it per-grain, no static check)
+    if (pointer.loopStartEnv != null || pointer.loopEndEnv != null) return null;
+    const le = pointer.loopEnd;
+    if (typeof le !== "number" || !isFinite(le)) return null; // loop_dur mode / no end
+    const ls = (typeof pointer.loopStart === "number" && isFinite(pointer.loopStart))
+      ? pointer.loopStart : 0;
+    return le <= ls ? { loopStart: ls, loopEnd: le } : null;
+  }
+
   window.PGEEnvUtils = {
     rescaleEnvArray,
     truncateEnvArray,
@@ -305,5 +329,6 @@
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,
+    loopBoundsError,
   };
 })();

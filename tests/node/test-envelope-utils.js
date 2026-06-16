@@ -26,10 +26,10 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 10 helpers",
+assert("PGEEnvUtils exposes the 11 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax"]
+   "computeYFit", "loopEnvMax", "loopBoundsError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -311,6 +311,45 @@ console.log("\n── loopEnvMax (sample-driven loop bound) ──");
 
   // null/empty stream is tolerated (no throw); absolute with no duration → null
   assert("null stream → null", U.loopEnvMax(null, undefined) === null);
+}
+
+// loopBoundsError — mirrors the engine's static loop-window validation (PGE
+// issue #97 / engine ec61242): with a loop active the read position is confined
+// to [loop_start, loop_end) via modular wrap, so a degenerate window is rejected
+// at parse time (loop_end <= loop_start → InvalidFieldValueError). Only the
+// SCALAR form is checked; an envelope on either endpoint is dynamic → exempt.
+// loop_dur mode is intentionally unconstrained (the way to straddle the file end).
+console.log("\n── loopBoundsError ──");
+{
+  const LB = U.loopBoundsError;
+  // valid windows → null
+  assert("loop_end > loop_start → null", LB({ loopStart: 0, loopEnd: 1 }) === null);
+  assert("loop_end > loop_start (non-zero start) → null",
+    LB({ loopStart: 0.5, loopEnd: 2 }) === null);
+  // degenerate windows → { loopStart, loopEnd }
+  assert("loop_end == loop_start → error",
+    eq(LB({ loopStart: 1, loopEnd: 1 }), { loopStart: 1, loopEnd: 1 }));
+  assert("loop_end < loop_start → error",
+    eq(LB({ loopStart: 2, loopEnd: 0.5 }), { loopStart: 2, loopEnd: 0.5 }));
+  // loop_start absent → engine default 0
+  assert("loop_end > 0, loop_start absent → null", LB({ loopEnd: 1 }) === null);
+  assert("loop_end == 0, loop_start absent → error (default start 0)",
+    eq(LB({ loopEnd: 0 }), { loopStart: 0, loopEnd: 0 }));
+  assert("loop_end < 0, loop_start absent → error",
+    eq(LB({ loopEnd: -1 }), { loopStart: 0, loopEnd: -1 }));
+  // loop_dur mode (no loop_end) is unconstrained
+  assert("loop_dur mode (no loop_end) → null", LB({ loopStart: 2, loopDur: 1 }) === null);
+  assert("loop_start only, no end/dur → null", LB({ loopStart: 0 }) === null);
+  // envelope endpoints are dynamic → exempt from the static check
+  assert("loop_end envelope → exempt even if first bp <= start",
+    LB({ loopStart: 2, loopEndEnv: [[0, 0], [1, 0]] }) === null);
+  assert("loop_start envelope → exempt",
+    LB({ loopStartEnv: [[0, 3], [1, 3]], loopEnd: 1 }) === null);
+  // robustness
+  assert("null pointer → null", LB(null) === null);
+  assert("empty pointer → null", LB({}) === null);
+  assert("non-numeric loop_end (dash placeholder) → null",
+    LB({ loopStart: 0, loopEnd: "—" }) === null);
 }
 
 console.log(`\n${"─".repeat(50)}`);
