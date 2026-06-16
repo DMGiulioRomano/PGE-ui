@@ -26,7 +26,9 @@ make tests            # full suite: tests-node + tests-python
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary), `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
-  (preferences `applyEdit` merge + a guard against the removed design-tool residue).
+  (preferences `applyEdit` merge + a guard against the removed design-tool residue),
+  and `test-audio-clock.js` (the playback clock's latency/lead compensation —
+  `audiblePosition`/`playAt` in `window.PGEAudioClock`).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -84,7 +86,7 @@ Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** 
 
 ### Audio playback (`audio-engine.js`)
 
-`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. The render output format is a Settings preference (`tweaks.outputFormat`, **default `wav`**, also `aiff`/`flac`), forwarded to the engine as `--format`. `backend.js` `stemUrl` routes playback by format: `wav`/`flac` → `GET /output/<basename>__<sid>.<ext>` served **raw** (browsers decode these natively — no sox); `aiff` → `GET /audio/<basename>__<sid>.aif`, which `server.py` transcodes to WAV via sox because Firefox can't decode AIFF natively. So with the default WAV, playback needs no sox at all; the `/audio` transcode is only the AIFF path. Sample durations in `GET /media` come from `soundfile` (`sf.info`, header-only), with `soxi -D` as fallback. Streams without a rendered stem stay silent (no procedural fallback).
+`window.PGEAudio.engine` is the master clock once playing — visual playhead reads `engine.currentTime` from `audioCtx.currentTime`, not its own `requestAnimationFrame` counter. The clock is **latency-compensated** so the cursor sits on the *audible* sound rather than ahead of it: `scheduleStreams` anchors `startedAtCtx` a small **start lead** (`START_LEAD_SEC`) into the future — enough for the `<audio>` media elements to reach `canplay` before they must sound — and `currentTime` subtracts the device `outputLatency` (falling back to `baseLatency`), clamping to the start position during the lead so the playhead holds instead of jumping. The streaming path (`_scheduleStreaming`) preloads each element a lead before its onset, gates `play()` to the clip's ctx-clock start (`PGEAudioClock.playAt`, which clamps to "now" for a mid-playback reschedule whose anchor is in the past), and on residual lateness seeks the element forward so audio re-aligns with the playhead. A pure decoded-buffer schedule needs no lead (sample-accurate `source.start`), so the lead collapses to the output latency. The pure clock math (`audiblePosition`, `playAt`) is exposed as `window.PGEAudioClock` and node-tested in `test-audio-clock.js`. The render output format is a Settings preference (`tweaks.outputFormat`, **default `wav`**, also `aiff`/`flac`), forwarded to the engine as `--format`. `backend.js` `stemUrl` routes playback by format: `wav`/`flac` → `GET /output/<basename>__<sid>.<ext>` served **raw** (browsers decode these natively — no sox); `aiff` → `GET /audio/<basename>__<sid>.aif`, which `server.py` transcodes to WAV via sox because Firefox can't decode AIFF natively. So with the default WAV, playback needs no sox at all; the `/audio` transcode is only the AIFF path. Sample durations in `GET /media` come from `soundfile` (`sf.info`, header-only), with `soxi -D` as fallback. Streams without a rendered stem stay silent (no procedural fallback).
 
 ### History / undo (`app.jsx`)
 
