@@ -636,6 +636,23 @@ const { DEPHASE_IMPLICIT } = window.PGEYaml;
 }
 
 {
+  // global typed-envelope {type, points} — what the editor emits when the user
+  // picks cubic on a global dephase envelope. The engine reads it as a GLOBAL
+  // cubic envelope (is_envelope_like: dict with 'points', classified before the
+  // per-param dict branch), so it must round-trip verbatim, not be flattened or
+  // mistaken for a per-param object.
+  const dataT = parse(topLevelYaml(["dephase:", "  type: cubic", "  points: [[0, 0], [1, 100]]"]));
+  const d = dataT.streams[0].dephase;
+  assert("dephase typed env — object with type+points kept",
+    d && d.type === "cubic" && Array.isArray(d.points) && d.points.length === 2, JSON.stringify(d));
+  assert("roundtrip dephase typed env — no diffs", roundTripDiff(dataT).length === 0,
+    JSON.stringify(roundTripDiff(dataT)));
+  assert("dephase typed env — survives YAML→UI→YAML→UI",
+    eq(parse(serialize(dataT)).streams[0].dephase, d),
+    JSON.stringify({ before: d, after: parse(serialize(dataT)).streams[0].dephase }));
+}
+
+{
   // per-param object: passes verbatim; an INTERNAL null (per-key default
   // prob) stays null, it must NOT become the sentinel.
   const yamlPP = `streams:

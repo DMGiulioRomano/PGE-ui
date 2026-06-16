@@ -9,9 +9,11 @@ const fs   = require("fs");
 const path = require("path");
 
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
-// window.PGEEnv at IIFE time. js-yaml is provided in case envelope-loops needs it.
+// window.PGEEnv at IIFE time and reads window.PGEDephase (dephase.js) at call
+// time. js-yaml is provided in case envelope-loops needs it.
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/dephase.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const U = window.PGEEnvUtils;
@@ -243,6 +245,34 @@ console.log("\n── computeYFit ──");
   // result is always a proper interval.
   assert("ymax strictly above ymin in every case",
     [r, r2, r3, r4, r5, r6].every(x => x.ymax > x.ymin));
+}
+
+console.log("\n── dephase typed {type,points} envelopes (cubic global interp) ──");
+{
+  // GLOBAL typed envelope (what wrapEnv emits for cubic) must be treated as a
+  // single global env: its points rescale, and it counts for truncation.
+  const typedStream = { id: "s7", dephase: { type: "cubic", points: [[0, 0], [1, 1]] } };
+  const rt = U.rescaleStreamEnvelopes(typedStream, 10, 20);
+  assert("rescale dephase typed global env (points scaled)",
+    eq(rt.dephase, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
+  assert("streamWouldTruncate true on typed global dephase env",
+    U.streamWouldTruncate(typedStream, 2) === true);
+  assert("rescale does not mutate typed dephase input",
+    eq(typedStream.dephase, { type: "cubic", points: [[0, 0], [1, 1]] }));
+
+  // truncate clips a typed global env past x=1.0 (object-form path).
+  const tt = U.truncateStreamEnvelopes({ id: "s7b", dephase: { type: "cubic", points: [[0, 0], [2, 1]] } });
+  assert("truncate typed global dephase env clips past 1.0",
+    eq(tt.dephase, { type: "cubic", points: [[0, 0], [1, 0.5]] }), JSON.stringify(tt.dephase));
+
+  // PER-PARAM with a typed envelope value: that param rescales too.
+  const ppStream = { id: "s8", dephase: { volume: { type: "cubic", points: [[0, 0], [1, 1]] }, pan: 0.5 } };
+  const rp = U.rescaleStreamEnvelopes(ppStream, 10, 20);
+  assert("rescale dephase.volume typed env param",
+    eq(rp.dephase.volume, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
+  assert("dephase.pan scalar preserved alongside typed param", rp.dephase.pan === 0.5);
+  assert("streamWouldTruncate true on typed per-param dephase env",
+    U.streamWouldTruncate(ppStream, 2) === true);
 }
 
 console.log(`\n${"─".repeat(50)}`);
