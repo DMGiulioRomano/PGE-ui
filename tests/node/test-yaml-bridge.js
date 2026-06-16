@@ -790,6 +790,78 @@ const serEnv0 = (d) => window.jsyaml.load(serialize(d)).streams[0].grain.envelop
 }
 
 /* ============================================================
+ * SECTION 8e-bis — grain.envelope blend curve with a non-linear global interp
+ * (step / cubic). The editor stores it as the typed dict {type, points} (via
+ * wrapEnv); parse/serialize must round-trip it WITHOUT crashing. The multistate
+ * branch used `curve.map(...)`, which threw "map is not a function" on the dict
+ * — the reported step/cubic crash. Transition keeps the dict verbatim.
+ * ============================================================ */
+
+console.log("\n── grain.envelope curve: step/cubic dict form (no crash) ──");
+
+{
+  // multistate + dict step curve in YAML → parse → serialize re-emits the
+  // engine-space dict verbatim (n=3: engine 0.5 ↔ editor 1.0). Regression:
+  // parse no longer crashes on the dict, serialize no longer crashes on `.map`.
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: {type: step, points: [[0, 0], [0.5, 0.5], [1, 1]]}"));
+  const env = serEnv0(data);
+  assert("step dict curve preserved verbatim",
+    eq(env.curve, { type: "step", points: [[0, 0], [0.5, 0.5], [1, 1]] }),
+    JSON.stringify(env.curve));
+  assert("step dict multistate — roundTrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // the actual editor gesture: an existing linear-array multistate curve gets the
+  // dict cubic form assigned (what commitWithInterp/wrapEnv produce). serialize
+  // must rescale points /(n-1), keep the {type} wrapper, and NOT throw.
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [1, 1]]"));
+  data.streams[0].grain.envelope.curve = { type: "cubic", points: [[0, 0], [0.5, 1.0], [1, 2]] };
+  let env, threw = false;
+  try { env = serEnv0(data); } catch (e) { threw = true; }
+  assert("cubic dict curve edit serializes without crashing", !threw);
+  assert("cubic dict curve edit rescaled to engine space, type kept",
+    !threw && eq(env.curve, { type: "cubic", points: [[0, 0], [0.5, 0.5], [1, 1]] }),
+    JSON.stringify(env && env.curve));
+}
+
+{
+  // transition + dict step curve: kept verbatim through parse + serialize
+  // (transition curve is already engine-space [0, 1], no rescale).
+  const data = parse(topLevelYaml([
+    "grain:",
+    "  duration: 0.05",
+    "  envelope:",
+    "    from: hanning",
+    "    to: bartlett",
+    "    curve: {type: step, points: [[0, 0], [1, 1]]}",
+  ]));
+  const env = serEnv0(data);
+  assert("transition step dict curve preserved",
+    eq(env, { from: "hanning", to: "bartlett", curve: { type: "step", points: [[0, 0], [1, 1]] } }),
+    JSON.stringify(env));
+  assert("transition step dict — roundTrip lossless",
+    roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // per-point interp triple on a multistate curve survives the round trip
+  // (the old rescale dropped it, emitting only [t, v]).
+  const data = parse(multistateYaml(
+    ["- [0, hanning]", "- [0.5, bartlett]", "- [1, blackman]"],
+    "curve: [[0, 0], [0.5, 0.5, step], [1, 1]]"));
+  const env = serEnv0(data);
+  assert("per-point interp on curve preserved",
+    eq(env.curve, [[0, 0], [0.5, 0.5, "step"], [1, 1]]),
+    JSON.stringify(env.curve));
+}
+
+/* ============================================================
  * SECTION 8f — explicit *_range: 0 is preserved (#50). Engine-side an explicit
  * range (even 0) sets has_explicit_range and DISABLES the implicit jitter the
  * dephase gate would otherwise apply (parameter.py _calculate_range: _mod_range

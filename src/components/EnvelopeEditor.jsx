@@ -195,7 +195,13 @@ function listEnvelopes(stream) {
       }
     }
   }
-  if (stream.grain && stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope) && Array.isArray(stream.grain.envelope.curve)) {
+  // The blend curve is either a plain [[t,v],…] array or the typed dict form
+  // {type, points} the editor emits when the user picks step/cubic global
+  // interp. Recognize both, or a non-linear curve silently drops out of the
+  // editor (and used to crash on serialize for multistate).
+  const _gEnv = stream.grain && stream.grain.envelope;
+  const _gEnvCurve = (_gEnv && typeof _gEnv === "object" && !Array.isArray(_gEnv)) ? _gEnv.curve : null;
+  if (_gEnvCurve != null && (Array.isArray(_gEnvCurve) || (typeof _gEnvCurve === "object" && Array.isArray(_gEnvCurve.points)))) {
     const genv = stream.grain.envelope;
     const isMultistate = Array.isArray(genv.states);
     const vmax = isMultistate ? Math.max(1, genv.states.length - 1) : 1;
