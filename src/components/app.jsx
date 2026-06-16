@@ -1334,6 +1334,7 @@ function App() {
     <ErrorBoundary label="Envelope editor">
     <EnvelopeEditor stream={selected()} pxPerSec={tweaks.zoom} duration={compDuration}
                     playhead={time}
+                    samples={mediaList.files}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
                     onLoopPanelChange={setLoopPanelOpen}
                     focusKey={envFocusKey}
