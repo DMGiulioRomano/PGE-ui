@@ -893,11 +893,16 @@ function App() {
         sample: sampleName, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
         timeMode: "normalized", distributionMode: "uniform",
-        density: 8, distribution: 0,
+        // Overall density defaults to fill_factor mode (= 2): density tracks
+        // grain_duration automatically instead of a fixed grains/sec. Mutually
+        // exclusive with density — keep density null, mirroring parse output.
+        density: null, fillFactor: 2, distribution: 0,
         volume: 0, volumeRange: null,
         pan: 0, panRange: null,
         grain: { duration: 0.05, durationRange: null, envelope: "hanning" },
-        pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null },
+        // loop_unit: normalized → start/loop coords read as [0,1] × sample_dur.
+        // No loop_start, so no loop is created; it only sets the unit convention.
+        pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null, loopUnit: "normalized" },
         pitch: { semitones: 0, range: null },
         voices: { num: 1 },
       };

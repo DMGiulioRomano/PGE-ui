@@ -1468,6 +1468,48 @@ const noSeedYaml = "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n
 }
 
 /* ============================================================
+ * SECTION 12 — new clip stream defaults (app.jsx createStreamFromSample)
+ *
+ * A freshly dropped clip defaults its Overall density to fill_factor mode
+ * (= 2, density tracks grain_duration) and its pointer to loop_unit:
+ * normalized (start/loop coords read as [0,1] × sample_dur). loop_start stays
+ * absent, so no loop is created — loop_unit only sets the unit convention.
+ * These pin the shape the editor emits so it can't silently drift back to a
+ * fixed density: 8 / absent loop_unit.
+ * ============================================================ */
+
+console.log("\n── new clip stream defaults (#createStreamFromSample) ──");
+
+{
+  // Mirrors the object built in createStreamFromSample (color/onset omitted —
+  // they don't affect the emitted density/pointer contract).
+  const newClip = {
+    id: "stream1", onset: 0, duration: 4, sample: "test.wav",
+    mute: false, solo: false,
+    timeMode: "normalized", distributionMode: "uniform",
+    density: null, fillFactor: 2, distribution: 0,
+    volume: 0, volumeRange: null,
+    pan: 0, panRange: null,
+    grain: { duration: 0.05, durationRange: null, envelope: "hanning" },
+    pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null, loopUnit: "normalized" },
+    pitch: { semitones: 0, range: null },
+    voices: { num: 1 },
+  };
+  const data = { streams: [newClip], title: "", duration: 60, bpm: 120 };
+  const y = serialize(data);
+  assert("new clip — fill_factor: 2 emitted", /fill_factor:\s*2\b/.test(y), y.slice(0, 500));
+  assert("new clip — density not emitted", !/^\s*density:/m.test(y), y.slice(0, 500));
+  assert("new clip — loop_unit: normalized emitted", y.includes("loop_unit: normalized"), y.slice(0, 500));
+  assert("new clip — no loop_start (no loop created)", !/loop_start:/.test(y), y.slice(0, 500));
+
+  const back = parse(y).streams[0];
+  assert("new clip — fillFactor survives, density null", back.fillFactor === 2 && back.density == null,
+    JSON.stringify({ ff: back.fillFactor, d: back.density }));
+  assert("new clip — loopUnit survives reparse", back.pointer.loopUnit === "normalized",
+    JSON.stringify(back.pointer));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 
