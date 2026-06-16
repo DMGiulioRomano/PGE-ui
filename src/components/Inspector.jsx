@@ -32,7 +32,10 @@ function AddParamMenu({ options, onAdd }) {
      - implicit      → dephase: null/absent  (default ~1% global probability)
      - global        → dephase: number | [[t,v],…]  (probability 0–100, same for all params)
      - per-parameter → dephase: { volume?, pan?, duration?, pitch?, pointer?, reverse?, envelope? }
-                       each value scalar or envelope (0–100)
+                       each value scalar or envelope (0–100); a key left out (or
+                       null) is range-only for that param — its _range applies at
+                       100% if present, else no variation (engine: GateFactory
+                       range-only, same as dephase:false for that param)
 */
 const DEPHASE_PARAMS = [
   { key: "volume",   desc: "applies volume_range per grain" },
@@ -162,6 +165,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
               exists: d && d[p.key] != null, def: 50
             }))}
             onAdd={(o) => onChange({ dephase: { ...(d || {}), [o.key]: o.def } })} />
+          <div className="voice-empty">unlisted params apply their _range at 100% (off if none) — add one only to lower its probability</div>
         </>
       ) : null}
     </Section>
