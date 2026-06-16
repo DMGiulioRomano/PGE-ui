@@ -22,6 +22,12 @@
 .pge-envedit .ee-side { flex: 0 0 auto; background: var(--bg-panel); border-right: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; overflow: hidden; position: relative; }
 .pge-envedit .ee-side-head { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); flex: 0 0 auto; background: var(--bg-panel); position: relative; z-index: 2; }
 .pge-envedit .ee-side-meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); display: flex; align-items: center; gap: 4px; }
+/* editable x,y of the selected breakpoint — sits below the head, above the yaxis overlay */
+.pge-envedit .ee-side-bp { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); flex: 0 0 auto; background: var(--bg-panel); position: relative; z-index: 2; }
+.pge-envedit .ee-side-bp-title { font-size: 10px; color: var(--accent); letter-spacing: 0.04em; }
+.pge-envedit .ee-side-bp-row { display: flex; align-items: center; gap: 6px; }
+.pge-envedit .ee-side-bp-lbl { font-size: 10px; color: var(--fg-3); width: 10px; flex: 0 0 auto; }
+.pge-envedit .ee-side-bp-sec { font-size: 9px; color: var(--fg-4); text-align: right; }
 /* yaxis overlays the full side so label `top` matches SVG coordinates */
 .pge-envedit .ee-side-yaxis { position: absolute; inset: 0; pointer-events: none; }
 .pge-envedit .ee-side-yunit { position: absolute; right: 8px; transform: translateY(0); font-size: 9px; color: var(--fg-2); font-family: var(--font-mono); letter-spacing: 0.04em; }

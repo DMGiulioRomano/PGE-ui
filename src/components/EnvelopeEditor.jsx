@@ -447,7 +447,7 @@ function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
 }
 
 function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey, arrowOwnerRef, samples }) {
-  const { Icon } = window.PGE;
+  const { Icon, NumberField } = window.PGE;
   // Chosen sample's duration drives the loop-window clamps (loop_* can't reach
   // past the sample's end). Same lookup the Inspector uses; undefined when the
   // sample isn't found or durations aren't available (file:// / server down).
@@ -950,6 +950,37 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  }
+
+  /* ----- keyboard-typed edit of the selected breakpoint's x / y -----
+     Drives the editable coordinate boxes in the side column. Same clamps as
+     the drag: x to the neighbouring BPs inside [0,1], y to [hardMin,hardMax].
+     One commit = one undo step. */
+  function setBPCoord(axis, raw) {
+    if (selectedBP == null) return;
+    const cur = rawEnv[selectedBP];
+    if (!PGEEnv.isBreakpoint(cur)) return;
+    if (!Number.isFinite(raw)) return;
+    let newX = cur[0], newVal = cur[1];
+    if (axis === "x") {
+      const xStep = 0.001;
+      const flatBPIndices = rawEnv.map((it, i) => PGEEnv.isBreakpoint(it) ? i : -1).filter((i) => i >= 0);
+      const myPos = flatBPIndices.indexOf(selectedBP);
+      const prevBP = myPos > 0 ? rawEnv[flatBPIndices[myPos - 1]] : null;
+      const nextBP = myPos < flatBPIndices.length - 1 ? rawEnv[flatBPIndices[myPos + 1]] : null;
+      const lo = prevBP ? prevBP[0] + xStep : xMin;
+      const hi = nextBP ? nextBP[0] - xStep : xMax;
+      newX = Math.max(lo, Math.min(hi, raw));
+    } else {
+      newVal = Math.max(env.hardMin, Math.min(env.hardMax, raw));
+    }
+    const updated = rawEnv.map((it, i) => {
+      if (i !== selectedBP) return it;
+      const bp = [+newX.toFixed(xPrec), +newVal.toFixed(yPrec)];
+      if (it.length >= 3) bp.push(it[2]);
+      return bp;
+    });
+    commit(updated);
   }
 
   /* ----- pattern point drag (inside loop's first cycle) ----- */
@@ -1662,6 +1693,26 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           <div className="ee-side-head">
             <EnvParamSelect envelopes={envelopes} value={env.key} onChange={setSelectedKey} compact />
           </div>
+          {/* editable x,y of the selected standalone breakpoint */}
+          {selectedBP != null && rawEnv[selectedBP] && PGEEnv.isBreakpoint(rawEnv[selectedBP]) ? (() => {
+            const p = rawEnv[selectedBP];
+            const bpNum = bpIndices.indexOf(selectedBP) + 1;
+            return (
+              <div className="ee-side-bp">
+                <div className="ee-side-bp-title mono">bp {bpNum > 0 ? bpNum : ""}</div>
+                <div className="ee-side-bp-row">
+                  <span className="ee-side-bp-lbl mono">x</span>
+                  <NumberField value={+p[0].toFixed(3)} width={68}
+                    onChange={(v) => setBPCoord("x", v)} />
+                </div>
+                <div className="ee-side-bp-row">
+                  <span className="ee-side-bp-lbl mono">y</span>
+                  <NumberField value={+p[1].toFixed(yPrec)} unit={env.unit} width={68} accent
+                    onChange={(v) => setBPCoord("y", v)} />
+                </div>
+                <div className="ee-side-bp-sec mono">{(stream.onset + p[0] * stream.duration).toFixed(2)}s</div>
+              </div>);
+          })() : null}
           <div className="ee-side-yaxis">
             {yTicks.map((yt) =>
             <div key={yt.v.toFixed(6)} className="ee-side-ylbl mono" style={{ top: yt.y }}>
