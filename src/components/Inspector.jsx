@@ -45,7 +45,7 @@ const DEPHASE_PARAMS = [
 ];
 
 function DephaseSection({ stream, onChange, onFocusEnvParam }) {
-  const { Section, ParamRow, Seg, Icon, Tag } = window.PGE;
+  const { Section, ParamRow, Seg, Icon, Tag, NumberField } = window.PGE;
   const PGEDephase = window.PGEDephase, PGEEnv = window.PGEEnv;
   const d = stream.dephase;
   // Classification lives in the shared window.PGEDephase (single source of
@@ -146,7 +146,8 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                     <span className="env-label">{items.length} bp</span>
                   </span>
                 ) : (
-                  <span className="v"><span className="pge-field" style={{width:70}}><span className="val">{val}</span><span className="unit">%</span></span></span>
+                  <span className="v"><NumberField value={val} unit="%" width={70}
+                        onChange={(nv) => onChange({ dephase: { ...d, [p.key]: nv } })} /></span>
                 )}
                 <button className="pge-icon-btn" title="Remove"
                         onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : window.PGEYaml.DEPHASE_IMPLICIT }); }}>
