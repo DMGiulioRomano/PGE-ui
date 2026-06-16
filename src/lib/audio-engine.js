@@ -29,6 +29,29 @@
   // fallback decode path over a long session (~20 MB/min per stereo 48k stem).
   const MAX_DECODED_BUFFERS = 16;
 
+  // Lead (seconds) folded into the clock anchor when streamed <audio> stems are
+  // scheduled, giving them time to reach `canplay` before they must sound. Small
+  // enough to feel responsive on play, large enough to cover a localhost WAV
+  // spin-up; residual lateness is absorbed by the compensating seek in
+  // `_scheduleStreaming`. Tune here if start sync ever drifts.
+  const START_LEAD_SEC = 0.09;
+
+  // --- pure clock math (no AudioContext), exposed as window.PGEAudioClock and
+  // exercised in tests/node/test-audio-clock.js -----------------------------
+  // Position currently audible: the ctx clock advanced since the anchor, minus
+  // device output latency, clamped so the start lead/latency window holds at
+  // `startedFromTimeline` instead of dipping below it.
+  function audiblePosition(ctxTime, startedAtCtx, startedFromTimeline, latency) {
+    const t = startedFromTimeline + (ctxTime - startedAtCtx) - (latency || 0);
+    return t < startedFromTimeline ? startedFromTimeline : t;
+  }
+  // ctx-clock instant a clip should sound: anchor + its onset delay, but never
+  // before now (a reschedule mid-playback anchors in the past → play at once).
+  function playAt(ctxTime, startedAtCtx, startDelay) {
+    const target = startedAtCtx + Math.max(0, startDelay || 0);
+    return ctxTime > target ? ctxTime : target;
+  }
+
   class AudioEngine {
     constructor() {
       this.ctx = null;
@@ -43,7 +66,8 @@
       this.trackAnalysers = new Map();    // streamId → AnalyserNode (tap post-gain)
       this.anySolo = false;
       this.playing = false;
-      this.startedAtCtx = 0;              // audioContext time at last play()
+      this.startedAtCtx = 0;              // audioContext time the clock is anchored to (incl. start lead)
+      this.startLead = 0;                 // s of lead folded into startedAtCtx at last schedule
       this.startedFromTimeline = 0;       // timeline position at last play()
       this.lastTickTimelinePos = 0;       // for currentTime when paused
       this.tickRaf = null;
@@ -230,7 +254,15 @@
       if (!this.ctx) return;
       this.lastStreams = streams;
       this.lastBasename = basename;
-      this.startedAtCtx = this.ctx.currentTime;
+      // Anchor the master clock a short lead into the future. Buffer sources are
+      // scheduled at this anchor and <audio> media elements get the lead to reach
+      // `canplay`, so audio and the visual playhead start together instead of the
+      // cursor running ahead while the elements spin up. The playhead is clamped
+      // to `fromTime` during the lead (see `currentTime`), so it holds still
+      // rather than jumping. A reschedule mid-playback keeps its past anchor — the
+      // streaming path clamps each clip's start to "now" via PGEAudioClock.playAt.
+      this.startLead = this._startLead(streams, fromTime);
+      this.startedAtCtx = this.ctx.currentTime + this.startLead;
       this.startedFromTimeline = fromTime;
 
       const anySolo = streams.some(s => s.solo);
@@ -269,16 +301,23 @@
       this.activeNodes.set(s.id, { source, gainNode, gainBase, timers: [] });
     }
 
-    // Stream a real stem via <audio>. The element + media node are built right
-    // before the clip sounds (now if mid-clip, else on a timer) so only active
-    // clips own a decoder. A second timer tears it down at clipEnd.
+    // Stream a real stem via <audio>. The element + media node are built a short
+    // lead before the clip should sound (so the network fetch/decode happens
+    // ahead of time, not at onset), the actual play() is gated to the clip's
+    // ctx-clock start, and a seek compensates any residual lateness so the audio
+    // lands on the playhead instead of trailing it. Only active clips own a
+    // decoder (built lead-before, torn down at clipEnd), so RAM stays bounded.
     _scheduleStreaming(s, url, fromTime, anySolo) {
       const onset = +s.onset || 0;
       const dur = +s.duration || 0;
-      const offset = Math.max(0, fromTime - onset);     // into-clip seek
-      const startDelay = Math.max(0, onset - fromTime); // s until onset
+      const offset = Math.max(0, fromTime - onset);     // into-clip seek at fromTime
+      const startDelay = Math.max(0, onset - fromTime); // s until onset (timeline)
       const entry = { gainBase: this._dbToLin(s.volume), timers: [] };
       this.activeNodes.set(s.id, entry);
+
+      // Absolute ctx-clock instant this clip should become audible. Never earlier
+      // than now (a reschedule mid-playback anchors in the past → play at once).
+      const playAtCtx = window.PGEAudioClock.playAt(this.ctx.currentTime, this.startedAtCtx, startDelay);
 
       const build = () => {
         if (this.activeNodes.get(s.id) !== entry) return; // stopped meanwhile
@@ -293,17 +332,32 @@
         this._tapTrackAnalyser(s.id, gainNode);
         entry.el = el; entry.mediaSource = mediaSource; entry.gainNode = gainNode;
 
-        const go = () => { try { el.currentTime = offset; } catch {} el.play().catch(() => {}); };
-        if (el.readyState >= 2) go(); else el.addEventListener("canplay", go, { once: true });
+        // Start playing at `playAtCtx`; if play() fires late, skip ahead by the
+        // slippage so the audio re-aligns with the (already advanced) playhead.
+        const fire = () => {
+          if (this.activeNodes.get(s.id) !== entry) return;
+          const late = Math.max(0, this.ctx.currentTime - playAtCtx);
+          try { el.currentTime = offset + late; } catch {}
+          el.play().catch(() => {});
+        };
+        const gate = () => {
+          if (this.activeNodes.get(s.id) !== entry) return;
+          const waitMs = (playAtCtx - this.ctx.currentTime) * 1000;
+          if (waitMs <= 0) fire();
+          else entry.timers.push(setTimeout(fire, waitMs));
+        };
+        if (el.readyState >= 2) gate(); else el.addEventListener("canplay", gate, { once: true });
       };
 
-      if (startDelay <= 0) build();
-      else entry.timers.push(setTimeout(build, startDelay * 1000));
+      // Kick off the load `startLead` before the clip sounds (immediately for a
+      // clip sounding now), so `canplay` is reached before `playAtCtx`.
+      const buildMs = (playAtCtx - this.startLead - this.ctx.currentTime) * 1000;
+      if (buildMs <= 0) build();
+      else entry.timers.push(setTimeout(build, buildMs));
 
-      // Tear down at clip end, timed from `fromTime` (the schedule baseline)
-      // so it is independent of when `build` actually runs.
+      // Tear down at clip end, in ctx-clock time so it follows the shifted start.
       if (dur) {
-        const stopMs = Math.max(0, (onset + dur - fromTime) * 1000);
+        const stopMs = Math.max(0, (playAtCtx + (dur - offset) - this.ctx.currentTime) * 1000);
         entry.timers.push(setTimeout(() => this._teardownNode(s.id), stopMs));
       }
     }
@@ -416,7 +470,36 @@
     get currentTime() {
       if (!this.ctx) return this.lastTickTimelinePos;
       if (!this.playing) return this.lastTickTimelinePos;
-      return this.startedFromTimeline + (this.ctx.currentTime - this.startedAtCtx);
+      // Report the position currently *audible* (ctx clock minus device output
+      // latency), clamped to `startedFromTimeline` during the start lead so the
+      // playhead holds at the start instead of dipping/jumping. Keeps the cursor
+      // on the sound rather than ahead of it.
+      return window.PGEAudioClock.audiblePosition(
+        this.ctx.currentTime, this.startedAtCtx, this.startedFromTimeline, this._outputLatency());
+    }
+
+    // Device output latency (ctx clock → speaker). `outputLatency` is the full
+    // path; `baseLatency` is just the AudioContext buffer — prefer the former,
+    // fall back to the latter, then 0 (Safari/old engines expose neither).
+    _outputLatency() {
+      const c = this.ctx;
+      if (!c) return 0;
+      if (typeof c.outputLatency === "number" && c.outputLatency > 0) return c.outputLatency;
+      if (typeof c.baseLatency === "number" && c.baseLatency > 0) return c.baseLatency;
+      return 0;
+    }
+
+    // Lead folded into the clock anchor at schedule time: enough headroom for the
+    // <audio> media elements to reach `canplay` before they must sound. Only
+    // streamed stems (URL-backed) need it; a pure decoded-buffer schedule starts
+    // sample-accurately, so the lead collapses to the (smaller) output latency.
+    _startLead(streams, fromTime) {
+      const hasStreaming = (streams || []).some(s => {
+        if (!this.streamUrls.has(s.id)) return false;
+        const onset = +s.onset || 0, dur = +s.duration || 0;
+        return !(dur && onset + dur <= fromTime);   // could still sound from here
+      });
+      return hasStreaming ? START_LEAD_SEC : this._outputLatency();
     }
 
     setMasterVolume(linear) {
@@ -476,5 +559,6 @@
     }
   }
 
+  window.PGEAudioClock = { audiblePosition, playAt };
   window.PGEAudio = { engine: new AudioEngine() };
 })();
