@@ -9,17 +9,10 @@
  *   3. transition  → {from, to, curve}                (object)    crossfade
  *   4. multistate  → {states: [...], curve}           (object)    N-way blend
  *
- * Window registry (15 funcs + 1 alias). The editor is NumPy-only in this build
- * (RenderButton: the csound renderer is disabled, every render runs
- * `--renderer numpy`), so this list mirrors the windows the NumPy renderer can
- * actually generate — src/rendering/numpy_window_registry.py in the engine.
- * The Csound registry (window_registry.py) additionally defines blackman_harris
- * (GEN20 opt 5), but NumPy has no equivalent: offering it passed YAML
- * validation yet raised InvalidWindowError at render time, so it is
- * intentionally excluded here. Re-add it once the NumPy registry gains parity.
+ * Window registry (16 funcs + 1 alias), from src/controllers/window_registry.py:
  *
- *   Symmetric bells   hanning hamming bartlett blackman gaussian
- *                     kaiser half_sine rectangle sinc
+ *   Symmetric bells   hanning hamming bartlett blackman blackman_harris
+ *                     gaussian kaiser half_sine rectangle sinc
  *   Percussive decay  expodec expodec_strong rexpodec
  *   Percussive rise   exporise exporise_strong rexporise
  *   Aliases           triangle → bartlett
@@ -40,6 +33,11 @@ const SHAPES = {
   triangle: (x) => 1 - Math.abs(2 * x - 1), // alias
   blackman: (x) =>
     0.42 - 0.5 * Math.cos(2 * Math.PI * x) + 0.08 * Math.cos(4 * Math.PI * x),
+  blackman_harris: (x) =>
+    0.35875 -
+    0.48829 * Math.cos(2 * Math.PI * x) +
+    0.14128 * Math.cos(4 * Math.PI * x) -
+    0.01168 * Math.cos(6 * Math.PI * x),
   gaussian: (x) => Math.exp(-Math.pow((x - 0.5) / 0.18, 2) / 2),
   kaiser: (x) => {
     // visual approximation of Kaiser β=8 — narrow bell, doesn't quite reach zero
@@ -76,6 +74,7 @@ const WINDOWS = [
   { name: "hanning",         cat: "bell",     desc: "smooth cosine bell, zero at edges (default)" },
   { name: "hamming",         cat: "bell",     desc: "cosine bell with small DC offset" },
   { name: "blackman",        cat: "bell",     desc: "narrower bell, suppressed sidelobes" },
+  { name: "blackman_harris", cat: "bell",     desc: "very narrow, maximum sidelobe suppression" },
   { name: "gaussian",        cat: "bell",     desc: "gaussian bell, soft edges" },
   { name: "kaiser",          cat: "bell",     desc: "kaiser β=8 — tunable bell" },
   { name: "bartlett",        cat: "bell",     desc: "triangle window (alias: triangle)" },
@@ -358,7 +357,7 @@ function EnvelopeSelectorRow({ value, onChange, onEditCurve }) {
   );
 }
 
-/* ----- The grid of windows (grouped by category) ----- */
+/* ----- The grid of all 16 windows ----- */
 function WindowGrid({ selected, onPick }) {
   const groups = useMemoES(() => {
     const out = { bell: [], special: [], decay: [], rise: [] };
