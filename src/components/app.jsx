@@ -307,6 +307,14 @@ function App() {
             .then(keys => setEnvelopeKeys(Array.isArray(keys) ? keys : []))
             .catch(() => {});
         }
+        // Pull the engine's parameter clamps so the UI's bounds + envelope
+        // auto-fit track the engine instead of the static fallback. Best-effort:
+        // an older server.py / engine returns {} and the fallback stays.
+        if (window.PGEBounds && window.PGEBackend.current.bounds) {
+          window.PGEBackend.current.bounds()
+            .then(raw => { if (raw && Object.keys(raw).length) window.PGEBounds.apply(raw); })
+            .catch(() => {});
+        }
         // Run setup in background so the engine venv is ready.
         setTimeout(async () => {
           const backend = window.PGEBackend.current;

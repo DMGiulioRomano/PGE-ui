@@ -36,8 +36,13 @@
     console.warn("js-yaml not loaded — yaml round-trip disabled");
   }
 
-  // Canonical engine bounds — single source of truth for the UI.
-  // Derived from parameter_definitions.py and pitch_unit.py.
+  // Engine bounds — STATIC FALLBACK for the UI clamps. These literals mirror
+  // parameter_definitions.py / pitch_unit.py and are what the editor uses when
+  // it can't reach the bridge (file:// with no server.py). When the bridge is
+  // up, bounds.js fetches GET /bounds (the engine source, AST-parsed) and
+  // overrides these via window.PGEBounds.apply() — so the live values track the
+  // engine. Keys are the UI's own names; the engine→UI mapping (incl. value vs
+  // range fields) lives in bounds.js (ENGINE_PARAM_MAP).
   window.PGE_BOUNDS = {
     volume:      { min: -120, max: 12 },
     volumeRange: { min: 0, max: 24 },
@@ -45,12 +50,28 @@
     panRange:    { min: 0, max: 360 },
     fillFactor:  { min: 0.001, max: 50 },
     offsetRange: { min: 0, max: 1 },
+    density:     { min: 0.01, max: 4000 },
+    distribution:{ min: 0, max: 1 },
+    speedRatio:  { min: -100, max: 100 },
+    grainDur:    { min: 0.001, max: 10 },
+    durationRange:{ min: 0, max: 10 },
+    // loop_* upper bound is sample-driven in the engine (max_val=None); these
+    // are the editor's permissive fallback caps.
+    loopStart:   { min: 0, max: 3600 },
+    loopDur:     { min: 0.005, max: 3600 },
+    loopEnd:     { min: 0, max: 3600 },
+    voicesNum:   { min: 1, max: 64 },
+    scatter:     { min: 0, max: 1 },
+    voicePitchOffset:   { min: -48, max: 48 },
+    voicePointerOffset: { min: -1, max: 1 },
+    voicePointerRange:  { min: 0, max: 1 },
     pitch: {
       semitones:    { min: -36, max: 36, rangeMax: 36 },
       cents:        { min: -3600, max: 3600, rangeMax: 3600 },
       quarter_tone: { min: -72, max: 72, rangeMax: 72 },
       eighth_tone:  { min: -144, max: 144, rangeMax: 144 },
       ratio:        { min: 0.001, max: 8, rangeMax: 2 },
+      edoFactor:    3,
     },
   };
 

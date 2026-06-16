@@ -389,7 +389,11 @@
   function pitchUnitBounds(unit, edoDivisions) {
     const u = normalizePitchUnit(unit, edoDivisions);
     if (u.kind === "edo") {
-      const bound = 3 * (u.edo || 12);
+      // ±(edoFactor · divisions); edoFactor comes from the engine
+      // (pitch_unit.py EdoUnit.value_bounds) via window.PGE_BOUNDS.pitch.
+      const PBp = (typeof window !== "undefined" && window.PGE_BOUNDS && window.PGE_BOUNDS.pitch) || null;
+      const factor = (PBp && typeof PBp.edoFactor === "number") ? PBp.edoFactor : 3;
+      const bound = factor * (u.edo || 12);
       return { min: -bound, max: bound, rangeMax: bound };
     }
     const PB = (typeof window !== "undefined" && window.PGE_BOUNDS && window.PGE_BOUNDS.pitch) || null;

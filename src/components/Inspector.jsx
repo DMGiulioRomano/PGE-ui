@@ -837,9 +837,8 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               const unitLabel = pu;
               const unitSymbol = window.PGEEnv.pitchUnitSymbol(pu, edoN);
               const pitchSteps = window.PGEEnv.pitchUnitIsInteger(pu) ? [1, 10, 100] : [0.1, 1, 10];
-              const pb = isEdo
-                ? { min: -(3 * edoN), max: 3 * edoN }
-                : (window.PGE_BOUNDS.pitch[pu] || window.PGE_BOUNDS.pitch.semitones);
+              // engine-driven: pitchUnitBounds reads PB.pitch (presets) / edoFactor (edo)
+              const pb = window.PGEEnv.pitchUnitBounds(pu, edoN);
               const [slMin, slMax] = [pb.min, pb.max];
               function setPitchUnit(newU) {
                 if (newU === pu) return;

@@ -123,6 +123,214 @@ def engine_envelope_keys(root: Path) -> list:
     return keys
 
 
+_PARAMETER_BOUNDS_CACHE: dict = {}
+
+# Fields of the engine's ParameterBounds dataclass, in positional order, with
+# the dataclass defaults for the ones that have them (min_val/max_val are
+# required, so they have no default here).
+_PB_FIELDS = ("min_val", "max_val", "min_range", "max_range",
+              "default_jitter", "variation_mode")
+_PB_DEFAULTS = {"min_range": 0.0, "max_range": 0.0,
+                "default_jitter": 0.0, "variation_mode": "additive"}
+# Used only if pitch_unit.py can't be parsed (older/odd engine): the nominal
+# EDO presets and the ±3-octave factor, matching pitch_unit.py.
+_PITCH_PRESET_DIVISIONS = {"semitones": 12, "cents": 1200,
+                           "quarter_tone": 24, "eighth_tone": 48}
+
+
+def _ast_literal(node):
+    """ast.literal_eval a node, tolerating unary minus (e.g. -100.0) and None.
+    Returns None on anything non-literal (an expression we can't resolve)."""
+    try:
+        return ast.literal_eval(node)
+    except Exception:
+        return None
+
+
+def _ast_call_name(call):
+    """Callee name of an ast.Call: `Foo(...)` → 'Foo', `mod.Foo(...)` → 'Foo'."""
+    f = call.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    return None
+
+
+def _parse_bounds_call(call):
+    """Turn a `ParameterBounds(...)` AST call into a plain dict, applying the
+    dataclass defaults for omitted fields. Positional args map onto _PB_FIELDS
+    in order; keywords override. Returns None unless both min_val and max_val
+    are present (max_val may legitimately be None — a sample-driven loop bound).
+    """
+    rec = dict(_PB_DEFAULTS)
+    for field, arg in zip(_PB_FIELDS, call.args):
+        rec[field] = _ast_literal(arg)
+    for kw in call.keywords:
+        if kw.arg in _PB_FIELDS:
+            rec[kw.arg] = _ast_literal(kw.value)
+    if "min_val" not in rec or "max_val" not in rec:
+        return None
+    return rec
+
+
+def _assigned_dict(node, name):
+    """Return the ast.Dict assigned to `name` by this node, handling both a
+    plain `name = {…}` (Assign) and an annotated `name: T = {…}` (AnnAssign —
+    the engine annotates GRANULAR_PARAMETERS / PITCH_UNIT_PRESETS). None if the
+    node isn't that assignment or the value isn't a dict literal."""
+    if isinstance(node, ast.Assign):
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        value = node.value
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        targets = [node.target.id]
+        value = node.value
+    else:
+        return None
+    if name in targets and isinstance(value, ast.Dict):
+        return value
+    return None
+
+
+def _parse_granular_parameters(src_text):
+    """Extract GRANULAR_PARAMETERS from parameter_definitions.py source as
+    {name: {min_val, max_val, …}}."""
+    out = {}
+    tree = ast.parse(src_text)
+    for node in ast.walk(tree):
+        d = _assigned_dict(node, "GRANULAR_PARAMETERS")
+        if d is None:
+            continue
+        for k, v in zip(d.keys, d.values):
+            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                continue
+            if isinstance(v, ast.Call) and _ast_call_name(v) == "ParameterBounds":
+                rec = _parse_bounds_call(v)
+                if rec is not None:
+                    out[k.value] = rec
+        break
+    return out
+
+
+def _find_value_bounds_method(classdef):
+    for fn in classdef.body:
+        if isinstance(fn, ast.FunctionDef) and fn.name == "value_bounds":
+            return fn
+    return None
+
+
+def _parse_edo_factor(tree):
+    """The ±N·divisions octave factor from EdoUnit.value_bounds
+    (`bound = 3.0 * self.divisions`). Defaults to 3.0 if not found."""
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef) and node.name == "EdoUnit"):
+            continue
+        fn = _find_value_bounds_method(node)
+        if fn is None:
+            continue
+        for sub in ast.walk(fn):
+            if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Mult):
+                for a, b in ((sub.left, sub.right), (sub.right, sub.left)):
+                    if (isinstance(a, ast.Constant)
+                            and isinstance(a.value, (int, float))
+                            and not isinstance(a.value, bool)
+                            and isinstance(b, ast.Attribute)
+                            and b.attr == "divisions"):
+                        return float(a.value)
+    return 3.0
+
+
+def _parse_ratio_bounds(tree):
+    """{min, max, rangeMax} from RatioUnit.value_bounds. Defaults to the known
+    [0.001, 8] / rangeMax 2 if not found."""
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef) and node.name == "RatioUnit"):
+            continue
+        fn = _find_value_bounds_method(node)
+        if fn is None:
+            continue
+        for sub in ast.walk(fn):
+            if isinstance(sub, ast.Call) and _ast_call_name(sub) == "ParameterBounds":
+                rec = _parse_bounds_call(sub)
+                if rec is not None and isinstance(rec.get("min_val"), (int, float)):
+                    return {"min": rec["min_val"], "max": rec["max_val"],
+                            "rangeMax": rec["max_range"]}
+    return {"min": 0.001, "max": 8.0, "rangeMax": 2.0}
+
+
+def _parse_pitch_presets(tree):
+    """EDO divisions per nominal preset from PITCH_UNIT_PRESETS
+    (`'semitones': lambda: EdoUnit(12, …)` → {'semitones': 12, …})."""
+    out = {}
+    for node in ast.walk(tree):
+        d = _assigned_dict(node, "PITCH_UNIT_PRESETS")
+        if d is None:
+            continue
+        for k, v in zip(d.keys, d.values):
+            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                continue
+            body = v.body if isinstance(v, ast.Lambda) else v
+            if (isinstance(body, ast.Call) and _ast_call_name(body) == "EdoUnit"
+                    and body.args):
+                div = _ast_literal(body.args[0])
+                if isinstance(div, int) and not isinstance(div, bool):
+                    out[k.value] = div
+        break
+    return out
+
+
+def _parse_pitch_bounds(src_text):
+    """Pitch bounds per unit, derived from pitch_unit.py: each EDO preset gets
+    ±(edoFactor·divisions); ratio is read from RatioUnit. Shape mirrors the
+    UI's window.PGE_BOUNDS.pitch."""
+    tree = ast.parse(src_text)
+    edo_factor = _parse_edo_factor(tree)
+    presets = _parse_pitch_presets(tree) or dict(_PITCH_PRESET_DIVISIONS)
+    out = {"edoFactor": edo_factor, "ratio": _parse_ratio_bounds(tree)}
+    for name, div in presets.items():
+        bound = edo_factor * div
+        out[name] = {"min": -bound, "max": bound, "rangeMax": bound}
+    return out
+
+
+def engine_parameter_bounds(root: Path) -> dict:
+    """Engine parameter clamps, AST-parsed from the engine source so the UI's
+    bounds aren't hardcoded.
+
+    Like engine_envelope_keys, we parse the literals rather than importing the
+    modules: parameter_definitions.py / pitch_unit.py would drag in the engine
+    package (and its venv), and parsing needs only stdlib — so this works even
+    when the engine venv isn't set up. Shape:
+
+        {"params": {name: {min_val, max_val, min_range, max_range,
+                           default_jitter, variation_mode}},
+         "pitch":  {semitones|cents|…: {min, max, rangeMax},
+                    ratio: {…}, edoFactor: float}}
+
+    Returns {} when neither source is present (an older engine) — the UI then
+    keeps its static fallback bounds. Cached per resolved root."""
+    key = str(root)
+    if key in _PARAMETER_BOUNDS_CACHE:
+        return _PARAMETER_BOUNDS_CACHE[key]
+    pdir = root / "src" / "parameters"
+    params, pitch = {}, {}
+    pd = pdir / "parameter_definitions.py"
+    if pd.exists():
+        try:
+            params = _parse_granular_parameters(pd.read_text(encoding="utf-8"))
+        except Exception:
+            params = {}
+    pu = pdir / "pitch_unit.py"
+    if pu.exists():
+        try:
+            pitch = _parse_pitch_bounds(pu.read_text(encoding="utf-8"))
+        except Exception:
+            pitch = {}
+    out = {"params": params, "pitch": pitch} if (params or pitch) else {}
+    _PARAMETER_BOUNDS_CACHE[key] = out
+    return out
+
+
 def _ensure_venv_events(root: Path):
     """Generator: yields NDJSON event dicts while creating the engine venv.
 
@@ -347,6 +555,13 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         UI score-envelope filter isn't hardcoded (issue #31). Empty list = the
         engine predates the feature; the UI then hides the filter."""
         return jsonify({"ok": True, "keys": engine_envelope_keys(root)})
+
+    @app.get("/bounds")
+    def bounds():
+        """Engine parameter clamps (min/max/range + pitch), parsed from the
+        engine source so the UI's bounds aren't hardcoded. Empty dict = an
+        engine without these files; the UI then keeps its static fallback."""
+        return jsonify({"ok": True, "bounds": engine_parameter_bounds(root)})
 
     # --------- listing ---------
 

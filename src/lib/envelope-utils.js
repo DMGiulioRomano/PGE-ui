@@ -239,6 +239,40 @@
     return fields.some(f => f && envArrayWouldTruncate(f, ratio));
   }
 
+  // Auto-fit the envelope Y window to the actual point values, for readability.
+  // Fits the POINTS (min..max of the y-values) plus a `padFrac` margin (10% by
+  // default), then clamps into [hardMin, hardMax]. This is the key change from
+  // the old autofit, which unioned with the static [visMin,visMax] and so could
+  // only grow — leaving an envelope whose points sit in a small sub-range
+  // squashed against one edge. With no finite points it falls back to the
+  // [visMin,visMax] default window; a constant set opens a minimal window
+  // (0.01 for seconds, else 1) so a flat curve isn't pinned to an edge.
+  // Pure: EnvelopeEditor recomputes it on open / param change / end-of-drag and
+  // freezes the returned window during a drag (so the dragged point can't
+  // "run away" under a rescaling axis). Returns { ymin, ymax }, ymax > ymin.
+  function computeYFit(values, opts) {
+    opts = opts || {};
+    const { visMin, visMax, hardMin, hardMax, unit } = opts;
+    const padFrac = opts.padFrac == null ? 0.10 : opts.padFrac;
+    const nums = (values || []).filter(v => typeof v === "number" && isFinite(v));
+    let lo, hi;
+    if (nums.length) {
+      lo = Math.min(...nums);
+      hi = Math.max(...nums);
+    } else {
+      lo = (typeof visMin === "number") ? visMin : 0;
+      hi = (typeof visMax === "number") ? visMax : lo + 1;
+    }
+    if (lo === hi) hi = lo + (unit === "s" ? 0.01 : 1);
+    const range = hi - lo;
+    hi = hi + range * padFrac;
+    lo = lo - range * padFrac;
+    if (typeof hardMax === "number") hi = Math.min(hardMax, hi);
+    if (typeof hardMin === "number") lo = Math.max(hardMin, lo);
+    if (!(hi > lo)) hi = lo + (unit === "s" ? 0.01 : 1);
+    return { ymin: lo, ymax: hi };
+  }
+
   window.PGEEnvUtils = {
     rescaleEnvArray,
     truncateEnvArray,
@@ -248,5 +282,6 @@
     truncateStreamEnvelopes,
     streamWouldTruncate,
     nudgeBreakpoint,
+    computeYFit,
   };
 })();

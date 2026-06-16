@@ -436,10 +436,21 @@
       } catch { return []; }
     }
 
+    // Engine parameter clamps (min/max/range + pitch), AST-parsed from the
+    // engine source by the bridge so the UI's bounds aren't hardcoded. Returns
+    // {} for an older server.py without /bounds or an engine without the
+    // parameter files — the UI then keeps its static fallback (PGE_BOUNDS).
+    async function bounds() {
+      try {
+        const d = await jget("/bounds");
+        return (d && d.bounds && typeof d.bounds === "object") ? d.bounds : {};
+      } catch { return {}; }
+    }
+
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys, bounds };
   }
 
   window.PGEBackend = {
