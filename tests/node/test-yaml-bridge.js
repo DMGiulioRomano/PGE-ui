@@ -1321,7 +1321,7 @@ const envHeavyYaml = `streams:
         points: [[0, 1], [0.5, 4], [1, 1]]
       pan:
         spread: [[0, 60], [0.27, 155], [1, 60]]
-        strategy: random
+        strategy: stochastic
     dephase: [[0, 100], [0.4047, 100], [1, 1]]
 `;
 
@@ -1348,7 +1348,7 @@ const envHeavyYaml = `streams:
   assert("inline — distribution points inline",                 /^\s*points: \[\[0, 0\], /m.test(y), y);
   assert("inline — num_voices keeps 'type: step'",              /^\s*type: step$/m.test(y),       y);
   assert("inline — num_voices points inline",                   /^\s*points: \[\[0, 1\], /m.test(y), y);
-  assert("inline — voices.pan keeps 'strategy: random'",        /^\s*strategy: random$/m.test(y), y);
+  assert("inline — voices.pan keeps 'strategy: stochastic'",    /^\s*strategy: stochastic$/m.test(y), y);
   assert("inline — voices.pan spread inline",                   /^\s*spread: \[\[0, 60\], /m.test(y), y);
 
   // Grain multistate envelope: states and curve both inline.
@@ -1358,6 +1358,52 @@ const envHeavyYaml = `streams:
   // Formatting only: round trip stays lossless.
   assert("inline — envelope-heavy round trip lossless", roundTripDiff(data).length === 0,
     JSON.stringify(roundTripDiff(data)).slice(0, 600));
+}
+
+{
+  // voices.pan step strategy: scalar + envelope round-trip (renamed pan surface).
+  const stepScalarYaml = `
+title: t
+duration: 10
+streams:
+  - stream_id: s1
+    onset: 0
+    duration: 10
+    sample: test.wav
+    voices:
+      num_voices: 4
+      pan:
+        strategy: step
+        step: 15
+`;
+  const dScalar = parse(stepScalarYaml);
+  const pan = dScalar.streams[0].voices.pan;
+  assert("pan step — strategy parsed", pan.strategy === "step", JSON.stringify(pan));
+  assert("pan step — scalar in step field", pan.step === 15 && pan.stepEnv == null, JSON.stringify(pan));
+  assert("pan step — scalar round trip lossless", roundTripDiff(dScalar).length === 0,
+    JSON.stringify(roundTripDiff(dScalar)).slice(0, 400));
+
+  const stepEnvYaml = `
+title: t
+duration: 10
+streams:
+  - stream_id: s1
+    onset: 0
+    duration: 10
+    sample: test.wav
+    voices:
+      num_voices: 4
+      pan:
+        strategy: step
+        step: [[0, 0], [1, 30]]
+`;
+  const dEnv = parse(stepEnvYaml);
+  const panE = dEnv.streams[0].voices.pan;
+  assert("pan step — envelope in stepEnv field", Array.isArray(panE.stepEnv) && panE.step == null, JSON.stringify(panE));
+  assert("pan step — envelope round trip lossless", roundTripDiff(dEnv).length === 0,
+    JSON.stringify(roundTripDiff(dEnv)).slice(0, 400));
+  const yE = serialize(dEnv);
+  assert("pan step — envelope serialized inline", /^\s*step: \[\[0, 0\], \[1, 30\]\]$/m.test(yE), yE);
 }
 
 {
