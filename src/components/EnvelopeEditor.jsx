@@ -182,6 +182,10 @@ function listEnvelopes(stream, sampleDur) {
     list.push({ key: "voicesPanSpread", label: "pan · spread", group: "Voices",
       path: ["voices", "pan", "spreadEnv"], unit: "°",
       visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
+  if (stream.voices && stream.voices.pan && stream.voices.pan.stepEnv)
+    list.push({ key: "voicesPanStep", label: "pan · step", group: "Voices",
+      path: ["voices", "pan", "stepEnv"], unit: "°",
+      visMin: -90, visMax: 90, hardMin: -3600, hardMax: 3600 });
   // dephase env detection goes through the shared classifier (window.PGEDephase),
   // so the typed {type, points} form (cubic global interp) registers as the
   // global env — not silently dropped. isEnvValue is true for [[t,v],…] and

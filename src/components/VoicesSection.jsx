@@ -20,9 +20,9 @@ const POINTER_STRATEGIES = [
   { value: "stochastic", label: "stochastic", desc: "seeded random in ±range (s · or % sample if normalized)" },
 ];
 const PAN_STRATEGIES = [
-  { value: "linear",     label: "linear",     desc: "symmetric ±spread/2" },
-  { value: "random",     label: "random",     desc: "seeded random in ±spread/2" },
-  { value: "additive",   label: "additive",   desc: "constant offset, no spread" },
+  { value: "range",      label: "range",      desc: "equidistant in ±spread/2" },
+  { value: "stochastic", label: "stochastic", desc: "seeded random in ±spread/2" },
+  { value: "step",       label: "step",       desc: "voice i → i × step" },
 ];
 const CHORDS_3V = ["maj","min","dim","aug","sus2","sus4"];
 const CHORDS_4V = ["dom7","maj7","min7","dim7","minmaj7"];
@@ -55,9 +55,9 @@ const STRATEGY_DEFAULTS = {
     stochastic: { pointer_range: 0.02 },
   },
   pan: {
-    linear:     { spread: 60.0 },
-    random:     { spread: 60.0 },
-    additive:   { spread: 60.0 },
+    range:      { spread: 60.0 },
+    stochastic: { spread: 60.0 },
+    step:       { step: 15.0 },
   },
 };
 
@@ -424,20 +424,30 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                   voices={v} dim="pan" onChange={update}>
         {(strat) => (
           <>
-            <VoiceStratParamRow name="spread"
-              value={(v.pan||{}).spread} valueEnv={(v.pan||{}).spreadEnv}
-              unit="°"
-              onValue={x => updateDim("pan", { spread: x })}
-              onMode={m => toggleStratParam(v, "pan", "spread", 60.0, m, onChange)}
-              onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPanSpread") : undefined} />
-            {strat === "linear" ? (
-              <div className="voice-meta">symmetric · voice 0 = -spread/2 → voice N = +spread/2</div>
+            {strat === "range" || strat === "stochastic" ? (
+              <VoiceStratParamRow name="spread"
+                value={(v.pan||{}).spread} valueEnv={(v.pan||{}).spreadEnv}
+                unit="°"
+                onValue={x => updateDim("pan", { spread: x })}
+                onMode={m => toggleStratParam(v, "pan", "spread", 60.0, m, onChange)}
+                onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPanSpread") : undefined} />
             ) : null}
-            {strat === "random" ? (
-              <div className="voice-meta">seeded random direction × spread/2</div>
+            {strat === "step" ? (
+              <VoiceStratParamRow name="step"
+                value={(v.pan||{}).step} valueEnv={(v.pan||{}).stepEnv}
+                unit="°"
+                onValue={x => updateDim("pan", { step: x })}
+                onMode={m => toggleStratParam(v, "pan", "step", 15.0, m, onChange)}
+                onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("voicesPanStep") : undefined} />
             ) : null}
-            {strat === "additive" ? (
-              <div className="voice-meta">all voices shift by spread (no distribution)</div>
+            {strat === "range" ? (
+              <div className="voice-meta">equidistant · voice 0 = 0 · voices 1..N fill ±spread/2</div>
+            ) : null}
+            {strat === "stochastic" ? (
+              <div className="voice-meta">seeded random direction × spread/2 · voice 0 = 0</div>
+            ) : null}
+            {strat === "step" ? (
+              <div className="voice-meta">voice i → i × step° · voice 0 = 0 · step may be negative</div>
             ) : null}
           </>
         )}
