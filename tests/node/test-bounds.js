@@ -53,6 +53,7 @@ const raw = {
     grain_duration:    { min_val: 0.002,max_val: 5,    min_range: 0, max_range: 0.8, default_jitter: 0.01, variation_mode: "additive" },
     pointer_deviation: { min_val: -1,   max_val: 1,    min_range: 0, max_range: 1,   default_jitter: 0.05, variation_mode: "additive" },
     loop_dur:          { min_val: 0.01, max_val: null, min_range: 0, max_range: 0,   default_jitter: 0,    variation_mode: "additive" },
+    num_voices:        { min_val: 1,    max_val: 256,  min_range: 0, max_range: 0,   default_jitter: 0,    variation_mode: "additive" },
   },
   pitch: {
     semitones: { min: -24, max: 24, rangeMax: 24 },
@@ -75,6 +76,8 @@ assert("durationRange ← grain_duration.RANGE (0..0.8)", out.durationRange.min 
 assert("offsetRange ← pointer_deviation.RANGE (0..1)",  out.offsetRange.min === 0 && out.offsetRange.max === 1);
 assert("loopDur.min ← loop_dur.value",      out.loopDur.min === 0.01);
 assert("loopDur.max null → keeps fallback (sample-driven)", out.loopDur.max === baseLoopDurMax);
+assert("voicesNum ← num_voices.value (1..256)", out.voicesNum.min === 1 && out.voicesNum.max === 256);
+assert("voicesNum static fallback is 1..256 (PGE #145)", window.PGE_BOUNDS.voicesNum.min === 1 && window.PGE_BOUNDS.voicesNum.max === 256);
 
 console.log("\n── mergeEngineBounds (pitch) ──");
 assert("pitch.semitones ← engine", out.pitch.semitones.max === 24 && out.pitch.semitones.min === -24);
