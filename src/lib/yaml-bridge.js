@@ -60,7 +60,7 @@
     loopStart:   { min: 0, max: 3600 },
     loopDur:     { min: 0.005, max: 3600 },
     loopEnd:     { min: 0, max: 3600 },
-    voicesNum:   { min: 1, max: 64 },
+    voicesNum:   { min: 1, max: 256 },
     scatter:     { min: 0, max: 1 },
     voicePitchOffset:   { min: -48, max: 48 },
     voicePointerOffset: { min: -1, max: 1 },
