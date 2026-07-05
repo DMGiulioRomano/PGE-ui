@@ -192,6 +192,15 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .voice-empty, .voice-help, .voice-meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); padding: 4px 8px; line-height: 1.4; }
 .voice-help { color: var(--fg-2); border-left: 2px solid var(--border-default); }
 .voice-meta { color: var(--fg-4); font-size: 9px; }
+/* chord_progression step editor */
+.cp-list { padding: 4px 8px 6px; display: flex; flex-direction: column; gap: 4px; }
+.cp-head, .cp-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 44px 24px; gap: 6px; align-items: center; }
+.cp-head { font: 9px var(--font-mono); color: var(--fg-4); text-transform: uppercase; letter-spacing: .04em; padding: 0 2px; }
+.cp-row .pge-mini-input { width: 100%; background: var(--bg-elevated); color: var(--fg-1); border: 1px solid var(--border-default); border-radius: 2px; height: 22px; font: 11px var(--font-mono); padding: 0 6px; }
+.cp-row .cp-chord { width: 100%; }
+.cp-del { height: 22px; padding: 0; width: 24px; justify-content: center; color: var(--fg-3); }
+.cp-del:hover { color: var(--status-error); }
+.cp-add { align-self: flex-start; height: 22px; font-size: 10px; color: var(--fg-2); margin-top: 2px; }
 .pge-split.horiz > .pane { display: flex; flex-direction: column; }
 .pge-split.vert > .pane { display: flex; flex-direction: row; }
 

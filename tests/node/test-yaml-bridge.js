@@ -201,6 +201,43 @@ assert("voices EDO parsed — unit object preserved", vpEdo && typeof vpEdo.unit
 const serializedVoiceEdo = serialize(parsedVoiceEdo);
 assert("voices EDO roundtrip — edo in YAML", serializedVoiceEdo.includes("edo: 31"), serializedVoiceEdo.slice(0, 500));
 
+/* voices pitch chord_progression (PGE issue #86 / PGE-ui #104) — the strategy
+ * carries a nested list plus interp/voice_leading; the round trip must keep
+ * all three lossless through packStrategy/unpackStrategy. */
+console.log("\n── voices: chord_progression ──");
+const yamlChordProg = `streams:
+  - stream_id: s1
+    onset: 0
+    duration: 16
+    sample: test.wav
+    voices:
+      num_voices: 4
+      pitch:
+        strategy: chord_progression
+        progression:
+          - [0, maj7]
+          - [8, min7, 1]
+          - [16, {chord: dom7, inversion: 0}]
+        interp: cubic
+        voice_leading: positional
+`;
+const parsedCP = parse(yamlChordProg);
+const cp = parsedCP.streams[0].voices.pitch;
+assert("chord_progression — strategy parsed", cp && cp.strategy === "chord_progression", JSON.stringify(cp));
+assert("chord_progression — progression is array of 3", Array.isArray(cp.progression) && cp.progression.length === 3, JSON.stringify(cp.progression));
+assert("chord_progression — compact step preserved", cp.progression[0][0] === 0 && cp.progression[0][1] === "maj7", JSON.stringify(cp.progression[0]));
+assert("chord_progression — inversion tuple preserved", cp.progression[1][2] === 1, JSON.stringify(cp.progression[1]));
+assert("chord_progression — explicit-form step preserved", cp.progression[2][1] && cp.progression[2][1].chord === "dom7", JSON.stringify(cp.progression[2]));
+assert("chord_progression — interp preserved", cp.interp === "cubic", JSON.stringify(cp));
+assert("chord_progression — voice_leading preserved", cp.voice_leading === "positional", JSON.stringify(cp));
+const serializedCP = serialize(parsedCP);
+assert("chord_progression serialize — strategy in YAML", serializedCP.includes("strategy: chord_progression"), serializedCP.slice(0, 700));
+assert("chord_progression serialize — progression in YAML", serializedCP.includes("progression:"), serializedCP.slice(0, 700));
+assert("chord_progression serialize — interp in YAML", serializedCP.includes("interp: cubic"), serializedCP.slice(0, 700));
+assert("chord_progression serialize — voice_leading in YAML", serializedCP.includes("voice_leading: positional"), serializedCP.slice(0, 700));
+const cpDiffs = roundTripDiff(parsedCP).filter(d => d.path && d.path.includes("pitch"));
+assert("chord_progression — roundtrip no pitch diffs", cpDiffs.length === 0, JSON.stringify(cpDiffs));
+
 /* ============================================================
  * SECTION 5 — parse from real showcase YAML
  * ============================================================ */
