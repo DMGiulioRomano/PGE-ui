@@ -20,6 +20,10 @@
  * Exports (window.PGEBounds): ENGINE_PARAM_MAP, mergeEngineBounds(base, raw), apply(raw)
  * ===========================================================================*/
 (function () {
+  // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
+  // globale, non per-stream. Serve per il minimo di grain_duration a 1 campione.
+  const OUTPUT_SR = 48000;
+
   // UI key → { param: <engine GRANULAR_PARAMETERS name>, field: "value" | "range" }.
   // "value" → {min_val, max_val}; "range" → {min_range, max_range}.
   // Pitch bounds are handled separately (engine ships them pre-computed per unit).
@@ -79,6 +83,16 @@
       // null max (loop_* is sample-driven) keeps the fallback cap.
       if (typeof hi === "number") next.max = hi;
       out[uiKey] = next;
+    }
+
+    // grain_duration min = 1 campione (PGE #158). L'engine espone via /bounds
+    // solo il min statico (1 ms); il minimo reale è 1/output_sr, un override
+    // dinamico che l'AST-parser di /bounds non vede. Lo applichiamo qui (output_sr
+    // è una config globale del motore, costante 48000 Hz lato UI).
+    if (out.grainDur) {
+      out.grainDur = Object.assign({}, out.grainDur, {
+        min: Math.min(out.grainDur.min, 1 / OUTPUT_SR),
+      });
     }
 
     if (raw.pitch && typeof raw.pitch === "object") {

@@ -318,6 +318,20 @@
     return le <= ls ? { loopStart: ls, loopEnd: le } : null;
   }
 
+  // Mirror della validazione PGE #158: con grain.duration_unit: samples la
+  // grain.duration deve essere esplicita. Il default 0.05 è in secondi e non
+  // viene convertito, quindi base (secondi) e duration_range (campioni)
+  // vivrebbero in domini diversi; il motore solleva MissingFieldError. Solo
+  // 'samples' è vincolato — 'seconds' e l'assenza usano il default liberamente.
+  // Ritorna null se valido/non applicabile, altrimenti { unit } così il chiamante
+  // costruisce il messaggio. Puro — niente DOM, niente chiamate al motore.
+  function grainDurationUnitError(grain) {
+    if (!grain || grain.durationUnit !== "samples") return null;
+    const hasScalar = grain.duration != null;
+    const hasEnv = grain.durationEnv != null;
+    return (hasScalar || hasEnv) ? null : { unit: "samples" };
+  }
+
   window.PGEEnvUtils = {
     rescaleEnvArray,
     truncateEnvArray,
@@ -330,5 +344,6 @@
     computeYFit,
     loopEnvMax,
     loopBoundsError,
+    grainDurationUnitError,
   };
 })();

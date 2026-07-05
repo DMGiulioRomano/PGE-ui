@@ -26,10 +26,10 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 11 helpers",
+assert("PGEEnvUtils exposes the 12 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopBoundsError"]
+   "computeYFit", "loopEnvMax", "loopBoundsError", "grainDurationUnitError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -350,6 +350,30 @@ console.log("\n── loopBoundsError ──");
   assert("empty pointer → null", LB({}) === null);
   assert("non-numeric loop_end (dash placeholder) → null",
     LB({ loopStart: 0, loopEnd: "—" }) === null);
+}
+
+// grainDurationUnitError — mirror della validazione PGE #158: con
+// grain.duration_unit: samples, grain.duration deve essere esplicita (il
+// default 0.05 è in secondi e non verrebbe convertito).
+console.log("\n── grainDurationUnitError ──");
+{
+  const GE = U.grainDurationUnitError;
+  // seconds / assente → nessun errore, qualunque cosa manchi
+  assert("unit assente → null", GE({}) === null);
+  assert("seconds senza duration → null", GE({ durationUnit: "seconds" }) === null);
+  // samples SENZA duration (scalare o env) → errore
+  assert("samples senza duration → errore", GE({ durationUnit: "samples" }) != null);
+  assert("samples con solo durationRange → errore",
+    GE({ durationUnit: "samples", durationRange: 96 }) != null);
+  // samples CON duration → null
+  assert("samples con duration scalare → null",
+    GE({ durationUnit: "samples", duration: 480 }) === null);
+  assert("samples con durationEnv → null",
+    GE({ durationUnit: "samples", durationEnv: [[0, 48], [1, 4800]] }) === null);
+  // robustezza
+  assert("null grain → null", GE(null) === null);
+  assert("duration 0 conta come presente (grano da 0? gestito dai bound) ",
+    GE({ durationUnit: "samples", duration: 0 }) === null);
 }
 
 console.log(`\n${"─".repeat(50)}`);

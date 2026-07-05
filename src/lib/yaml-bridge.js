@@ -53,7 +53,7 @@
     density:     { min: 0.01, max: 4000 },
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
-    grainDur:    { min: 0.001, max: 10 },
+    grainDur:    { min: 1 / 48000, max: 10 },   // min 1 campione (PGE #158)
     durationRange:{ min: 0, max: 10 },
     // loop_* upper bound is sample-driven in the engine (max_val=None); these
     // are the editor's permissive fallback caps.
@@ -104,7 +104,7 @@
    * keys the editor doesn't model yet survive the round trip instead of
    * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
   const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
-  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "envelope", "reverse"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "envelope", "reverse"]);
   const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
   const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
 
@@ -359,6 +359,9 @@
       // gate would otherwise apply (engine parameter.py), same as pitch.range —
       // emit it. pickValueOrEnv returns undefined when truly unset (null). #50
       duration_range: pickValueOrEnv(grain.durationRange, grain.durationRangeEnv),
+      // Meta-chiave (PGE #158): unità di duration/duration_range. Emessa solo
+      // se impostata; assente = default engine (seconds).
+      duration_unit:  grain.durationUnit || undefined,
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
     // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
@@ -623,6 +626,9 @@
         duration:      grDur.scalar,
         durationEnv:   grDur.env,
         ...(() => { const dr = unpackValueOrEnv(grain.duration_range ?? null); return { durationRange: dr.scalar, durationRangeEnv: dr.env }; })(),  // preserve absence (#50)
+        // Meta-chiave (PGE #158): unità di duration/duration_range. Assente =
+        // default engine (seconds); non iniettata per non sporcare la cache.
+        ...("duration_unit" in grain ? { durationUnit: grain.duration_unit ?? null } : {}),
         // Preserve absence (engine default is 'hanning') — injecting it would
         // write `envelope: hanning` on save and bust the engine cache. The
         // EnvelopeSelector renders an unset value as 'hanning'.

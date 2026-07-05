@@ -1593,6 +1593,40 @@ console.log("\n── new clip stream defaults (#createStreamFromSample) ──"
 }
 
 /* ============================================================
+ * SECTION — grain.duration_unit modelled (PGE #158)
+ * ============================================================ */
+
+console.log("\n── grain.duration_unit (#158) ──");
+
+{
+  const yamlSamples =
+    "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n" +
+    "    grain:\n      duration: 480\n      duration_range: 96\n      duration_unit: samples\n";
+  const d = parse(yamlSamples);
+  const g = d.streams[0].grain;
+  assert("parse grain.duration_unit → durationUnit", g.durationUnit === "samples",
+    JSON.stringify(g));
+  assert("duration_unit NOT captured under grain._extra",
+    !(g._extra && "duration_unit" in g._extra), JSON.stringify(g._extra));
+  const y = serialize(d);
+  assert("serialize grain.duration_unit", /duration_unit:\s*samples/.test(y), y.slice(0, 400));
+  assert("duration_unit emitted exactly once (no _extra dup)",
+    (y.match(/duration_unit:/g) || []).length === 1, y.slice(0, 400));
+  const back = parse(y).streams[0].grain;
+  assert("durationUnit survives full round-trip", back.durationUnit === "samples");
+}
+
+{
+  // Assente di default: nessuna chiave duration_unit iniettata.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    grain:\n      duration: 0.05\n");
+  assert("durationUnit null when absent", d.streams[0].grain.durationUnit == null,
+    JSON.stringify(d.streams[0].grain));
+  const y = serialize(d);
+  assert("no duration_unit emitted when absent", !/duration_unit:/.test(y), y.slice(0, 400));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 

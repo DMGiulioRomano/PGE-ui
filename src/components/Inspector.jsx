@@ -870,6 +870,42 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                           onEditEnv={focusEnv("durationRange")}
                           onValue={(v) => onChange({grain: {...stream.grain, durationRange: v}})} />
               ) : null}
+              {/* duration_unit meta-key (PGE #158): seconds (default/absent) | samples */}
+              <div className="pge-prow">
+                <span className="k" title="unità di grain.duration e duration_range · samples: campioni a 48000 Hz (min 1 campione), richiede una duration esplicita">duration_unit</span>
+                <span />
+                <span className="v">
+                  <Seg size="xs" value={stream.grain.durationUnit || "seconds"}
+                       onChange={(v) => {
+                         if (v === "samples") {
+                           onChange({ grain: { ...stream.grain, durationUnit: "samples" } });
+                         } else {
+                           const ng = { ...stream.grain }; delete ng.durationUnit;
+                           onChange({ grain: ng });
+                         }
+                       }}
+                       options={[{label:"seconds",value:"seconds"},{label:"samples",value:"samples"}]} />
+                  {stream.grain.durationUnit ? null : <span className="hint" style={{fontSize:9, marginLeft:4}}>default</span>}
+                </span>
+                <span />
+              </div>
+              {window.PGEEnvUtils.grainDurationUnitError(stream.grain) ? (
+                <div className="pge-prow" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+                    duration_unit: samples richiede una grain.duration esplicita (il default 0.05 è in secondi e non viene convertito).
+                  </span>
+                  <span />
+                </div>
+              ) : stream.grain.durationUnit === "samples" ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                    valori in campioni a 48000 Hz · min 1 campione · convertiti in secondi al parse
+                  </span>
+                  <span />
+                </div>
+              ) : null}
               <window.PGE.EnvelopeSelectorRow
                 value={stream.grain.envelope}
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}

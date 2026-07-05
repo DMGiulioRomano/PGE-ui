@@ -72,6 +72,14 @@ assert("density ← density.value (min/max)", out.density.min === 0.5 && out.den
 assert("volume ← volume.value",             out.volume.min === -90 && out.volume.max === 6);
 assert("volumeRange ← volume.RANGE",        out.volumeRange.min === 0 && out.volumeRange.max === 18);
 assert("grainDur ← grain_duration.value",   out.grainDur.max === 5);
+// PGE #158: il min reale di grain_duration è 1 campione (1/output_sr). L'engine
+// espone via /bounds solo il min statico (1 ms); l'override dinamico non è
+// visibile all'AST-parser, quindi lo applichiamo lato UI.
+assert("grainDur.min floored to 1 sample (1/48000) despite engine 0.002",
+  Math.abs(out.grainDur.min - 1 / 48000) < 1e-12, String(out.grainDur.min));
+assert("static fallback grainDur.min is 1 sample (1/48000)",
+  Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / 48000) < 1e-12,
+  String(window.PGE_BOUNDS.grainDur.min));
 assert("durationRange ← grain_duration.RANGE (0..0.8)", out.durationRange.min === 0 && out.durationRange.max === 0.8);
 assert("offsetRange ← pointer_deviation.RANGE (0..1)",  out.offsetRange.min === 0 && out.offsetRange.max === 1);
 assert("loopDur.min ← loop_dur.value",      out.loopDur.min === 0.01);
