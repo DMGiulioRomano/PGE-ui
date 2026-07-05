@@ -7,6 +7,7 @@ const PITCH_STRATEGIES = [
   { value: "step",       label: "step",       desc: "i × step  · arithmetic progression" },
   { value: "range",      label: "range",      desc: "fill pitch_range across N voices" },
   { value: "chord",      label: "chord",      desc: "harmonic intervals, octave-wraps" },
+  { value: "chord_progression", label: "chord progression", desc: "harmony over time · per-voice glissando/step" },
   { value: "stochastic", label: "stochastic", desc: "seeded random in ±pitch_range" },
   { value: "spectral",   label: "spectral",   desc: "harmonic series · offset(i)=round(12×log₂(i+1))" },
 ];
@@ -37,11 +38,35 @@ const CHORD_GROUPS = [
   { label: "7 voices", chords: CHORDS_7V },
 ];
 
+// note count per chord, derived from the voices-count groups above
+// (index 0 = 3 voices, …, index 4 = 7 voices). Drives the inversion range.
+const CHORD_SIZES = {};
+CHORD_GROUPS.forEach((g, i) => { g.chords.forEach(c => { CHORD_SIZES[c] = i + 3; }); });
+
+// progression step accessors — tolerate the three YAML forms the engine accepts:
+//   [t, "maj7"] · [t, "min7", 1] · [t, {chord, inversion}]
+function cpStepT(step)     { return Array.isArray(step) ? (step[0] ?? 0) : 0; }
+function cpStepChord(step) {
+  if (!Array.isArray(step)) return "maj7";
+  const s = step[1];
+  return (s && typeof s === "object") ? s.chord : s;
+}
+function cpStepInv(step) {
+  if (!Array.isArray(step)) return 0;
+  const s = step[1];
+  if (s && typeof s === "object") return s.inversion || 0;
+  return step[2] || 0;
+}
+// normalize to the compact array form on any edit: 2-tuple when root position,
+// 3-tuple otherwise (matches the issue examples, keeps YAML clean).
+function cpMakeStep(t, chord, inv) { return inv ? [t, chord, inv] : [t, chord]; }
+
 const STRATEGY_DEFAULTS = {
   pitch: {
     step:       { step: 3.0 },
     range:      { pitch_range: 12.0 },
     chord:      { chord: "dom7", inversion: 0 },
+    chord_progression: { progression: [[0, "maj7"], [8, "min7"]], interp: "linear", voice_leading: "nearest" },
     stochastic: { pitch_range: 12.0 },
     spectral:   { max_partial: 16 },
   },
@@ -104,6 +129,103 @@ function VoiceStratParamRow({ name, value, valueEnv, unit, onValue, onMode, onEd
     onValue={onValue}
     steps={steps}
   />;
+}
+
+function ChordProgressionEditor({ pitch, timeMode, onPatch }) {
+  const prog = Array.isArray(pitch.progression) ? pitch.progression : [];
+  const interp = pitch.interp || "linear";
+  const voiceLeading = pitch.voice_leading || "nearest";
+  const normalized = timeMode === "normalized";
+  const tUnit = normalized ? "0..1" : "s";
+
+  function writeStep(i, t, chord, inv) {
+    const next = prog.slice();
+    next[i] = cpMakeStep(t, chord, inv);
+    onPatch({ progression: next });
+  }
+  function addStep() {
+    const last = prog.length ? prog[prog.length - 1] : null;
+    const t = last ? cpStepT(last) : 0;
+    const chord = last ? cpStepChord(last) : "maj7";
+    onPatch({ progression: prog.concat([[t, chord]]) });
+  }
+  function removeStep(i) {
+    const next = prog.slice();
+    next.splice(i, 1);
+    onPatch({ progression: next });
+  }
+
+  return (
+    <>
+      <div className="pge-prow">
+        <span className="k">interp</span><span />
+        <span className="v">
+          <select className="pge-mini-select" value={interp}
+                  onChange={e => onPatch({ interp: e.target.value })}>
+            <option value="linear">linear</option>
+            <option value="cubic">cubic</option>
+            <option value="step">step</option>
+          </select>
+        </span><span />
+      </div>
+      <div className="pge-prow">
+        <span className="k">voice_leading</span><span />
+        <span className="v">
+          <select className="pge-mini-select" value={voiceLeading}
+                  onChange={e => onPatch({ voice_leading: e.target.value })}>
+            <option value="nearest">nearest</option>
+            <option value="positional">positional</option>
+          </select>
+        </span><span />
+      </div>
+      <div className="cp-list">
+        <div className="cp-head">
+          <span>t · {tUnit}</span><span>chord</span><span>inv</span><span />
+        </div>
+        {prog.length === 0 ? (
+          <div className="voice-empty">empty progression · add at least one chord</div>
+        ) : null}
+        {prog.map((step, i) => {
+          const chord = cpStepChord(step);
+          const nInv = CHORD_SIZES[chord] || 1;
+          const inv = Math.min(cpStepInv(step), nInv - 1);
+          return (
+            <div className="cp-row" key={i}>
+              <input type="number" className="pge-mini-input cp-t"
+                     step={normalized ? 0.01 : 0.1}
+                     value={cpStepT(step)}
+                     onChange={e => writeStep(i, +e.target.value || 0, chord, inv)} />
+              <select className="pge-mini-select cp-chord" value={chord}
+                      onChange={e => {
+                        const nc = e.target.value;
+                        const cap = (CHORD_SIZES[nc] || 1) - 1;
+                        writeStep(i, cpStepT(step), nc, Math.min(inv, cap));
+                      }}>
+                {CHORD_GROUPS.map(g => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.chords.map(c => <option key={c} value={c}>{c}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <input type="number" className="pge-mini-input cp-inv"
+                     min={0} max={nInv - 1} step={1} value={inv}
+                     title={`inversion ∈ [0, ${nInv - 1}] for ${chord}`}
+                     onChange={e => writeStep(i, cpStepT(step), chord,
+                       Math.max(0, Math.min(nInv - 1, Math.round(+e.target.value || 0))))} />
+              <button className="pge-btn ghost cp-del" title="remove step"
+                      onClick={() => removeStep(i)}>✕</button>
+            </div>
+          );
+        })}
+        <button className="pge-btn ghost cp-add" onClick={addStep}>+ add chord</button>
+      </div>
+      <div className="voice-meta">
+        chord = f(time) · voice 0 = reference (root motion lives in the stream pitch envelope) ·
+        interp linear/cubic = glissando, step = blocks · times follow stream time_mode
+        ({normalized ? "0..1 of duration" : "seconds"}) and must be non-decreasing · semitone-locked
+      </div>
+    </>
+  );
 }
 
 function VoiceGroup({ title, strategies, voices, dim, onChange, children, extraTopRow }) {
@@ -198,7 +320,8 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
       <VoiceGroup title="Pitch" strategies={PITCH_STRATEGIES}
                   voices={v} dim="pitch" onChange={update}
                   extraTopRow={(strat) => {
-                    if (strat === "chord" || strat === "spectral") return null;
+                    // semitone-locked strategies: no unit selector
+                    if (strat === "chord" || strat === "chord_progression" || strat === "spectral") return null;
                     const curUnit = (v.pitch||{}).unit;
                     const isEdo = curUnit && typeof curUnit === "object";
                     const unitStr = isEdo ? "edo" : (curUnit || "semitones");
@@ -310,6 +433,12 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
                 <VoiceParamRow name="inversion" value={(v.pitch||{}).inversion ?? 0} unit=""
                   onChange={x => updateDim("pitch", { inversion: Math.max(0, Math.round(x)) })} />
               </>
+            ) : null}
+            {strat === "chord_progression" ? (
+              <ChordProgressionEditor
+                pitch={v.pitch || {}}
+                timeMode={stream.timeMode}
+                onPatch={patch => updateDim("pitch", patch)} />
             ) : null}
             {strat === "stochastic" ? (
               <>

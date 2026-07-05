@@ -29,7 +29,12 @@ jobs:
       # from its own path) so the engine smoke test runs here instead of skipping.
       # If PythonGranularEngine is private, add an ENGINE_REPO_TOKEN secret (a PAT
       # with read access); for a public repo the default GITHUB_TOKEN is enough.
+      # continue-on-error: when the token can't read the private engine (secret
+      # absent/expired, or a fork PR without secrets) the checkout must not fail
+      # the whole job — test_engine_render already skips when the engine venv/
+      # main.py is absent, so the bridge tests still run and gate the PR.
       - name: checkout PythonGranularEngine
+        continue-on-error: true
         uses: actions/checkout@v4
         with:
           repository: DMGiulioRomano/PythonGranularEngine
@@ -43,7 +48,10 @@ jobs:
         run: pip install flask flask-cors pytest PyYAML
       # Build the engine's own venv so test_engine_render runs (instead of
       # skipping on a missing .venv/main.py). numpy renderer needs numpy+soundfile.
+      # Skipped implicitly when the checkout above didn't land the engine sources.
       - name: set up engine venv
+        continue-on-error: true
+        if: hashFiles('PythonGranularEngine/requirements.txt') != ''
         working-directory: PythonGranularEngine
         run: |
           python -m venv .venv
