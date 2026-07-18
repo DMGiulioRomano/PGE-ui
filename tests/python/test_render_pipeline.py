@@ -282,10 +282,44 @@ def _stub_score_visualizer(root):
     )
 
 
+def _stub_envelope_extractor_pge(root, keys=("volume", "pan", "pitch",
+                                             "voice_pitch_offset")):
+    """Write a minimal envelope_extractor.py in the current engine layout
+    (src/pge/rendering/, post PGE #150+#162) with the ENVELOPE_COLORS literal.
+    In this layout score_visualizer.py only re-imports the dict, so the parser
+    must find it here."""
+    d = root / "src" / "pge" / "rendering"
+    d.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"    '{k}': '#000000',\n" for k in keys)
+    (d / "envelope_extractor.py").write_text(
+        "import numpy as np  # never imported by the parser\n"
+        "ENVELOPE_COLORS = {\n" + body + "}\n"
+        "PLOT_ENVELOPE_KEYS = frozenset(ENVELOPE_COLORS)\n",
+        encoding="utf-8",
+    )
+
+
 def test_engine_envelope_keys_parses_source_in_order(tmp_path):
     import server
     _stub_score_visualizer(tmp_path)
     assert server.engine_envelope_keys(tmp_path) == ["volume", "pan", "pitch"]
+
+
+def test_engine_envelope_keys_pge_layout(tmp_path):
+    # current engine layout (PGE #162): the literal lives in
+    # src/pge/rendering/envelope_extractor.py (issue #109)
+    import server
+    _stub_envelope_extractor_pge(tmp_path)
+    assert server.engine_envelope_keys(tmp_path) == [
+        "volume", "pan", "pitch", "voice_pitch_offset"]
+
+
+def test_engine_envelope_keys_prefers_current_layout(tmp_path):
+    # both layouts present (e.g. stale build dirs): the current one wins
+    import server
+    _stub_score_visualizer(tmp_path)
+    _stub_envelope_extractor_pge(tmp_path, keys=("density",))
+    assert server.engine_envelope_keys(tmp_path) == ["density"]
 
 
 def test_engine_envelope_keys_missing_returns_empty(tmp_path):
@@ -370,6 +404,21 @@ def _stub_parameter_files(root):
         "}\n",
         encoding="utf-8",
     )
+
+
+def test_engine_parameter_bounds_pge_layout(tmp_path):
+    # current engine layout (PGE #162): parameters live under
+    # src/pge/parameters/ (issue #109). Reuse the legacy stub then relocate it.
+    import server
+    _stub_parameter_files(tmp_path)
+    legacy = tmp_path / "src" / "parameters"
+    new = tmp_path / "src" / "pge" / "parameters"
+    new.parent.mkdir(parents=True, exist_ok=True)
+    legacy.rename(new)
+    params = server.engine_parameter_bounds(tmp_path)["params"]
+    assert params["density"]["max_val"] == 4000.0
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}
 
 
 def test_engine_parameter_bounds_parses_registry(tmp_path):
