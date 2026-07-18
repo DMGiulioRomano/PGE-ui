@@ -160,6 +160,17 @@ def test_build_cmd_plot_envelopes_strips_blanks():
     assert cmd[cmd.index("--plot-envelopes") + 1] == "pitch,pan"
 
 
+def test_build_cmd_show_voice_offsets_only_with_visualize():
+    # per-voice offset curves in the PDF score (PGE #90 / PGE-ui #55): gated
+    # on --visualize like --show-static, default off
+    assert "--show-voice-offsets" not in _cmd()
+    assert "--show-voice-offsets" not in _cmd(visualize=True)
+    assert "--show-voice-offsets" not in _cmd(visualize=False,
+                                              show_voice_offsets=True)
+    cmd = _cmd(visualize=True, show_voice_offsets=True)
+    assert "--visualize" in cmd and "--show-voice-offsets" in cmd
+
+
 # ---------------------------------------------------------------------------
 # kill_process / watchdog
 # ---------------------------------------------------------------------------

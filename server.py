@@ -876,6 +876,10 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         renderer = opts.get("renderer", "numpy")
         use_cache = bool(opts.get("useCache", True))
         visualize = bool(opts.get("visualize", False))
+        # Per-voice offset curves in the PDF score (PGE #90 / issue #55).
+        # Off by default; engines that predate the flag parse argv manually
+        # and ignore unknown flags, so forwarding it is always safe.
+        show_voice_offsets = bool(opts.get("showVoiceOffsets", False))
         page_duration = opts.get("pageDuration")
         # Selective score-envelope filter (issue #31). Keep only names the engine
         # actually knows: an unknown name makes main.py exit 1 and aborts the
@@ -945,6 +949,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 visualize=visualize, page_duration=page_duration, reaper=reaper,
                 basename=basename, refs=refs, output=output, fmt=fmt,
                 plot_envelopes=plot_envelopes, grain_json=grain_json,
+                show_voice_offsets=show_voice_offsets,
             )
 
             yield json.dumps({"type": "log",
