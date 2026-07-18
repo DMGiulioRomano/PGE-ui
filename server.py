@@ -89,7 +89,7 @@ _ENVELOPE_KEYS_CACHE: dict = {}
 
 def engine_envelope_keys(root: Path) -> list:
     """Valid `--plot-envelopes` names = keys of the engine's `ENVELOPE_COLORS`
-    dict in src/rendering/score_visualizer.py (issue #31).
+    dict literal (issue #31).
 
     We AST-parse the source rather than importing the module: it pulls in
     matplotlib/numpy/soundfile and may live in the engine's own venv, neither
@@ -97,28 +97,42 @@ def engine_envelope_keys(root: Path) -> list:
     works even when the engine venv isn't set up yet. The UI fetches these to
     populate the score-envelope filter so the list is never hardcoded.
 
-    Returns the keys in source order, or [] if the file/constant is missing (an
-    older engine without the feature) — in which case the filter stays hidden
+    The literal has moved across engine layouts (issue #109): born in
+    src/rendering/score_visualizer.py, extracted to envelope_extractor.py
+    (PGE #150 — score_visualizer now only re-imports it, so parsing it there
+    finds nothing), then the whole package moved under src/pge/ (PGE #162).
+    Candidates are tried newest-first; the first file whose parse yields keys
+    wins, so every engine vintage keeps working.
+
+    Returns the keys in source order, or [] if no candidate has the constant
+    (an engine without the feature) — in which case the filter stays hidden
     and the flag is never sent. Result is cached per resolved root."""
     key = str(root)
     if key in _ENVELOPE_KEYS_CACHE:
         return _ENVELOPE_KEYS_CACHE[key]
+    candidates = (
+        root / "src" / "pge" / "rendering" / "envelope_extractor.py",
+        root / "src" / "rendering" / "envelope_extractor.py",
+        root / "src" / "rendering" / "score_visualizer.py",
+    )
     keys: list = []
-    src = root / "src" / "rendering" / "score_visualizer.py"
-    try:
-        tree = ast.parse(src.read_text(encoding="utf-8"))
-        for node in tree.body:
-            if not isinstance(node, ast.Assign):
-                continue
-            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            if "ENVELOPE_COLORS" not in names or not isinstance(node.value, ast.Dict):
-                continue
-            for k in node.value.keys:
-                if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                    keys.append(k.value)
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+            for node in tree.body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                if "ENVELOPE_COLORS" not in names or not isinstance(node.value, ast.Dict):
+                    continue
+                for k in node.value.keys:
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        keys.append(k.value)
+                break
+        except Exception:
+            keys = []
+        if keys:
             break
-    except Exception:
-        keys = []
     _ENVELOPE_KEYS_CACHE[key] = keys
     return keys
 
@@ -312,7 +326,11 @@ def engine_parameter_bounds(root: Path) -> dict:
     key = str(root)
     if key in _PARAMETER_BOUNDS_CACHE:
         return _PARAMETER_BOUNDS_CACHE[key]
-    pdir = root / "src" / "parameters"
+    # Current layout first (src/pge/, PGE #162), legacy flat src/ as fallback
+    # for older engine checkouts (issue #109).
+    pdir = root / "src" / "pge" / "parameters"
+    if not pdir.is_dir():
+        pdir = root / "src" / "parameters"
     params, pitch = {}, {}
     pd = pdir / "parameter_definitions.py"
     if pd.exists():
@@ -876,6 +894,10 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         renderer = opts.get("renderer", "numpy")
         use_cache = bool(opts.get("useCache", True))
         visualize = bool(opts.get("visualize", False))
+        # Per-voice offset curves in the PDF score (PGE #90 / issue #55).
+        # Off by default; engines that predate the flag parse argv manually
+        # and ignore unknown flags, so forwarding it is always safe.
+        show_voice_offsets = bool(opts.get("showVoiceOffsets", False))
         page_duration = opts.get("pageDuration")
         # Selective score-envelope filter (issue #31). Keep only names the engine
         # actually knows: an unknown name makes main.py exit 1 and aborts the
@@ -945,6 +967,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 visualize=visualize, page_duration=page_duration, reaper=reaper,
                 basename=basename, refs=refs, output=output, fmt=fmt,
                 plot_envelopes=plot_envelopes, grain_json=grain_json,
+                show_voice_offsets=show_voice_offsets,
             )
 
             yield json.dumps({"type": "log",

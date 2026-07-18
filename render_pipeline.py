@@ -108,7 +108,7 @@ class RenderState:
 def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache,
                          cache, visualize, page_duration, reaper, basename,
                          refs, output, fmt, plot_envelopes=None,
-                         grain_json=True) -> list:
+                         grain_json=True, show_voice_offsets=False) -> list:
     """Build the `python src/main.py …` argv. Pure (no spawning) so it is unit
     testable. `--show-static` is appended only with `--visualize` — it has no
     effect otherwise (engine docs/reference/cli.md). #43
@@ -122,7 +122,12 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
 
     `grain_json` (issue #68) toggles the per-stream `--grain-json` sidecar the
     UI uses to draw grains. Default True keeps the historical always-on behavior
-    (#13); set False to skip the heavy JSON on dense compositions."""
+    (#13); set False to skip the heavy JSON on dense compositions.
+
+    `show_voice_offsets` (PGE #90 / PGE-ui #55) draws the per-voice offset
+    curves (voice_pitch_offset/voice_pointer_offset per voice, plus the single
+    voice_pointer_range spread) in the PDF score's envelope panel. Only
+    meaningful with `--visualize`, so it is gated inside that block."""
     cmd = [
         str(venv_py), str(root / "src" / "main.py"),
         str(yml), str(output_stem),
@@ -136,6 +141,8 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
         cmd += ["--cache", "--cache-dir", str(cache)]
     if visualize:
         cmd += ["--visualize", "--show-static"]
+        if show_voice_offsets:
+            cmd += ["--show-voice-offsets"]
         if page_duration is not None and float(page_duration) != 15.0:
             cmd += ["--page-duration", str(float(page_duration))]
         if plot_envelopes:
