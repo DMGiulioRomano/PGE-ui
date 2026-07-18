@@ -1000,6 +1000,7 @@ function App() {
   const renderOptions = {
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
+    showVoiceOffsets: !!tweaks.renderShowVoiceOffsets,
     grainJson: tweaks.renderGrainJson !== false,
     pageDuration: tweaks.renderPageDuration ?? 15,
     plotEnvelopes: Array.isArray(tweaks.renderPlotEnvelopes) ? tweaks.renderPlotEnvelopes : [],
@@ -1020,6 +1021,7 @@ function App() {
     }
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
+    setTweak("renderShowVoiceOffsets", next.showVoiceOffsets);
     setTweak("renderGrainJson", next.grainJson);
     setTweak("renderPageDuration", next.pageDuration);
     setTweak("renderPlotEnvelopes", Array.isArray(next.plotEnvelopes) ? next.plotEnvelopes : []);
@@ -1053,6 +1055,8 @@ function App() {
       // user would be "looking at grains" with no data to draw (issue #68).
       grainJson: renderOptions.grainJson || !!tweaks.showGrains || grainScoreOpen,
       pageDuration: renderOptions.visualize ? renderOptions.pageDuration : undefined,
+      showVoiceOffsets: renderOptions.visualize && renderOptions.showVoiceOffsets
+        ? true : undefined,
       plotEnvelopes: renderOptions.visualize && renderOptions.plotEnvelopes.length
         ? renderOptions.plotEnvelopes : undefined,
       reaper: renderOptions.reaper,

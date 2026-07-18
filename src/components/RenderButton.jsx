@@ -103,6 +103,17 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
               <span className="rs-hint">seconds per page</span>
             </div>
           ) : null}
+          {options.visualize ? (
+            <div className="rs-row" style={{paddingLeft: 18}}
+                 onClick={() => toggle("showVoiceOffsets", !options.showVoiceOffsets)}>
+              <span className="rs-k">voice offsets</span>
+              <div className={"rs-tog" + (options.showVoiceOffsets ? " on" : "")}
+                   role="switch" aria-checked={!!options.showVoiceOffsets}>
+                <span className="rs-tog-knob" />
+              </div>
+              <div className="rs-hint">per-voice pitch/pointer offset curves in the score</div>
+            </div>
+          ) : null}
           {options.visualize && keys.length ? (
             <div className="rs-row rs-env-filter" style={{paddingLeft: 18}}>
               <span className="rs-k">plot envelopes</span>
@@ -173,6 +184,7 @@ function buildCommand(o) {
   if (o.useCache) parts.push("--cache", "--cache-dir", "cache");
   if (o.visualize) {
     parts.push("--visualize", "--show-static");
+    if (o.showVoiceOffsets) parts.push("--show-voice-offsets");
     if (o.pageDuration && o.pageDuration !== 15) parts.push("--page-duration", String(o.pageDuration));
     if (Array.isArray(o.plotEnvelopes) && o.plotEnvelopes.length) {
       parts.push("--plot-envelopes", o.plotEnvelopes.join(","));
