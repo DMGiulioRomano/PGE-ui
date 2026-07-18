@@ -23,6 +23,10 @@
       if (PGEEnv.isBreakpoint(item)) {
         const c = [...item]; c[0] = Math.min(1, +(c[0] * ratio).toFixed(5)); return c;
       }
+      if (PGEEnv.isBPGroup(item)) {
+        // BP group [points, interp]: i punti hanno tempi assoluti come i BP
+        return [rescaleEnvArray(item[0], ratio), item[1]];
+      }
       if (PGEEnv.isCompactBlock(item)) {
         const c = [...item]; c[1] = Math.min(1, +(c[1] * ratio).toFixed(5)); return c;
       }
@@ -55,6 +59,16 @@
           }
           break;
         }
+      } else if (PGEEnv.isBPGroup(item)) {
+        // BP group: tronca i punti interni (stessa regola dei BP); se resta
+        // un solo punto il gruppo degenera a breakpoint nudo.
+        if (prevX >= 1.0) break;
+        const inner = truncateEnvArray(item[0]);
+        if (inner.length >= 2) result.push([inner, item[1]]);
+        else if (inner.length === 1) result.push(inner[0]);
+        const lastP = inner[inner.length - 1];
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; }
+        if (item[0].some(p => p[0] > 1.0)) break; // il gruppo è stato tagliato
       } else if (PGEEnv.isCompactBlock(item)) {
         if (prevX >= 1.0) break; // block starts beyond boundary — drop
         if (item[1] > 1.0) {
@@ -80,6 +94,7 @@
     if (!Array.isArray(arr)) return false;
     return arr.some(item => {
       if (PGEEnv.isBreakpoint(item)) return item[0] * ratio > 1.0;
+      if (PGEEnv.isBPGroup(item)) return item[0].some(p => p[0] * ratio > 1.0);
       if (PGEEnv.isCompactBlock(item)) return item[1] * ratio > 1.0;
       return false;
     });
