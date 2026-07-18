@@ -1,5 +1,6 @@
 import math
 import os
+import re
 import struct
 import subprocess
 import tempfile
@@ -13,7 +14,25 @@ PGE_ROOT  = os.path.abspath(
 PYTHON    = os.path.join(PGE_ROOT, ".venv/bin/python")
 MAIN      = os.path.join(PGE_ROOT, "src/main.py")
 SHOWCASE  = os.path.join(PGE_ROOT, "configs/PGE_pitch_units_showcase.yml")
-SAMPLE    = os.path.join(PGE_ROOT, "refs/weNeedToTalkAboutIt.wav")
+
+# `sample:` lines in the showcase config, with optional quotes and trailing
+# comment. Regex instead of a YAML parser so the fixture stays stdlib-only.
+_SAMPLE_RE = re.compile(r"""^\s*sample:\s*["']?([^"'\n#]+?)["']?\s*(?:#.*)?$""",
+                        re.MULTILINE)
+
+
+def _showcase_samples():
+    """Sample filenames referenced by the showcase config.
+
+    Read from the config itself rather than hardcoded: the showcase drifts
+    with the engine (it referenced weNeedToTalkAboutIt.wav, now voice.wav),
+    and a hardcoded name silently stops covering the render's real inputs."""
+    try:
+        with open(SHOWCASE, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    return sorted({m.group(1).strip() for m in _SAMPLE_RE.finditer(text)})
 
 # Integration test: shells out to the engine. Skip cleanly when the sibling
 # engine repo or its venv isn't present (e.g. CI without the checkout) instead
@@ -48,20 +67,23 @@ def _synthesize_sample(path, *, seconds=20, sr=48000):
 
 @pytest.fixture
 def sample_present():
-    """Ensure the config's source sample exists for the render.
+    """Ensure every source sample the config references exists for the render.
 
-    If a real sample is already present (a dev's own refs/), leave it untouched.
-    Otherwise synthesize one and remove it afterwards so the checkout stays clean.
+    Samples already present (a dev's own refs/) are left untouched; the missing
+    ones are synthesized and removed afterwards so the checkout stays clean.
     """
-    if os.path.exists(SAMPLE):
-        yield
-        return
-    _synthesize_sample(SAMPLE)
+    created = []
+    for name in _showcase_samples():
+        path = os.path.join(PGE_ROOT, "refs", name)
+        if not os.path.exists(path):
+            _synthesize_sample(path)
+            created.append(path)
     try:
         yield
     finally:
-        if os.path.exists(SAMPLE):
-            os.unlink(SAMPLE)
+        for path in created:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 def test_render_pitch_units_showcase(sample_present):
