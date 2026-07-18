@@ -241,7 +241,8 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
   let expandedBPs = [];
   if (envValue && envValue.length) {
     const hasLoop = window.PGEEnv && window.PGEEnv.envHasLoop(envValue);
-    if (hasLoop) {
+    const hasGroup = window.PGEEnv && window.PGEEnv.envHasGroup(envValue);
+    if (hasLoop || hasGroup) {
       const exp = window.PGEEnv.expandMixed(envValue);
       expandedBPs = exp.points;
       loopCount = exp.blocks.length;

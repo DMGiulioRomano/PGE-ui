@@ -72,7 +72,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
     if (mode === "off")       return <span className="mono" style={{color:"var(--fg-3)"}}>off</span>;
     if (mode === "implicit")  return <span className="mono" style={{color:"var(--fg-3)"}}>implicit · 1%</span>;
     if (mode === "global")    {
-      if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.unwrapEnv(d).items.length} bp</span>;
+      if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items).length} bp</span>;
       return <span className="mono" style={{color:"var(--accent)"}}>{d}%</span>;
     }
     const n = Object.keys(d || {}).length;
@@ -113,7 +113,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                       const v = typeof d === "number" ? d : 1;
                       onChange({ dephase: [[0, v], [1, v]] });
                     } else {
-                      const items = dIsEnv ? PGEEnv.unwrapEnv(d).items : null;
+                      const items = dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null;
                       const v = (items && items[0] && items[0][1]) || 1;
                       onChange({ dephase: v });
                     }
@@ -121,7 +121,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                   value={dIsEnv ? "—" : d}
                   unit={dIsEnv ? "" : "%"}
                   accent={dIsEnv}
-                  envValue={dIsEnv ? PGEEnv.unwrapEnv(d).items : null}
+                  envValue={dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("dephase") : undefined}
                   onValue={(v) => onChange({dephase: v})} />
       ) : null}
@@ -133,7 +133,7 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
             // Same typed-env handling per parameter: a per-param value can also
             // take the {type, points} form (cubic on a per-param dephase env).
             const isEnv = PGEDephase.isEnvValue(val);
-            const items = isEnv ? PGEEnv.unwrapEnv(val).items : null;
+            const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
             return (
               <div key={p.key} className="pge-prow">
                 <span className="k">{p.key}</span>

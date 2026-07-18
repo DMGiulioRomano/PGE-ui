@@ -434,6 +434,41 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
 
 }
 
+/* ---------- BPZonePanel — controls for the selected BP macro-zone ----------
+   Simmetrico a LoopBlockPanel: una macrozona di breakpoint (run di BP
+   consecutivi) ha il proprio selettore interp (BP group [points, interp],
+   PGE #64). L'interp governa i soli segmenti interni della zona; il segmento
+   in uscita dall'ultimo punto segue il default globale. */
+function BPZonePanel({ zone, interp, color, onSetInterp }) {
+  if (!zone) return null;
+  const n = zone.indices.length;
+  return (
+    <div className="ee-loop-panel" style={{ borderColor: color }}>
+      <div className="ee-loop-panel-head">
+        <span className="ee-loop-panel-icon" style={{ color }}>▱</span>
+        <span className="ee-loop-panel-title">bp zone</span>
+        <span className="ee-loop-panel-meta mono">
+          [{zone.start.toFixed(3)} → {zone.end.toFixed(3)}] · {n} bp
+        </span>
+        <span style={{ flex: 1 }} />
+      </div>
+      <div className="ee-loop-panel-row">
+        <label className="ee-loop-fld">
+          <span className="ee-loop-lbl">interp</span>
+          <select className="ee-loop-select mono" value={interp}
+          onChange={(e) => onSetInterp(e.target.value)}>
+            {interp === "mixed" ? <option value="mixed" disabled>mixed</option> : null}
+            {INTERP_TYPES.map((o) => <option key={o.val} value={o.val}>{o.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="ee-loop-panel-hint mono">
+        interp di zona · governa i segmenti interni ({n} pt → {Math.max(0, n - 1)} seg) · il segmento in uscita segue il default globale · shift+click su un segmento ▸ override per-punto
+      </div>
+    </div>);
+
+}
+
 let _envClipboard = null;
 
 function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
@@ -445,6 +480,7 @@ function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
   const PGEEnv = window.PGEEnv;
   return items.map(it => {
     if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
+    if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
     if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
     return it;
   });
@@ -464,6 +500,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const [hoverBP, setHoverBP] = useStateEE(null);
   const [hoverBlock, setHoverBlock] = useStateEE(null);
   const [selectedBlock, setSelectedBlock] = useStateEE(null); // originalIdx of selected loop
+  const [selectedZone, setSelectedZone] = useStateEE(null); // index into macroZones of selected bps zone
   const [selectedBP, setSelectedBP] = useStateEE(null); // originalIdx of selected breakpoint
   const [selectedPattern, setSelectedPattern] = useStateEE(null); // {blockIdx, patIdx} of selected pattern point inside a loop
   const [ctxMenu, setCtxMenu] = useStateEE(null); // { bpOrigIdx, x, y, curInterp } | null
@@ -534,8 +571,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (envelopes.find((e) => e.key === key)) setSelectedKey(key);
   }, [focusKey]);
 
-  /* clear selected block/bp on stream/env switch */
-  useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}, [stream && stream.id, selectedKey]);
+  /* clear selected block/bp/zone on stream/env switch */
+  useEffectEE(() => {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);setSelectedZone(null);}, [stream && stream.id, selectedKey]);
 
   /* ---- viewport size ---- */
   const [vp, setVp] = useStateEE({ w: 1200, h: 200 });
@@ -559,8 +596,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const envs = listEnvelopes(stream, sampleDur);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
-      const cur = (getNested(stream, e2.path) || []).slice();
       const PGEEnv = window.PGEEnv;
+      const curWrap = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      const cur = PGEEnv.desugarBPGroups(curWrap.items);
+      const commitCur = (next) => onChange(patchForPath(stream, e2.path,
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, curWrap.interp || "linear"), curWrap.interp)));
       e.preventDefault();
       if (selectedPattern != null) {
         // Delete a single pattern point inside a loop block. Refuse to drop
@@ -575,7 +615,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         const newBlock = block.slice();
         newBlock[0] = newPattern;
         const next = cur.map((it, i) => i === blockIdx ? newBlock : it);
-        onChange(patchForPath(stream, e2.path, next));
+        commitCur(next);
         setSelectedPattern(null);
       } else if (selectedBP != null) {
         // Allow deletion unless it would leave the envelope without any
@@ -584,11 +624,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
         const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
         if (remainingBPs + remainingLoops < 1) {setSelectedBP(null);return;}
-        onChange(patchForPath(stream, e2.path, next));
+        commitCur(next);
         setSelectedBP(null);
       } else if (selectedBlock != null) {
         const next = cur.filter((_, i) => i !== selectedBlock);
-        onChange(patchForPath(stream, e2.path, next));
+        commitCur(next);
         setSelectedBlock(null);
       }
     }
@@ -643,7 +683,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const envs = listEnvelopes(stream, sampleDur);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
-      const { items, interp } = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      const _w = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      const items = PGEEnv.desugarBPGroups(_w.items);
+      const interp = _w.interp;
       if (!PGEEnv.isBreakpoint(items[selectedBP])) return;
 
       // We own this key — block the timeline clip-nudge even at a clamp boundary.
@@ -660,7 +702,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         arrowGestureRef.current = true;
         if (window.PGEHistory) window.PGEHistory.beginGesture();
       }
-      onChange(patchForPath(stream, e2.path, PGEEnv.wrapEnv(next, interp)));
+      onChange(patchForPath(stream, e2.path,
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, interp || "linear"), interp)));
     }
     function onKeyUp(e) {
       if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") &&
@@ -683,9 +726,21 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const PGEEnv = window.PGEEnv;
   const rawEnvRaw = (stream && env) ? getNested(stream, env.path) : null;
   const _wrap = rawEnvRaw ? PGEEnv.unwrapEnv(rawEnvRaw) : { items: [], interp: null };
-  const rawEnv = _wrap.items;
+  /* BP group [points, interp] (PGE #64): l'editor lavora sulla forma DESUGARATA
+     — il group interp diventa il type esplicito dei punti interni (3-tuple
+     della #54), così tutti gli indici piatti (selezione, drag, zone) restano
+     stabili. commit() ricompatta i run uniformi in [points, interp] via
+     resugarBPGroups, quindi lo YAML mantiene la forma a gruppi. */
+  const rawEnv = PGEEnv.desugarBPGroups(_wrap.items);
   const globalInterp = _wrap.interp;
-  const exp = useMemoEE(() => rawEnvRaw ? PGEEnv.expandMixed(rawEnvRaw) : { blocks: [], bps: [] }, [rawEnvRaw]);
+  /* expandMixed sul desugarato (non su rawEnvRaw): blocks.originalIdx deve
+     indicizzare rawEnv, e con i gruppi gli indici nativi divergerebbero. La
+     forma typed {type,points} non contiene gruppi e passa com'è. */
+  const exp = useMemoEE(() => {
+    if (!rawEnvRaw) return { points: [], cycles: [], blocks: [] };
+    const src = PGEEnv.isTypedEnv(rawEnvRaw) ? rawEnvRaw : PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(rawEnvRaw).items);
+    return PGEEnv.expandMixed(src);
+  }, [rawEnvRaw]);
   const blockByOrig = useMemoEE(() => {
     const m = new Map();
     exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
@@ -725,10 +780,27 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     return zones;
   }, [rawEnv]);
 
-  /* selectedBlockObj and its side-effect must live before any early return
-     so that hook call count stays stable across renders. */
+  /* ---- interp effettiva di una macrozona bps (BP group, PGE #64) ----
+     null con meno di 2 punti (nessun segmento interno); "mixed" quando i
+     segmenti interni non condividono lo stesso type effettivo. */
+  function zoneEffInterp(zone) {
+    if (!zone || zone.kind !== "bps" || zone.indices.length < 2) return null;
+    const g = _wrap.interp || "linear";
+    const effs = zone.indices.slice(0, -1).map((i) => {
+      const it = rawEnv[i];
+      return (it && typeof it[2] === "string") ? it[2] : g;
+    });
+    return effs.every((t) => t === effs[0]) ? effs[0] : "mixed";
+  }
+
+  /* selectedBlockObj / selZoneObj and their side-effect must live before any
+     early return so that hook call count stays stable across renders. */
   const selectedBlockObj = selectedBlock != null ? blockByOrig.get(selectedBlock) : null;
-  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null); }, [selectedBlockObj != null]);
+  const selZoneObj = (() => {
+    const z = selectedZone != null ? macroZones[selectedZone] : null;
+    return (z && z.kind === "bps" && z.indices.length >= 2) ? z : null;
+  })();
+  useEffectEE(() => { onLoopPanelChange?.(selectedBlockObj != null || selZoneObj != null); }, [selectedBlockObj != null, selZoneObj != null]);
 
   function handleCopyEnv() {
     const clip = { sourceStreamId: stream.id, sourceParam: env.key,
@@ -742,7 +814,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envClipboard) return;
     const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
     const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
-    onChange(patchForPath(stream, env.path, window.PGEEnv.wrapEnv(remapped, interp)));
+    onChange(patchForPath(stream, env.path,
+      window.PGEEnv.wrapEnv(window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp)));
   }
 
   /* ============ Empty states ============ */
@@ -849,10 +922,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
 
   /* ============ Interactions ============ */
   function commit(next) {
-    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(next, globalInterp)));
+    const resugared = PGEEnv.resugarBPGroups(next, globalInterp || "linear");
+    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, globalInterp)));
   }
   function commitWithInterp(nextItems, nextInterp) {
-    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(nextItems, nextInterp)));
+    const resugared = PGEEnv.resugarBPGroups(nextItems, nextInterp || "linear");
+    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, nextInterp)));
   }
   function beginDragHistory() {if (window.PGEHistory) window.PGEHistory.beginGesture();}
   function endDragHistory() {if (window.PGEHistory) window.PGEHistory.endGesture();}
@@ -908,6 +983,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     setSelectedBP(idx);
     setSelectedBlock(null);
     setSelectedPattern(null);
+    setSelectedZone(null);
     beginDragHistory();
     const svg = svgRef.current;
     const rect = svg.getBoundingClientRect();
@@ -994,6 +1070,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     setSelectedPattern({ blockIdx: blockOrigIdx, patIdx });
     setSelectedBlock(null);
     setSelectedBP(null);
+    setSelectedZone(null);
     beginDragHistory();
     const svg = svgRef.current;
     const rect = svg.getBoundingClientRect();
@@ -1042,6 +1119,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     setSelectedBlock(blockOrigIdx);
     setSelectedBP(null);
     setSelectedPattern(null);
+    setSelectedZone(null);
     beginDragHistory();
     const svg = svgRef.current;
     const rect = svg.getBoundingClientRect();
@@ -1150,6 +1228,15 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       if (PGEEnv.isBreakpoint(rawEnv[i]) && rawEnv[i][0] > x) {insertAt = i;break;}
       if (PGEEnv.isCompactBlock(rawEnv[i]) && rawEnv[i][1] > x) {insertAt = i;break;}
     }
+    // Se il punto spezza un segmento con interp esplicita (zona BP group /
+    // per-point #54), eredita il type del BP a sinistra: entrambe le metà
+    // del segmento conservano l'interp e la zona resta uniforme.
+    let leftBP = null;
+    for (let i = insertAt - 1; i >= 0; i--) {
+      if (PGEEnv.isBreakpoint(rawEnv[i])) { leftBP = rawEnv[i]; break; }
+      if (PGEEnv.isCompactBlock(rawEnv[i])) break;
+    }
+    if (leftBP && typeof leftBP[2] === "string") newBP.push(leftBP[2]);
     const next = [...rawEnv];
     next.splice(insertAt, 0, newBP);
     commit(next);
@@ -1249,7 +1336,14 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     }
     function up() {
       const toIdx = zoneReorderRef.current;
-      if (toIdx != null && toIdx !== fromZoneIdx) doZoneReorder(fromZoneIdx, toIdx);
+      if (toIdx != null && toIdx !== fromZoneIdx) {
+        doZoneReorder(fromZoneIdx, toIdx);
+        setSelectedZone(null); // gli indici zona cambiano dopo il riordino
+      } else if (zone.kind === "bps") {
+        // pointerdown+up senza spostamento = click → seleziona la zona
+        // (apre il BPZonePanel con il selettore interp per-macrozona)
+        setSelectedZone(fromZoneIdx);
+      }
       zoneReorderRef.current = null;
       setDragging(null);
       endDragHistory();
@@ -1378,6 +1472,22 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   /* ----- update loop block ----- */
   function updateBlock(origIdx, newRaw) {
     const next = rawEnv.map((it, i) => i === origIdx ? newRaw : it);
+    commit(next);
+  }
+
+  /* ----- set macro-zone interp (BP group, PGE #64) -----
+     Tagga i punti interni del run con il type scelto (l'ultimo punto resta
+     al default globale: governa il segmento in uscita dalla zona). Il commit
+     ricompatta il run uniforme nella forma YAML [points, interp]; scegliere
+     il default globale scioglie il gruppo in breakpoint nudi. */
+  function setZoneInterp(zone, type) {
+    if (!zone || zone.kind !== "bps") return;
+    const g = globalInterp || "linear";
+    const internal = new Set(zone.indices.slice(0, -1));
+    const next = rawEnv.map((it, i) => {
+      if (!internal.has(i) || !PGEEnv.isBreakpoint(it)) return it;
+      return type === g ? [it[0], it[1]] : [it[0], it[1], type];
+    });
     commit(next);
   }
 
@@ -1635,6 +1745,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const bpIndices = rawEnv.map((it, i) => PGEEnv.isBreakpoint(it) ? i : -1).filter((i) => i >= 0);
 
   const hasLoop = exp.blocks.length > 0;
+  // Con più di una macrozona l'interp globale non ha più senso (issue #108):
+  // ogni zona ha il suo selettore. Nel modello desugarato più zone bps
+  // implicano loop block in mezzo, ma il vincolo resta esplicito.
+  const nonEmptyZoneCount = macroZones.filter((z) => z.kind !== "empty").length;
+  const showGlobalInterp = !hasLoop && nonEmptyZoneCount <= 1;
 
   return (
     <div className="pge-envedit" data-screen-label="04 Envelope Editor" ref={rootRef}>
@@ -1657,7 +1772,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                   : "Nessun envelope copiato"}>
           <Icon name="clipboard" size={12} />
         </button>
-        {!hasLoop ?
+        {showGlobalInterp ?
         <label className="ee-loop-fld" title="global interpolation for this envelope's breakpoints">
             <span className="ee-loop-lbl">interp</span>
             <select className="ee-loop-select mono" value={globalInterp}
@@ -1681,14 +1796,18 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
             <span className="mono" style={{ color: "var(--fg-3)" }}>@ {playhead.toFixed(2)}s</span>
           </span> :
         null}
-        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · shift+click segmento ▸ interp · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
+        <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · shift+click segmento ▸ interp · click zona bp ▸ interp di zona · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
       </header>
 
-      {/* ============ optional: selected loop control panel ============ */}
+      {/* ============ optional: selected loop / bp-zone control panel ============ */}
       {selectedBlockObj ?
       <LoopBlockPanel block={selectedBlockObj} color={stream.color}
       onUpdate={(newRaw) => updateBlock(selectedBlock, newRaw)}
       onDelete={deleteSelectedLoop} /> :
+      selZoneObj ?
+      <BPZonePanel zone={selZoneObj} color={stream.color}
+      interp={zoneEffInterp(selZoneObj) || "linear"}
+      onSetInterp={(v) => setZoneInterp(selZoneObj, v)} /> :
       null}
 
       {/* ============ ROW: side column + canvas ============ */}
@@ -1730,7 +1849,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           <div className="ee-canvas" style={{ height: "100%" }}>
             <svg ref={svgRef} className="ee-layer" width="100%" height={H}
             onDoubleClick={onCanvasDblClick}
-            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);}}}
+            onClick={(e) => {if (e.target === e.currentTarget) {setSelectedBlock(null);setSelectedBP(null);setSelectedPattern(null);setSelectedZone(null);}}}
             onMouseDown={() => { if (ctxMenu) setCtxMenu(null); }}>
 
               {/* vertical x grid */}
@@ -1766,7 +1885,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                       className={"ee-loop-region" + (sel ? " sel" : "") + (hov ? " hov" : "")}
                       onMouseEnter={() => setHoverBlock(b.originalIdx)}
                       onMouseLeave={() => setHoverBlock(null)}
-                      onClick={(e) => {e.stopPropagation();setSelectedBlock(b.originalIdx);setSelectedBP(null);setSelectedPattern(null);}} />
+                      onClick={(e) => {e.stopPropagation();setSelectedBlock(b.originalIdx);setSelectedBP(null);setSelectedPattern(null);setSelectedZone(null);}} />
                       {/* cycle dividers */}
                       {b.cycles.slice(1).map((c, ci) =>
                       <line key={"d" + ci} x1={xOf(c.start)} x2={xOf(c.start)}
@@ -1804,11 +1923,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                   const isZoneReorder = dragging && dragging.kind === "zone-reorder";
                   const isFrom = isZoneReorder && dragging.fromIdx === zi;
                   const isTo = isZoneReorder && dragging.toIdx === zi && dragging.toIdx !== dragging.fromIdx;
+                  const isSel = selZoneObj != null && selectedZone === zi;
                   const cls = "ee-zone ee-zone-" + z.kind +
                     (isFrom ? " ee-zone-drag-from" : "") +
-                    (isTo ? " ee-zone-drag-to" : "");
+                    (isTo ? " ee-zone-drag-to" : "") +
+                    (isSel ? " ee-zone-sel" : "");
+                  // le zone bps mostrano l'interp di macrozona (BP group #64)
+                  const zInterp = z.kind === "bps" ? zoneEffInterp(z) : null;
                   const label =
-                    z.kind === "bps" ? (z.indices.length + " bp" + (z.indices.length > 1 ? "s" : "")) :
+                    z.kind === "bps" ? (z.indices.length + " bp" + (z.indices.length > 1 ? "s" : "") +
+                      (zInterp && w >= 92 ? " · " + zInterp : "")) :
                     z.kind === "loop" ? "↻ loop" :
                     "free";
                   const showLabel = w >= 38;
