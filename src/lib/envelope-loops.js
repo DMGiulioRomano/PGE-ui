@@ -12,6 +12,13 @@
  *
  *   Gli `item` nella forma (A) sono:
  *   - breakpoint:  [t, v]                    (t∈[0,1] in editor visivo)
+ *   - bp group:    [points, interp]          (PGE #64 / PR #165)
+ *                  points: [[t, v(, type?)], …]  tempi ASSOLUTI
+ *                  interp: 'linear' | 'cubic' | 'step' — governa i soli
+ *                  segmenti interni (n punti → n−1 segmenti); il segmento in
+ *                  uscita dall'ultimo punto segue il default globale. Un type
+ *                  esplicito per-punto fa override dell'interp di zona.
+ *                  Supportata anche la forma diretta `param: [points, interp]`.
  *   - compact:     [pattern, end_time, n_reps, interp?, dist?]
  *                  pattern: [[xPct, y], …]   xPct ∈ [0,100]
  *                  end_time: tempo ASSOLUTO finale (non durata)
@@ -45,9 +52,12 @@
   }
   function wrapEnv(items, interp) {
     const hasLoop = items.some(isCompactBlock);
+    // BP groups keep the flat mixed-array form: the dict form is only for
+    // pure-BP envelopes with a single global interp
+    const hasGroup = items.some(isBPGroup);
     // if any breakpoint has an explicit per-point type, keep flat array (3-tuples)
     const hasPerPoint = items.some((it) => Array.isArray(it) && it.length === 3 && typeof it[2] === "string");
-    if (hasPerPoint) return items;
+    if (hasPerPoint || hasGroup) return items;
     if (!interp || interp === "linear" || hasLoop) return items;
     // dict form available only for pure-BP envelopes with non-linear global interp
     return { type: interp, points: items.slice() };
@@ -60,9 +70,90 @@
            typeof item[1] === "number" && typeof item[2] === "number";
   }
 
+  /* ---------- BP group [points, interp] (PGE #64 / PR #165) ----------
+     L'unica lista a 2 elementi con elem[0] lista di punti ed elem[1] stringa:
+     nessuna collisione con [t, v], 3-tuple per-punto o loop block (3+ elem). */
+  function isBPGroup(item) {
+    return Array.isArray(item) && item.length === 2 &&
+           Array.isArray(item[0]) && item[0].length > 0 &&
+           Array.isArray(item[0][0]) && item[0][0].length >= 2 &&
+           typeof item[1] === "string";
+  }
+
   function envHasLoop(env) {
     const items = isTypedEnv(env) ? env.points : env;
     return Array.isArray(items) && items.some(isCompactBlock);
+  }
+
+  function envHasGroup(env) {
+    if (isBPGroup(env)) return true; // forma diretta [points, interp]
+    const items = isTypedEnv(env) ? env.points : env;
+    return Array.isArray(items) && items.some(isBPGroup);
+  }
+
+  /* ---------- desugar / resugar dei BP group ----------
+     Il motore desugara il gruppo sui breakpoint 3-tuple della per-point interp
+     (#54): l'interp di zona diventa il type esplicito dei punti interni,
+     l'ultimo punto resta com'è (il suo type governa il gap in uscita).
+     L'editor lavora sulla forma piatta (indici stabili) e ricompatta al commit.
+
+     desugar:  [[pts, 'cubic'], …] → [t, v, 'cubic'] per i punti interni
+     resugar:  un run di BP consecutivi i cui segmenti interni hanno tutti lo
+               stesso type effettivo T ≠ default globale torna [points, T];
+               altrimenti resta piatto (i tag == default vengono normalizzati
+               via, come fa il context-menu per-segmento). Il ciclo
+               desugar∘resugar è idempotente sugli indici. */
+  function desugarBPGroups(items) {
+    if (isBPGroup(items)) items = [items]; // forma diretta
+    if (!Array.isArray(items)) return items;
+    const out = [];
+    for (const it of items) {
+      if (isBPGroup(it)) {
+        const pts = it[0], g = it[1];
+        pts.forEach((p, i) => {
+          if (i < pts.length - 1) {
+            out.push([p[0], p[1], typeof p[2] === "string" ? p[2] : g]);
+          } else {
+            out.push(p.length >= 3 && typeof p[2] === "string" ? [p[0], p[1], p[2]] : [p[0], p[1]]);
+          }
+        });
+      } else {
+        out.push(it);
+      }
+    }
+    return out;
+  }
+
+  function resugarBPGroups(items, globalDefault) {
+    if (!Array.isArray(items)) return items;
+    const g = globalDefault || "linear";
+    const out = [];
+    let run = [];
+    function flushRun() {
+      if (!run.length) return;
+      if (run.length >= 2) {
+        const effs = run.slice(0, -1).map((p) => typeof p[2] === "string" ? p[2] : g);
+        const T = effs.every((t) => t === effs[0]) ? effs[0] : null;
+        if (T && T !== g) {
+          const pts = run.map((p, i) => {
+            if (i === run.length - 1) return typeof p[2] === "string" ? [p[0], p[1], p[2]] : [p[0], p[1]];
+            return [p[0], p[1]]; // tag interno == T → assorbito dal gruppo
+          });
+          out.push([pts, T]);
+          run = [];
+          return;
+        }
+      }
+      // run piatto — normalizza via i tag ridondanti (== default globale)
+      run.forEach((p) => out.push(typeof p[2] === "string" && p[2] === g ? [p[0], p[1]] : p));
+      run = [];
+    }
+    for (const it of items) {
+      if (isBreakpoint(it)) run.push(it);
+      else { flushRun(); out.push(it); }
+    }
+    flushRun();
+    return out;
   }
 
   /* ---------- distribuzioni temporali (time_distribution.py) ----------
@@ -111,6 +202,7 @@
     // typed envelope wrapping: peel it and tag points with the global interp
     let globalInterp = "linear";
     if (isTypedEnv(env)) { globalInterp = env.type || "linear"; env = env.points; }
+    if (isBPGroup(env)) env = [env]; // forma diretta [points, interp]
     const points = [];
     const cycles = [];
     const blocks = [];
@@ -122,6 +214,26 @@
       if (isBreakpoint(item)) {
         points.push([item[0], item[1], (typeof item[2] === "string" ? item[2] : globalInterp)]);
         if (item[0] > currentTime) currentTime = item[0];
+        continue;
+      }
+      if (isBPGroup(item)) {
+        // BP group: l'interp di zona governa i segmenti interni; il segmento
+        // in uscita dall'ultimo punto segue il default globale. Un type
+        // esplicito per-punto fa override. Tempi assoluti; collisione al bordo
+        // zona (t <= ultimo punto precedente) → DISCONTINUITY_OFFSET, stessa
+        // regola dei loop block.
+        const pts = item[0], gInterp = item[1] || "linear";
+        for (let pi = 0; pi < pts.length; pi++) {
+          const p = pts[pi];
+          let pt = p[0];
+          if (pi === 0 && points.length > 0 && pt <= currentTime) {
+            pt = currentTime + DISCONTINUITY_OFFSET;
+          }
+          const isLast = pi === pts.length - 1;
+          const tag = typeof p[2] === "string" ? p[2] : (isLast ? globalInterp : gInterp);
+          points.push([pt, p[1], tag]);
+          if (pt > currentTime) currentTime = pt;
+        }
         continue;
       }
       if (!isCompactBlock(item)) continue;
@@ -191,6 +303,9 @@
     if (dist)   parts.push(fmtDist(dist));
     return "[" + parts.join(", ") + "]";
   }
+  function fmtBPGroup(group) {
+    return `[${fmtPattern(group[0])}, '${group[1]}']`;
+  }
   function fmtEnvInline(env) {
     // typed envelope dict form: {type: 'cubic', points: [[t,v], …]}
     if (isTypedEnv(env)) {
@@ -198,17 +313,24 @@
       return `{type: ${env.type}, points: [${pts}]}`;
     }
     if (!Array.isArray(env)) return JSON.stringify(env);
-    // Single compact block: emit bare form (no outer wrapping), per reference §2.4
+    // Single compact block / BP group: emit bare form (no outer wrapping)
     if (env.length === 1 && isCompactBlock(env[0])) return fmtCompact(env[0]);
-    return "[" + env.map(it => isBreakpoint(it) ? fmtBP(it) : fmtCompact(it)).join(", ") + "]";
+    if (env.length === 1 && isBPGroup(env[0])) return fmtBPGroup(env[0]);
+    return "[" + env.map(it =>
+      isBreakpoint(it) ? fmtBP(it) :
+      isBPGroup(it)    ? fmtBPGroup(it) :
+      fmtCompact(it)
+    ).join(", ") + "]";
   }
 
   /* normalizza un valore parsato all'array di items mixed-format
      - bare compact `[pattern, end, n, …]` → `[compact]`
+     - bare BP group `[points, interp]`    → `[group]`
      - resto invariato                                                   */
   function normalizeEnv(parsed) {
     if (!Array.isArray(parsed)) return parsed;
     if (isCompactBlock(parsed)) return [parsed];
+    if (isBPGroup(parsed)) return [parsed];
     return parsed;
   }
 
@@ -436,6 +558,10 @@
   // loop block) applying `conv` to each y-value; x (time) is untouched.
   function _mapPitchEnv(env, conv) {
     function mapItem(item) {
+      if (isBPGroup(item)) {
+        // [ [[t,v(,type)],…], interp ]
+        return [item[0].map(mapItem), item[1]];
+      }
       if (isCompactBlock(item)) {
         // [ [[x,y],…], end_time, n_reps, interp_in, interp_out ]
         return [item[0].map(mapItem), ...item.slice(1)];
@@ -465,9 +591,10 @@
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
     isBreakpoint, isCompactBlock, envHasLoop,
+    isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, expandMixed,
-    fmtEnvInline, fmtCompact, fmtDist, fmtBP, fmtNum,
+    fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,
     normalizePitchUnit, pitchToSemitones, semitonesToPitch,

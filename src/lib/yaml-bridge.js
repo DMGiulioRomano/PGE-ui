@@ -500,6 +500,9 @@
     // Bare single compact loop block: [pattern, end_time, n_reps, interp?, dist?]
     if (Array.isArray(node[0]) && node[0].length > 0 && Array.isArray(node[0][0]) &&
         typeof node[1] === "number" && typeof node[2] === "number") return true;
+    // Bare BP group (direct form): [points, interp] — PGE #64
+    if (node.length === 2 && Array.isArray(node[0]) && node[0].length > 0 &&
+        Array.isArray(node[0][0]) && typeof node[1] === "string") return true;
     return false;
   }
 
