@@ -96,6 +96,7 @@
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
     "solo", "mute",
+    "rng_group",
   ]);
 
   /* Known keys inside the block nodes that serialize rebuilds in full
@@ -337,6 +338,10 @@
     };
     if (s.timeMode)         y.time_mode = s.timeMode;
     if (s.distributionMode) y.distribution_mode = s.distributionMode;
+    // Emit only a non-empty group: a cleared Inspector field means "no group"
+    // and must never serialize as `rng_group: ''` (engine treats falsy as
+    // absent, but the key would still churn the file and the stream cache).
+    if (s.rngGroup)         y.rng_group = s.rngGroup;
     if (s.rangeAlwaysActive) y.range_always_active = true;
     if (s.timeScale != null && s.timeScale !== 1.0)        y.time_scale = s.timeScale;
     if (s.clipStrategy && s.clipStrategy !== "overflow_margin") y.clip_strategy = s.clipStrategy;
@@ -603,6 +608,12 @@
       // 'uniform' when unset (see Inspector). Same rationale as time_mode above.
       distributionMode: y.distribution_mode ?? undefined,
       rangeAlwaysActive: !!y.range_always_active,
+      // Shared RNG identity (engine #169). Absence must round-trip as absence
+      // (identity = stream_id engine-side) AND as a *missing key*, not an
+      // explicit undefined: canonicalJSON (backend.js) hashes present-but-
+      // undefined keys as null, so an always-present key would shift every
+      // stored fingerprint and mark all existing stems stale once.
+      ...(y.rng_group != null ? { rngGroup: y.rng_group } : {}),
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
       clipStrategy: y.clip_strategy || "overflow_margin",
       clipMargin:   y.clip_margin   != null ? y.clip_margin   : 0.0,
@@ -868,10 +879,32 @@
     return diffs;
   }
 
+  /* Merge a patch into a stream, treating an `undefined` value as "remove this
+   * key" instead of "store the key with value undefined".
+   *
+   * The distinction is invisible to every reader of the stream object (`s.foo`
+   * is undefined either way) but visible to `canonicalJSON` in backend.js,
+   * which walks `Object.keys` and serializes a present-but-undefined key as
+   * `null`. Without this, clearing an optional field (Inspector's rng_group)
+   * would leave a residue that changes the fingerprint and marks the stem
+   * stale even though the audio went back to what was already rendered.
+   *
+   * Only `undefined` deletes: `null` is a meaningful editor value (the
+   * scalar/env pairs use it for "this one of the two isn't active"). */
+  function applyStreamPatch(stream, patch) {
+    const out = { ...stream };
+    for (const k of Object.keys(patch)) {
+      if (patch[k] === undefined) delete out[k];
+      else out[k] = patch[k];
+    }
+    return out;
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
     serializeStream,
+    applyStreamPatch,
     parseStream,
     emptyProject,
     computeDuration,

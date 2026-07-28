@@ -592,6 +592,25 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 </span>
                 <span />
               </div>
+              <div className="pge-prow">
+                <span className="k" title="shared RNG identity (engine #169): same group → same random sequences. Needs a project seed, and the same density/distribution — otherwise the time grids drift apart. Empty → per-stream isolation (stream_id)">rng_group</span>
+                <span />
+                <span className="v">
+                  <input type="text" className="pge-mini-input" style={{width: 110}}
+                         placeholder="(none)"
+                         key={stream.id + ":" + (stream.rngGroup || "")}
+                         defaultValue={stream.rngGroup || ""}
+                         onBlur={e => {
+                           const v = e.target.value.trim();
+                           if (v !== (stream.rngGroup || "")) onChange({rngGroup: v || undefined});
+                         }}
+                         onKeyDown={e => {
+                           if (e.key === "Enter") e.target.blur();
+                           if (e.key === "Escape") { e.target.value = stream.rngGroup || ""; e.target.blur(); }
+                         }} />
+                </span>
+                <span />
+              </div>
               <div className="pge-prow" style={{opacity: 0.45, pointerEvents: "none"}}>
                 <span className="k" title="reserved — not yet used by the engine">distribution_mode</span>
                 <span />

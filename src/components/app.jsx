@@ -80,6 +80,16 @@ function useTweaks(defaults) {
   return [values, setTweak];
 }
 
+// Merge di un patch nello stream. Delega al node-tested applyStreamPatch:
+// una chiave con valore `undefined` viene RIMOSSA, non lasciata presente —
+// il residuo sarebbe invisibile a chi legge lo stream ma non a canonicalJSON,
+// che lo serializza come `null` e marca lo stem stale a vuoto (issue #112).
+function mergeStreamPatch(stream, patch) {
+  return window.PGEYaml
+    ? window.PGEYaml.applyStreamPatch(stream, patch)
+    : { ...stream, ...patch };
+}
+
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
@@ -816,7 +826,7 @@ function App() {
             ...d,
             streams: d.streams.map(s => {
               if (s.id !== id) return s;
-              return { ...rescaleStreamEnvelopes(origin, origin.duration, patch.duration), ...patch };
+              return mergeStreamPatch(rescaleStreamEnvelopes(origin, origin.duration, patch.duration), patch);
             }),
           }));
         } else {
@@ -832,7 +842,7 @@ function App() {
             streams: d.streams.map(s => {
               if (s.id !== id) return s;
               const rescaled = rescaleStreamEnvelopes(s, cur.duration, patch.duration);
-              return { ...(ratio > 1 ? truncateStreamEnvelopes(rescaled) : rescaled), ...patch };
+              return mergeStreamPatch(ratio > 1 ? truncateStreamEnvelopes(rescaled) : rescaled, patch);
             }),
           }));
         }
@@ -840,7 +850,7 @@ function App() {
         return;
       }
     }
-    setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? { ...s, ...patch } : s) }));
+    setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? mergeStreamPatch(s, patch) : s) }));
     setDirty(true);
   }
   // Top-level `seed` (engine #81): project-wide, NOT per-stream — it never
