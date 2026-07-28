@@ -96,6 +96,7 @@
     "pan", "pan_range", "volume", "volume_range",
     "dephase",
     "solo", "mute",
+    "rng_group",
   ]);
 
   /* Known keys inside the block nodes that serialize rebuilds in full
@@ -337,6 +338,10 @@
     };
     if (s.timeMode)         y.time_mode = s.timeMode;
     if (s.distributionMode) y.distribution_mode = s.distributionMode;
+    // Emit only a non-empty group: a cleared Inspector field means "no group"
+    // and must never serialize as `rng_group: ''` (engine treats falsy as
+    // absent, but the key would still churn the file and the stream cache).
+    if (s.rngGroup)         y.rng_group = s.rngGroup;
     if (s.rangeAlwaysActive) y.range_always_active = true;
     if (s.timeScale != null && s.timeScale !== 1.0)        y.time_scale = s.timeScale;
     if (s.clipStrategy && s.clipStrategy !== "overflow_margin") y.clip_strategy = s.clipStrategy;
@@ -603,6 +608,12 @@
       // 'uniform' when unset (see Inspector). Same rationale as time_mode above.
       distributionMode: y.distribution_mode ?? undefined,
       rangeAlwaysActive: !!y.range_always_active,
+      // Shared RNG identity (engine #169). Absence must round-trip as absence
+      // (identity = stream_id engine-side) AND as a *missing key*, not an
+      // explicit undefined: canonicalJSON (backend.js) hashes present-but-
+      // undefined keys as null, so an always-present key would shift every
+      // stored fingerprint and mark all existing stems stale once.
+      ...(y.rng_group != null ? { rngGroup: y.rng_group } : {}),
       timeScale:    y.time_scale    != null ? y.time_scale    : 1.0,
       clipStrategy: y.clip_strategy || "overflow_margin",
       clipMargin:   y.clip_margin   != null ? y.clip_margin   : 0.0,

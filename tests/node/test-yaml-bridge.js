@@ -1627,6 +1627,48 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 /* ============================================================
+ * rng_group (engine #169) — identità RNG condivisa fra stream
+ * ============================================================ */
+
+{
+  // Presente: modellato first-class come rngGroup, non in _extra.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    rng_group: cugini\n");
+  const s = d.streams[0];
+  assert("parse rng_group → rngGroup", s.rngGroup === "cugini", JSON.stringify(s.rngGroup));
+  assert("rng_group NOT captured under _extra",
+    !(s._extra && "rng_group" in s._extra), JSON.stringify(s._extra));
+  const y = serialize(d);
+  assert("serialize rng_group", /rng_group:\s*cugini/.test(y), y.slice(0, 400));
+  assert("rng_group emitted exactly once (no _extra dup)",
+    (y.match(/rng_group:/g) || []).length === 1, y.slice(0, 400));
+  const back = parse(y).streams[0];
+  assert("rngGroup survives full round-trip", back.rngGroup === "cugini");
+  const diffs = roundTripDiff(d);
+  assert("roundtrip rng_group — no diffs", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // Assente di default: nessuna chiave rng_group iniettata (l'assenza deve
+  // sopravvivere: identità = stream_id lato engine, file invariato al save).
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n");
+  assert("rngGroup null when absent", d.streams[0].rngGroup == null,
+    JSON.stringify(d.streams[0].rngGroup));
+  const y = serialize(d);
+  assert("no rng_group emitted when absent", !/rng_group:/.test(y), y.slice(0, 400));
+}
+
+{
+  // Stringa vuota (campo Inspector svuotato) = assente: mai `rng_group: ''`.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    rng_group: cugini\n");
+  d.streams[0].rngGroup = "";
+  const y = serialize(d);
+  assert("empty rngGroup not emitted", !/rng_group:/.test(y), y.slice(0, 400));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 

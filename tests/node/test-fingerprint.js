@@ -63,6 +63,8 @@ const sensitive = [
   ["pan",           s => s.pan = 100],
   ["volume",        s => s.volume = -6],
   ["pointer.speedRatio", s => s.pointer.speedRatio = 2],
+  // engine #169: shared RNG identity changes the drawn sequences → new audio.
+  ["rngGroup",      s => s.rngGroup = "cugini"],
 ];
 for (const [label, mut] of sensitive) {
   const s = base(); mut(s);

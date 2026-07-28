@@ -197,6 +197,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .cp-head, .cp-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 44px 24px; gap: 6px; align-items: center; }
 .cp-head { font: 9px var(--font-mono); color: var(--fg-4); text-transform: uppercase; letter-spacing: .04em; padding: 0 2px; }
 .cp-row .pge-mini-input { width: 100%; background: var(--bg-elevated); color: var(--fg-1); border: 1px solid var(--border-default); border-radius: 2px; height: 22px; font: 11px var(--font-mono); padding: 0 6px; }
+/* Same chrome inside inspector prop rows (rng_group, edo divisions), natural width. */
+.pge-prow .pge-mini-input { background: var(--bg-elevated); color: var(--fg-1); border: 1px solid var(--border-default); border-radius: 2px; height: 22px; font: 11px var(--font-mono); padding: 0 6px; }
 .cp-row .cp-chord { width: 100%; }
 .cp-del { height: 22px; padding: 0; width: 24px; justify-content: center; color: var(--fg-3); }
 .cp-del:hover { color: var(--status-error); }
