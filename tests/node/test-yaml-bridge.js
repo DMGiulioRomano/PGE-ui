@@ -1669,6 +1669,38 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 /* ============================================================
+ * applyStreamPatch — un patch con `undefined` CANCELLA la chiave
+ * ============================================================ */
+
+{
+  const { applyStreamPatch } = window.PGEYaml;
+  const base = { id: "s1", density: 20, rngGroup: "cugini" };
+
+  const cleared = applyStreamPatch(base, { rngGroup: undefined });
+  assert("undefined patch removes the key", !("rngGroup" in cleared),
+    JSON.stringify(cleared));
+  assert("clearing leaves the other fields", cleared.density === 20 && cleared.id === "s1",
+    JSON.stringify(cleared));
+
+  const set = applyStreamPatch(base, { rngGroup: "altro" });
+  assert("value patch assigns", set.rngGroup === "altro", JSON.stringify(set));
+
+  // null NON cancella: nell'editor è un valore significativo (i campi
+  // scalar/env paralleli usano null per "questo dei due non è attivo").
+  const nulled = applyStreamPatch({ id: "s1", densityEnv: [[0, 1]] }, { densityEnv: null });
+  assert("null patch keeps the key", "densityEnv" in nulled && nulled.densityEnv === null,
+    JSON.stringify(nulled));
+
+  // non muta l'originale (setData si aspetta un nuovo oggetto)
+  assert("does not mutate the input", base.rngGroup === "cugini", JSON.stringify(base));
+
+  // chiave assente + patch undefined → resta assente, nessuna chiave iniettata
+  const noop = applyStreamPatch({ id: "s1" }, { rngGroup: undefined });
+  assert("undefined patch on absent key stays absent", !("rngGroup" in noop),
+    JSON.stringify(noop));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 

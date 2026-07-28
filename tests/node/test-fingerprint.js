@@ -14,12 +14,16 @@ const fs   = require("fs");
 const path = require("path");
 
 // Minimal browser shims so backend.js loads in node: no real network/storage.
-global.window = {};
+// yaml-bridge comes along for applyStreamPatch (the editor's write path —
+// what actually reaches the fingerprint after an Inspector edit).
+global.window = { jsyaml: require("js-yaml") };
 global.localStorage = { getItem: () => null, setItem: () => {} };
 global.fetch = () => Promise.reject(new Error("no network in test"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8"));
 
 const { fingerprintStream } = window.PGEBackend;
+const { applyStreamPatch } = window.PGEYaml;
 
 let pass = 0, fail = 0;
 function assert(label, cond, extra) {
@@ -109,6 +113,21 @@ console.log("\n── multistate envelope preservation fields are fingerprint-in
     const s = ms(); s.grain.envelope.curve = [[0, 0], [1, 1.5]];
     assert("detects grain.envelope.curve edit", fp(s) !== fpMs, "fp unchanged");
   }
+}
+
+console.log("\n── clearing a field must not leave a stale-inducing residue ──");
+{
+  // Il giro completo dell'Inspector: assegno un gruppo, poi svuoto il campo.
+  // Se il patch lasciasse `rngGroup: undefined` nello stato, canonicalJSON lo
+  // serializzerebbe come `null` e lo stem risulterebbe stale pur essendo
+  // tornato all'audio di prima (engine #169 / review PR #113).
+  const never = base();
+  const grouped = applyStreamPatch(never, { rngGroup: "cugini" });
+  const cleared = applyStreamPatch(grouped, { rngGroup: undefined });
+
+  assert("assigning a group changes the fingerprint", fp(grouped) !== fp(never));
+  assert("clearing it restores the original fingerprint", fp(cleared) === fp(never),
+    JSON.stringify({ never: fp(never), cleared: fp(cleared) }));
 }
 
 console.log(`\n${"─".repeat(50)}`);

@@ -593,7 +593,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <span />
               </div>
               <div className="pge-prow">
-                <span className="k" title="shared RNG identity (engine #169): streams with the same group — and the same stochastic parameters — draw the same random sequences (needs a project seed for cross-run reproducibility). Empty → per-stream isolation (stream_id)">rng_group</span>
+                <span className="k" title="shared RNG identity (engine #169): same group → same random sequences. Needs a project seed, and the same density/distribution — otherwise the time grids drift apart. Empty → per-stream isolation (stream_id)">rng_group</span>
                 <span />
                 <span className="v">
                   <input type="text" className="pge-mini-input" style={{width: 110}}

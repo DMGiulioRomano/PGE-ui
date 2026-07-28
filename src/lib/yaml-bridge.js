@@ -879,10 +879,32 @@
     return diffs;
   }
 
+  /* Merge a patch into a stream, treating an `undefined` value as "remove this
+   * key" instead of "store the key with value undefined".
+   *
+   * The distinction is invisible to every reader of the stream object (`s.foo`
+   * is undefined either way) but visible to `canonicalJSON` in backend.js,
+   * which walks `Object.keys` and serializes a present-but-undefined key as
+   * `null`. Without this, clearing an optional field (Inspector's rng_group)
+   * would leave a residue that changes the fingerprint and marks the stem
+   * stale even though the audio went back to what was already rendered.
+   *
+   * Only `undefined` deletes: `null` is a meaningful editor value (the
+   * scalar/env pairs use it for "this one of the two isn't active"). */
+  function applyStreamPatch(stream, patch) {
+    const out = { ...stream };
+    for (const k of Object.keys(patch)) {
+      if (patch[k] === undefined) delete out[k];
+      else out[k] = patch[k];
+    }
+    return out;
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
     serializeStream,
+    applyStreamPatch,
     parseStream,
     emptyProject,
     computeDuration,
