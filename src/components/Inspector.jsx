@@ -611,13 +611,22 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 </span>
                 <span />
               </div>
-              <div className="pge-prow" style={{opacity: 0.45, pointerEvents: "none"}}>
-                <span className="k" title="reserved — not yet used by the engine">distribution_mode</span>
+              <div className="pge-prow">
+                <span className="k" title="how a _range band is filled: uniform (flat) or gaussian (bell, σ = width/6)">distribution_mode</span>
                 <span />
                 <span className="v">
                   <Seg size="xs" value={stream.distributionMode || "uniform"} onChange={v => onChange({distributionMode: v})}
                        options={[{label:"uniform",value:"uniform"},{label:"gaussian",value:"gaussian"}]} />
-                  <span className="hint" style={{fontSize: 9, marginLeft: 4}}>reserved</span>
+                </span>
+                <span />
+              </div>
+              <div className="pge-prow">
+                <span className="k" title="where base sits inside a _range band: center (base ± range/2) or min (base → base+range)">range_anchor</span>
+                <span />
+                <span className="v">
+                  <Seg size="xs" value={stream.rangeAnchor || "center"}
+                       onChange={v => onChange({rangeAnchor: v === "center" ? undefined : v})}
+                       options={[{label:"center",value:"center"},{label:"min",value:"min"}]} />
                 </span>
                 <span />
               </div>
@@ -943,7 +952,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               ) : null}
               <AddParamMenu
                 options={[
-                  { key: "durationRange", label: "duration_range", desc: "± randomization on grain duration", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
+                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
                   { key: "reverse",       label: "reverse",        desc: "force reverse (key present, value empty)", exists: stream.grain.reverse !== undefined, def: null },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />

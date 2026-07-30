@@ -1701,6 +1701,63 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 /* ============================================================
+ * SECTION — range_anchor: modelled key, absence preserved (engine PR #173)
+ *
+ * range_anchor decides where `base` sits inside a `_range` band
+ * (center default = symmetric, min = base is the floor). Same absence-
+ * preservation contract as time_mode/distribution_mode: a stream WITHOUT the
+ * key must round-trip WITHOUT it, or saving would write range_anchor: center
+ * onto every stream and bust the engine's per-stream cache.
+ * ============================================================ */
+
+console.log("\n── range_anchor (engine #173) ──");
+
+{
+  const data = parse(topLevelYaml([]));
+  assert("absent range_anchor — not defaulted in state",
+    data.streams[0].rangeAnchor == null,
+    JSON.stringify(data.streams[0].rangeAnchor));
+  const y = serialize(data);
+  assert("absent range_anchor — not emitted", !y.includes("range_anchor"),
+    y.slice(0, 400));
+}
+
+{
+  const data = parse(topLevelYaml(["range_anchor: min"]));
+  assert("explicit min — kept in state", data.streams[0].rangeAnchor === "min",
+    JSON.stringify(data.streams[0].rangeAnchor));
+  const y = serialize(data);
+  assert("explicit min — emitted", y.includes("range_anchor: min"), y.slice(0, 400));
+}
+
+{
+  const data = parse(topLevelYaml(["range_anchor: center"]));
+  assert("explicit center — kept in state",
+    data.streams[0].rangeAnchor === "center",
+    JSON.stringify(data.streams[0].rangeAnchor));
+  const y = serialize(data);
+  assert("explicit center — emitted", y.includes("range_anchor: center"),
+    y.slice(0, 400));
+}
+
+{
+  // range_anchor is modelled first-class, so it must NOT leak into _extra
+  // (which would double-emit it on serialize).
+  const data = parse(topLevelYaml(["range_anchor: min"]));
+  const extra = data.streams[0]._extra || {};
+  assert("range_anchor not captured in _extra", !("range_anchor" in extra),
+    JSON.stringify(extra));
+}
+
+{
+  // Lossless round-trip: no divergences reported for a stream using the key.
+  const data = parse(topLevelYaml(["range_anchor: min"]));
+  const diff = roundTripDiff(data);
+  assert("range_anchor round-trip lossless", diff.length === 0,
+    JSON.stringify(diff));
+}
+
+/* ============================================================
  * Summary
  * ============================================================ */
 
