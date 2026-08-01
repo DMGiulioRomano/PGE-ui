@@ -89,7 +89,7 @@
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
   const KNOWN_STREAM_KEYS = new Set([
     "stream_id", "onset", "duration", "sample",
-    "time_mode", "distribution_mode",
+    "time_mode", "distribution_mode", "range_anchor",
     "range_always_active", "time_scale", "clip_strategy", "clip_margin",
     "density", "fill_factor", "distribution",
     "grain", "pointer", "pitch", "voices",
@@ -338,6 +338,10 @@
     };
     if (s.timeMode)         y.time_mode = s.timeMode;
     if (s.distributionMode) y.distribution_mode = s.distributionMode;
+    // Emit only when set: absence means the engine default 'center', and
+    // writing range_anchor: center onto every stream would bust the per-stream
+    // cache. Same rationale as distribution_mode above.
+    if (s.rangeAnchor)      y.range_anchor = s.rangeAnchor;
     // Emit only a non-empty group: a cleared Inspector field means "no group"
     // and must never serialize as `rng_group: ''` (engine treats falsy as
     // absent, but the key would still churn the file and the stream cache).
@@ -607,6 +611,9 @@
       // busting the engine's per-stream content cache. UI falls back to display
       // 'uniform' when unset (see Inspector). Same rationale as time_mode above.
       distributionMode: y.distribution_mode ?? undefined,
+      // Absence preserved (engine default 'center'): injecting a default would
+      // write it back on save and bust the per-stream cache. Same as above.
+      rangeAnchor: y.range_anchor ?? undefined,
       rangeAlwaysActive: !!y.range_always_active,
       // Shared RNG identity (engine #169). Absence must round-trip as absence
       // (identity = stream_id engine-side) AND as a *missing key*, not an

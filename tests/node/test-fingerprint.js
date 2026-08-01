@@ -69,6 +69,8 @@ const sensitive = [
   ["pointer.speedRatio", s => s.pointer.speedRatio = 2],
   // engine #169: shared RNG identity changes the drawn sequences → new audio.
   ["rngGroup",      s => s.rngGroup = "cugini"],
+  // engine #173: the anchor changes the _range band, hence the drawn values.
+  ["rangeAnchor",   s => s.rangeAnchor = "min"],
 ];
 for (const [label, mut] of sensitive) {
   const s = base(); mut(s);
@@ -128,6 +130,22 @@ console.log("\n── clearing a field must not leave a stale-inducing residue �
   assert("assigning a group changes the fingerprint", fp(grouped) !== fp(never));
   assert("clearing it restores the original fingerprint", fp(cleared) === fp(never),
     JSON.stringify({ never: fp(never), cleared: fp(cleared) }));
+}
+
+console.log("\n── _extra keys are audio-affecting: they enter the fingerprint (#115) ──");
+{
+  // Unknown stream keys the editor doesn't model are preserved verbatim under
+  // `_extra` (yaml-bridge). canonicalJSON walks the whole stream object and
+  // `_extra` is not in FP_IGNORE, so any such key DOES affect the fingerprint —
+  // confirming the concern raised in PGE-ui #115: no _extra key can silently
+  // leave a stale stem reading fresh.
+  const s = base();
+  s._extra = { some_future_engine_key: "a" };
+  assert("adding an _extra key changes the fingerprint", fp(s) !== fp0);
+
+  const t = base(); t._extra = { some_future_engine_key: "a" };
+  const u = base(); u._extra = { some_future_engine_key: "b" };
+  assert("changing an _extra value changes the fingerprint", fp(t) !== fp(u));
 }
 
 console.log(`\n${"─".repeat(50)}`);
