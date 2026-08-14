@@ -106,7 +106,9 @@ function YamlEditor({ stream, onChange, samples }) {
       // in the YAML) and `id` (identity, kept stable even if stream_id is
       // blanked) are preserved from the live stream. updateStream in app.jsx
       // does a shallow {...s, ...patch}, so a complete object is safe. #42
-      const parsed = window.PGEYaml.parseStream(draft);
+      // La media list serve al parse quanto al progetto intero: senza, uno
+      // stream che omette `duration` tornerebbe qui marcato irrisolto (#117).
+      const parsed = window.PGEYaml.parseStream(draft, 0, { samples: _samples });
       onChange && onChange({
         ...parsed,
         color: stream.color,   // synthesized by streamFromYaml, never in YAML

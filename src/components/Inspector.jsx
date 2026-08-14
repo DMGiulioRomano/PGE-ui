@@ -572,6 +572,25 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     <Icon name={freezeEnvOnResize ? "lock" : "lockOpen"} size={11} />
                   </button>
                 } />
+              {/* duration implicita (engine #205): la chiave non c'e' nel YAML e
+                  la lunghezza viene dal sample. Va detto, perche' il numero
+                  mostrato non e' scritto da nessuna parte e cambia se cambia il
+                  file; e va detto anche quando il sample non e' risolvibile,
+                  perche' li' il numero e' una stima del solo editor. */}
+              {stream.durationImplicit ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{
+                    fontSize:9, lineHeight:1.4,
+                    color: stream.durationUnresolved ? "var(--status-warn)" : "var(--fg-4)",
+                  }}>
+                    {stream.durationUnresolved
+                      ? "sample non risolvibile — durata stimata, non scritta nel YAML"
+                      : "implicita = durata del sample · modificarla la rende esplicita"}
+                  </span>
+                  <span />
+                </div>
+              ) : null}
               <div className="pge-prow">
                 <span className="k">sample</span>
                 <span />
