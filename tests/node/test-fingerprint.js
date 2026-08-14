@@ -50,10 +50,24 @@ const ignored = {
   mute: true,
   solo: true,
   onset: 99.0,        // moving a clip on the timeline must not mark it stale
+  // Bookkeeping for the optional `duration` (PGE #205): whether the length was
+  // written in the YAML or inherited from the sample says nothing about the
+  // audio — only the resolved number does, and that IS hashed.
+  durationImplicit: true,
+  durationUnresolved: true,
 };
 for (const [k, v] of Object.entries(ignored)) {
   const s = base(); s[k] = v;
   assert(`ignores ${k}`, fp(s) === fp0, `${k}: fp changed`);
+}
+
+{
+  // Typing the exact length the sample already implied is a no-op for the
+  // renderer: the stem must stay green, not go stale on the flag alone.
+  const implicit = { ...base(), duration: 10, durationImplicit: true };
+  const madeExplicit = applyStreamPatch(implicit, { duration: 10 });
+  assert("implicit → explicit at the same value keeps the stem fresh",
+    fp(madeExplicit) === fp(implicit), "fp changed");
 }
 
 console.log("\n── fields that MUST affect the fingerprint (audio-relevant) ──");

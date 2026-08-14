@@ -51,7 +51,13 @@
   // would mark every already-rendered multistate stem stale the moment this
   // preservation shipped. Exclude them: only a real edit to a window name or the
   // curve changes the fingerprint.
-  const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw"]);
+  // durationImplicit / durationUnresolved (engine #205) are bookkeeping for the
+  // optional `duration`: they record whether the length was written in the YAML
+  // or inherited from the sample. The renderer only ever sees the resolved
+  // number, which IS hashed — so typing the value the sample already implied
+  // must leave the stem green instead of going stale on a flag flip.
+  const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
+                             "durationImplicit", "durationUnresolved"]);
 
   function canonicalJSON(v, ignore) {
     if (v === null || v === undefined) return "null";

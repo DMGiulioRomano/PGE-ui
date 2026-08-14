@@ -333,7 +333,10 @@
     const y = {
       stream_id: s.id,
       onset:     s.onset ?? 0,
-      duration:  s.duration ?? 0,
+      // An implicit duration (PGE #205) stays implicit: writing the resolved
+      // number back would materialize a value the author chose to leave to the
+      // sample, and would freeze it against a later change of the audio file.
+      ...(s.durationImplicit ? {} : { duration: s.duration ?? 0 }),
       sample:    s.sample,
     };
     if (s.timeMode)         y.time_mode = s.timeMode;
@@ -568,7 +571,39 @@
 
   /* ---------- yaml → editor ---------- */
 
-  function streamFromYaml(y, idx) {
+  /* Last-resort stream length, used only when `duration` is omitted AND the
+   * sample's real length is unknown (file:// with no server, media list not
+   * loaded yet, sample file missing). It is the historical editor default;
+   * `durationUnresolved` marks it so the UI can say the number is a guess
+   * instead of drawing it as fact. */
+  const IMPLICIT_DURATION_FALLBACK = 5;
+
+  /* Sample length from the media list (GET /media gives {name, duration}).
+   * null when the sample can't be resolved — a 0 or a non-number is as
+   * unusable as a missing entry, so it collapses to the same answer. */
+  function sampleDurationOf(samples, name) {
+    if (!name || !Array.isArray(samples)) return null;
+    const hit = samples.find(s => s && s.name === name);
+    const d = hit ? hit.duration : null;
+    return (typeof d === "number" && isFinite(d) && d > 0) ? d : null;
+  }
+
+  /* Engine rule (PGE #205), mirrored: a declared duration wins; absent or null
+   * means the sample's length. `== null` and not falsiness — `duration: 0` is
+   * a real (degenerate) declaration and the engine keeps it as zero rather
+   * than substituting the sample. */
+  function resolveStreamDuration(y, samples) {
+    const declared = y.duration ?? null;
+    if (declared != null) {
+      return { value: declared, implicit: false, unresolved: false };
+    }
+    const sampleDur = sampleDurationOf(samples, y.sample);
+    return sampleDur != null
+      ? { value: sampleDur, implicit: true, unresolved: false }
+      : { value: IMPLICIT_DURATION_FALLBACK, implicit: true, unresolved: true };
+  }
+
+  function streamFromYaml(y, idx, samples) {
     const id = y.stream_id || ("stream" + (idx + 1));
 
     const dens = unpackValueOrEnv(y.density);
@@ -590,10 +625,19 @@
       if (!KNOWN_STREAM_KEYS.has(k)) extras[k] = y[k];
     }
 
+    // duration is optional in the engine (PGE #205): absent (or null) means
+    // "as long as the sample". `resolved` is what every reader of the stream
+    // uses — timeline width, envelope X axis, render extent — so it stays a
+    // plain number; `durationImplicit` is what serialization looks at, so an
+    // omitted key is not materialized on save.
+    const dur = resolveStreamDuration(y, samples);
+
     const out = {
       id,
       onset: y.onset ?? 0,
-      duration: y.duration ?? 5,
+      duration: dur.value,
+      durationImplicit: dur.implicit,
+      durationUnresolved: dur.unresolved,
       sample: y.sample || "",
       color: colorForStream(id, idx),
       // Presence-keyed to match the engine's _filter_solo_mute: the key being
@@ -728,7 +772,10 @@
   function parse(text, opts = {}) {
     if (!window.jsyaml) throw new Error("js-yaml not loaded");
     const y = window.jsyaml.load(text) || {};
-    const streams = Array.isArray(y.streams) ? y.streams.map((s, i) => streamFromYaml(s, i)) : [];
+    const samples = opts.samples || [];
+    const streams = Array.isArray(y.streams)
+      ? y.streams.map((s, i) => streamFromYaml(s, i, samples))
+      : [];
     // Dedupe stream ids — some engine configs have duplicate stream_id values,
     // which would break React keys + selection. Suffix collisions with #2, #3…
     {
@@ -752,7 +799,7 @@
       duration: computeDuration(streams),
       bpm:      y.bpm || 120,
       streams,
-      samples:  opts.samples || [],
+      samples,
     };
     // seed: optional top-level key for reproducible NumPy renders (engine #81).
     // Modelled first-class (not _extra). Accept integers (incl. 0 and negatives)
@@ -786,10 +833,12 @@
     return dumpWithInlineEnvelopes(streamToYaml(stream)).replace(/\n$/, "");
   }
 
-  function parseStream(text, idx = 0) {
+  function parseStream(text, idx = 0, opts = {}) {
     if (!window.jsyaml) throw new Error("js-yaml not loaded");
     const y = window.jsyaml.load(text) || {};
-    return streamFromYaml(y, idx);
+    // Same media list as the project parse: without it a stream that omits
+    // `duration` would come back from the Raw tab flagged unresolved.
+    return streamFromYaml(y, idx, opts.samples || []);
   }
 
   // Composition length is always derived from the streams: the furthest stream
@@ -903,6 +952,15 @@
     for (const k of Object.keys(patch)) {
       if (patch[k] === undefined) delete out[k];
       else out[k] = patch[k];
+    }
+    // Setting a duration from the interface is a decision: it makes the value
+    // explicit, so it gets written to the YAML (PGE #205). A patch that brings
+    // its own durationImplicit is a whole re-parsed stream (Raw tab), and there
+    // the parsed flag is the truth — otherwise editing anything in the raw YAML
+    // would materialize a duration key the author never wrote.
+    if (patch.duration !== undefined && !("durationImplicit" in patch)) {
+      out.durationImplicit = false;
+      out.durationUnresolved = false;
     }
     return out;
   }
