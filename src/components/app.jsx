@@ -216,6 +216,13 @@ function App() {
   const envArrowRef = useRefApp({ focused: false, singleBPSelected: false });
   const clipboardRef = React.useRef([]);
   const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: [], error: null });
+  // Copia della media list leggibile DOPO un await, dove lo stato catturato
+  // nella closure del render sarebbe gia' vecchio. Serve a onProjectSelect:
+  // fra `await readFile(...)` e il `parse` che risolve le durate implicite
+  // (PGE #205) la lista puo' essere atterrata, e senza questo il progetto
+  // verrebbe parsato con quella vuota — durate sul fallback e nessun evento
+  // successivo che le ripari, perche' `mediaList` non cambia piu'.
+  const mediaFilesRef = useRefApp([]);
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
 
   /* ============ Render state ============ */
@@ -277,6 +284,10 @@ function App() {
     setMediaList(l => ({ ...l, loading: true, error: null }));
     try {
       const r = await backend.fs.listDir("media");
+      // Il ref si aggiorna qui, non in un effetto: fra il setState e il giro di
+      // effetti puo' inserirsi la continuazione di un await gia' in volo, ed e'
+      // esattamente quella che deve leggere la lista fresca.
+      mediaFilesRef.current = r.files || [];
       setMediaList({ loading: false, path: r.path, files: r.files || [], error: r.error || null });
     } catch (e) {
       setMediaList(l => ({ ...l, loading: false, error: e.message }));
@@ -1248,7 +1259,9 @@ function App() {
         const basename = name.replace(/\.yml$/, "");
         const parsed = window.PGEYaml.parse(yamlText, {
           project: basename,
-          samples: mediaList.files || [],
+          // dal ref, non dallo stato: la closure e' stata catturata prima
+          // dell'await sopra, e la media list puo' essere atterrata nel mezzo.
+          samples: mediaFilesRef.current || [],
         });
         // Intentional _setDataRaw (bypasses history): loading a project is an
         // atomic action, not an undoable edit — resetHistory() clears the stack
