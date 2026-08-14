@@ -84,9 +84,9 @@ function useTweaks(defaults) {
 // una chiave con valore `undefined` viene RIMOSSA, non lasciata presente —
 // il residuo sarebbe invisibile a chi legge lo stream ma non a canonicalJSON,
 // che lo serializza come `null` e marca lo stem stale a vuoto (issue #112).
-function mergeStreamPatch(stream, patch) {
+function mergeStreamPatch(stream, patch, samples) {
   return window.PGEYaml
-    ? window.PGEYaml.applyStreamPatch(stream, patch)
+    ? window.PGEYaml.applyStreamPatch(stream, patch, { samples })
     : { ...stream, ...patch };
 }
 
@@ -216,6 +216,13 @@ function App() {
   const envArrowRef = useRefApp({ focused: false, singleBPSelected: false });
   const clipboardRef = React.useRef([]);
   const [mediaList, setMediaList] = useStateApp({ loading: false, path: null, files: [], error: null });
+  // Copia della media list leggibile DOPO un await, dove lo stato catturato
+  // nella closure del render sarebbe gia' vecchio. Serve a onProjectSelect:
+  // fra `await readFile(...)` e il `parse` che risolve le durate implicite
+  // (PGE #205) la lista puo' essere atterrata, e senza questo il progetto
+  // verrebbe parsato con quella vuota — durate sul fallback e nessun evento
+  // successivo che le ripari, perche' `mediaList` non cambia piu'.
+  const mediaFilesRef = useRefApp([]);
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
 
   /* ============ Render state ============ */
@@ -277,6 +284,10 @@ function App() {
     setMediaList(l => ({ ...l, loading: true, error: null }));
     try {
       const r = await backend.fs.listDir("media");
+      // Il ref si aggiorna qui, non in un effetto: fra il setState e il giro di
+      // effetti puo' inserirsi la continuazione di un await gia' in volo, ed e'
+      // esattamente quella che deve leggere la lista fresca.
+      mediaFilesRef.current = r.files || [];
       setMediaList({ loading: false, path: r.path, files: r.files || [], error: r.error || null });
     } catch (e) {
       setMediaList(l => ({ ...l, loading: false, error: e.message }));
@@ -361,6 +372,26 @@ function App() {
     onProjectSelect(target);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectsList.files]);
+
+  // Le durate implicite (PGE #205) si risolvono dalla media list, che al boot
+  // arriva DOPO il progetto: `GET /projects` e `GET /media` partono insieme e
+  // la prima risponde per prima (l'altra apre l'header di ogni file audio).
+  // Senza questa seconda passata ogni stream senza `duration` resterebbe sul
+  // fallback per tutta la sessione — 5 secondi in timeline, nota di durata
+  // stimata, `computeDuration` sbagliata, e stem che al reload successivo
+  // risultano stale perche' il fingerprint e' stato calcolato sul numero finto.
+  //
+  // Il gate e' `path !== null`, non `!loading`: lo stato iniziale della lista e'
+  // gia' "non in caricamento" prima ancora che il fetch parta, quindi `loading`
+  // non distingue "vuota perche' non ancora chiesta" da "vuota davvero".
+  //
+  // _setDataRaw e non setData: l'arrivo dei media non e' una modifica
+  // dell'utente. Non deve sporcare il progetto ne' diventare un passo di undo.
+  useEffectApp(() => {
+    if (mediaList.path === null) return;
+    if (!window.PGEYaml || !window.PGEYaml.resolveImplicitDurations) return;
+    _setDataRaw(d => window.PGEYaml.resolveImplicitDurations(d, mediaList.files || []));
+  }, [mediaList.path, mediaList.files]);
 
   // Boot diagnostic — once per session, log a summary to console + terminal
   // so the first thing visible during a smoke test is a clear picture of
@@ -826,7 +857,7 @@ function App() {
             ...d,
             streams: d.streams.map(s => {
               if (s.id !== id) return s;
-              return mergeStreamPatch(rescaleStreamEnvelopes(origin, origin.duration, patch.duration), patch);
+              return mergeStreamPatch(rescaleStreamEnvelopes(origin, origin.duration, patch.duration), patch, mediaList.files);
             }),
           }));
         } else {
@@ -842,7 +873,7 @@ function App() {
             streams: d.streams.map(s => {
               if (s.id !== id) return s;
               const rescaled = rescaleStreamEnvelopes(s, cur.duration, patch.duration);
-              return mergeStreamPatch(ratio > 1 ? truncateStreamEnvelopes(rescaled) : rescaled, patch);
+              return mergeStreamPatch(ratio > 1 ? truncateStreamEnvelopes(rescaled) : rescaled, patch, mediaList.files);
             }),
           }));
         }
@@ -850,7 +881,7 @@ function App() {
         return;
       }
     }
-    setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? mergeStreamPatch(s, patch) : s) }));
+    setData(d => ({ ...d, streams: d.streams.map(s => s.id === id ? mergeStreamPatch(s, patch, mediaList.files) : s) }));
     setDirty(true);
   }
   // Top-level `seed` (engine #81): project-wide, NOT per-stream — it never
@@ -1228,7 +1259,9 @@ function App() {
         const basename = name.replace(/\.yml$/, "");
         const parsed = window.PGEYaml.parse(yamlText, {
           project: basename,
-          samples: mediaList.files || [],
+          // dal ref, non dallo stato: la closure e' stata catturata prima
+          // dell'await sopra, e la media list puo' essere atterrata nel mezzo.
+          samples: mediaFilesRef.current || [],
         });
         // Intentional _setDataRaw (bypasses history): loading a project is an
         // atomic action, not an undoable edit — resetHistory() clears the stack

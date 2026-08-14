@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration } = window.PGEYaml;
+const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -1755,6 +1755,183 @@ console.log("\n── range_anchor (engine #173) ──");
   const diff = roundTripDiff(data);
   assert("range_anchor round-trip lossless", diff.length === 0,
     JSON.stringify(diff));
+}
+
+console.log("\n\u2500\u2500 duration optional (engine #205) \u2500\u2500");
+
+// The media list (GET /media) is what tells the editor how long a sample is.
+const SAMPLES = [{ name: "test.wav", duration: 2.5 }];
+
+function durationYaml(durationLine) {
+  return `streams:
+  - stream_id: s1
+    onset: 0
+${durationLine ? "    " + durationLine + "\n" : ""}    sample: test.wav
+`;
+}
+
+{
+  // Absent duration: the stream lasts as long as the sample, not a hardcoded 5s.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  const s = data.streams[0];
+  assert("absent duration \u2192 sample duration", s.duration === 2.5, JSON.stringify(s.duration));
+  assert("absent duration \u2192 marked implicit", s.durationImplicit === true,
+    JSON.stringify(s.durationImplicit));
+  assert("absent duration \u2192 sample resolved", !s.durationUnresolved,
+    JSON.stringify(s.durationUnresolved));
+  const y = serialize(data);
+  assert("absent duration \u2192 not re-emitted", !/^[ \t]+duration:/m.test(y), y.slice(0, 400));
+  const diffs = roundTripDiff(data);
+  assert("absent duration \u2192 round-trip lossless", diffs.length === 0, JSON.stringify(diffs));
+}
+
+{
+  // `duration: ~` is a null scalar: for the engine that is the same as absent.
+  const data = parse(durationYaml("duration: ~"), { samples: SAMPLES });
+  const s = data.streams[0];
+  assert("duration: ~ \u2192 sample duration", s.duration === 2.5, JSON.stringify(s.duration));
+  assert("duration: ~ \u2192 marked implicit", s.durationImplicit === true,
+    JSON.stringify(s.durationImplicit));
+  const y = serialize(data);
+  assert("duration: ~ \u2192 not re-emitted", !/^[ \t]+duration:/m.test(y), y.slice(0, 400));
+}
+
+{
+  // Explicit duration wins and keeps being written out.
+  const data = parse(durationYaml("duration: 5"), { samples: SAMPLES });
+  const s = data.streams[0];
+  assert("explicit duration kept", s.duration === 5, JSON.stringify(s.duration));
+  assert("explicit duration \u2192 not implicit", s.durationImplicit === false,
+    JSON.stringify(s.durationImplicit));
+  const y = serialize(data);
+  assert("explicit duration \u2192 emitted", /^[ \t]+duration: 5$/m.test(y), y.slice(0, 400));
+}
+
+{
+  // Sample not in the media list (file:// with no server, or a missing file):
+  // the editor must not blow up, and must not silently pretend it knows.
+  const data = parse(durationYaml(null), { samples: [] });
+  const s = data.streams[0];
+  assert("unresolvable sample \u2192 still a usable number",
+    typeof s.duration === "number" && isFinite(s.duration) && s.duration > 0,
+    JSON.stringify(s.duration));
+  assert("unresolvable sample \u2192 flagged", s.durationUnresolved === true,
+    JSON.stringify(s.durationUnresolved));
+  assert("unresolvable sample \u2192 still implicit", s.durationImplicit === true,
+    JSON.stringify(s.durationImplicit));
+  const y = serialize(data);
+  assert("unresolvable sample \u2192 duration still not invented in the YAML",
+    !/^[ \t]+duration:/m.test(y), y.slice(0, 400));
+}
+
+{
+  // Editing the duration from the interface makes it explicit.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  const edited = { ...data, streams: [applyStreamPatch(data.streams[0], { duration: 3 })] };
+  assert("UI edit \u2192 no longer implicit", edited.streams[0].durationImplicit === false,
+    JSON.stringify(edited.streams[0].durationImplicit));
+  const y = serialize(edited);
+  assert("UI edit \u2192 duration written explicitly", /^[ \t]+duration: 3$/m.test(y), y.slice(0, 400));
+}
+
+{
+  // A patch that doesn't mention duration leaves the implicit flag alone.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  const patched = applyStreamPatch(data.streams[0], { onset: 1.5 });
+  assert("unrelated patch \u2192 implicit preserved", patched.durationImplicit === true,
+    JSON.stringify(patched.durationImplicit));
+}
+
+{
+  // The Raw tab patches the WHOLE parsed stream, duration included. That patch
+  // carries its own durationImplicit, which must win over the "the user typed a
+  // duration" heuristic — otherwise editing anything in the raw YAML would
+  // materialize a duration key the author never wrote.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  const fromRaw = parseStream("stream_id: s1\nonset: 0\nsample: test.wav\n", 0, { samples: SAMPLES });
+  const patched = applyStreamPatch(data.streams[0], fromRaw);
+  assert("raw-tab patch \u2192 implicit preserved", patched.durationImplicit === true,
+    JSON.stringify(patched.durationImplicit));
+  assert("raw-tab patch \u2192 sample duration resolved", patched.duration === 2.5,
+    JSON.stringify(patched.duration));
+}
+
+console.log("\n\u2500\u2500 duration implicita: risoluzione tardiva (engine #205) \u2500\u2500");
+
+// Al boot la media list arriva DOPO il progetto: GET /projects e GET /media
+// partono insieme e la prima risponde per prima. Se la risoluzione restasse
+// solo al parse, ogni stream senza `duration` resterebbe congelato sul
+// fallback per tutta la sessione.
+
+{
+  const atBoot = parse(durationYaml(null), { samples: [] });
+  assert("boot senza media \u2192 non risolto", atBoot.streams[0].durationUnresolved === true,
+    JSON.stringify(atBoot.streams[0].durationUnresolved));
+
+  const settled = resolveImplicitDurations(atBoot, SAMPLES);
+  assert("media in ritardo \u2192 durata vera", settled.streams[0].duration === 2.5,
+    JSON.stringify(settled.streams[0].duration));
+  assert("media in ritardo \u2192 non piu' irrisolto",
+    settled.streams[0].durationUnresolved === false,
+    JSON.stringify(settled.streams[0].durationUnresolved));
+  assert("media in ritardo \u2192 resta implicita", settled.streams[0].durationImplicit === true,
+    JSON.stringify(settled.streams[0].durationImplicit));
+  const y = serialize(settled);
+  assert("media in ritardo \u2192 la chiave resta omessa", !/^[ \t]+duration:/m.test(y),
+    y.slice(0, 400));
+}
+
+{
+  // La lista sample va aggiornata insieme alle durate, o roundTripDiff
+  // ri-parserebbe con la lista vuota e segnalerebbe divergenze inventate.
+  const settled = resolveImplicitDurations(parse(durationYaml(null), { samples: [] }), SAMPLES);
+  assert("media in ritardo \u2192 round-trip pulito", roundTripDiff(settled).length === 0,
+    JSON.stringify(roundTripDiff(settled)));
+}
+
+{
+  const data = parse(durationYaml("duration: 5"), { samples: [] });
+  const settled = resolveImplicitDurations(data, SAMPLES);
+  assert("duration esplicita \u2192 non toccata dalla risoluzione tardiva",
+    settled.streams[0].duration === 5, JSON.stringify(settled.streams[0].duration));
+}
+
+{
+  // Nessun cambiamento -> stesso oggetto: la risoluzione non deve produrre
+  // render inutili ne' passi di undo quando i media si ricaricano.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  assert("niente da risolvere \u2192 stesso oggetto",
+    resolveImplicitDurations(data, data.samples) === data);
+}
+
+console.log("\n\u2500\u2500 cambio sample: la durata implicita segue (engine #205) \u2500\u2500");
+
+const OTHER_SAMPLES = [{ name: "test.wav", duration: 2.5 }, { name: "lungo.wav", duration: 9 }];
+
+{
+  const data = parse(durationYaml(null), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "lungo.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio sample \u2192 durata del nuovo sample", moved.duration === 9,
+    JSON.stringify(moved.duration));
+  assert("cambio sample \u2192 resta implicita", moved.durationImplicit === true,
+    JSON.stringify(moved.durationImplicit));
+}
+
+{
+  const data = parse(durationYaml("duration: 5"), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "lungo.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio sample con duration esplicita \u2192 durata invariata",
+    moved.duration === 5, JSON.stringify(moved.duration));
+}
+
+{
+  const data = parse(durationYaml(null), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "ignoto.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio verso un sample ignoto \u2192 marcato irrisolto",
+    moved.durationUnresolved === true, JSON.stringify(moved.durationUnresolved));
 }
 
 /* ============================================================
