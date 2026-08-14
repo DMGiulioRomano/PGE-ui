@@ -585,7 +585,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     color: stream.durationUnresolved ? "var(--status-warn)" : "var(--fg-4)",
                   }}>
                     {stream.durationUnresolved
-                      ? "sample non risolvibile — durata stimata, non scritta nel YAML"
+                      ? "durata stimata — non scritta nel YAML"
                       : "implicita = durata del sample · modificarla la rende esplicita"}
                   </span>
                   <span />
