@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch } = window.PGEYaml;
+const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -1854,6 +1854,84 @@ ${durationLine ? "    " + durationLine + "\n" : ""}    sample: test.wav
     JSON.stringify(patched.durationImplicit));
   assert("raw-tab patch \u2192 sample duration resolved", patched.duration === 2.5,
     JSON.stringify(patched.duration));
+}
+
+console.log("\n\u2500\u2500 duration implicita: risoluzione tardiva (engine #205) \u2500\u2500");
+
+// Al boot la media list arriva DOPO il progetto: GET /projects e GET /media
+// partono insieme e la prima risponde per prima. Se la risoluzione restasse
+// solo al parse, ogni stream senza `duration` resterebbe congelato sul
+// fallback per tutta la sessione.
+
+{
+  const atBoot = parse(durationYaml(null), { samples: [] });
+  assert("boot senza media \u2192 non risolto", atBoot.streams[0].durationUnresolved === true,
+    JSON.stringify(atBoot.streams[0].durationUnresolved));
+
+  const settled = resolveImplicitDurations(atBoot, SAMPLES);
+  assert("media in ritardo \u2192 durata vera", settled.streams[0].duration === 2.5,
+    JSON.stringify(settled.streams[0].duration));
+  assert("media in ritardo \u2192 non piu' irrisolto",
+    settled.streams[0].durationUnresolved === false,
+    JSON.stringify(settled.streams[0].durationUnresolved));
+  assert("media in ritardo \u2192 resta implicita", settled.streams[0].durationImplicit === true,
+    JSON.stringify(settled.streams[0].durationImplicit));
+  const y = serialize(settled);
+  assert("media in ritardo \u2192 la chiave resta omessa", !/^[ \t]+duration:/m.test(y),
+    y.slice(0, 400));
+}
+
+{
+  // La lista sample va aggiornata insieme alle durate, o roundTripDiff
+  // ri-parserebbe con la lista vuota e segnalerebbe divergenze inventate.
+  const settled = resolveImplicitDurations(parse(durationYaml(null), { samples: [] }), SAMPLES);
+  assert("media in ritardo \u2192 round-trip pulito", roundTripDiff(settled).length === 0,
+    JSON.stringify(roundTripDiff(settled)));
+}
+
+{
+  const data = parse(durationYaml("duration: 5"), { samples: [] });
+  const settled = resolveImplicitDurations(data, SAMPLES);
+  assert("duration esplicita \u2192 non toccata dalla risoluzione tardiva",
+    settled.streams[0].duration === 5, JSON.stringify(settled.streams[0].duration));
+}
+
+{
+  // Nessun cambiamento -> stesso oggetto: la risoluzione non deve produrre
+  // render inutili ne' passi di undo quando i media si ricaricano.
+  const data = parse(durationYaml(null), { samples: SAMPLES });
+  assert("niente da risolvere \u2192 stesso oggetto",
+    resolveImplicitDurations(data, data.samples) === data);
+}
+
+console.log("\n\u2500\u2500 cambio sample: la durata implicita segue (engine #205) \u2500\u2500");
+
+const OTHER_SAMPLES = [{ name: "test.wav", duration: 2.5 }, { name: "lungo.wav", duration: 9 }];
+
+{
+  const data = parse(durationYaml(null), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "lungo.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio sample \u2192 durata del nuovo sample", moved.duration === 9,
+    JSON.stringify(moved.duration));
+  assert("cambio sample \u2192 resta implicita", moved.durationImplicit === true,
+    JSON.stringify(moved.durationImplicit));
+}
+
+{
+  const data = parse(durationYaml("duration: 5"), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "lungo.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio sample con duration esplicita \u2192 durata invariata",
+    moved.duration === 5, JSON.stringify(moved.duration));
+}
+
+{
+  const data = parse(durationYaml(null), { samples: OTHER_SAMPLES });
+  const moved = applyStreamPatch(data.streams[0], { sample: "ignoto.wav" },
+                                 { samples: OTHER_SAMPLES });
+  assert("cambio verso un sample ignoto \u2192 marcato irrisolto",
+    moved.durationUnresolved === true, JSON.stringify(moved.durationUnresolved));
 }
 
 /* ============================================================

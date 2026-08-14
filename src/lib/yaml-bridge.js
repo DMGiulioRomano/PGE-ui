@@ -947,7 +947,7 @@
    *
    * Only `undefined` deletes: `null` is a meaningful editor value (the
    * scalar/env pairs use it for "this one of the two isn't active"). */
-  function applyStreamPatch(stream, patch) {
+  function applyStreamPatch(stream, patch, opts = {}) {
     const out = { ...stream };
     for (const k of Object.keys(patch)) {
       if (patch[k] === undefined) delete out[k];
@@ -961,8 +961,57 @@
     if (patch.duration !== undefined && !("durationImplicit" in patch)) {
       out.durationImplicit = false;
       out.durationUnresolved = false;
+      return out;
+    }
+    // Cambiare sample cambia la durata di uno stream che la eredita: senza
+    // questo la timeline, l'asse X degli envelope e il fingerprint resterebbero
+    // sulla lunghezza del sample precedente, proprio nel caso che il default
+    // vuole rendere fedele. La lista arriva dal chiamante (mergeStreamPatch),
+    // perche' qui dentro non c'e' accesso alla media list.
+    //
+    // Due esclusioni. Un patch che porta il proprio `durationImplicit` e' uno
+    // stream intero ri-parsato (tab Raw): ha gia' risolto la durata con la sua
+    // lista, ricalcolarla qui la sovrascriverebbe. E senza `samples` non si
+    // ricalcola affatto: un chiamante che non la passa otterrebbe il fallback
+    // al posto di un valore buono.
+    if (patch.sample !== undefined
+        && out.durationImplicit
+        && !("durationImplicit" in patch)
+        && Array.isArray(opts.samples)) {
+      const dur = resolveStreamDuration({ sample: out.sample }, opts.samples);
+      out.duration = dur.value;
+      out.durationUnresolved = dur.unresolved;
     }
     return out;
+  }
+
+  /* Ri-risolve le durate implicite contro una lista sample arrivata DOPO il
+   * parse. Al boot `GET /projects` e `GET /media` partono insieme e la prima
+   * risponde per prima, quindi il progetto viene parsato con la media list
+   * ancora vuota: senza questa seconda passata ogni stream senza `duration`
+   * resterebbe congelato sul fallback per tutta la sessione — 5 secondi in
+   * timeline, nota di durata stimata, `computeDuration` sbagliata, e un
+   * fingerprint che cambia da solo al reload successivo.
+   *
+   * Ritorna lo STESSO oggetto quando non cambia niente: chi la chiama la
+   * applica a ogni arrivo di media, e un oggetto nuovo a vuoto sarebbe un
+   * render inutile (o, peggio, un passo di undo se passasse dalla history).
+   *
+   * `samples` finisce anche in `data.samples`, che roundTripDiff ri-passa al
+   * parse di controllo: con la lista vecchia segnalerebbe divergenze inventate.
+   */
+  function resolveImplicitDurations(data, samples) {
+    if (!data || !Array.isArray(data.streams)) return data;
+    let changed = false;
+    const streams = data.streams.map(s => {
+      if (!s || !s.durationImplicit) return s;
+      const dur = resolveStreamDuration({ sample: s.sample }, samples);
+      if (dur.value === s.duration && dur.unresolved === !!s.durationUnresolved) return s;
+      changed = true;
+      return { ...s, duration: dur.value, durationUnresolved: dur.unresolved };
+    });
+    if (!changed && data.samples === samples) return data;
+    return { ...data, streams, samples: samples || [] };
   }
 
   window.PGEYaml = {
@@ -970,6 +1019,7 @@
     serialize:       dataToYaml,
     serializeStream,
     applyStreamPatch,
+    resolveImplicitDurations,
     parseStream,
     emptyProject,
     computeDuration,
