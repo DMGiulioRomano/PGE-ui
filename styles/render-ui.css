@@ -102,6 +102,26 @@
   margin-top: -2px;
   font-family: var(--mono, JetBrains Mono, ui-monospace, monospace);
 }
+/* Campi di testo/numero dentro il popover (page duration, lens targets): la
+   regola .pge-mini-input di editor.css è scopata su .cp-row/.pge-prow, qui
+   arrivavano senza stile. */
+.pge-render-split .rs-row .pge-mini-input {
+  background: var(--bg-panel);
+  color: var(--fg-1);
+  border: 1px solid var(--border-default);
+  border-radius: 2px;
+  height: 20px;
+  padding: 0 5px;
+  font: 10.5px var(--mono, JetBrains Mono, ui-monospace, monospace);
+}
+.pge-render-split .rs-row .pge-mini-input:focus {
+  outline: none;
+  border-color: var(--border-strong, var(--fg-4));
+}
+/* SPEC delle lenti malformato: il render partirebbe e morirebbe con exit 1,
+   quindi il campo lo dice prima e il flag non viene inviato. */
+.pge-render-split .rs-hint.err { color: var(--status-error); }
+.pge-render-split .rs-row .pge-mini-input.err { border-color: var(--status-error); }
 .pge-render-split .rs-locked {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 9.5px; color: var(--fg-4);
