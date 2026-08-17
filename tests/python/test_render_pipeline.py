@@ -171,6 +171,48 @@ def test_build_cmd_show_voice_offsets_only_with_visualize():
     assert "--visualize" in cmd and "--show-voice-offsets" in cmd
 
 
+# --- lente della partitura (PGE #214 / issue #120) -------------------------
+
+def test_build_cmd_magnify_only_with_visualize():
+    """Lente automatica: default off, e senza --visualize non ha effetto —
+    stessa regola di --show-static e --show-voice-offsets."""
+    assert "--magnify" not in _cmd()
+    assert "--magnify" not in _cmd(visualize=True)
+    assert "--magnify" not in _cmd(visualize=False, magnify=True)
+    cmd = _cmd(visualize=True, magnify=True)
+    assert "--visualize" in cmd and "--magnify" in cmd
+
+
+def test_build_cmd_magnify_at_spec_forwarded_verbatim():
+    """Lo SPEC dei target espliciti passa così com'è (lo riparsa il motore),
+    a meno degli spazi ai bordi. Vuoto/None = nessun target → flag omesso, che
+    è la ragione per cui il motore non vede mai `--magnify-at ""` (che
+    rifiuterebbe con exit 1)."""
+    assert "--magnify-at" not in _cmd(visualize=True, magnify_at=None)
+    assert "--magnify-at" not in _cmd(visualize=True, magnify_at="")
+    assert "--magnify-at" not in _cmd(visualize=True, magnify_at="   ")
+    assert "--magnify-at" not in _cmd(visualize=False, magnify_at="t=14")
+    cmd = _cmd(visualize=True, magnify_at="  t=14,zoom=10  ")
+    assert cmd[cmd.index("--magnify-at") + 1] == "t=14,zoom=10"
+
+
+def test_build_cmd_magnify_at_is_a_single_argv_token():
+    """Niente shell di mezzo: ';' e ',' restano dentro un token solo, quindi
+    più target arrivano interi al motore."""
+    cmd = _cmd(visualize=True, magnify_at="t=4;t=12,zoom=6")
+    assert cmd[cmd.index("--magnify-at") + 1] == "t=4;t=12,zoom=6"
+
+
+def test_build_cmd_magnify_modes_combine():
+    """Automatica ed esplicite non si escludono: il motore le somma (la prima
+    è la lente sul cluster più denso, le altre i punti chiesti)."""
+    cmd = _cmd(visualize=True, magnify=True, magnify_at="t=14")
+    assert "--magnify" in cmd and "--magnify-at" in cmd
+    # solo target espliciti, senza lente automatica
+    only_at = _cmd(visualize=True, magnify_at="t=14")
+    assert "--magnify" not in only_at and "--magnify-at" in only_at
+
+
 # ---------------------------------------------------------------------------
 # kill_process / watchdog
 # ---------------------------------------------------------------------------

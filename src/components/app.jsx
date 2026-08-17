@@ -1045,6 +1045,8 @@ function App() {
     grainJson: tweaks.renderGrainJson !== false,
     pageDuration: tweaks.renderPageDuration ?? 15,
     plotEnvelopes: Array.isArray(tweaks.renderPlotEnvelopes) ? tweaks.renderPlotEnvelopes : [],
+    magnify: !!tweaks.renderMagnify,
+    magnifyAt: tweaks.renderMagnifyAt || "",
     reaper: !!tweaks.renderReaper,
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
@@ -1066,6 +1068,8 @@ function App() {
     setTweak("renderGrainJson", next.grainJson);
     setTweak("renderPageDuration", next.pageDuration);
     setTweak("renderPlotEnvelopes", Array.isArray(next.plotEnvelopes) ? next.plotEnvelopes : []);
+    setTweak("renderMagnify",   next.magnify);
+    setTweak("renderMagnifyAt", next.magnifyAt || "");
     setTweak("renderReaper",    next.reaper);
     setTweak("renderPreclean",  next.preclean);
   }
@@ -1100,6 +1104,12 @@ function App() {
         ? true : undefined,
       plotEnvelopes: renderOptions.visualize && renderOptions.plotEnvelopes.length
         ? renderOptions.plotEnvelopes : undefined,
+      // Lente della partitura (PGE #214 / issue #120). Lo SPEC dei target
+      // espliciti parte solo se la grammatica regge: il motore lo rifiuterebbe
+      // con exit 1, portandosi via anche l'audio gia' renderizzato.
+      magnify: renderOptions.visualize && renderOptions.magnify ? true : undefined,
+      magnifyAt: renderOptions.visualize && magnifySpecSendable(renderOptions.magnifyAt)
+        ? renderOptions.magnifyAt.trim() : undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
@@ -1521,6 +1531,17 @@ function App() {
       ) : null}
     </div>
   );
+}
+
+/* SPEC delle lenti esplicite (--magnify-at): si invia solo se c'è ed è valido.
+ * Il motore rifiuta uno SPEC malformato con exit 1 — la partitura non si
+ * degrada, muore l'intero render — quindi il filtro sta qui e in
+ * RenderButton.buildCommand, che deve mostrare quello che parte davvero. La
+ * grammatica vive in src/lib/magnify-spec.js (node-testata). */
+function magnifySpecSendable(spec) {
+  const text = (spec || "").trim();
+  if (!text) return false;
+  return !window.PGEMagnifySpec || window.PGEMagnifySpec.error(text) === null;
 }
 
 function classifyLogLine(s) {

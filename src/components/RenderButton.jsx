@@ -9,6 +9,12 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
   const rootRef = useRefRB(null);
   const keys = Array.isArray(envelopeKeys) ? envelopeKeys : [];
   const selectedEnv = Array.isArray(options.plotEnvelopes) ? options.plotEnvelopes : [];
+  // Grammatica dello SPEC delle lenti esplicite, controllata mentre si scrive:
+  // uno SPEC rotto non degrada la partitura, fa uscire main.py con codice 1 e
+  // porta via l'intero render (issue #120). Il campo vuoto non è un errore.
+  const magnifyErr = window.PGEMagnifySpec
+    ? window.PGEMagnifySpec.error(options.magnifyAt)
+    : null;
 
   function toggleEnv(name) {
     const next = selectedEnv.includes(name)
@@ -114,6 +120,32 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
               <div className="rs-hint">per-voice pitch/pointer offset curves in the score</div>
             </div>
           ) : null}
+          {options.visualize ? (
+            <div className="rs-row" style={{paddingLeft: 18}}
+                 onClick={() => toggle("magnify", !options.magnify)}>
+              <span className="rs-k">lens</span>
+              <div className={"rs-tog" + (options.magnify ? " on" : "")}
+                   role="switch" aria-checked={!!options.magnify}>
+                <span className="rs-tog-knob" />
+              </div>
+              <div className="rs-hint">zoom circle on each page's densest grain cluster, with the envelope values read at that instant</div>
+            </div>
+          ) : null}
+          {options.visualize ? (
+            <div className="rs-row" style={{paddingLeft: 18}}>
+              <span className="rs-k">lens targets</span>
+              <input type="text" style={{width: 172}}
+                     className={"pge-mini-input" + (magnifyErr ? " err" : "")}
+                     placeholder="t=14,zoom=10;t=32,stream=s2"
+                     value={options.magnifyAt || ""}
+                     onChange={e => toggle("magnifyAt", e.target.value)} />
+              <div className={"rs-hint" + (magnifyErr ? " err" : "")}>
+                {magnifyErr
+                  ? `--magnify-at: ${magnifyErr} — not sent`
+                  : "explicit lenses: t (s) required; y, zoom, out, src, stream optional; ';' separates targets"}
+              </div>
+            </div>
+          ) : null}
           {options.visualize && keys.length ? (
             <div className="rs-row rs-env-filter" style={{paddingLeft: 18}}>
               <span className="rs-k">plot envelopes</span>
@@ -189,6 +221,13 @@ function buildCommand(o) {
     if (Array.isArray(o.plotEnvelopes) && o.plotEnvelopes.length) {
       parts.push("--plot-envelopes", o.plotEnvelopes.join(","));
     }
+    if (o.magnify) parts.push("--magnify");
+    // Stesso filtro di onRender: uno SPEC vuoto o rotto non viene spedito,
+    // quindi l'anteprima non deve mostrarlo.
+    const spec = (o.magnifyAt || "").trim();
+    const specOk = spec && window.PGEMagnifySpec
+      && window.PGEMagnifySpec.error(spec) === null;
+    if (specOk) parts.push("--magnify-at", `"${spec}"`);
   }
   if (o.reaper) parts.push("--reaper");
   return parts.join(" ");

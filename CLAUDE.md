@@ -28,7 +28,9 @@ make tests            # full suite: tests-node + tests-python
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
-  `audiblePosition`/`playAt` in `window.PGEAudioClock`).
+  `audiblePosition`/`playAt` in `window.PGEAudioClock`), and
+  `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
+  `window.PGEMagnifySpec`, plus source guards on the UI wiring).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -63,6 +65,23 @@ fallback).
 ### NDJSON render protocol
 
 `POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`. `server.py` parses `main.py` stdout (`[3/5] streamX rendering…` / `→ output/…`) into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` (`runLocalRender`-style flow) AND the React state in `app.jsx`.
+
+### Score options that can kill a render
+
+Most render options degrade gracefully — a wrong one produces a worse PDF. Two
+don't: an unknown `--plot-envelopes` name and a malformed `--magnify-at` SPEC
+both make `main.py` print and **exit 1**, taking the whole render (audio
+included) with them. So both are filtered before they reach argv, in different
+places for different reasons. Envelope names are checked *server-side*
+(`server.py` intersects them with `engine_envelope_keys(root)`) because the
+valid set is read from the engine source and the browser doesn't have it. The
+lens SPEC is checked *client-side* (`src/lib/magnify-spec.js`,
+`window.PGEMagnifySpec.error`, node-tested) because it's free text typed in the
+render popover and the useful moment to say "chiave ignota 'zom'" is while
+typing, not after a failed render. `render_pipeline.py` only drops a blank
+SPEC; the grammar lives in the JS mirror of the engine's `_parse_magnify_spec`
+— same parity pact as the fingerprint, so a grammar change in PGE lands here
+too.
 
 The request body carries `yamlContent` (the editor state serialized on every render, saved or not). `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* to a throwaway temp file. This matters for the cache: the engine's per-stream manifest is keyed by the YAML basename (`cache/<basename>.json`), so a render-time temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY — defeating incremental caching entirely. Writing the stable basename keeps the manifest persistent across renders, so only genuinely changed streams re-render.
 

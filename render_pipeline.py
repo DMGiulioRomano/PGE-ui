@@ -108,7 +108,8 @@ class RenderState:
 def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache,
                          cache, visualize, page_duration, reaper, basename,
                          refs, output, fmt, plot_envelopes=None,
-                         grain_json=True, show_voice_offsets=False) -> list:
+                         grain_json=True, show_voice_offsets=False,
+                         magnify=False, magnify_at=None) -> list:
     """Build the `python src/main.py …` argv. Pure (no spawning) so it is unit
     testable. `--show-static` is appended only with `--visualize` — it has no
     effect otherwise (engine docs/reference/cli.md). #43
@@ -127,7 +128,21 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
     `show_voice_offsets` (PGE #90 / PGE-ui #55) draws the per-voice offset
     curves (voice_pitch_offset/voice_pointer_offset per voice, plus the single
     voice_pointer_range spread) in the PDF score's envelope panel. Only
-    meaningful with `--visualize`, so it is gated inside that block."""
+    meaningful with `--visualize`, so it is gated inside that block.
+
+    `magnify` / `magnify_at` (PGE #214 / PGE-ui #120) are the score's lens: the
+    first projects a zoomed circle on each page's densest grain cluster, the
+    second takes an engine SPEC of explicit targets
+    (`t=14,y=2.7,zoom=10;t=20,stream=texture2`) — and since PGE #214 every lens
+    also reads out the envelope values at its instant. The two combine (auto
+    lens plus explicit ones) and are gated on `--visualize` like the rest.
+
+    The SPEC is forwarded verbatim, like `--plot-envelopes` names: the engine
+    is the one that parses it. What this function does refuse is the *blank*
+    one — a whitespace-only field means "no explicit targets", while
+    `--magnify-at ""` is an error that exits main.py with code 1 and would take
+    the whole render, audio included, down with it. The UI checks the grammar
+    before sending (`src/lib/magnify-spec.js`) so a typo doesn't get this far."""
     cmd = [
         str(venv_py), str(root / "src" / "main.py"),
         str(yml), str(output_stem),
@@ -149,6 +164,11 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
             names = [str(n).strip() for n in plot_envelopes if str(n).strip()]
             if names:
                 cmd += ["--plot-envelopes", ",".join(names)]
+        if magnify:
+            cmd += ["--magnify"]
+        spec = str(magnify_at).strip() if magnify_at else ""
+        if spec:
+            cmd += ["--magnify-at", spec]
     if reaper:
         cmd += ["--reaper", "--reaper-path", str(output / f"{basename}.rpp")]
     if renderer == "csound":
