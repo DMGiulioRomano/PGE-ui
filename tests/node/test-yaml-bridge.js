@@ -1941,3 +1941,113 @@ const OTHER_SAMPLES = [{ name: "test.wav", duration: 2.5 }, { name: "lungo.wav",
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
+
+/* ============================================================
+ * SECTION — grain.read_direction (PGE #207)
+ * ============================================================
+ * Scalare O envelope, quindi campi paralleli come gli altri parametri —
+ * a differenza di `reverse`, che è presence-keyed e non prende valore.
+ * Il default è l'ASSENZA: con entrambe le chiavi assenti il motore usa la
+ * modalità `auto`, in cui il verso segue il segno di pointer.speed_ratio.
+ * Materializzare un +1 su uno stream che nessuno ha toccato ne cambierebbe
+ * la resa, quindi l'assenza si preserva.
+ * ============================================================ */
+
+console.log("\n── grain.read_direction (PGE #207) ──");
+
+function grainYaml(body) {
+  return `streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n    grain:\n${body}`;
+}
+
+{
+  const data = parse(grainYaml("      read_direction: 1\n"));
+  const g = data.streams[0].grain;
+  assert("scalare +1 → readDirection", g.readDirection === 1, JSON.stringify(g));
+  assert("scalare → nessun env", g.readDirectionEnv == null, JSON.stringify(g));
+  assert("non finisce in _extra (è in GRAIN_KNOWN)",
+    !(g._extra && "read_direction" in g._extra), JSON.stringify(g._extra));
+  const y = serialize(data);
+  assert("serialize scalare", /read_direction: 1/.test(y), y.slice(0, 400));
+  assert("nessun type: step scritto (è implicito lato motore)",
+    !/type:\s*step/.test(y), y.slice(0, 400));
+  assert("roundtrip scalare — nessun diff", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  const data = parse(grainYaml("      read_direction: -1\n"));
+  assert("scalare -1", data.streams[0].grain.readDirection === -1);
+  assert("serialize -1", /read_direction: -1/.test(serialize(data)));
+}
+
+{
+  const data = parse(grainYaml("      read_direction: [[0, 1], [12, -1]]\n"));
+  const g = data.streams[0].grain;
+  assert("envelope → readDirectionEnv", eq(g.readDirectionEnv, [[0, 1], [12, -1]]),
+    JSON.stringify(g));
+  assert("envelope → nessuno scalare", g.readDirection == null, JSON.stringify(g));
+  const y = serialize(data);
+  assert("serialize envelope", /read_direction:/.test(y), y.slice(0, 400));
+  assert("envelope: ancora nessun type: step", !/type:\s*step/.test(y), y.slice(0, 400));
+  assert("roundtrip envelope — nessun diff", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // L'assenza è il terzo stato: modalità `auto` del motore.
+  const data = parse(grainYaml("      duration: 0.05\n"));
+  const g = data.streams[0].grain;
+  assert("chiave assente → non nello stato",
+    !("readDirection" in g) && !("readDirectionEnv" in g), JSON.stringify(g));
+  assert("assente → non emessa (auto preservato)",
+    !serialize(data).includes("read_direction"), serialize(data).slice(0, 400));
+}
+
+{
+  // `read_direction:` vuota è un ERRORE del motore, non una modalità come
+  // `reverse:`. Si tiene verbatim perché l'Inspector possa dirlo invece che
+  // l'editor cancellare in silenzio quello che l'autore ha scritto.
+  const data = parse(grainYaml("      read_direction:\n"));
+  const g = data.streams[0].grain;
+  assert("chiave vuota → presente e null", "readDirection" in g && g.readDirection === null,
+    JSON.stringify(g));
+  assert("chiave vuota → riemessa", /read_direction: null/.test(serialize(data)),
+    serialize(data).slice(0, 400));
+  assert("roundtrip chiave vuota — nessun diff", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // Le due chiavi insieme sono un errore del motore, non una priorità: a
+  // differenza di loop_end/loop_dur (dove il precedente vicino ne scarta una)
+  // qui si tengono entrambe. Scartarne una nasconderebbe l'errore dell'autore
+  // — l'Inspector lo segnala, e il controllo del verso lo risolve.
+  const data = parse(grainYaml("      reverse:\n      read_direction: 1\n"));
+  const g = data.streams[0].grain;
+  assert("entrambe le chiavi restano nello stato",
+    g.reverse === null && g.readDirection === 1, JSON.stringify(g));
+  const y = serialize(data);
+  assert("entrambe riemesse (l'errore resta visibile)",
+    /reverse: null/.test(y) && /read_direction: 1/.test(y), y.slice(0, 400));
+  assert("roundtrip conflitto — nessun diff", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // Un ciclo compatto sopravvive come per gli altri envelope.
+  const data = parse(grainYaml("      read_direction: [[[0, 1], [50, -1]], 2.0, 2]\n"));
+  const g = data.streams[0].grain;
+  // Il blocco compatto E' il valore, non un elemento di una lista che lo
+  // contiene: unpackValueOrEnv lo instrada a env così com'è.
+  assert("formato compatto → env", eq(g.readDirectionEnv, [[[0, 1], [50, -1]], 2, 2]),
+    JSON.stringify(g.readDirectionEnv));
+  assert("roundtrip compatto — nessun diff", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
+}
+
+{
+  // Il bound statico serve al clamp quando il bridge non è raggiungibile.
+  assert("PGE_BOUNDS.readDirection è il fallback statico",
+    window.PGE_BOUNDS.readDirection.min === -1 && window.PGE_BOUNDS.readDirection.max === 1,
+    JSON.stringify(window.PGE_BOUNDS.readDirection));
+}

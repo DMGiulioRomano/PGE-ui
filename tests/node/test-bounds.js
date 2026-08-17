@@ -99,6 +99,28 @@ assert("mergeEngineBounds does NOT mutate base", window.PGE_BOUNDS.density.max =
 assert("empty raw → clone equal to base", B.mergeEngineBounds(window.PGE_BOUNDS, {}).density.max === baseDensityMax);
 assert("null raw → no crash, clone of base", B.mergeEngineBounds(window.PGE_BOUNDS, null).density.max === baseDensityMax);
 
+console.log("\n── read_direction (PGE #207) ──");
+{
+  // La chiave arriva da /bounds con min_val/max_val = -1/+1. Il mapping serve
+  // a farla atterrare su window.PGE_BOUNDS come gli altri controlli; il
+  // vincolo vero — SOLO i due estremi, non l'intervallo — non è esprimibile
+  // qui e vive in PGEEnvUtils.snapDirection.
+  assert("read_direction è mappato su ENGINE_PARAM_MAP",
+    B.ENGINE_PARAM_MAP.readDirection
+      && B.ENGINE_PARAM_MAP.readDirection.param === "read_direction"
+      && B.ENGINE_PARAM_MAP.readDirection.field === "value",
+    JSON.stringify(B.ENGINE_PARAM_MAP.readDirection));
+  const rd = B.mergeEngineBounds(window.PGE_BOUNDS, {
+    read_direction: { min_val: -1, max_val: 1, min_range: 0, max_range: 0,
+                      variation_mode: "negate" },
+  }).readDirection;
+  assert("readDirection ← read_direction.value (-1..+1)",
+    rd.min === -1 && rd.max === 1, JSON.stringify(rd));
+  assert("fallback statico presente per file:// / server down",
+    window.PGE_BOUNDS.readDirection.min === -1 && window.PGE_BOUNDS.readDirection.max === 1,
+    JSON.stringify(window.PGE_BOUNDS.readDirection));
+}
+
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");
 B.apply(raw);
 assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max === 2000);
