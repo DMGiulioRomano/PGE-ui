@@ -162,6 +162,35 @@ console.log("\n── _extra keys are audio-affecting: they enter the fingerprin
   assert("changing an _extra value changes the fingerprint", fp(t) !== fp(u));
 }
 
+console.log("\n── grain.read_direction (PGE #207) ──");
+{
+  // Il verso cambia l'audio reso, quindi DEVE marcare lo stem stale. Non c'è
+  // niente da aggiungere a FP_IGNORE: il fingerprint cammina l'oggetto stream
+  // per intero, quindi i campi nuovi entrano da soli. Questo test è qui perché
+  // se ne accorga chi un domani li escludesse per sbaglio.
+  const auto = base();
+  const avanti = base(); avanti.grain = { ...avanti.grain, readDirection: 1 };
+  const indietro = base(); indietro.grain = { ...indietro.grain, readDirection: -1 };
+  assert("dichiarare un verso cambia il fingerprint", fp(avanti) !== fp(auto));
+  assert("i due versi hanno fingerprint diversi", fp(avanti) !== fp(indietro));
+
+  const env = base();
+  env.grain = { ...env.grain, readDirection: null, readDirectionEnv: [[0, 1], [0.5, -1]] };
+  assert("passare a envelope cambia il fingerprint", fp(env) !== fp(avanti));
+
+  const env2 = base();
+  env2.grain = { ...env2.grain, readDirection: null, readDirectionEnv: [[0, 1], [0.7, -1]] };
+  assert("spostare il cambio di verso nel tempo cambia il fingerprint",
+    fp(env) !== fp(env2));
+
+  // `reverse` e `read_direction: -1` dicono la stessa cosa al motore ma sono
+  // scritture diverse: il fingerprint le distingue, ed è corretto — il primo
+  // render dopo il cambio di chiave riparte, e questo è il comportamento
+  // prudente su una coppia che il motore rifiuta se coesiste.
+  const rev = base(); rev.grain = { ...rev.grain, reverse: null };
+  assert("reverse e read_direction: -1 non collidono", fp(rev) !== fp(indietro));
+}
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

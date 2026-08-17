@@ -55,6 +55,11 @@
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / 48000, max: 10 },   // min 1 campione (PGE #158)
     durationRange:{ min: 0, max: 10 },
+    // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
+    // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
+    // motore al parse. Il vincolo "solo i due estremi" non è esprimibile qui e
+    // vive nei controlli (PGEEnvUtils.snapDirection).
+    readDirection:{ min: -1, max: 1 },
     // loop_* upper bound is sample-driven in the engine (max_val=None); these
     // are the editor's permissive fallback caps.
     loopStart:   { min: 0, max: 3600 },
@@ -105,7 +110,7 @@
    * keys the editor doesn't model yet survive the round trip instead of
    * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
   const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
-  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "envelope", "reverse"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "envelope", "reverse", "read_direction"]);
   const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
   const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
 
@@ -380,6 +385,23 @@
     // = auto). The editor stores null for the bare key; emit it verbatim —
     // null survives stripUndef and dumps as `reverse: null`.
     if (grain.reverse !== undefined) grainY.reverse = grain.reverse;
+    // read_direction (PGE #207): scalar or envelope, and NO `type: step` —
+    // the step is implicit engine-side, so writing it would be valid but pure
+    // noise in the diff. `undefined` from pickValueOrEnv with the key present
+    // in state means the bare `read_direction:` came in from the file; it is
+    // re-emitted as-is (the engine rejects it, and hiding that helps nobody).
+    //
+    // Both direction keys are emitted when both are in state, even though the
+    // engine rejects the pair. The precedent next door (loop_end / loop_dur)
+    // drops one, but there the two keys say the same thing two ways and the
+    // engine resolves by priority; here they say opposite things and the
+    // engine refuses to choose. Dropping one would hide the author's mistake —
+    // the Inspector flags it instead, and the direction control resolves it by
+    // writing exactly one key.
+    if (grain.readDirection !== undefined || grain.readDirectionEnv != null) {
+      const rd = pickValueOrEnv(grain.readDirection, grain.readDirectionEnv);
+      grainY.read_direction = rd === undefined ? null : rd;
+    }
     mergeBlockExtras(grainY, grain._extra);
     if (Object.values(grainY).some(v => v !== undefined)) {
       y.grain = stripUndef(grainY);
@@ -702,6 +724,24 @@
         // Keep the value verbatim — anything non-null is an engine error the
         // user should still see round-trip.
         ...("reverse" in grain ? { reverse: grain.reverse ?? null } : {}),
+        // read_direction (PGE #207): -1 back, +1 forward, scalar OR envelope —
+        // so it gets the parallel-field treatment, unlike `reverse` which is
+        // presence-keyed and takes no value. Absence is preserved: absent (and
+        // `reverse` absent too) means the engine's `auto` mode, where the
+        // direction follows the sign of pointer.speed_ratio. Writing +1 for a
+        // stream nobody touched would change what it renders.
+        //
+        // The bare `read_direction:` is kept verbatim rather than collapsed
+        // into absence: unlike `reverse:`, an empty value here is an engine
+        // error, and the Inspector says so instead of the editor quietly
+        // deleting what the author wrote.
+        ...(() => {
+          if (!("read_direction" in grain)) return {};
+          const rd = unpackValueOrEnv(grain.read_direction ?? null);
+          if (rd.scalar == null && rd.env == null)
+            return { readDirection: null, readDirectionEnv: null };
+          return { readDirection: rd.scalar, readDirectionEnv: rd.env };
+        })(),
         ...(() => { const ex = collectExtras(y.grain, GRAIN_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pointer: {

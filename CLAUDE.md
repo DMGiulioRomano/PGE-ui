@@ -30,7 +30,10 @@ make tests            # full suite: tests-node + tests-python
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
   `audiblePosition`/`playAt` in `window.PGEAudioClock`), and
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
-  `window.PGEMagnifySpec`, plus source guards on the UI wiring).
+  `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
+  `test-time-dist.js` (the compact block's time-distribution registry mirror —
+  `window.PGEEnv.timeDistError` plus the no-longer-silent fallback in
+  `computeCycleDurations`).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -93,6 +96,25 @@ The UI's clamps (min/max/range for every control + envelope, and the pitch-unit 
 
 Loop-window semantics (engine confinement, PGE-ui issue #97). With a loop active the engine confines the grain read position — base + `pointer.offset_range` + voice pointer offsets (`voices` → `pointer_range`/`step`) — to `[loop_start, loop_end)` via modular wrap (without a loop it scales/wraps over the whole file, unchanged). A loop straddling the file end is expressible **only** via `loop_dur` (`loop_start + loop_dur > sample_dur`); `loop_end` stays bound to `[0, sample_dur]`. The engine rejects a degenerate static window (`loop_end <= loop_start` → `InvalidFieldValueError`; envelope endpoints are dynamic → exempt). `loopBoundsError` in `envelope-utils.js` (node-tested) mirrors that static check so the Inspector can warn pre-render; the Inspector also surfaces the confinement in the `offset_range` / voices-pointer hints. The grain visualizations (`grain-map.js`) need no change — they plot the engine's post-render sidecar JSON, so the new confinement shows through automatically.
 
+Discrete-domain parameters (`grain.read_direction`, PGE #207). Its engine bounds
+are `-1`/`+1`, but the domain is the **set** `{-1, +1}`, not the interval: the
+engine rejects `0` and `0.5` at parse time (`InvalidFieldValueError`) rather than
+clamping them, and the bounds payload has no way to say so. So every place the UI
+*computes* a y instead of the user *choosing* one must **snap to the sign**, not
+clamp to the range — `truncateEnvArray`'s closing breakpoint (freeze-on-resize
+could otherwise turn a valid project into one that won't render, without the user
+touching the direction), the EnvelopeEditor drag, and the keyboard nudge.
+`snapDirection` / `snapForDomain` in `envelope-utils.js` (node-tested) are the
+single source; the envelope entry carries `domain: "direction"` and the editor
+routes every y through one `clampY`. The nudge's `snapYFromDelta` takes the
+**delta**, not the sum: on two states the value axis has a direction, not a
+distance. Interpolation is `step`, imposed and implicit — the editor draws with
+that default and hides the interp selectors, since `linear`/`cubic` are hard
+parse errors here, not worse curves. `readDirectionError` mirrors the engine's
+three rejections (`reverse` + `read_direction` together, the bare key, an
+out-of-domain value) for the Inspector, because a hand-written YAML can carry all
+three even though the direction control cannot produce them.
+
 The EnvelopeEditor Y window **auto-fits the point values** for readability (`computeYFit` in `envelope-utils.js`, node-tested): it fits min..max of the breakpoints + 10% margin, clamped into the dynamic `[hardMin,hardMax]` — not the old `[visMin,visMax]` union, which could only grow and left points squashed against an edge. The fit is live while idle and **frozen during a drag** (a `useRef` snapshot) so the grabbed point can't slide under a rescaling axis; `visMin/visMax` are only the no-points fallback window.
 
 ### Fingerprint parity
@@ -104,6 +126,8 @@ The fresh/stale/never *classification* built on top of the hash (not the hash it
 ### YAML round-trip (`yaml-bridge.js`)
 
 Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model; unknown keys *inside* `pointer`/`grain`/`pitch`/`voices` (blocks the serializer rebuilds in full) are preserved the same way under `<block>._extra`. `dephase: null` (engine: implicit 1% mode, distinct from key-absent = off) is stored in editor state as the sentinel `window.PGEYaml.DEPHASE_IMPLICIT` and serialized back to `dephase: null`.
+
+The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine resolves by **refusing**, not by priority — unlike `loop_end`/`loop_dur` next door, where the serializer drops one. Here both are kept in state and both are re-emitted: the two keys say opposite things, so dropping one would hide the author's mistake, which is exactly what the engine declines to do. The Inspector flags the pair and the single direction control resolves it by writing exactly one key. The bare `read_direction:` is likewise kept verbatim (it is an engine error, unlike the bare `reverse:` which is that key's whole syntax), and **absence is preserved** for both: with neither key present the engine uses `auto` mode, where the direction follows the sign of `pointer.speed_ratio`, so materializing a `+1` would change what an untouched stream renders.
 
 Stream `duration` is **optional** for the engine (PGE #205): absent or `null` means "as long as the sample". Editor state keeps `duration` a plain number for every reader (timeline width, envelope X axis, render extent), resolved from the media list (`parse(text, {samples})`, `parseStream(text, idx, {samples})` — both need the sample list or the length can't be known), and records the provenance in two flags: `durationImplicit` (serialization omits the key, so an implicit length is never materialized on save) and `durationUnresolved` (the sample's length is unknown — `file://`, server down, file missing — so the number is the `IMPLICIT_DURATION_FALLBACK` guess and the Inspector says so). `applyStreamPatch` clears `durationImplicit` when a patch sets `duration`, *unless* the patch carries its own flag — a whole re-parsed stream from the Raw tab must not materialize a key the author never wrote.
 

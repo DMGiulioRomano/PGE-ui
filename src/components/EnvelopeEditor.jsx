@@ -79,6 +79,18 @@ function listEnvelopes(stream, sampleDur) {
       path: ["grain", "durationRangeEnv"], unit: "s",
       visMin: 0, visMax: 0.5, hardMin: PB.durationRange.min, hardMax: PB.durationRange.max });
   }
+  if (stream.grain && stream.grain.readDirectionEnv) {
+    // `domain: "direction"` (PGE #207) è ciò che distingue questo envelope da
+    // tutti gli altri: i suoi y non vivono su un continuo ma su {-1, +1}, e il
+    // motore rifiuta gli intermedi al parse invece di clamparli. I bound qui
+    // restano [-1, 1] perché servono al disegno — è lo snap, non il clamp, a
+    // far rispettare il dominio quando l'utente trascina.
+    list.push({ key: "readDirection", label: "read_direction", group: "Grain",
+      path: ["grain", "readDirectionEnv"], unit: "",
+      domain: "direction", integer: true,
+      visMin: -1, visMax: 1,
+      hardMin: PB.readDirection.min, hardMax: PB.readDirection.max });
+  }
   if (stream.panEnv) {
     list.push({ key: "pan", label: "pan", group: "Volume & Pan",
       path: ["panEnv"], unit: "°",
@@ -197,7 +209,7 @@ function listEnvelopes(stream, sampleDur) {
       path: ["dephase"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
   } else if (PGEDephase.mode(stream.dephase) === "perParam") {
-    const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","envelope"];
+    const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","read_direction","envelope"];
     for (const pk of DEPHASE_PARAM_KEYS) {
       if (PGEDephase.isEnvValue(stream.dephase[pk])) {
         list.push({ key: "dephase_" + pk, label: pk, group: "Dephase",
@@ -321,7 +333,7 @@ const DIST_TYPES = [
 { val: "geometric", label: "geo", hint: "progressione geometrica · ratio>1 ritarda" },
 { val: "power", label: "power", hint: "power law · cresce come (i+1)^e" }];
 
-const INTERP_TYPES = [
+const _INTERP_TYPES = [
 { val: "linear", label: "linear" },
 { val: "cubic", label: "cubic" },
 { val: "step", label: "step" }];
@@ -336,7 +348,10 @@ const DIST_PARAM = {
 function distType(d) {return typeof d === "string" ? d : d && d.type || "linear";}
 function distParams(d) {return typeof d === "object" && d ? d : {};}
 
-function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
+function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
+  // interpTypes: ristretto a ["step"] sui domini discreti (read_direction),
+  // dove gli altri valori sono errori di parse e non curve alternative.
+  const INTERP_TYPES = interpTypes || _INTERP_TYPES;
   const { Icon } = window.PGE;
   if (!block) return null;
   const [pat, end, n, interp, dist] = block.raw;
@@ -427,6 +442,19 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
         )}
       </div>
 
+      {/* La distribuzione temporale dichiarata non è costruibile: il motore
+          rifiuta questo blocco (PGE #208) mentre l'anteprima qui sopra è
+          disegnata con il ripiego lineare. Senza questa riga il disegno
+          sarebbe indistinguibile da un `linear` scritto davvero, e l'errore
+          si scoprirebbe solo a render fallito. */}
+      {block.distError ? (
+        <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-error)" }}>
+          {block.distError.kind === "name"
+            ? `time_dist "${block.distError.name}" non esiste: il motore rifiuta il blocco. Validi: ${window.PGEEnv.TIME_DIST_NAMES.join(", ")}.`
+            : `time_dist ${block.distError.name}: il parametro "${block.distError.param}" non è valido e il motore rifiuta il blocco.`}
+          {" "}L'anteprima qui sopra usa cicli di durata uguale.
+        </div>
+      ) : null}
       <div className="ee-loop-panel-hint mono">
         pattern · {block.pattern.length} pt · x∈[0,100]% di ciclo · drag i punti del 1° ciclo per modificare il pattern · drag l'edge destro del loop per allungarlo
       </div>
@@ -439,7 +467,8 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color }) {
    consecutivi) ha il proprio selettore interp (BP group [points, interp],
    PGE #64). L'interp governa i soli segmenti interni della zona; il segmento
    in uscita dall'ultimo punto segue il default globale. */
-function BPZonePanel({ zone, interp, color, onSetInterp }) {
+function BPZonePanel({ zone, interp, color, onSetInterp, interpTypes }) {
+  const INTERP_TYPES = interpTypes || _INTERP_TYPES;
   if (!zone) return null;
   const n = zone.indices.length;
   return (
@@ -696,6 +725,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const yPrec = e2.integer ? 0 : (e2.unit === "s" ? 4 : 2);
       const next = window.PGEEnvUtils.nudgeBreakpoint(items, selectedBP, axis, delta, {
         hardMin: e2.hardMin, hardMax: e2.hardMax, xPrec: 4, yPrec,
+        // Dominio discreto (read_direction): sull'asse valore la freccia
+        // sceglie lo stato, non sposta di un passo. Riceve il delta apposta —
+        // vedi nudgeBreakpoint.
+        snapYFromDelta: window.PGEEnvUtils.snapForDomain(e2.domain),
       });
       if (next === items) return; // clamped to no movement → no commit, no undo entry
       if (!arrowGestureRef.current) {
@@ -733,6 +766,19 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
      resugarBPGroups, quindi lo YAML mantiene la forma a gruppi. */
   const rawEnv = PGEEnv.desugarBPGroups(_wrap.items);
   const globalInterp = _wrap.interp;
+  /* L'interp che vale quando l'envelope non ne dichiara uno. Per tutti i
+     parametri è `linear`, il default del motore; per read_direction è `step`,
+     che il motore IMPONE (PGE #207) — l'envelope si scrive come una spezzata
+     qualsiasi e il gradino non va scritto. Senza questo il disegno mostrerebbe
+     rampe fra +1 e -1 che il render non produce mai: l'anteprima mentirebbe
+     esattamente sul parametro il cui unico contenuto è dove cambia il verso. */
+  const defaultInterp = (env && env.domain === "direction") ? "step" : "linear";
+  /* Su un dominio discreto l'interp non è una scelta: `linear` e `cubic` sono
+     errori duri del motore, non curve peggiori. I selettori spariscono invece
+     di offrire due opzioni su tre che non renderizzano. */
+  const interpIsFixed = defaultInterp !== "linear";
+  const interpTypes = interpIsFixed
+    ? _INTERP_TYPES.filter((o) => o.val === defaultInterp) : _INTERP_TYPES;
   /* expandMixed sul desugarato (non su rawEnvRaw): blocks.originalIdx deve
      indicizzare rawEnv, e con i gruppi gli indici nativi divergerebbero. La
      forma typed {type,points} non contiene gruppi e passa com'è. */
@@ -901,6 +947,15 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const yPrec = env.integer ? 0 : (env.unit === "s" ? 4 : 2);
   const xMin = 0,xMax = 1;
 
+  /* Ogni y prodotto dal puntatore passa di qui. Su un parametro continuo è il
+     clamp di sempre; su un dominio discreto (read_direction, PGE #207) è uno
+     SNAP: il motore rifiuta gli intermedi al parse invece di clamparli, quindi
+     trascinare a 0.4 produrrebbe YAML che non renderizza. Snappare al segno
+     significa che il punto si aggancia al verso più vicino mentre lo si
+     trascina — il gesto resta continuo, il valore no. */
+  const snapY = window.PGEEnvUtils.snapForDomain(env.domain);
+  const clampY = (v) => snapY ? snapY(v) : Math.max(env.hardMin, Math.min(env.hardMax, v));
+
   /* time grid */
   const ticks = [];
   for (let i = 0; i <= 10; i++) {
@@ -965,7 +1020,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       commit(newItems);
     } else {
       const { bpOrigIdx } = ctxMenu;
-      const effectiveDefault = globalInterp || "linear";
+      const effectiveDefault = globalInterp || defaultInterp;
       const newItems = rawEnv.map((it, i) => {
         if (i !== bpOrigIdx || !PGEEnv.isBreakpoint(it)) return it;
         if (type === effectiveDefault) return [it[0], it[1]];
@@ -1005,8 +1060,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const hi = nextBP ? nextBP[0] - xStep : xMax;
       newX = Math.max(lo, Math.min(hi, newX));
       let newVal = valOfY(yPx);
-      newVal = Math.max(env.hardMin, Math.min(env.hardMax, newVal));
-      if (ev.shiftKey) {
+      newVal = clampY(newVal);
+      // Shift = aggancio alla griglia dei valori "tondi". Su un dominio
+      // discreto non c'è griglia più fitta dei due valori stessi, e passare di
+      // qui potrebbe solo allontanarsene.
+      if (ev.shiftKey && !snapY) {
         const niceY = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000];
         let s = niceY[0];
         for (const n of niceY) {if (n * 10 >= ymax - ymin) {s = n;break;}}
@@ -1052,7 +1110,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const hi = nextBP ? nextBP[0] - xStep : xMax;
       newX = Math.max(lo, Math.min(hi, raw));
     } else {
-      newVal = Math.max(env.hardMin, Math.min(env.hardMax, raw));
+      newVal = clampY(raw);
     }
     const updated = rawEnv.map((it, i) => {
       if (i !== selectedBP) return it;
@@ -1093,7 +1151,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       if (patIdx === pattern.length - 1) xPct = 100;else
       xPct = Math.max(prev + 0.1, Math.min(next - 0.1, xPct));
       let newVal = valOfY(yPx);
-      newVal = Math.max(env.hardMin, Math.min(env.hardMax, newVal));
+      newVal = clampY(newVal);
       const newPattern = pattern.map((p, i) => i === patIdx ?
       (p.length >= 3 ? [+xPct.toFixed(2), +newVal.toFixed(yPrec), p[2]] : [+xPct.toFixed(2), +newVal.toFixed(yPrec)]) : p);
       const newBlock = [newPattern, block.raw[1], block.raw[2], block.raw[3], block.raw[4]].filter((x) => x !== undefined);
@@ -1188,7 +1246,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const yPx = e.clientY - rect.top;
     if (yPx < PAD_T) return; // ignore loop band
     const x = Math.max(xMin, Math.min(xMax, bpXofXPx(xPx)));
-    const val = Math.max(env.hardMin, Math.min(env.hardMax, valOfY(yPx)));
+    const val = clampY(valOfY(yPx));
 
     // If the click landed *inside* a loop block's x-range, add a new pattern
     // point to that block instead of a standalone breakpoint. The new point
@@ -1482,7 +1540,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
      il default globale scioglie il gruppo in breakpoint nudi. */
   function setZoneInterp(zone, type) {
     if (!zone || zone.kind !== "bps") return;
-    const g = globalInterp || "linear";
+    const g = globalInterp || defaultInterp;
     const internal = new Set(zone.indices.slice(0, -1));
     const next = rawEnv.map((it, i) => {
       if (!internal.has(i) || !PGEEnv.isBreakpoint(it)) return it;
@@ -1575,7 +1633,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
 
     function flushBPs() {
       if (!bpRun.length) return;
-      const res = emitGroup(bpRun, globalInterp || "linear", started);
+      const res = emitGroup(bpRun, globalInterp || defaultInterp, started);
       if (!started) firstX = res.firstX;
       lastX = res.lastX;
       started = true;
@@ -1627,7 +1685,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         kind: "bp",
         d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b[0]).toFixed(2)} ${yOf(b[1]).toFixed(2)}`,
         bpOrigIdx: iA,
-        curInterp: segInterp(a, globalInterp || "linear"),
+        curInterp: segInterp(a, globalInterp || defaultInterp),
         midX: (xOf(a[0]) + xOf(b[0])) / 2,
         midY: (yOf(a[1]) + yOf(b[1])) / 2,
         rx: xOf(a[0]), rw: xOf(b[0]) - xOf(a[0]),
@@ -1749,7 +1807,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   // ogni zona ha il suo selettore. Nel modello desugarato più zone bps
   // implicano loop block in mezzo, ma il vincolo resta esplicito.
   const nonEmptyZoneCount = macroZones.filter((z) => z.kind !== "empty").length;
-  const showGlobalInterp = !hasLoop && nonEmptyZoneCount <= 1;
+  const showGlobalInterp = !hasLoop && nonEmptyZoneCount <= 1 && !interpIsFixed;
 
   return (
     <div className="pge-envedit" data-screen-label="04 Envelope Editor" ref={rootRef}>
@@ -1777,7 +1835,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
             <span className="ee-loop-lbl">interp</span>
             <select className="ee-loop-select mono" value={globalInterp}
               onChange={(e) => commitWithInterp(rawEnv, e.target.value)}>
-              {INTERP_TYPES.map((o) => <option key={o.val} value={o.val}>{o.label}</option>)}
+              {_INTERP_TYPES.map((o) => <option key={o.val} value={o.val}>{o.label}</option>)}
             </select>
           </label> :
         null}
@@ -1802,11 +1860,13 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       {/* ============ optional: selected loop / bp-zone control panel ============ */}
       {selectedBlockObj ?
       <LoopBlockPanel block={selectedBlockObj} color={stream.color}
+      interpTypes={interpTypes}
       onUpdate={(newRaw) => updateBlock(selectedBlock, newRaw)}
       onDelete={deleteSelectedLoop} /> :
       selZoneObj ?
       <BPZonePanel zone={selZoneObj} color={stream.color}
-      interp={zoneEffInterp(selZoneObj) || "linear"}
+      interp={zoneEffInterp(selZoneObj) || defaultInterp}
+      interpTypes={interpTypes}
       onSetInterp={(v) => setZoneInterp(selZoneObj, v)} /> :
       null}
 
@@ -2073,7 +2133,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
                     icon: <path d="M2,14 C8,14 20,4 26,4" stroke="currentColor" strokeWidth="1.5" fill="none"/> },
                   { val: "step",   label: "step",
                     icon: <polyline points="2,14 26,14 26,4" stroke="currentColor" strokeWidth="1.5" fill="none"/> },
-                ].map(({ val, label, icon }) => (
+                // Su un dominio discreto resta il solo 'step': gli altri due
+                // non sono curve peggiori, sono errori di parse (PGE #207).
+                ].filter(({ val }) => !interpIsFixed || val === defaultInterp)
+                 .map(({ val, label, icon }) => (
                   <button key={val}
                     className={"ee-seg-ctx-btn" + (val === ctxMenu.curInterp ? " active" : "")}
                     onMouseDown={(e) => { e.stopPropagation(); applySegInterp(val); }}>

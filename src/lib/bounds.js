@@ -41,6 +41,10 @@
     speedRatio:         { param: "pointer_speed_ratio", field: "value" },
     grainDur:           { param: "grain_duration",      field: "value" },
     durationRange:      { param: "grain_duration",      field: "range" },
+    // read_direction (PGE #207): min_val/max_val = -1/+1. I bound da soli non
+    // dicono che sono ammessi SOLO i due estremi — quel vincolo sta nella UI
+    // (snapDirection), come per gli altri controlli senza controparte diretta.
+    readDirection:      { param: "read_direction",      field: "value" },
     offsetRange:        { param: "pointer_deviation",   field: "range" },
     loopStart:          { param: "loop_start",          field: "value" },
     loopDur:            { param: "loop_dur",            field: "value" },

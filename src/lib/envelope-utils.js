@@ -13,6 +13,31 @@
 (function () {
   const PGEEnv = window.PGEEnv;
 
+  /* ---------- grain.read_direction: un dominio di due elementi ----------
+   * PGE #207. Il verso di lettura vale -1 o +1 e basta: il motore rifiuta ogni
+   * valore intermedio al parse (InvalidFieldValueError), NON lo clampa. Il
+   * dominio è l'insieme {-1, +1}, mentre i bound `[-1, 1]` che arrivano da
+   * /bounds descrivono un intervallo — leggerli come tali è esattamente
+   * l'errore che questa costante evita.
+   *
+   * Conseguenza operativa: dovunque la UI CALCOLI un y invece di sceglierlo
+   * (interpolazione del breakpoint di chiusura, drag, nudge da tastiera) il
+   * valore va SNAPPATO al segno, non clampato al range. Senza questo un
+   * ridimensionamento dello stream può trasformare un progetto valido in uno
+   * che non renderizza, senza che l'utente abbia toccato il verso. */
+  const DIRECTION_VALUES = [-1, 1];
+
+  function snapDirection(y) {
+    return (typeof y === "number" && y < 0) ? -1 : 1;
+  }
+
+  // Il "domain" di un campo envelope: `null` per il continuo (tutti gli altri
+  // parametri), "direction" per read_direction. Passato ai walker per campo,
+  // perché la regola non è dello stream ma della singola chiave.
+  function snapForDomain(domain) {
+    return domain === "direction" ? snapDirection : null;
+  }
+
   function rescaleEnvArray(arr, ratio) {
     // object-form {type, points} envelope
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
@@ -34,14 +59,20 @@
     });
   }
 
-  function truncateEnvArray(arr) {
+  // `snap`, quando presente, riscrive ogni y CALCOLATO da questa funzione (il
+  // breakpoint di chiusura interpolato al bordo). I valori scelti dall'utente
+  // passano intatti: se sono fuori dominio è un problema che va segnalato, non
+  // corretto in silenzio. Su read_direction senza snap l'interpolazione fra un
+  // +1 e un -1 produce tipicamente uno 0.3, che il motore rifiuta.
+  function truncateEnvArray(arr, snap) {
     // object-form {type, points}: clip points beyond x=1.0, add closing BP
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return { ...arr, points: truncateEnvArray(arr.points) };
+      return { ...arr, points: truncateEnvArray(arr.points, snap) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     const result = [];
     let prevX = 0, prevY = null;
+    const close = (y) => (snap ? snap(y) : +y.toFixed(4));
 
     for (const item of arr) {
       if (PGEEnv.isBreakpoint(item)) {
@@ -53,9 +84,9 @@
           // first BP past boundary — interpolate closing BP at x=1.0
           if (prevY !== null && prevX < x) {
             const t = (1.0 - prevX) / (x - prevX);
-            result.push([1.0, +(prevY + (y - prevY) * t).toFixed(4)]);
+            result.push([1.0, close(prevY + (y - prevY) * t)]);
           } else {
-            result.push([1.0, +y.toFixed(4)]);
+            result.push([1.0, close(y)]);
           }
           break;
         }
@@ -63,7 +94,7 @@
         // BP group: tronca i punti interni (stessa regola dei BP); se resta
         // un solo punto il gruppo degenera a breakpoint nudo.
         if (prevX >= 1.0) break;
-        const inner = truncateEnvArray(item[0]);
+        const inner = truncateEnvArray(item[0], snap);
         if (inner.length >= 2) result.push([inner, item[1]]);
         else if (inner.length === 1) result.push(inner[0]);
         const lastP = inner[inner.length - 1];
@@ -101,7 +132,7 @@
   }
 
   // dephase per-parameter envelope keys (mirror EnvelopeEditor.jsx listEnvelopes).
-  const DEPHASE_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "envelope"];
+  const DEPHASE_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"];
 
   // dephase is stored verbatim (yaml-bridge passes it through): it can be the
   // DEPHASE_IMPLICIT sentinel / false / a scalar prob, a GLOBAL envelope (array
@@ -131,8 +162,10 @@
     return [];
   }
 
+  // `fn` riceve (envelope, domain): il dominio è della singola chiave, non
+  // dello stream, e solo read_direction ne ha uno che non sia il continuo.
   function _applyEnvFields(stream, fn) {
-    const wf = (obj, key) => obj[key] != null ? { [key]: fn(obj[key]) } : {};
+    const wf = (obj, key, domain) => obj[key] != null ? { [key]: fn(obj[key], domain) } : {};
     const dephaseWalk = Array.isArray(stream.dephase) || (stream.dephase && typeof stream.dephase === "object");
     return {
       ...stream,
@@ -147,6 +180,8 @@
         ...stream.grain,
         ...wf(stream.grain, "durationEnv"),
         ...wf(stream.grain, "durationRangeEnv"),
+        // read_direction: dominio {-1, +1}, non un continuo (PGE #207).
+        ...wf(stream.grain, "readDirectionEnv", "direction"),
         // grain.envelope.curve: blend/morph curve, array or {type,points} —
         // both handled by rescaleEnvArray/truncateEnvArray.
         ...(stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope)
@@ -178,7 +213,15 @@
      Pure: never mutates `items`. Returns the SAME array reference when the move
      resolves to no change (clamped to a boundary, or the rounded delta is below
      one precision step) so callers can skip a redundant commit / undo entry.
-     opts: { hardMin, hardMax, xPrec=4, yPrec=2, xStep=0.001, xMin=0, xMax=1 }. */
+     opts: { hardMin, hardMax, xPrec=4, yPrec=2, xStep=0.001, xMin=0, xMax=1,
+             snapYFromDelta }.
+     `snapYFromDelta` sostituisce il clamp sull'asse valore su un dominio
+     discreto (read_direction, PGE #207), e riceve il DELTA, non la somma.
+     È voluto: su due soli stati l'asse non ha distanze, ha un verso. Sommando
+     il delta al valore corrente, un passo da 0.1 partendo da -1 darebbe -0.9,
+     che snappato torna a -1 — la freccia non farebbe niente finché il passo
+     non supera 1. Con il delta, freccia su = lo stato in alto, freccia giù =
+     quello in basso, che è l'unica cosa che quell'asse può voler dire. */
   function nudgeBreakpoint(items, index, axis, delta, opts) {
     opts = opts || {};
     const xPrec   = opts.xPrec   != null ? opts.xPrec   : 4;
@@ -204,6 +247,8 @@
       const lo = prevBP ? prevBP[0] + xStep : xMin;
       const hi = nextBP ? nextBP[0] - xStep : xMax;
       newX = Math.max(lo, Math.min(hi, bp[0] + delta));
+    } else if (opts.snapYFromDelta) {
+      newVal = opts.snapYFromDelta(delta);
     } else {
       newVal = Math.max(hardMin, Math.min(hardMax, bp[1] + delta));
     }
@@ -218,11 +263,13 @@
 
   function rescaleStreamEnvelopes(stream, oldDur, newDur) {
     const ratio = oldDur / newDur;
+    // Il rescale tocca solo la x: nessun y viene calcolato, quindi nessun snap.
     return _applyEnvFields(stream, arr => rescaleEnvArray(arr, ratio));
   }
 
   function truncateStreamEnvelopes(stream) {
-    return _applyEnvFields(stream, truncateEnvArray);
+    return _applyEnvFields(stream,
+      (arr, domain) => truncateEnvArray(arr, snapForDomain(domain)));
   }
 
   function streamWouldTruncate(stream, ratio) {
@@ -231,6 +278,7 @@
       stream.panEnv, stream.panRangeEnv, stream.volumeEnv, stream.volumeRangeEnv,
       stream.grain    && stream.grain.durationEnv,
       stream.grain    && stream.grain.durationRangeEnv,
+      stream.grain    && stream.grain.readDirectionEnv,
       stream.grain    && stream.grain.envelope && stream.grain.envelope.curve,
       stream.pointer  && stream.pointer.speedRatioEnv,
       stream.pointer  && stream.pointer.loopStartEnv,
@@ -347,7 +395,68 @@
     return (hasScalar || hasEnv) ? null : { unit: "samples" };
   }
 
+  // Mirror dei due rifiuti del motore su grain.read_direction (PGE #207) che
+  // l'editor può incontrare aprendo uno YAML scritto a mano. Non sono
+  // producibili dai controlli — il verso è un controllo solo, e sceglie quale
+  // chiave scrivere — ma un file caricato può contenerli, e allora il render
+  // fallisce: meglio dirlo nell'Inspector che dopo un render andato a vuoto.
+  //
+  //   "conflict" → reverse e read_direction insieme. Errore esplicito, non una
+  //                priorità: le due chiavi governano la stessa grandezza con
+  //                semantiche opposte e il motore rifiuta di scegliere.
+  //   "empty"    → `read_direction:` senza valore. A differenza di `reverse:`,
+  //                dove la chiave vuota È la sintassi, qui è un errore.
+  //   "domain"   → un valore fuori da {-1, +1}, scalare o dentro l'envelope.
+  //
+  // Ritorna null se valido/non applicabile, altrimenti { kind, value }.
+  // Puro — niente DOM, niente chiamate al motore.
+  function readDirectionError(grain) {
+    if (!grain) return null;
+    const present = grain.readDirection !== undefined || grain.readDirectionEnv != null;
+    if (!present) return null;
+
+    if (grain.reverse !== undefined) return { kind: "conflict" };
+
+    if (grain.readDirectionEnv != null) {
+      const bad = _envValuesOutsideDirection(grain.readDirectionEnv);
+      return bad.length ? { kind: "domain", value: bad[0] } : null;
+    }
+    if (grain.readDirection == null) return { kind: "empty" };
+    return DIRECTION_VALUES.includes(grain.readDirection)
+      ? null : { kind: "domain", value: grain.readDirection };
+  }
+
+  // Raccoglie i valori Y fuori dominio in un envelope, in ogni forma che il
+  // motore accetta. Serve solo a nominare il primo colpevole nel messaggio,
+  // quindi non replica la validazione completa del motore: quella è del
+  // language server, che vede il testo YAML e può ancorarla a una riga.
+  function _envValuesOutsideDirection(env) {
+    const out = [];
+    const check = (y) => {
+      if (typeof y === "number" && !DIRECTION_VALUES.includes(y)) out.push(y);
+    };
+    const walk = (arr) => {
+      if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+        walk(arr.points);
+        return;
+      }
+      if (!Array.isArray(arr)) return;
+      for (const item of arr) {
+        if (PGEEnv.isBPGroup(item)) walk(item[0]);
+        else if (PGEEnv.isCompactBlock(item)) walk(item[0]);
+        else if (PGEEnv.isBreakpoint(item)) check(item[1]);
+        else if (Array.isArray(item) && item.length >= 2) check(item[1]);
+      }
+    };
+    walk(env);
+    return out;
+  }
+
   window.PGEEnvUtils = {
+    DIRECTION_VALUES,
+    snapDirection,
+    snapForDomain,
+    readDirectionError,
     rescaleEnvArray,
     truncateEnvArray,
     envArrayWouldTruncate,

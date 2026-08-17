@@ -156,11 +156,65 @@
     return out;
   }
 
-  /* ---------- distribuzioni temporali (time_distribution.py) ----------
-     vincolo invariante: sum(cycleDurs) === T                              */
+  /* ---------- distribuzioni temporali (time_distribution.py) ---------- */
+
+  // Registro chiuso del motore (TimeDistributionFactory._DISTRIBUTIONS), alias
+  // compresi, con il vincolo che ciascun costruttore applica al proprio
+  // parametro. `power.exponent` chiede solo un numero: qualunque reale è un
+  // esponente legittimo.
+  const TIME_DIST_SPECS = {
+    linear:      {},
+    exponential: { rate: v => v > 0 },
+    exp:         { rate: v => v > 0 },
+    logarithmic: { base: v => v > 1 },
+    log:         { base: v => v > 1 },
+    geometric:   { ratio: v => v > 0 },
+    geo:         { ratio: v => v > 0 },
+    power:       { exponent: v => true },
+  };
+  const TIME_DIST_NAMES = Object.keys(TIME_DIST_SPECS);
+
+  // Mirror delle validazioni che il motore fa costruendo la distribuzione
+  // (PGE #208). Serve perché senza di esso l'anteprima disegna una curva
+  // plausibile per uno YAML che non renderizza: un nome ignoto ripiega su
+  // `linear` e sembra corretto, `{base: 1}` produce durate NaN e non lo dice.
+  //
+  // Ritorna null se valida, altrimenti { kind, name?, param? } —
+  //   "name"  → il nome non è nel registro
+  //   "param" → il parametro esiste ma è fuori dal bound del costruttore, o è
+  //             estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
+  //             inatteso). Puro, node-testabile.
+  function timeDistError(dist) {
+    if (dist == null) return null;
+    if (typeof dist !== "string" && typeof dist !== "object") return { kind: "name" };
+    const rawName = typeof dist === "string" ? dist : (dist.type != null ? dist.type : "linear");
+    if (typeof rawName !== "string") return { kind: "name" };
+    const name = rawName.toLowerCase();
+    if (!TIME_DIST_NAMES.includes(name)) return { kind: "name", name: rawName };
+    if (typeof dist !== "object") return null;
+
+    const ammessi = TIME_DIST_SPECS[name];
+    for (const k of Object.keys(dist)) {
+      if (k === "type") continue;
+      const num = typeof dist[k] === "number" && isFinite(dist[k]);
+      if (!(k in ammessi) || !num || !ammessi[k](dist[k]))
+        return { kind: "param", name, param: k };
+    }
+    return null;
+  }
+
+  /* vincolo invariante: sum(cycleDurs) === T
+     Su una spec non valida si RIPIEGA su linear per poter comunque disegnare
+     qualcosa, ma il fallback non è più muto: `timeDistError` dice che quello
+     YAML non renderizza, e `expandMixed` lo riporta sul blocco. Prima il
+     ripiegamento era indistinguibile da un `linear` scritto davvero — e per
+     `{base: 1}` / `{exponent: 'x'}` non ripiegava affatto, produceva durate
+     NaN che nessuno segnalava. */
   function computeCycleDurations(T, N, dist) {
     if (T <= 0 || N < 1) return [];
-    const type = typeof dist === "string" ? dist : (dist && dist.type) || "linear";
+    const type = timeDistError(dist)
+      ? "linear"
+      : (typeof dist === "string" ? dist : (dist && dist.type) || "linear");
     const p    = (typeof dist === "object" && dist) ? dist : {};
 
     if (type === "linear") return new Array(N).fill(T / N);
@@ -249,6 +303,10 @@
       const block = {
         index: blocks.length, originalIdx: i,
         start: blockStart, end: endTime, nReps, interp, dist, pattern,
+        // Non null quando la distribuzione dichiarata non è costruibile: i
+        // cicli qui sotto sono disegnati con il ripiego lineare, ma il motore
+        // rifiuterebbe questo blocco. Chi disegna può dirlo.
+        distError: timeDistError(dist),
         cycles: []
       };
       let t = blockStart;
@@ -594,6 +652,7 @@
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, expandMixed,
+    TIME_DIST_NAMES, timeDistError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,

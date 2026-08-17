@@ -44,6 +44,11 @@ const DEPHASE_PARAMS = [
   { key: "pitch",    desc: "applies pitch.range" },
   { key: "pointer",  desc: "applies pointer.offset_range" },
   { key: "reverse",  desc: "flip grain reverse flag" },
+  // Voce distinta da `reverse`, non un suo alias (PGE #207): ciascuna governa
+  // la propria chiave del blocco grain e non tocca l'altra. Un
+  // `dephase: {reverse: N}` scritto prima non ribalta un read_direction
+  // aggiunto dopo.
+  { key: "read_direction", desc: "flip the declared grain.read_direction" },
   { key: "envelope", desc: "switch window when grain.envelope is a list" },
 ];
 
@@ -321,6 +326,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "loopStart"  && stream.pointer && stream.pointer.loopStartEnv)  return "env";
     if (k === "loopDur"    && stream.pointer && stream.pointer.loopDurEnv)    return "env";
     if (k === "grainDur" && stream.grain && stream.grain.durationEnv) return "env";
+    if (k === "readDirection" && stream.grain && stream.grain.readDirectionEnv) return "env";
     if (k === "pan" && stream.panEnv) return "env";
     if (k === "volume" && stream.volumeEnv) return "env";
     if (k === "pitch" && stream.pitch && stream.pitch.valueEnv) return "env";
@@ -367,6 +373,26 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
       } else {
         const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || 0.05;
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
+      }
+      return;
+    }
+    if (k === "readDirection") {
+      // Dominio {-1, +1} (PGE #207): l'envelope seminato è un cambio di verso,
+      // non la rampa costante degli altri parametri — su due stati una rampa
+      // non ha niente da produrre. Tornando a scalare si snappa il primo
+      // breakpoint invece di prenderlo com'è: un valore intermedio arrivato
+      // da un file scritto a mano non deve sopravvivere al giro.
+      const cur = stream.grain || {};
+      const S = window.PGEEnvUtils.snapDirection;
+      if (newMode === "env") {
+        const v = cur.readDirection != null ? S(cur.readDirection) : 1;
+        onChange({ grain: { ...cur, readDirection: null,
+                            readDirectionEnv: [[0, v], [0.5, -v]] } });
+      } else {
+        const first = cur.readDirectionEnv && cur.readDirectionEnv[0]
+          && cur.readDirectionEnv[0][1];
+        onChange({ grain: { ...cur, readDirection: first != null ? S(first) : 1,
+                            readDirectionEnv: null } });
       }
       return;
     }
@@ -958,21 +984,115 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}
                 onEditCurve={() => { setSelRow("grain.envelope.curve"); if (onFocusEnvParam) onFocusEnvParam("grainEnvCurve"); }}
               />
-              {stream.grain.reverse !== undefined ? (
-                <div className="pge-prow">
-                  <span className="k">reverse</span>
-                  <span />
-                  <span className="v"><span style={{color:"var(--accent)"}}>forced</span><span className="unit" style={{marginLeft:6, color:"var(--fg-3)"}}>· key present, value empty</span></span>
-                  <button className="pge-icon-btn" title="Remove → reverse follows pointer speed (auto)"
-                          onClick={() => { const ng = { ...stream.grain }; delete ng.reverse; onChange({ grain: ng }); }}>
-                    <Icon name="x" size={11} />
-                  </button>
-                </div>
-              ) : null}
+              {/* Verso di lettura del grano (PGE #207). Un controllo solo per
+                  due chiavi mutuamente esclusive: `reverse` (presence-keyed,
+                  storica) e `read_direction` (dichiarativa, anche envelope).
+                  Il motore le rifiuta insieme — non sceglie per priorità —
+                  quindi l'unico modo di non produrre YAML rotto è che sia la
+                  UI a decidere quale scrivere.
+
+                  Tre stati, non due: il terzo è la CHIAVE ASSENTE, cioè la
+                  modalità `auto` in cui il verso segue il segno di
+                  pointer.speed_ratio. È il default, e resta tale: scrivere +1
+                  su uno stream che nessuno ha toccato ne cambierebbe la resa.
+
+                  Le etichette dicono il verso, non il numero: `-1`/`+1` sono
+                  la scrittura, «avanti»/«indietro» sono ciò che la chiave dice. */}
+              {(() => {
+                const g = stream.grain;
+                const envMode = getMode("readDirection") === "env" && g.readDirectionEnv != null;
+                const hasRD = g.readDirection !== undefined || g.readDirectionEnv != null;
+                const state = envMode ? "env"
+                  : g.reverse !== undefined ? "back"
+                  : !hasRD ? "auto"
+                  : g.readDirection === -1 ? "back"
+                  : g.readDirection === 1 ? "forward"
+                  : "invalid";
+                // Passare da uno stato all'altro riscrive SEMPRE entrambe le
+                // chiavi: è il punto in cui un conflitto ereditato da un file
+                // scritto a mano si risolve, semplicemente usando il controllo.
+                function setDirection(next) {
+                  const ng = { ...g };
+                  delete ng.reverse;
+                  delete ng.readDirection;
+                  delete ng.readDirectionEnv;
+                  if (next === "forward") ng.readDirection = 1;
+                  else if (next === "back") ng.readDirection = -1;
+                  else if (next === "env") {
+                    ng.readDirection = null;
+                    ng.readDirectionEnv = [[0, 1], [0.5, -1]];
+                  }
+                  onChange({ grain: ng });
+                }
+                const err = window.PGEEnvUtils.readDirectionError(g);
+                return (
+                  <React.Fragment>
+                    <div className={"pge-prow" + (selRow === "grain.readDirection" ? " selected" : "")}
+                         onClick={() => setSelRow("grain.readDirection")}>
+                      <span className="k" title="verso di lettura DENTRO il grano · indipendente dal segno di pointer.speed_ratio">read_direction</span>
+                      <span />
+                      {state === "env" ? (
+                        <span className="v env" onClick={focusEnv("readDirection")}>
+                          <span className="env-label" style={{color:"var(--accent)"}}>
+                            {g.readDirectionEnv.length} bp · a gradino
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="v">
+                          <Seg size="xs" value={state === "invalid" ? "" : state}
+                               onChange={setDirection}
+                               options={[
+                                 { label: "auto",     value: "auto" },
+                                 { label: "avanti",   value: "forward" },
+                                 { label: "indietro", value: "back" },
+                                 { label: "env",      value: "env" },
+                               ]} />
+                        </span>
+                      )}
+                      {state === "env" ? (
+                        <button className="pge-icon-btn" title="Torna a un verso costante"
+                                onClick={() => setDirection("forward")}>
+                          <Icon name="x" size={11} />
+                        </button>
+                      ) : <span />}
+                    </div>
+                    {state === "auto" ? (
+                      <div className="pge-prow hint" style={{paddingTop:0}}>
+                        <span className="k" /><span />
+                        <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                          chiave assente · il verso segue il segno di pointer.speed_ratio
+                        </span>
+                        <span />
+                      </div>
+                    ) : null}
+                    {g.reverse !== undefined && state === "back" ? (
+                      <div className="pge-prow hint" style={{paddingTop:0}}>
+                        <span className="k" /><span />
+                        <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                          scritto come <code>reverse:</code> (chiave vuota) · sceglierne un altro passa a read_direction
+                        </span>
+                        <span />
+                      </div>
+                    ) : null}
+                    {err ? (
+                      <div className="pge-prow" style={{paddingTop:0}}>
+                        <span className="k" /><span />
+                        <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+                          {err.kind === "conflict"
+                            ? "reverse e read_direction insieme: governano la stessa grandezza con semantiche opposte e il motore le rifiuta insieme. Scegli un verso qui sopra per tenerne una sola."
+                            : err.kind === "empty"
+                            ? "read_direction senza valore: a differenza di reverse: la chiave vuota qui è un errore. Scegli un verso."
+                            : `${err.value} non è un verso: read_direction ammette solo -1 (indietro) e +1 (avanti), e il motore rifiuta gli intermedi al parse invece di clamparli.`}
+                        </span>
+                        <span />
+                      </div>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })()}
               <AddParamMenu
                 options={[
                   { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
-                  { key: "reverse",       label: "reverse",        desc: "force reverse (key present, value empty)", exists: stream.grain.reverse !== undefined, def: null },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
             </Section>

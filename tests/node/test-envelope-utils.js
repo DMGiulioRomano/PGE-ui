@@ -26,10 +26,11 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 12 helpers",
+assert("PGEEnvUtils exposes the 15 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopBoundsError", "grainDurationUnitError"]
+   "computeYFit", "loopEnvMax", "loopBoundsError", "grainDurationUnitError",
+   "snapDirection", "snapForDomain", "readDirectionError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 
@@ -379,3 +380,110 @@ console.log("\n── grainDurationUnitError ──");
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
+
+/* ===========================================================================
+ * grain.read_direction — un dominio di due elementi (PGE #207)
+ * ===========================================================================
+ * Il verso di lettura vale -1 o +1 e basta: il motore rifiuta gli intermedi al
+ * parse invece di clamparli. Ogni y che la UI CALCOLA invece di sceglierlo va
+ * quindi snappato al segno, altrimenti un'operazione che l'utente non collega
+ * al verso — ridimensionare uno stream — produce YAML che non renderizza.
+ * =========================================================================== */
+
+console.log("\n── read_direction · snapDirection ──");
+assert("+1 resta +1", U.snapDirection(1) === 1);
+assert("-1 resta -1", U.snapDirection(-1) === -1);
+assert("un intermedio positivo va a +1", U.snapDirection(0.3) === 1);
+assert("un intermedio negativo va a -1", U.snapDirection(-0.3) === -1);
+assert("lo zero non ha segno: va a +1 come il motore non fa",
+  U.snapDirection(0) === 1);
+assert("snapForDomain('direction') ritorna lo snap",
+  U.snapForDomain("direction") === U.snapDirection);
+assert("snapForDomain di un continuo non ritorna niente",
+  !U.snapForDomain(null) && !U.snapForDomain("continuous"));
+
+console.log("\n── read_direction · truncateEnvArray non interpola ──");
+assert("senza snap il punto di chiusura è interpolato (comportamento storico)",
+  eq(U.truncateEnvArray([[0, 1], [1.5, -1]]), [[0, 1], [1, -0.3333]]),
+  JSON.stringify(U.truncateEnvArray([[0, 1], [1.5, -1]])));
+assert("con lo snap il punto di chiusura è un verso",
+  eq(U.truncateEnvArray([[0, 1], [1.5, -1]], U.snapDirection), [[0, 1], [1, -1]]));
+// t = (1-0)/(1.1-0) = 0.909 → y = 1 + (-2)(0.909) = -0.818, negativo.
+assert("snap: un'interpolazione negativa va a -1",
+  eq(U.truncateEnvArray([[0, 1], [1.1, -1]], U.snapDirection), [[0, 1], [1, -1]]));
+// Qui il bordo cade presto nel segmento: t = 0.2, y = 1 - 0.4 = 0.6, positivo.
+assert("snap: un'interpolazione positiva va a +1",
+  eq(U.truncateEnvArray([[0, 1], [5, -1]], U.snapDirection), [[0, 1], [1, 1]]),
+  JSON.stringify(U.truncateEnvArray([[0, 1], [5, -1]], U.snapDirection)));
+// t = (1-0.8)/(1.5-0.8) = 0.2857 → y = 1 - 0.571 = 0.43, positivo.
+assert("snap dentro un BP group",
+  eq(U.truncateEnvArray([[[[0, 1], [0.8, 1], [1.5, -1]], "step"]], U.snapDirection),
+     [[[[0, 1], [0.8, 1], [1, 1]], "step"]]),
+  JSON.stringify(U.truncateEnvArray([[[[0, 1], [0.8, 1], [1.5, -1]], "step"]], U.snapDirection)));
+assert("i punti SCELTI dall'utente passano intatti (snap solo sul calcolato)",
+  eq(U.truncateEnvArray([[0, 1], [0.5, -1]], U.snapDirection), [[0, 1], [0.5, -1]]));
+
+console.log("\n── read_direction · truncateStreamEnvelopes instrada per campo ──");
+{
+  const s = {
+    grain: { durationEnv: [[0, 0.05], [1.5, 0.2]],
+             readDirectionEnv: [[0, 1], [1.5, -1]] },
+  };
+  const out = U.truncateStreamEnvelopes(s);
+  assert("il campo continuo resta interpolato",
+    eq(out.grain.durationEnv, [[0, 0.05], [1, 0.15]]),
+    JSON.stringify(out.grain.durationEnv));
+  assert("il campo direction è snappato",
+    eq(out.grain.readDirectionEnv, [[0, 1], [1, -1]]),
+    JSON.stringify(out.grain.readDirectionEnv));
+}
+assert("streamWouldTruncate vede readDirectionEnv",
+  U.streamWouldTruncate({ grain: { readDirectionEnv: [[0, 1], [1, -1]] } }, 2));
+
+console.log("\n── read_direction · nudgeBreakpoint sull'asse valore ──");
+{
+  const items = [[0, 1], [0.5, -1]];
+  const opts = { snapYFromDelta: U.snapDirection };
+  // Freccia su sul punto a -1 → +1, con QUALUNQUE passo: su due stati l'asse
+  // ha un verso, non una distanza.
+  const su = U.nudgeBreakpoint(items, 1, "value", 0.1, opts);
+  assert("freccia su → lo stato in alto, anche col passo più piccolo",
+    eq(su, [[0, 1], [0.5, 1]]), JSON.stringify(su));
+  const giu = U.nudgeBreakpoint(items, 0, "value", -0.1, opts);
+  assert("freccia giù → lo stato in basso",
+    eq(giu, [[0, -1], [0.5, -1]]), JSON.stringify(giu));
+  assert("una freccia che non cambia stato non produce un commit",
+    U.nudgeBreakpoint(items, 0, "value", 0.1, opts) === items);
+  const clamp = U.nudgeBreakpoint(items, 1, "value", 0.1, { hardMin: -1, hardMax: 1 });
+  assert("senza snap il clamp produce l'intermedio che il motore rifiuta",
+    eq(clamp, [[0, 1], [0.5, -0.9]]), JSON.stringify(clamp));
+}
+
+console.log("\n── read_direction · readDirectionError ──");
+assert("chiave assente → nessun errore", U.readDirectionError({}) === null);
+assert("solo reverse → nessun errore (è l'altra chiave del gruppo)",
+  U.readDirectionError({ reverse: null }) === null);
+assert("+1 valido", U.readDirectionError({ readDirection: 1 }) === null);
+assert("-1 valido", U.readDirectionError({ readDirection: -1 }) === null);
+assert("0 fuori dominio",
+  (U.readDirectionError({ readDirection: 0 }) || {}).kind === "domain");
+assert("0.5 fuori dominio",
+  (U.readDirectionError({ readDirection: 0.5 }) || {}).kind === "domain");
+assert("il messaggio può nominare il colpevole",
+  U.readDirectionError({ readDirection: 0.5 }).value === 0.5);
+assert("chiave presente e vuota → errore (a differenza di reverse:)",
+  (U.readDirectionError({ readDirection: null }) || {}).kind === "empty");
+assert("reverse + read_direction → conflitto",
+  (U.readDirectionError({ reverse: null, readDirection: 1 }) || {}).kind === "conflict");
+assert("il conflitto ha la precedenza sul dominio, come nel motore",
+  (U.readDirectionError({ reverse: null, readDirection: 0.5 }) || {}).kind === "conflict");
+assert("envelope di soli versi → valido",
+  U.readDirectionError({ readDirectionEnv: [[0, 1], [0.5, -1]] }) === null);
+assert("envelope con un intermedio → dominio",
+  (U.readDirectionError({ readDirectionEnv: [[0, 1], [0.5, 0.3]] }) || {}).kind === "domain");
+assert("envelope: intermedio dentro un BP group",
+  (U.readDirectionError({ readDirectionEnv: [[[[0, 1], [0.5, 0.3]], "step"]] }) || {}).kind === "domain");
+assert("envelope: intermedio dentro il pattern di un ciclo",
+  (U.readDirectionError({ readDirectionEnv: [[[[0, 1], [50, 0.3]], 2.0, 2]] }) || {}).kind === "domain");
+assert("envelope: forma dict {points}",
+  (U.readDirectionError({ readDirectionEnv: { points: [[0, 1], [0.5, 0.3]] } }) || {}).kind === "domain");
