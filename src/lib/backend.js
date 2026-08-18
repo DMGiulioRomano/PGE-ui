@@ -57,7 +57,12 @@
   // number, which IS hashed — so typing the value the sample already implied
   // must leave the stem green instead of going stale on a flag flip.
   const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
-                             "durationImplicit", "durationUnresolved"]);
+                             "durationImplicit", "durationUnresolved",
+                             // How deviation_probability was spelled in the file
+                             // it came from (#124) — provenance, not content.
+                             // Reopening a pre-v7 project must not mark every
+                             // stem stale over a key spelling.
+                             "deviationProbabilityLegacy"]);
 
   function canonicalJSON(v, ignore) {
     if (v === null || v === undefined) return "null";

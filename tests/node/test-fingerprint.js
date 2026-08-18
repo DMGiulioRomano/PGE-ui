@@ -55,6 +55,9 @@ const ignored = {
   // audio — only the resolved number does, and that IS hashed.
   durationImplicit: true,
   durationUnresolved: true,
+  // Which spelling of deviation_probability the file used (#124): the healed
+  // value IS hashed, the note about where it came from is not.
+  deviationProbabilityLegacy: true,
 };
 for (const [k, v] of Object.entries(ignored)) {
   const s = base(); s[k] = v;

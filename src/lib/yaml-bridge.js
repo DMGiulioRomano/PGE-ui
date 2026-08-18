@@ -826,13 +826,18 @@
       // stem fingerprint (backend.js FP_IGNORE).
       ...(() => {
         const hasNew = "deviation_probability" in y;
-        const key = hasNew ? "deviation_probability"
-                  : (LEGACY_DEVIATION_KEY in y ? LEGACY_DEVIATION_KEY : null);
-        if (key === null) return { deviationProbability: undefined };
-        const raw = y[key];
+        const hasLegacy = LEGACY_DEVIATION_KEY in y;
+        const key = hasNew ? "deviation_probability" : (hasLegacy ? LEGACY_DEVIATION_KEY : null);
+        const raw = key === null ? undefined : y[key];
         return {
-          deviationProbability: raw === null ? DEVIATION_PROBABILITY_IMPLICIT : raw,
-          ...(hasNew ? {} : { deviationProbabilityLegacy: true }),
+          deviationProbability: key === null ? undefined
+                              : (raw === null ? DEVIATION_PROBABILITY_IMPLICIT : raw),
+          // Always emitted, like durationImplicit: the Raw tab merges a whole
+          // re-parsed stream with a shallow spread, so an omitted key would
+          // leave a stale `true` behind after the author fixes the spelling by
+          // hand — and the Inspector would keep announcing a migration that
+          // already happened.
+          deviationProbabilityLegacy: !hasNew && hasLegacy,
         };
       })(),
     };

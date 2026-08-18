@@ -762,10 +762,33 @@ const { DEVIATION_PROBABILITY_IMPLICIT } = window.PGEYaml;
   // deviation_probability stream, flag included, and stops moving.
   const migrated = parse(serialize(parse(topLevelYaml(["dephase: 50"]))));
   assert("legacy dephase — settles after one migration pass",
-    migrated.streams[0].deviationProbability === 50 && !migrated.streams[0].deviationProbabilityLegacy,
+    migrated.streams[0].deviationProbability === 50 && migrated.streams[0].deviationProbabilityLegacy === false,
     JSON.stringify({ v: migrated.streams[0].deviationProbability, legacy: migrated.streams[0].deviationProbabilityLegacy }));
   assert("legacy dephase — migrated stream round-trips clean",
     roundTripDiff(migrated).length === 0, JSON.stringify(roundTripDiff(migrated)));
+}
+
+{
+  // Raw tab: applyEdits spreads a whole re-parsed stream over the live one, so
+  // the flag has to be emitted even when false — otherwise fixing the spelling
+  // by hand would leave the Inspector announcing a migration that is done.
+  const legacyStream = parseStream(`stream_id: s1
+sample: test.wav
+onset: 0
+duration: 5
+dephase: 50
+`, 0, { samples: [] });
+  assert("Raw tab — legacy spelling flags the stream", legacyStream.deviationProbabilityLegacy === true,
+    JSON.stringify(legacyStream.deviationProbabilityLegacy));
+  const fixedByHand = parseStream(`stream_id: s1
+sample: test.wav
+onset: 0
+duration: 5
+deviation_probability: 50
+`, 0, { samples: [] });
+  const merged = { ...legacyStream, ...fixedByHand };
+  assert("Raw tab — fixing the spelling clears the flag through the shallow merge",
+    merged.deviationProbabilityLegacy === false, JSON.stringify(merged.deviationProbabilityLegacy));
 }
 
 {
@@ -783,7 +806,7 @@ const { DEVIATION_PROBABILITY_IMPLICIT } = window.PGEYaml;
   const s = data.streams[0];
   assert("both keys — the engine's key wins", s.deviationProbability === 90,
     JSON.stringify(s.deviationProbability));
-  assert("both keys — not flagged legacy (nothing was migrated)", !s.deviationProbabilityLegacy,
+  assert("both keys — not flagged legacy (nothing was migrated)", s.deviationProbabilityLegacy === false,
     JSON.stringify(s.deviationProbabilityLegacy));
   const y = serialize(data);
   assert("both keys — only the new one emitted", /deviation_probability: 90/.test(y) && !/\bdephase\b/.test(y),
@@ -791,25 +814,17 @@ const { DEVIATION_PROBABILITY_IMPLICIT } = window.PGEYaml;
 }
 
 {
-  // the legacy flag is provenance, not content: it must not reach the YAML,
-  // and it must not mark an untouched stem stale (like durationImplicit).
+  // The legacy flag is provenance, not content: it must not reach the YAML, and
+  // the healed stream must otherwise be indistinguishable from one that was
+  // written with the current spelling all along. (That it also leaves the stem
+  // fingerprint alone is backend.js FP_IGNORE, asserted in test-fingerprint.js.)
   const data = parse(topLevelYaml(["dephase: 50"]));
   assert("legacy flag — never serialized", !serialize(data).includes("Legacy"), serialize(data).slice(0, 400));
   const fresh = parse(topLevelYaml(["deviation_probability: 50"]));
-  assert("legacy flag — same fingerprint as the healed stream",
-    fpIgnoresLegacyFlag(data.streams[0], fresh.streams[0]),
-    JSON.stringify({ legacy: data.streams[0], fresh: fresh.streams[0] }));
-}
-
-/* Mirrors backend.js FP_IGNORE: two streams that differ ONLY by the legacy
-   provenance flag must hash the same, or reopening a pre-v7 project would mark
-   every stem stale for a key spelling. */
-function fpIgnoresLegacyFlag(a, b) {
-  const strip = (s) => {
-    const { deviationProbabilityLegacy, color, ...rest } = s;
-    return JSON.stringify(rest, Object.keys(rest).sort());
-  };
-  return strip(a) === strip(b);
+  const strip = ({ deviationProbabilityLegacy, color, ...rest }) => rest;
+  assert("legacy flag — healed stream matches a natively-new one",
+    eq(strip(data.streams[0]), strip(fresh.streams[0])),
+    JSON.stringify({ legacy: strip(data.streams[0]), fresh: strip(fresh.streams[0]) }));
 }
 
 const deviationFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
