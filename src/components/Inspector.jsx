@@ -534,10 +534,21 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // duration is unknown) keeps the static PGE_BOUNDS max. Mirrors the
   // sample-driven hardMax the EnvelopeEditor applies to the same params.
   const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
-  const clampLoop = (key, v) => {
+  // Which unit the loop coordinates are in, and where it comes from (issue
+  // #126). Every stream the editor creates is born `time_mode: normalized`, so
+  // the loop window silently lives in [0,1] and the cap of 1 reads as arbitrary
+  // — the YAML never mentions loop_unit. `loopUnitInherited` is what would be in
+  // force with the key absent: picking it in the control deletes the key instead
+  // of materializing a redundant one.
+  const loopUnit = window.PGEEnvUtils.loopUnitInfo(stream);
+  const loopUnitInherited = window.PGEEnvUtils.loopUnitInfo({ timeMode: stream.timeMode }).unit;
+  // `cap` overrides the current loop cap — the unit control needs to clamp
+  // against the cap the NEW unit brings, before the new pointer is state.
+  const clampLoop = (key, v, cap) => {
     const b = window.PGE_BOUNDS[key];
-    const hi = loopMax != null ? loopMax : (b ? b.max : Infinity);
-    return Math.max(b ? b.min : 0, Math.min(hi, v));
+    const hi = cap === undefined ? loopMax : cap;
+    const max = hi != null ? hi : (b ? b.max : Infinity);
+    return Math.max(b ? b.min : 0, Math.min(max, v));
   };
 
   // Loop semantics (issue #97): with a loop active the engine confines the grain
@@ -842,16 +853,47 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                               onEditEnv={focusEnv("loopDur")}
                               onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: clampLoop("loopDur", v)}})} />
                   )}
-                  {stream.pointer.loopUnit ? (
-                    <div className="pge-prow">
-                      <span className="k">loop_unit</span><span />
-                      <span className="v"><span style={{color:"var(--accent)"}}>{stream.pointer.loopUnit}</span></span>
-                      <button className="pge-icon-btn" title="Remove"
-                              onClick={() => { const np = { ...stream.pointer }; delete np.loopUnit; onChange({ pointer: np }); }}>
-                        <Icon name="x" size={11} />
-                      </button>
-                    </div>
-                  ) : null}
+                  <div className="pge-prow">
+                    <span className="k" title="unità delle coordinate del loop: absolute → secondi, cap = durata del sample · normalized → [0,1] × sample_dur. Assente = ereditata da time_mode (motore: loop_unit or time_mode)">loop_unit</span>
+                    <Seg size="xs" value={loopUnit.unit}
+                         onChange={(u) => {
+                           const np = { ...stream.pointer };
+                           // The unit already in force needs no key: absence
+                           // means "inherit from time_mode", and writing it out
+                           // would change the YAML without changing the render.
+                           if (u === loopUnitInherited) delete np.loopUnit; else np.loopUnit = u;
+                           // The cap travels with the unit (1 in normalized,
+                           // sample_dur in seconds), so the endpoints get the
+                           // same clamp a typed edit gets — otherwise switching
+                           // to normalized would leave a 12 s loop_start sitting
+                           // in a [0,1] field, which the engine silently clamps
+                           // at render. Envelope endpoints are per-grain and
+                           // exempt, as everywhere else in the loop block.
+                           const cap = window.PGEEnvUtils.loopEnvMax({ ...stream, pointer: np }, sampleDur);
+                           for (const k of ["loopStart", "loopEnd", "loopDur"]) {
+                             if (typeof np[k] === "number") np[k] = clampLoop(k, np[k], cap);
+                           }
+                           onChange({ pointer: np });
+                         }}
+                         options={[{label:"absolute",value:"absolute"},{label:"normalized",value:"normalized"}]} />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)"}}>
+                      {loopUnit.source === "loop_unit" ? "esplicito"
+                        : loopUnit.source === "time_mode" ? ("da time_mode: " + stream.timeMode)
+                        : "default"}
+                    </span>
+                    <span />
+                  </div>
+                  <div className="pge-prow hint" style={{paddingTop:0}}>
+                    <span className="k" /><span />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                      {loopUnit.unit === "normalized"
+                        ? "loop_start/end/dur ∈ [0, 1], scalati per sample_dur dal motore"
+                        : (loopMax != null
+                            ? ("loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
+                            : "loop_start/end/dur in secondi · durata del sample ignota, cap statico")}
+                    </span>
+                    <span />
+                  </div>
                   {loopBoundsErr ? (
                     <div className="pge-prow" style={{paddingTop:0}}>
                       <span className="k" /><span />
@@ -905,17 +947,15 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
                   { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s) — loop_start+loop_dur > sample_dur ⇒ loop straddling the file end",
                     exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
-                  { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
-                    exists: stream.pointer.loopUnit != null, def: "normalized" },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
                 ]}
                 onAdd={(o) => {
                   const np = { ...stream.pointer, [o.key]: o.def };
                   // Loop fields only render together — if the user introduces
-                  // loop_end/loop_dur/loop_unit without loop_start, seed it to 0
-                  // so the row block appears.
-                  if ((o.key === "loopEnd" || o.key === "loopDur" || o.key === "loopUnit")
+                  // loop_end/loop_dur without loop_start, seed it to 0 so the
+                  // row block appears.
+                  if ((o.key === "loopEnd" || o.key === "loopDur")
                        && np.loopStart == null) {
                     np.loopStart = 0;
                   }
