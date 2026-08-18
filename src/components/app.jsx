@@ -927,9 +927,11 @@ function App() {
     const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
     const palette = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
     setData(d => {
-      const n = d.streams.length + 1;
+      const usedIds = new Set(d.streams.map(s => s.id));
+      let counter = d.streams.length + 1;
+      while (usedIds.has("stream" + counter)) counter++;
       const newStream = {
-        id: "stream" + n, onset: Math.max(0, +onset.toFixed(2)),
+        id: "stream" + counter, onset: Math.max(0, +onset.toFixed(2)),
         duration: Math.min(d.duration - onset, Math.max(2, sampleRec.duration)),
         sample: sampleName, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
