@@ -146,6 +146,23 @@ console.log("\n── timeDistError: overflow della coppia con n_reps ──");
   assert("power exponent intero → non segnalato (Python lo calcola su interi)",
     kind({ type: "power", exponent: 200 }, 400) === undefined);
 
+  /* I bordi della banda int/float, fissati qui perché il commento in
+     _overflowError li dichiara. Il conto modella il quoziente intero, che è la
+     lettura più permissiva: sotto questi n_reps il motore rende davvero con
+     ratio/rate INTERI, e segnalare prima sarebbe un falso positivo. Dove il
+     valore è float il motore trabocca un n_reps prima e noi taciamo — banda da
+     uno, nella direzione sicura. Numeri verificati sul motore. */
+  assert("ratio 10 · 309 tace (con ratio intero il motore rende)",
+    kind({ type: "geometric", ratio: 10 }, 309) === undefined);
+  assert("ratio 10 · 310 segnala (primo rifiutato dal motore con ratio intero)",
+    kind({ type: "geometric", ratio: 10 }, 310) === "overflow");
+  assert("ratio 2 · 1024 tace (il motore lo rifiuta: banda da uno)",
+    kind({ type: "geometric", ratio: 2 }, 1024) === undefined);
+  assert("ratio 2 · 1025 segnala", kind({ type: "geometric", ratio: 2 }, 1025) === "overflow");
+  assert("rate 0.5 · 1025 tace (il motore lo rifiuta: banda da uno)",
+    kind({ type: "exponential", rate: 0.5 }, 1025) === undefined);
+  assert("rate 0.5 · 1026 segnala", kind({ type: "exponential", rate: 0.5 }, 1026) === "overflow");
+
   assert("linear non eleva niente a potenza", kind("linear", 100000) === undefined);
   assert("logarithmic nemmeno",
     kind({ type: "logarithmic", base: 2 }, 100000) === undefined);
@@ -172,6 +189,43 @@ console.log("\n── timeDistError: overflow della coppia con n_reps ──");
     durs.length === 400 && durs.every(d => isFinite(d) && d > 0), JSON.stringify(durs.slice(0, 3)));
   assert("e la somma resta il tempo del blocco",
     Math.abs(durs.reduce((a, b) => a + b, 0) - 2.0) < 1e-9);
+}
+
+/* La rete sull'OUTPUT. `timeDistError` copre le coppie che il MOTORE rifiuta;
+   restano quelle che il motore rende e Math.pow no — esponente o ratio interi,
+   dove Python calcola su interi illimitati. Lì distError tace, e prima uscivano
+   durate NaN o tutte zero disegnate in silenzio: esattamente il sintomo che
+   questa PR dichiara di chiudere. La guardia non enumera quei casi, guarda cosa
+   è uscito. */
+console.log("\n── computeCycleDurations: ripiego anche quando a tradire sono le durate ──");
+{
+  const sane = (durs, N, T) =>
+    durs.length === N && durs.every(d => isFinite(d) && d >= 0) &&
+    Math.abs(durs.reduce((a, b) => a + b, 0) - T) < 1e-9;
+
+  for (const [dist, N, perche] of [
+    [{ type: "power", exponent: 400 }, 400, "esponente intero: il motore rende, Math.pow no"],
+    [{ type: "power", exponent: 200 }, 400, "idem, sotto la soglia float"],
+    [{ type: "geometric", ratio: 10 }, 309, "ratio intero a un passo dalla soglia: durate tutte zero"],
+  ]) {
+    assert(`${JSON.stringify(dist)} · n=${N} → durate sane (${perche})`,
+      sane(E.computeCycleDurations(2.0, N, dist), N, 2.0),
+      JSON.stringify(E.computeCycleDurations(2.0, N, dist).slice(0, 3)));
+    assert(`${JSON.stringify(dist)} · n=${N} → e distError tace (il motore rende)`,
+      E.timeDistError(dist, N) === null, JSON.stringify(E.timeDistError(dist, N)));
+  }
+
+  // E le distribuzioni sane non devono ripiegare per colpa della guardia: la
+  // tolleranza è relativa, non assoluta.
+  for (const [dist, N] of [
+    [{ type: "geometric", ratio: 1.5 }, 100], [{ type: "geometric", ratio: 10 }, 300],
+    [{ type: "geometric", ratio: 0.1 }, 300], [{ type: "exponential", rate: 0.5 }, 1000],
+    [{ type: "logarithmic", base: 2 }, 500], [{ type: "power", exponent: 0.5 }, 1000],
+  ]) {
+    const durs = E.computeCycleDurations(2.0, N, dist);
+    const uniforme = durs.every(d => Math.abs(d - 2.0 / N) < 1e-15);
+    assert(`${JSON.stringify(dist)} · n=${N} → NON ripiegata`, !uniforme && sane(durs, N, 2.0));
+  }
 }
 
 console.log("\n── expandMixed riporta l'errore sul blocco ──");

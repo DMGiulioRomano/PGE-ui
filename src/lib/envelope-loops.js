@@ -48,6 +48,14 @@
     if (isTypedEnv(env)) {
       return { interp: env.type || "linear", items: env.points.slice() };
     }
+    // Dict con `points` ma senza `type`: forma che l'editor non emette mai
+    // (wrapEnv scrive il dict solo per dire un interp non lineare) ma che il
+    // motore accetta — `is_envelope_like` guarda solo che `points` ci sia. Va
+    // letta qui, altrimenti chi la dichiara envelope a monte se la vede aprire
+    // vuota, e un commit su quell'editor la svuoterebbe davvero.
+    if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
+      return { interp: "linear", items: env.points.slice() };
+    }
     return { interp: "linear", items: Array.isArray(env) ? env.slice() : [] };
   }
   function wrapEnv(items, interp) {
@@ -229,7 +237,17 @@
      buona. Ma `200` e `200.0` in YAML arrivano qui come lo stesso Number, e
      `Number.isInteger` non li distingue. Segnaliamo quindi solo l'esponente
      frazionario: chi scrive `exponent: 200.0` con troppi cicli vede l'errore
-     del motore, non l'avviso — un avviso in meno, mai uno di troppo. */
+     del motore, non l'avviso — un avviso in meno, mai uno di troppo.
+
+     La stessa ambiguità int/float c'è in `geometric` e in `exponential`, ma lì
+     non si può scegliere allo stesso modo: la potenza sta dentro
+     un'espressione, e la soglia intera e quella float distano un n_reps. Il
+     conto qui modella il quoziente `(1 - r**N)/(1 - r)`, cioè la semantica
+     INTERA, che è la più permissiva delle due: `ratio: 10` con `n_reps: 309`
+     rende davvero, e adottare la soglia float lo segnalerebbe per sbaglio.
+     Il prezzo è una banda di un valore dove il float trabocca e noi taciamo —
+     `ratio: 10.0` a 309, `ratio: 2` a 1024, `rate: 0.5` a 1025 — sempre nella
+     direzione dichiarata sicura. I bordi sono fissati nei test. */
   function _overflowError(name, p, nReps) {
     const N = +nReps;
     if (!isFinite(N) || N < 1) return null;
@@ -279,39 +297,56 @@
      `{base: 1}` / `{exponent: 'x'}` non ripiegava affatto, produceva durate
      NaN che nessuno segnalava. */
   function computeCycleDurations(T, N, dist) {
+    const uniform = () => new Array(N).fill(T / N);
     if (T <= 0 || N < 1) return [];
     const type = timeDistError(dist, N)
       ? "linear"
       : (typeof dist === "string" ? dist : (dist && dist.type) || "linear");
     const p    = (typeof dist === "object" && dist) ? dist : {};
 
-    if (type === "linear") return new Array(N).fill(T / N);
+    if (type === "linear") return uniform();
 
     if (type === "exponential" || type === "exp") {
       const rate = p.rate != null ? +p.rate : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.pow(rate, -i); w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
     if (type === "logarithmic" || type === "log") {
       const base = p.base != null ? +p.base : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.log(i + 1) / Math.log(base) + 1; w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
     if (type === "geometric" || type === "geo") {
       const r = p.ratio != null ? +p.ratio : 1.5;
-      if (Math.abs(r - 1) < 1e-9) return new Array(N).fill(T / N);
+      if (Math.abs(r - 1) < 1e-9) return uniform();
       const d0 = T * (1 - r) / (1 - Math.pow(r, N));
-      return new Array(N).fill(0).map((_, i) => d0 * Math.pow(r, i));
+      return guard(new Array(N).fill(0).map((_, i) => d0 * Math.pow(r, i)));
     }
     if (type === "power") {
       const e = p.exponent != null ? +p.exponent : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.pow(i + 1, e); w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
-    return new Array(N).fill(T / N);
+    return uniform();
+
+    /* Ultima rete, sull'OUTPUT invece che sulla spec. `timeDistError` sa dire
+       quali coppie (parametro, n_reps) il MOTORE rifiuta, e su quelle ripiega
+       già; ma qui `Math.pow` trabocca anche dove il motore no — con un
+       esponente o un ratio interi Python calcola su interi illimitati e
+       renderizza, mentre di qua uscivano durate NaN o tutte zero, disegnate
+       senza dire niente. Enumerare quei casi vorrebbe dire replicare la
+       distinzione int/float che il JS non vede; guardare cosa è uscito la
+       copre tutta: se le durate non sono finite, o non sommano a T, il disegno
+       torna a cicli uguali — lo stesso ripiego dell'altro ramo. */
+    function guard(durs) {
+      const sum = durs.reduce((a, b) => a + b, 0);
+      const ok = durs.every(d => isFinite(d) && d >= 0) &&
+                 isFinite(sum) && Math.abs(sum - T) <= 1e-9 * Math.max(1, Math.abs(T));
+      return ok ? durs : uniform();
+    }
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
