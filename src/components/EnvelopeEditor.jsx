@@ -460,6 +460,18 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
           {" "}L'anteprima qui sopra usa cicli di durata uguale.
         </div>
       ) : null}
+
+      {/* Il ripiego opposto, e per questo con parole opposte: qui lo YAML è
+          buono e il motore lo rende: è il conto in doppia precisione
+          dell'anteprima a non arrivarci, e cicli uguali sono plausibili e
+          sbagliati. Non è un errore da correggere, è un limite del disegno —
+          quindi warn, non error, e nessun invito a cambiare il valore. */}
+      {!block.distError && block.previewFallback ? (
+        <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-warn)" }}>
+          l'anteprima non sa disegnare questa distribuzione e mostra cicli di durata
+          uguale: il motore la rende, fortemente sbilanciata verso l'ultimo ciclo.
+        </div>
+      ) : null}
       <div className="ee-loop-panel-hint mono">
         pattern · {block.pattern.length} pt · x∈[0,100]% di ciclo · drag i punti del 1° ciclo per modificare il pattern · drag l'edge destro del loop per allungarlo
       </div>

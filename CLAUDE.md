@@ -150,7 +150,14 @@ That leaves the mirror image — pairs the engine renders and `Math.pow`
 does not — so `computeCycleDurations` has a second, cheaper net on its
 **output**: if the durations are not all finite, or do not sum to `T`, it falls
 back to equal cycles anyway. That covers the whole int/float casistica without
-enumerating it, and is the same fallback the declared-error path already takes.
+enumerating it. It is *not* the same fallback as the declared-error path,
+though, and must not be silent like it: there the engine rejects the block,
+here it renders it — often steeply skewed (`{power, exponent: 1000}` over 4
+cycles puts 100% of the time in the last one) — so equal cycles are a plausible
+wrong preview. The guard marks the array `previewFallback` (non-enumerable, so
+no existing comparison on the durations changes), `expandMixed` carries it onto
+the block next to `distError`, and the loop panel says it in its own words —
+warn, not error, because nothing in the YAML needs fixing.
 
 ### Dynamic parameter bounds
 

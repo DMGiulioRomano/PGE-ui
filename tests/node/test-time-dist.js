@@ -203,17 +203,48 @@ console.log("\n── computeCycleDurations: ripiego anche quando a tradire sono
     durs.length === N && durs.every(d => isFinite(d) && d >= 0) &&
     Math.abs(durs.reduce((a, b) => a + b, 0) - T) < 1e-9;
 
+  /* Il ripiego qui NON può essere muto come quello di timeDistError, e per la
+     ragione opposta: là il motore rifiuta il blocco, qui lo rende — spesso
+     fortemente sbilanciato — e cicli uguali sono un'anteprima plausibile e
+     sbagliata, peggio delle NaN di prima che almeno erano rotte a vista.
+     Numeri del motore, verificati: `power exponent 1000` con 4 cicli mette il
+     100% del tempo nell'ultimo, `geometric ratio 10` con 309 cicli il 90%.
+     Quindi si fissa il SEGNALE, non solo la sanità delle durate. */
   for (const [dist, N, perche] of [
+    [{ type: "power", exponent: 1000 }, 4, "bastano 4 cicli: il motore mette tutto nell'ultimo"],
     [{ type: "power", exponent: 400 }, 400, "esponente intero: il motore rende, Math.pow no"],
     [{ type: "power", exponent: 200 }, 400, "idem, sotto la soglia float"],
     [{ type: "geometric", ratio: 10 }, 309, "ratio intero a un passo dalla soglia: durate tutte zero"],
   ]) {
+    const durs = E.computeCycleDurations(2.0, N, dist);
     assert(`${JSON.stringify(dist)} · n=${N} → durate sane (${perche})`,
-      sane(E.computeCycleDurations(2.0, N, dist), N, 2.0),
-      JSON.stringify(E.computeCycleDurations(2.0, N, dist).slice(0, 3)));
+      sane(durs, N, 2.0), JSON.stringify(durs.slice(0, 3)));
     assert(`${JSON.stringify(dist)} · n=${N} → e distError tace (il motore rende)`,
       E.timeDistError(dist, N) === null, JSON.stringify(E.timeDistError(dist, N)));
+    assert(`${JSON.stringify(dist)} · n=${N} → ma il ripiego si dichiara`,
+      E.isPreviewFallback(durs) === true);
   }
+
+  // Il flag è invisibile a JSON/Object.keys, così nessun confronto sulle durate
+  // cambia significato per il fatto che ci sia.
+  {
+    const durs = E.computeCycleDurations(2.0, 4, { type: "power", exponent: 1000 });
+    assert("il flag non entra nel JSON delle durate",
+      JSON.stringify(durs) === JSON.stringify([0.5, 0.5, 0.5, 0.5]), JSON.stringify(durs));
+    assert("né in Object.keys", !Object.keys(durs).includes("previewFallback"));
+  }
+
+  // E non si accende dove il ripiego è già dichiarato da distError (là il
+  // pannello parla di suo, e il motore quel blocco lo rifiuta) né su una
+  // distribuzione uniforme scritta davvero.
+  assert("distribuzione con errore dichiarato → non è un ripiego dell'anteprima",
+    E.isPreviewFallback(E.computeCycleDurations(2.0, 400, { type: "geometric", ratio: 10 })) === false);
+  assert("nome ignoto → idem",
+    E.isPreviewFallback(E.computeCycleDurations(2.0, 8, "bogus")) === false);
+  assert("linear scritta davvero → nessun ripiego",
+    E.isPreviewFallback(E.computeCycleDurations(2.0, 8, "linear")) === false);
+  assert("ratio ≈ 1 (il motore devia su linear) → nessun ripiego",
+    E.isPreviewFallback(E.computeCycleDurations(2.0, 8, { type: "geometric", ratio: 1 })) === false);
 
   // E le distribuzioni sane non devono ripiegare per colpa della guardia: la
   // tolleranza è relativa, non assoluta.
@@ -224,7 +255,24 @@ console.log("\n── computeCycleDurations: ripiego anche quando a tradire sono
   ]) {
     const durs = E.computeCycleDurations(2.0, N, dist);
     const uniforme = durs.every(d => Math.abs(d - 2.0 / N) < 1e-15);
-    assert(`${JSON.stringify(dist)} · n=${N} → NON ripiegata`, !uniforme && sane(durs, N, 2.0));
+    assert(`${JSON.stringify(dist)} · n=${N} → NON ripiegata`,
+      !uniforme && sane(durs, N, 2.0) && !E.isPreviewFallback(durs));
+  }
+
+  // expandMixed porta il flag sul blocco, che è dove il pannello lo legge.
+  {
+    const ripiegato = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 4, "linear", { type: "power", exponent: 1000 }]]);
+    assert("expandMixed → previewFallback sul blocco",
+      ripiegato.blocks[0].previewFallback === true);
+    assert("…e distError resta null, così il pannello sceglie l'altro messaggio",
+      ripiegato.blocks[0].distError === null, JSON.stringify(ripiegato.blocks[0].distError));
+
+    const sano = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 4, "linear", { type: "geometric", ratio: 1.5 }]]);
+    assert("blocco sano → previewFallback false", sano.blocks[0].previewFallback === false);
+
+    const overflow = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 400, "linear", { type: "geometric", ratio: 10 }]]);
+    assert("blocco che il motore rifiuta → parla distError, non previewFallback",
+      overflow.blocks[0].distError.kind === "overflow" && overflow.blocks[0].previewFallback === false);
   }
 }
 

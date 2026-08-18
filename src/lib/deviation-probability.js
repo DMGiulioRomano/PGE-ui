@@ -21,8 +21,9 @@
  * the editor never emits but a hand-written file can carry.
  *
  * Depends on window.PGEYaml (DEVIATION_PROB_IMPLICIT sentinel) and window.PGEEnv
- * (isTypedEnv) — both read at call time, so load order only requires them
- * present before these functions run. Attaches to window.PGEDeviationProb.
+ * (isBreakpoint / isBPGroup / isCompactBlock) — both read at call time, so load
+ * order only requires them present before these functions run. Attaches to
+ * window.PGEDeviationProb.
  * ===========================================================================*/
 
 (function () {

@@ -340,13 +340,35 @@
        senza dire niente. Enumerare quei casi vorrebbe dire replicare la
        distinzione int/float che il JS non vede; guardare cosa è uscito la
        copre tutta: se le durate non sono finite, o non sommano a T, il disegno
-       torna a cicli uguali — lo stesso ripiego dell'altro ramo. */
+       torna a cicli uguali — lo stesso ripiego dell'altro ramo.
+
+       Ma qui il ripiego non può essere muto come là, e per la ragione opposta:
+       quando parla `timeDistError` il motore RIFIUTA il blocco, e il pannello
+       lo dice; qui il motore lo RENDE, spesso fortemente sbilanciato (con
+       `{power, exponent: 1000}` e 4 cicli mette il 100% del tempo nell'ultimo),
+       e cicli uguali sono un'anteprima plausibile e sbagliata — peggio delle
+       NaN di prima, che almeno erano rotte a vista. Il ripiego marca quindi
+       l'array con `previewFallback`, che `expandMixed` porta sul blocco e il
+       pannello traduce in un messaggio suo, diverso da quello dell'overflow.
+       Il flag nasce dalla guardia, cioè esattamente dove il conto JS ha
+       fallito: nessuna soglia in più da tenere allineata al motore. */
     function guard(durs) {
       const sum = durs.reduce((a, b) => a + b, 0);
       const ok = durs.every(d => isFinite(d) && d >= 0) &&
                  isFinite(sum) && Math.abs(sum - T) <= 1e-9 * Math.max(1, Math.abs(T));
-      return ok ? durs : uniform();
+      return ok ? durs : _markPreviewFallback(uniform());
     }
+  }
+
+  /* Marca un array di durate come ripiego dell'anteprima. Non enumerabile:
+     JSON, spread e Object.keys non lo vedono, così nessun confronto esistente
+     sulle durate cambia significato. Si legge con `isPreviewFallback`. */
+  function _markPreviewFallback(durs) {
+    Object.defineProperty(durs, "previewFallback", { value: true, enumerable: false });
+    return durs;
+  }
+  function isPreviewFallback(durs) {
+    return !!(durs && durs.previewFallback);
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
@@ -410,6 +432,11 @@
         // cicli qui sotto sono disegnati con il ripiego lineare, ma il motore
         // rifiuterebbe questo blocco. Chi disegna può dirlo.
         distError: timeDistError(dist, nReps),
+        // L'altro ripiego, che è il contrario: la spec è buona e il motore la
+        // rende, ma il conto in doppia precisione è uscito inservibile e i
+        // cicli qui sotto sono uguali per forza. Chi disegna deve dirlo con
+        // parole diverse — qui non c'è niente di sbagliato nello YAML.
+        previewFallback: isPreviewFallback(cycleDurs),
         cycles: []
       };
       let t = blockStart;
@@ -754,7 +781,7 @@
     isBreakpoint, isCompactBlock, envHasLoop,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
-    computeCycleDurations, expandMixed,
+    computeCycleDurations, isPreviewFallback, expandMixed,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
