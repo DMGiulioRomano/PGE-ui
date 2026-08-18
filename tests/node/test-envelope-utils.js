@@ -26,10 +26,10 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 15 helpers",
+assert("PGEEnvUtils exposes the 16 helpers",
   ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopBoundsError", "grainDurationUnitError",
+   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopBoundsError", "grainDurationUnitError",
    "snapDirection", "snapForDomain", "readDirectionError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
@@ -314,6 +314,46 @@ console.log("\n── loopEnvMax (sample-driven loop bound) ──");
   assert("null stream → null", U.loopEnvMax(null, undefined) === null);
 }
 
+// ---------------------------------------------------------------------------
+// loopUnitInfo — which unit the loop window is written in, and where that unit
+// comes from. Same resolution as the engine (loop_unit or time_mode), plus the
+// provenance the Inspector needs to label the control as inherited and to drop
+// a redundant key instead of materializing it (issue #126).
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitInfo (unit + provenance) ──");
+{
+  const info = (stream) => U.loopUnitInfo(stream);
+
+  assert("no keys → absolute from the engine default",
+    eq(info({}), { unit: "absolute", source: "default" }));
+  assert("null stream tolerated → absolute/default",
+    eq(info(null), { unit: "absolute", source: "default" }));
+
+  assert("timeMode normalized → normalized, inherited",
+    eq(info({ timeMode: "normalized" }), { unit: "normalized", source: "time_mode" }));
+  assert("timeMode absolute → absolute, inherited",
+    eq(info({ timeMode: "absolute" }), { unit: "absolute", source: "time_mode" }));
+
+  assert("explicit loop_unit normalized wins over an absolute stream",
+    eq(info({ timeMode: "absolute", pointer: { loopUnit: "normalized" } }),
+       { unit: "normalized", source: "loop_unit" }));
+  assert("explicit loop_unit absolute wins over a normalized stream (the #126 escape)",
+    eq(info({ timeMode: "normalized", pointer: { loopUnit: "absolute" } }),
+       { unit: "absolute", source: "loop_unit" }));
+
+  // The engine only ever tests `!= 'normalized'`, so anything else is seconds.
+  assert("unknown loop_unit string → absolute (engine tests != normalized)",
+    eq(info({ pointer: { loopUnit: "seconds" } }), { unit: "absolute", source: "loop_unit" }));
+  assert("unknown time_mode string → absolute",
+    eq(info({ timeMode: "weird" }), { unit: "absolute", source: "time_mode" }));
+
+  // loopEnvMax must agree with it — one resolution, two readers.
+  assert("loopEnvMax agrees: inherited normalized still caps at 1",
+    U.loopEnvMax({ timeMode: "normalized" }, 30) === 1);
+  assert("loopEnvMax agrees: explicit absolute on a normalized stream caps at sampleDur",
+    U.loopEnvMax({ timeMode: "normalized", pointer: { loopUnit: "absolute" } }, 30) === 30);
+}
+
 // loopBoundsError — mirrors the engine's static loop-window validation (PGE
 // issue #97 / engine ec61242): with a loop active the read position is confined
 // to [loop_start, loop_end) via modular wrap, so a degenerate window is rejected
@@ -377,9 +417,6 @@ console.log("\n── grainDurationUnitError ──");
     GE({ durationUnit: "samples", duration: 0 }) === null);
 }
 
-console.log(`\n${"─".repeat(50)}`);
-console.log(`${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
 
 /* ===========================================================================
  * grain.read_direction — un dominio di due elementi (PGE #207)
@@ -487,3 +524,34 @@ assert("envelope: intermedio dentro il pattern di un ciclo",
   (U.readDirectionError({ readDirectionEnv: [[[[0, 1], [50, 0.3]], 2.0, 2]] }) || {}).kind === "domain");
 assert("envelope: forma dict {points}",
   (U.readDirectionError({ readDirectionEnv: { points: [[0, 1], [0.5, 0.3]] } }) || {}).kind === "domain");
+
+/* ============================================================
+ * Cablaggio nella UI — la parte JSX non ha test di componente
+ * (CLAUDE.md), quindi si asserisce sul sorgente come fa
+ * test-magnify-spec.js.
+ * ============================================================ */
+
+console.log("\n── cablaggio loop_unit (issue #126) ──");
+{
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+
+  assert("l'Inspector risolve unità e provenienza con loopUnitInfo",
+    /window\.PGEEnvUtils\.loopUnitInfo\(stream\)/.test(inspSrc));
+  assert("calcola anche l'unità ereditata (per sapere quando togliere la chiave)",
+    /loopUnitInherited/.test(inspSrc));
+  assert("loop_unit è un controllo, non più una riga di sola lettura",
+    /options=\{\[\{label:"absolute",value:"absolute"\},\{label:"normalized",value:"normalized"\}\]\}/.test(inspSrc));
+  assert("scegliere l'unità già in vigore cancella la chiave invece di scriverla",
+    /u === loopUnitInherited\) delete np\.loopUnit; else np\.loopUnit = u/.test(inspSrc));
+  assert("una riga dichiara il cap effettivo del loop",
+    /durata del sample/.test(inspSrc));
+  assert("loop_unit non è più nell'AddParamMenu (il controllo lo rimpiazza)",
+    !/key: "loopUnit"/.test(inspSrc));
+  assert("cambiare unità ri-clampa gli estremi scalari col cap della nuova unità",
+    /const cap = window\.PGEEnvUtils\.loopEnvMax\(\{ \.\.\.stream, pointer: np \}, sampleDur\)/.test(inspSrc)
+    && /np\[k\] = clampLoop\(k, np\[k\], cap\)/.test(inspSrc));
+}
+
+console.log(`\n${"─".repeat(50)}`);
+console.log(`${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);
