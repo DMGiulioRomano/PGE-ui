@@ -17,7 +17,8 @@
  * GateFactory._classify_deviation_probability, which tests envelope-like
  * (Envelope.is_envelope_like: a list of breakpoints OR a dict carrying 'points')
  * BEFORE the dict→SPECIFIC (per-param) branch. So `{type, points}` is a GLOBAL
- * envelope, never per-param.
+ * envelope, never per-param — and so is a bare `{points}` without `type`, which
+ * the editor never emits but a hand-written file can carry.
  *
  * Depends on window.PGEYaml (DEVIATION_PROB_IMPLICIT sentinel) and window.PGEEnv
  * (isTypedEnv) — both read at call time, so load order only requires them
@@ -25,13 +26,21 @@
  * ===========================================================================*/
 
 (function () {
-  /* Is a VALUE an envelope? True for a breakpoint array [[t,v],…] and for the
-     typed `{type, points}` object form. Used both for the top-level global
-     value and for each per-param value. Mirrors the dict half of the engine's
-     Envelope.is_envelope_like (a dict with 'points'). */
+  /* Is a VALUE an envelope? True for a breakpoint array [[t,v],…], for the
+     typed `{type, points}` object form the editor emits, and per il dict che
+     porta `points` e basta. Usata sia per il valore globale sia per ciascun
+     valore per-parametro.
+
+     La metà dict è quella del motore alla lettera — `'points' in obj`, niente
+     di più (Envelope.is_envelope_like). Chiedere anche `type`, come fa
+     isTypedEnv, spostava nel ramo per-parametro un envelope globale valido:
+     l'editor apriva il pannello sbagliato, e i corpi rotti sotto `points`
+     (`{points: null}`, `{points: []}`) non arrivavano mai al controllo di
+     error(). isTypedEnv resta più stretta perché lì `type` è il dato che si
+     va a leggere; qui la domanda è solo se il motore lo tratterà da envelope. */
   function isEnvValue(v) {
     if (Array.isArray(v)) return true;
-    return !!(window.PGEEnv && window.PGEEnv.isTypedEnv(v));
+    return !!(v && typeof v === "object" && "points" in v);
   }
 
   /* Classify `deviation_probability` into "off" | "implicit" | "global" |
@@ -43,6 +52,11 @@
     // Key absent (undefined) and explicit false both mean off (engine default
     // off). Only the DEVIATION_PROB_IMPLICIT sentinel above means implicit 1%.
     if (d === false || d == null) return "off";
+    // `true` non è off: in Python bool è sottoclasse di int, quindi il motore
+    // lo prende dal ramo `isinstance(dp, (int, float))` e costruisce un
+    // RandomGate su float(True) — l'1% implicito, ma dichiarato. L'ordine
+    // conta: il check su `false` sta sopra e resta off.
+    if (typeof d === "boolean") return "global";
     if (typeof d === "number") return "global";
     if (isEnvValue(d)) return "global";          // [[t,v],…] or {type, points}
     if (typeof d === "object") return "perParam"; // dict without 'points'
@@ -68,6 +82,12 @@
     const E = window.PGEEnv;
     if (Array.isArray(v)) {
       if (v.length === 0) return "empty";
+      // Prima l'array INTERO, poi i suoi elementi — nello stesso ordine di
+      // is_envelope_like. Due forme sono il corpo, non un elemento del corpo:
+      // il BP group diretto `[[[0,0],[1,100]], 'cubic']` (PGE #64) e il blocco
+      // compatto nudo `[[[0,0],[100,50]], 1.0, 4]`. Guardando solo gli elementi
+      // finivano segnalate come non costruibili, e il motore le costruisce.
+      if (E.isBPGroup(v) || E.isCompactBlock(v)) return null;
       const any = v.some(it => E.isBreakpoint(it) || E.isBPGroup(it) || E.isCompactBlock(it));
       return any ? null : "shape";
     }

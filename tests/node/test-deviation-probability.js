@@ -43,6 +43,10 @@ console.log("\n── mode(): off / implicit ──");
 assert("undefined → off (key absent)", D.mode(undefined) === "off");
 assert("null → off",                   D.mode(null) === "off");
 assert("false → off",                  D.mode(false) === "off");
+// `true` non è off: bool è sottoclasse di int in Python, e il motore lo prende
+// dal ramo numerico. Verificato: create_gate(True, param_key='volume') → RandomGate.
+assert("true → global (il motore ne fa un RandomGate su float(True))",
+  D.mode(true) === "global");
 assert("DEVIATION_PROB_IMPLICIT sentinel → implicit", D.mode(DEVIATION_PROB_IMPLICIT) === "implicit");
 
 console.log("\n── mode(): global (scalar + envelope forms) ──");
@@ -54,12 +58,27 @@ assert("typed cubic envelope → global",
   D.mode({ type: "cubic", points: [[0, 0], [1, 100]] }) === "global");
 assert("typed exp envelope → global",
   D.mode({ type: "exp", points: [[0, 0], [1, 100]] }) === "global");
-// Boundary: a bare {points} dict without `type` is NOT the UI's typed form
-// (wrapEnv always emits `type`), so the editor classifier treats it as a dict.
-// The engine's is_envelope_like is looser (any dict with 'points'); supporting
-// that hand-authored form would also require unwrapEnv to read it — out of scope.
-assert("dict with points but no type → perParam (UI form always carries type)",
-  D.mode({ points: [[0, 0], [1, 100]] }) === "perParam");
+// Il dict con il solo `points` — forma che l'editor non emette mai (wrapEnv
+// scrive il dict solo per dire un interp non lineare) ma che il motore accetta:
+// `is_envelope_like` guarda che `points` ci sia, non che ci sia anche `type`.
+// Verificato sul motore: GateFactory.create_gate lo costruisce come EnvelopeGate.
+// Leggerlo per-parametro apriva il pannello sbagliato.
+assert("dict con points ma senza type → global (come il motore)",
+  D.mode({ points: [[0, 0], [1, 100]] }) === "global");
+// La trappola a valle: dichiararlo envelope senza che unwrapEnv lo sappia
+// leggere lo farebbe aprire VUOTO nell'editor, e un commit lì sopra lo
+// svuoterebbe davvero. È lo stesso giro che fa listEnvelopes → EnvelopeEditor:
+// isEnvValue decide che è un envelope globale, unwrapEnv ne prende i punti.
+{
+  const stream = { id: "s1", deviationProbability: { points: [[0, 0], [1, 100]] } };
+  assert("giro completo: dichiarato envelope…", D.isEnvValue(stream.deviationProbability));
+  const un = window.PGEEnv.unwrapEnv(stream.deviationProbability);
+  assert("…e aperto con i suoi punti, non vuoto",
+    un.items.length === 2 && un.interp === "linear", JSON.stringify(un));
+  const typed = window.PGEEnv.unwrapEnv({ type: "cubic", points: [[0, 0], [1, 100]] });
+  assert("il typed env resta letto col suo interp (il bug per cui il modulo esiste)",
+    typed.items.length === 2 && typed.interp === "cubic", JSON.stringify(typed));
+}
 
 console.log("\n── mode(): perParam ──");
 assert("per-param dict → perParam", D.mode({ volume: 50 }) === "perParam");
@@ -71,8 +90,10 @@ assert("per-param dict with typed env value → perParam",
 console.log("\n── isEnvValue() ──");
 assert("array → env",                    D.isEnvValue([[0, 0], [1, 1]]) === true);
 assert("typed {type,points} → env",      D.isEnvValue({ type: "cubic", points: [[0, 0], [1, 1]] }) === true);
-assert("{points} without type → not env (UI form always typed)",
-  D.isEnvValue({ points: [[0, 0], [1, 1]] }) === false);
+assert("{points} senza type → env (metà dict di is_envelope_like)",
+  D.isEnvValue({ points: [[0, 0], [1, 1]] }) === true);
+assert("dict per-parametro senza points → non env",
+  D.isEnvValue({ volume: [[0, 0], [1, 1]] }) === false);
 assert("number → not env",               D.isEnvValue(50) === false);
 assert("per-param dict → not env",       D.isEnvValue({ volume: 50 }) === false);
 assert("null → not env",                 D.isEnvValue(null) === false);
@@ -100,7 +121,19 @@ assert("true → nessun errore (per il motore è il numero 1)", D.error(true) ==
 assert("envelope valido → nessun errore",     D.error([[0, 0], [1, 100]]) === null);
 assert("envelope tipizzato valido → nessun errore",
   D.error({ type: "cubic", points: [[0, 0], [1, 100]] }) === null);
-assert("blocco compatto → nessun errore",     D.error([[[[0, 0], [100, 50]], 1.0, 4]]) === null);
+assert("blocco compatto (annidato) → nessun errore",
+  D.error([[[[0, 0], [100, 50]], 1.0, 4]]) === null);
+// Le due forme in cui il corpo È il gruppo o il blocco, non li contiene:
+// is_envelope_like le prova sull'oggetto intero prima di scorrerlo. Verificato
+// sul motore: entrambe → EnvelopeGate.
+assert("BP group diretto → nessun errore (PGE #64)",
+  D.error([[[0, 0], [1, 100]], "cubic"]) === null);
+assert("blocco compatto nudo → nessun errore",
+  D.error([[[0, 0], [100, 50]], 1.0, 4]) === null);
+assert("BP group diretto sotto una chiave per-parametro → nessun errore",
+  D.error({ volume: [[[0, 0], [1, 100]], "cubic"] }) === null);
+assert("blocco compatto nudo sotto una chiave per-parametro → nessun errore",
+  D.error({ pitch: [[[0, 0], [100, 50]], 1.0, 4] }) === null);
 
 console.log("\n── error(): envelope globale malformato ──");
 assert("lista vuota → env/empty",
@@ -109,13 +142,21 @@ assert("lista vuota → env/empty",
 assert("lista senza breakpoint → env/shape", (D.error(["x"]) || {}).reason === "shape");
 assert("points vuoti → env/empty",
   (D.error({ type: "linear", points: [] }) || {}).reason === "empty");
-// Limite noto, ereditato dal classificatore: isEnvValue chiede che `points` sia
-// una lista, mentre al motore basta che la chiave ci sia. Un `points` scalare
-// qui non è nemmeno un envelope, quindi finisce nel ramo per-parametro e passa.
-assert("points scalare → passa (il classificatore non lo legge come envelope)",
-  D.error({ type: "linear", points: 5 }) === null);
+assert("points scalare → env/shape (il motore legge la chiave, non il tipo)",
+  (D.error({ type: "linear", points: 5 }) || {}).reason === "shape");
 assert("globale malformato → nessun param nominato",
   D.error([]).param === undefined, JSON.stringify(D.error([])));
+// Il ramo dict di _envBodyError, prima raggiungibile solo per-parametro: è la
+// grafia più plausibile del terzo corpo malformato di PGE #209. Tutti e quattro
+// verificati sul motore → InvalidFieldValueError.
+assert("{points:} lasciata vuota → env/shape",
+  (D.error({ points: null }) || {}).reason === "shape", JSON.stringify(D.error({ points: null })));
+assert("{points: 'x'} → env/shape", (D.error({ points: "x" }) || {}).reason === "shape");
+assert("{points: []} globale → env/empty", (D.error({ points: [] }) || {}).reason === "empty");
+assert("{type: cubic, points: null} → env/shape",
+  (D.error({ type: "cubic", points: null }) || {}).reason === "shape");
+assert("{points: [[0,1]]} globale valido → nessun errore",
+  D.error({ points: [[0, 1]] }) === null);
 
 console.log("\n── error(): valore per-parametro malformato ──");
 assert("volume: [] → env/empty su volume",

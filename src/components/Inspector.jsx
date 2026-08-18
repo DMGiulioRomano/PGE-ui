@@ -49,8 +49,7 @@ const DEVIATION_PROB_PARAMS = [
   // Voce distinta da `reverse`, non un suo alias (PGE #207): ciascuna governa
   // la propria chiave del blocco grain e non tocca l'altra. Un
   // `deviation_probability: {reverse: N}` scritto prima non ribalta un
-  // read_direction
-  // aggiunto dopo.
+  // `read_direction` aggiunto dopo.
   { key: "read_direction", desc: "flip the declared grain.read_direction" },
   { key: "envelope", desc: "switch window when grain.envelope is a list" },
 ];
@@ -74,6 +73,10 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // rendevano applicando la deviazione al 100% dei grani, cioe' l'opposto di
   // quanto scritto. Ora il render esce con errore: meglio dirlo qui.
   const bodyErr = PGEDeviationProb.error(d);
+  // `true` è un modo globale valido, non off: il motore lo legge come
+  // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
+  // "true", senza riscrivere lo YAML finché non lo si tocca.
+  const dScalar = typeof d === "boolean" ? 1 : d;
 
   function setMode(next) {
     if (next === "off")       return onChange({ deviationProbability: false });
@@ -88,7 +91,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
     if (mode === "implicit")  return <span className="mono" style={{color:"var(--fg-3)"}}>implicit · 1%</span>;
     if (mode === "global")    {
       if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items).length} bp</span>;
-      return <span className="mono" style={{color:"var(--accent)"}}>{d}%</span>;
+      return <span className="mono" style={{color:"var(--accent)"}}>{dScalar}%</span>;
     }
     const n = Object.keys(d || {}).length;
     return <span className="mono" style={{color:"var(--accent)"}}>per-param · {n}</span>;
@@ -137,7 +140,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                   mode={dIsEnv ? "env" : "scalar"}
                   onMode={(m) => {
                     if (m === "env") {
-                      const v = typeof d === "number" ? d : 1;
+                      const v = typeof dScalar === "number" ? dScalar : 1;
                       onChange({ deviationProbability: [[0, v], [1, v]] });
                     } else {
                       const items = dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null;
@@ -145,7 +148,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                       onChange({ deviationProbability: v });
                     }
                   }}
-                  value={dIsEnv ? "—" : d}
+                  value={dIsEnv ? "—" : dScalar}
                   unit={dIsEnv ? "" : "%"}
                   accent={dIsEnv}
                   envValue={dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null}
