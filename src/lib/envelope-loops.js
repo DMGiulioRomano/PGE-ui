@@ -180,28 +180,96 @@
   // `linear` e sembra corretto, `{base: 1}` produce durate NaN e non lo dice.
   //
   // Ritorna null se valida, altrimenti { kind, name?, param? } —
-  //   "name"  → il nome non è nel registro
-  //   "param" → il parametro esiste ma è fuori dal bound del costruttore, o è
-  //             estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
-  //             inatteso). Puro, node-testabile.
-  function timeDistError(dist) {
+  //   "name"     → il nome non è nel registro
+  //   "param"    → il parametro esiste ma è fuori dal bound del costruttore, o è
+  //                estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
+  //                inatteso).
+  //   "overflow" → parametro e n_reps sono entrambi legittimi da soli, ma la
+  //                potenza che la distribuzione calcola con quella coppia non
+  //                sta in un float (vedi _overflowError). Riportato solo se
+  //                `nReps` è noto. Puro, node-testabile.
+  function timeDistError(dist, nReps) {
     if (dist == null) return null;
     if (typeof dist !== "string" && typeof dist !== "object") return { kind: "name" };
     const rawName = typeof dist === "string" ? dist : (dist.type != null ? dist.type : "linear");
     if (typeof rawName !== "string") return { kind: "name" };
     const name = rawName.toLowerCase();
     if (!TIME_DIST_NAMES.includes(name)) return { kind: "name", name: rawName };
-    if (typeof dist !== "object") return null;
 
-    const ammessi = TIME_DIST_SPECS[name];
-    for (const k of Object.keys(dist)) {
-      if (k === "type") continue;
-      const num = typeof dist[k] === "number" && isFinite(dist[k]);
-      if (!(k in ammessi) || !num || !ammessi[k](dist[k]))
-        return { kind: "param", name, param: k };
+    if (typeof dist === "object") {
+      const ammessi = TIME_DIST_SPECS[name];
+      for (const k of Object.keys(dist)) {
+        if (k === "type") continue;
+        const num = typeof dist[k] === "number" && isFinite(dist[k]);
+        if (!(k in ammessi) || !num || !ammessi[k](dist[k]))
+          return { kind: "param", name, param: k };
+      }
     }
-    return null;
+    // Anche la forma stringa entra qui: i default del costruttore sono quelli
+    // del motore, e con abbastanza cicli traboccano pure loro.
+    return _overflowError(name, (typeof dist === "object" && dist) ? dist : {}, nReps);
   }
+
+  // L'ordine di grandezza oltre cui un float non c'è più.
+  const LOG10_MAX = Math.log10(Number.MAX_VALUE); // ≈ 308.25
+
+  /* Mirror dell'overflow che il motore intercetta costruendo i pesi dei cicli
+     (PGE #212, review #216). Non è un bound su un valore e non poteva esserlo:
+     `ratio: 10` e `n_reps: 400` sono legittimi da soli, e il costruttore che
+     riceve il primo non vede il secondo — è la coppia a esplodere. In JS non
+     c'è OverflowError: la potenza diventa Infinity e le durate NaN o zero, così
+     il blocco veniva disegnato collassato senza che niente lo dicesse.
+
+     Il conto si fa sui logaritmi, mai sulla potenza: calcolarla per scoprire
+     che trabocca darebbe Infinity e basta.
+
+     Un caso resta fuori, e per una differenza che questo lato non può vedere:
+     in `power` il motore trabocca solo se l'esponente è un float, perché con un
+     intero Python calcola su interi illimitati e la divisione successiva torna
+     buona. Ma `200` e `200.0` in YAML arrivano qui come lo stesso Number, e
+     `Number.isInteger` non li distingue. Segnaliamo quindi solo l'esponente
+     frazionario: chi scrive `exponent: 200.0` con troppi cicli vede l'errore
+     del motore, non l'avviso — un avviso in meno, mai uno di troppo. */
+  function _overflowError(name, p, nReps) {
+    const N = +nReps;
+    if (!isFinite(N) || N < 1) return null;
+    const mk = (param, value) => ({ kind: "overflow", name, param, value, nReps: N });
+
+    if (name === "geometric" || name === "geo") {
+      const r = p.ratio != null ? +p.ratio : 1.5;
+      // ratio ≈ 1 → il motore devia su linear prima di elevare; ratio < 1 → la
+      // potenza tende a zero. Trabocca solo la crescita.
+      if (!(r > 1) || Math.abs(r - 1) < 1e-6) return null;
+      // sum_geometric = (1 - ratio**N) / (1 - ratio)
+      const mag = N * Math.log10(r) - Math.log10(Math.abs(1 - r));
+      return mag > LOG10_MAX ? mk("ratio", r) : null;
+    }
+    if (name === "exponential" || name === "exp") {
+      const rate = p.rate != null ? +p.rate : 2.0;
+      // weights[i] = rate ** -i: cresce solo se rate < 1, e al massimo in i=N-1.
+      if (!(rate > 0) || rate >= 1) return null;
+      const mag = (N - 1) * Math.log10(1 / rate);
+      return mag > LOG10_MAX ? mk("rate", rate) : null;
+    }
+    if (name === "power") {
+      const e = p.exponent != null ? +p.exponent : 2.0;
+      // weights[i] = (i+1) ** exponent: il massimo è N ** exponent.
+      if (!isFinite(e) || e <= 0 || Number.isInteger(e)) return null;
+      const mag = e * Math.log10(N);
+      return mag > LOG10_MAX ? mk("exponent", e) : null;
+    }
+    return null; // linear e logarithmic non elevano niente a potenza
+  }
+
+  // Il rimedio dipende dal parametro, non dalla distribuzione (PGE #216):
+  // `ratio` e `rate` sono fattori di una progressione, e verso 1 la
+  // progressione si appiattisce; `exponent` è una scala, dove 1 è un valore
+  // ordinario ed è l'ordine di grandezza a essere fuori misura.
+  const TIME_DIST_OVERFLOW_FIX = {
+    ratio:    "avvicina ratio a 1",
+    rate:     "avvicina rate a 1",
+    exponent: "riduci exponent in valore assoluto",
+  };
 
   /* vincolo invariante: sum(cycleDurs) === T
      Su una spec non valida si RIPIEGA su linear per poter comunque disegnare
@@ -212,7 +280,7 @@
      NaN che nessuno segnalava. */
   function computeCycleDurations(T, N, dist) {
     if (T <= 0 || N < 1) return [];
-    const type = timeDistError(dist)
+    const type = timeDistError(dist, N)
       ? "linear"
       : (typeof dist === "string" ? dist : (dist && dist.type) || "linear");
     const p    = (typeof dist === "object" && dist) ? dist : {};
@@ -306,7 +374,7 @@
         // Non null quando la distribuzione dichiarata non è costruibile: i
         // cicli qui sotto sono disegnati con il ripiego lineare, ma il motore
         // rifiuterebbe questo blocco. Chi disegna può dirlo.
-        distError: timeDistError(dist),
+        distError: timeDistError(dist, nReps),
         cycles: []
       };
       let t = blockStart;
@@ -652,7 +720,7 @@
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, expandMixed,
-    TIME_DIST_NAMES, timeDistError,
+    TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,

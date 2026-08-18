@@ -451,6 +451,11 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
         <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-error)" }}>
           {block.distError.kind === "name"
             ? `time_dist "${block.distError.name}" non esiste: il motore rifiuta il blocco. Validi: ${window.PGEEnv.TIME_DIST_NAMES.join(", ")}.`
+            : block.distError.kind === "overflow"
+            // Né il parametro né n_reps è fuori posto da solo: è la coppia a
+            // esplodere, quindi il messaggio nomina entrambi e lascia scegliere
+            // quale ridurre — come fa l'hint del motore (PGE #212).
+            ? `time_dist ${block.distError.name}: ${block.distError.param}=${block.distError.value} con n_reps=${block.distError.nReps} non sta in un float e il motore rifiuta il blocco. Riduci n_reps, oppure ${window.PGEEnv.TIME_DIST_OVERFLOW_FIX[block.distError.param] || `riduci ${block.distError.param}`}.`
             : `time_dist ${block.distError.name}: il parametro "${block.distError.param}" non è valido e il motore rifiuta il blocco.`}
           {" "}L'anteprima qui sopra usa cicli di durata uguale.
         </div>

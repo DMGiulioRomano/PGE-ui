@@ -98,6 +98,82 @@ assert("una distribuzione valida NON viene ripiegata",
   !eq(E.computeCycleDurations(2.0, 3, { type: "geometric", ratio: 2 }),
       E.computeCycleDurations(2.0, 3, "linear")));
 
+/* Overflow: la coppia (parametro, n_reps) che il motore non riesce a calcolare
+   (PGE #212). Le soglie qui sotto sono verificate contro il motore vero — sopra
+   passa, sotto trabocca — e il mirror lavora sui logaritmi, perché calcolare la
+   potenza per scoprire che trabocca darebbe solo Infinity. */
+console.log("\n── timeDistError: overflow della coppia con n_reps ──");
+{
+  const kind = (d, n) => (E.timeDistError(d, n) || {}).kind;
+
+  assert("senza n_reps l'overflow non si può nemmeno guardare",
+    E.timeDistError({ type: "geometric", ratio: 10 }) === null);
+  assert("geometric ratio 10 · n_reps 308 → sotto la soglia",
+    kind({ type: "geometric", ratio: 10 }, 308) === undefined);
+  assert("geometric ratio 10 · n_reps 310 → overflow",
+    kind({ type: "geometric", ratio: 10 }, 310) === "overflow");
+  assert("geometric ratio 10 · n_reps 400 → overflow (il caso della issue)",
+    kind({ type: "geometric", ratio: 10 }, 400) === "overflow");
+  assert("geometric ratio < 1 → la potenza tende a zero, nessun overflow",
+    kind({ type: "geometric", ratio: 0.1 }, 4000) === undefined);
+  assert("geometric ratio ≈ 1 → il motore devia su linear prima di elevare",
+    kind({ type: "geometric", ratio: 1 }, 100000) === undefined);
+  assert("forma stringa: anche i default traboccano, con abbastanza cicli",
+    kind("geometric", 1760) === "overflow");
+  assert("forma stringa: e sotto la soglia no", kind("geometric", 1747) === undefined);
+
+  assert("exponential rate 0.1 · n_reps 400 → overflow",
+    kind({ type: "exponential", rate: 0.1 }, 400) === "overflow");
+  assert("exponential rate 0.1 · n_reps 300 → sotto la soglia",
+    kind({ type: "exponential", rate: 0.1 }, 300) === undefined);
+  assert("exponential rate > 1 → i pesi decrescono, nessun overflow",
+    kind({ type: "exponential", rate: 2 }, 100000) === undefined);
+  assert("exponential rate 0.5 · n_reps 1023 → sotto la soglia",
+    kind({ type: "exponential", rate: 0.5 }, 1023) === undefined);
+  assert("exponential rate 0.5 · n_reps 1200 → overflow",
+    kind({ type: "exponential", rate: 0.5 }, 1200) === "overflow");
+
+  assert("power exponent frazionario grande → overflow",
+    kind({ type: "power", exponent: 200.5 }, 400) === "overflow");
+  assert("power exponent frazionario ma pochi cicli → nessun overflow",
+    kind({ type: "power", exponent: 200.5 }, 4) === undefined);
+  assert("power exponent negativo → sottoflusso a zero, non overflow",
+    kind({ type: "power", exponent: -200.5 }, 400) === undefined);
+  // Limite dichiarato: in Python `200` è un intero e la potenza si calcola su
+  // interi illimitati (nessun overflow), `200.0` è un float e trabocca. In JS
+  // sono lo stesso Number: segnaliamo solo il frazionario, così l'avviso non
+  // esce mai su uno YAML che rende.
+  assert("power exponent intero → non segnalato (Python lo calcola su interi)",
+    kind({ type: "power", exponent: 200 }, 400) === undefined);
+
+  assert("linear non eleva niente a potenza", kind("linear", 100000) === undefined);
+  assert("logarithmic nemmeno",
+    kind({ type: "logarithmic", base: 2 }, 100000) === undefined);
+
+  const ov = E.timeDistError({ type: "geometric", ratio: 10 }, 400);
+  assert("l'errore nomina entrambi i colpevoli",
+    ov.param === "ratio" && ov.value === 10 && ov.nReps === 400, JSON.stringify(ov));
+  assert("e la distribuzione", ov.name === "geometric", JSON.stringify(ov));
+  assert("il rimedio dipende dal parametro, non dalla distribuzione",
+    E.TIME_DIST_OVERFLOW_FIX.ratio === "avvicina ratio a 1" &&
+    E.TIME_DIST_OVERFLOW_FIX.rate === "avvicina rate a 1" &&
+    E.TIME_DIST_OVERFLOW_FIX.exponent === "riduci exponent in valore assoluto",
+    JSON.stringify(E.TIME_DIST_OVERFLOW_FIX));
+
+  // Un parametro fuori bound resta un errore di parametro: il costruttore
+  // fallisce prima che ci sia una potenza da calcolare.
+  assert("bound rotto e overflow insieme → vince il bound",
+    kind({ type: "geometric", ratio: -10 }, 400) === "param");
+
+  // Il ripiego lineare vale anche qui: prima Math.pow dava Infinity e le durate
+  // uscivano NaN o zero, e il blocco si disegnava collassato senza dirlo.
+  const durs = E.computeCycleDurations(2.0, 400, { type: "geometric", ratio: 10 });
+  assert("overflow → cicli di durata uguale, non NaN",
+    durs.length === 400 && durs.every(d => isFinite(d) && d > 0), JSON.stringify(durs.slice(0, 3)));
+  assert("e la somma resta il tempo del blocco",
+    Math.abs(durs.reduce((a, b) => a + b, 0) - 2.0) < 1e-9);
+}
+
 console.log("\n── expandMixed riporta l'errore sul blocco ──");
 {
   const buono = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 2, "linear", "exponential"]]);
@@ -113,6 +189,13 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
   assert("e i punti sono finiti, non NaN",
     rotto.points.every(p => isFinite(p[0]) && isFinite(p[1])),
     JSON.stringify(rotto.points));
+
+  const traboccante = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 400, "linear", { type: "geometric", ratio: 10 }]]);
+  assert("blocco che trabocca → distError di overflow",
+    (traboccante.blocks[0].distError || {}).kind === "overflow",
+    JSON.stringify(traboccante.blocks[0].distError));
+  assert("e i suoi punti restano finiti",
+    traboccante.points.every(p => isFinite(p[0]) && isFinite(p[1])));
 
   const rottoParam = E.expandMixed([[[[0, 0], [50, 1]], 2.0, 2, "linear", { type: "logarithmic", base: 1 }]]);
   assert("blocco con parametro fuori bound → distError di parametro",
