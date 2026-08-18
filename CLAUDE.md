@@ -32,8 +32,11 @@ make tests            # full suite: tests-node + tests-python
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
   `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
   `test-time-dist.js` (the compact block's time-distribution registry mirror —
-  `window.PGEEnv.timeDistError` plus the no-longer-silent fallback in
-  `computeCycleDurations`).
+  `window.PGEEnv.timeDistError`, including the `(param, n_reps)` overflow whose
+  thresholds are checked against the real engine, plus the no-longer-silent
+  fallback in `computeCycleDurations`), and `test-deviation-probability.js`
+  (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier and
+  `error()`, the mirror of the bodies the engine rejects).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -89,6 +92,41 @@ too.
 The request body carries `yamlContent` (the editor state serialized on every render, saved or not). `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* to a throwaway temp file. This matters for the cache: the engine's per-stream manifest is keyed by the YAML basename (`cache/<basename>.json`), so a render-time temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY — defeating incremental caching entirely. Writing the stable basename keeps the manifest persistent across renders, so only genuinely changed streams re-render.
 
 Consequence: a render persists the current editor state to the source config even if the user never hit Save (Save only additionally clears the in-UI `dirty` flag). There is no "draft" copy. **Git is the versioning/rollback mechanism**: to discard unsaved edits, reset `configs/<basename>.yml` to the last commit (`git checkout -- configs/<basename>.yml`). Keep `configs/` under version control for this reason.
+
+### YAML bodies that can kill a render
+
+Two engine failures the UI mirrors client-side, because in both the engine used
+to accept the body and now refuses it (PGE #209 / #212, PGE-ui issue #123).
+
+`deviation_probability` with a body that will not build as an envelope — `[]`,
+a list with no breakpoint, a dict without `points`, either globally or under a
+per-param key — used to be silenced into an `AlwaysGate`: the render succeeded
+applying the deviation to **100%** of the grains, the opposite of what was
+written. It now raises and the render exits. `window.PGEDeviationProb.error`
+(`src/lib/deviation-probability.js`, node-tested) is the mirror, and the
+Inspector shows it above the mode selector. It is deliberately the
+**conservative half** of the engine's builder: it flags only bodies that cannot
+be an envelope in any reading, so a mixed `[[0,1], 'x']` passes here and is
+caught by the engine — an alert fewer, never one on a YAML that renders.
+
+None of the Inspector controls can produce those bodies (the EnvelopeEditor
+refuses to delete the last breakpoint), so they arrive from the Raw tab or a
+hand-written file. The one exception was the per-param "remove" button: emptying
+the dict wrote the **empty key**, which is the single one of the five off-ish
+spellings that does *not* disable the deviation (it is implicit 1%, PGE #210).
+The off state must serialize as `false` or as no key at all — never as an empty
+key. That rule holds for any future on/off control over this key.
+
+The compact block's time distribution has a second one: `{type: geometric,
+ratio: 10}` with `n_reps: 400` overflows a float. Neither value is out of place
+alone — the constructor that receives the parameter never sees `n_reps` — so it
+is not expressible as a bound, and `timeDistError(dist, nReps)` reports it as a
+third kind, `overflow`, naming both. The check runs on logarithms (computing the
+power to find out it overflows would only yield `Infinity`), and the thresholds
+are pinned against the real engine in `test-time-dist.js`. Known gap, documented
+there: in `power` the engine only overflows with a *float* exponent, and YAML
+`200` vs `200.0` reach JS as the same Number, so only a fractional exponent is
+flagged.
 
 ### Dynamic parameter bounds
 
@@ -150,7 +188,7 @@ The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearin
 
 Sources live under `src/lib/` (the `.js` logic — `window.*` globals, no modules), `src/components/` (the `.jsx` UI), and `styles/` (the `.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all, so the same relative paths work over `file://` and over the bridge. Node tests in `tests/node/` load the libs via relative paths (`../../src/lib/…`, `../../src/components/…`).
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` (needs `window.PGE_BOUNDS` from yaml-bridge) → `src/lib/envelope-loops.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` (needs `window.PGE_BOUNDS` from yaml-bridge) → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 
