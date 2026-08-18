@@ -350,11 +350,38 @@
   // Returns null when the sample duration is unknown (file:// / server down /
   // unreadable file / sample not found) so callers keep the static fallback cap.
   function loopEnvMax(stream, sampleDur) {
-    const unit = (stream && stream.pointer && stream.pointer.loopUnit)
-      || (stream && stream.timeMode) || "absolute";
+    const unit = loopUnitInfo(stream).unit;
     if (unit === "normalized") return 1;
     return (typeof sampleDur === "number" && isFinite(sampleDur) && sampleDur > 0)
       ? sampleDur : null;
+  }
+
+  // Which unit the loop window is written in, and WHERE that unit comes from.
+  // Same resolution as the engine (PointerController._pre_normalize_loop_params:
+  // `loop_unit = params.get('loop_unit') or self._config.time_mode`), but it also
+  // reports the provenance, because the provenance is the whole usability
+  // problem: every stream the editor creates is born `time_mode: normalized`, so
+  // the loop coordinates silently live in [0,1] — and the cap of 1 looks
+  // arbitrary — even though no `loop_unit` key was ever written (issue #126).
+  // The Inspector needs the source to (a) label the loop_unit control as
+  // inherited and (b) delete the key instead of materializing a redundant one
+  // when the user picks the value that was already in force.
+  //   source "loop_unit" → pointer.loop_unit is explicit in the YAML
+  //   source "time_mode" → inherited from the stream's time_mode
+  //   source "default"   → neither key present, engine default "absolute"
+  // Anything other than "normalized" means absolute seconds — the engine only
+  // ever tests `!= 'normalized'` — so an unknown string resolves to "absolute"
+  // here too, keeping the mirror faithful for hand-written YAML.
+  function loopUnitInfo(stream) {
+    const explicit = stream && stream.pointer && stream.pointer.loopUnit;
+    if (explicit) {
+      return { unit: explicit === "normalized" ? "normalized" : "absolute", source: "loop_unit" };
+    }
+    const tm = stream && stream.timeMode;
+    if (tm) {
+      return { unit: tm === "normalized" ? "normalized" : "absolute", source: "time_mode" };
+    }
+    return { unit: "absolute", source: "default" };
   }
 
   // Mirror of the engine's static loop-window validation (PGE issue #97 / engine
@@ -467,6 +494,7 @@
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,
+    loopUnitInfo,
     loopBoundsError,
     grainDurationUnitError,
   };
