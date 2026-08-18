@@ -9,11 +9,11 @@ const fs   = require("fs");
 const path = require("path");
 
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
-// window.PGEEnv at IIFE time and reads window.PGEDephase (dephase.js) at call
+// window.PGEEnv at IIFE time and reads window.PGEDeviationProb (deviation-probability.js) at call
 // time. js-yaml is provided in case envelope-loops needs it.
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
-eval(fs.readFileSync(path.join(__dirname, "../../src/lib/dephase.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const U = window.PGEEnvUtils;
@@ -185,26 +185,26 @@ console.log("\n── range / curve envelopes (issue #61) ──");
     U.streamWouldTruncate({ volumeRangeEnv: [[0, 0], [1, 1]] }, 1) === false);
 }
 
-console.log("\n── dephase envelopes (issue #61) ──");
+console.log("\n── deviationProbability envelopes (issue #61) ──");
 {
   // global probability envelope (array form)
-  const arrStream = { id: "s5", dephase: [[0, 0], [1, 1]] };
+  const arrStream = { id: "s5", deviationProbability: [[0, 0], [1, 1]] };
   const ra = U.rescaleStreamEnvelopes(arrStream, 10, 20);
-  assert("rescale dephase array form", eq(ra.dephase, [[0, 0], [0.5, 1]]));
-  assert("streamWouldTruncate true on dephase array", U.streamWouldTruncate(arrStream, 2) === true);
+  assert("rescale deviationProbability array form", eq(ra.deviationProbability, [[0, 0], [0.5, 1]]));
+  assert("streamWouldTruncate true on deviationProbability array", U.streamWouldTruncate(arrStream, 2) === true);
 
   // per-param object: array params rescaled, scalar/null params preserved verbatim
-  const objStream = { id: "s6", dephase: { volume: [[0, 0], [1, 1]], pan: 0.5, pitch: null } };
+  const objStream = { id: "s6", deviationProbability: { volume: [[0, 0], [1, 1]], pan: 0.5, pitch: null } };
   const ro = U.rescaleStreamEnvelopes(objStream, 10, 20);
-  assert("rescale dephase.volume (array param)", eq(ro.dephase.volume, [[0, 0], [0.5, 1]]));
-  assert("dephase.pan scalar param preserved",   ro.dephase.pan === 0.5);
-  assert("dephase.pitch null param preserved",   ro.dephase.pitch === null);
-  assert("streamWouldTruncate true on dephase.volume env", U.streamWouldTruncate(objStream, 2) === true);
-  assert("rescaleStreamEnvelopes does not mutate dephase input", eq(objStream.dephase.volume, [[0, 0], [1, 1]]));
+  assert("rescale deviationProbability.volume (array param)", eq(ro.deviationProbability.volume, [[0, 0], [0.5, 1]]));
+  assert("deviationProbability.pan scalar param preserved",   ro.deviationProbability.pan === 0.5);
+  assert("deviationProbability.pitch null param preserved",   ro.deviationProbability.pitch === null);
+  assert("streamWouldTruncate true on deviationProbability.volume env", U.streamWouldTruncate(objStream, 2) === true);
+  assert("rescaleStreamEnvelopes does not mutate deviationProbability input", eq(objStream.deviationProbability.volume, [[0, 0], [1, 1]]));
 
-  // scalar / false dephase left untouched (not a time-domain envelope)
-  assert("dephase scalar untouched", U.rescaleStreamEnvelopes({ dephase: 0.01 }, 10, 20).dephase === 0.01);
-  assert("dephase false untouched",  U.rescaleStreamEnvelopes({ dephase: false }, 10, 20).dephase === false);
+  // scalar / false deviationProbability left untouched (not a time-domain envelope)
+  assert("deviationProbability scalar untouched", U.rescaleStreamEnvelopes({ deviationProbability: 0.01 }, 10, 20).deviationProbability === 0.01);
+  assert("deviationProbability false untouched",  U.rescaleStreamEnvelopes({ deviationProbability: false }, 10, 20).deviationProbability === false);
 }
 
 // ---------------------------------------------------------------------------
@@ -248,31 +248,31 @@ console.log("\n── computeYFit ──");
     [r, r2, r3, r4, r5, r6].every(x => x.ymax > x.ymin));
 }
 
-console.log("\n── dephase typed {type,points} envelopes (cubic global interp) ──");
+console.log("\n── deviationProbability typed {type,points} envelopes (cubic global interp) ──");
 {
   // GLOBAL typed envelope (what wrapEnv emits for cubic) must be treated as a
   // single global env: its points rescale, and it counts for truncation.
-  const typedStream = { id: "s7", dephase: { type: "cubic", points: [[0, 0], [1, 1]] } };
+  const typedStream = { id: "s7", deviationProbability: { type: "cubic", points: [[0, 0], [1, 1]] } };
   const rt = U.rescaleStreamEnvelopes(typedStream, 10, 20);
-  assert("rescale dephase typed global env (points scaled)",
-    eq(rt.dephase, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
-  assert("streamWouldTruncate true on typed global dephase env",
+  assert("rescale deviationProbability typed global env (points scaled)",
+    eq(rt.deviationProbability, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
+  assert("streamWouldTruncate true on typed global deviationProbability env",
     U.streamWouldTruncate(typedStream, 2) === true);
-  assert("rescale does not mutate typed dephase input",
-    eq(typedStream.dephase, { type: "cubic", points: [[0, 0], [1, 1]] }));
+  assert("rescale does not mutate typed deviationProbability input",
+    eq(typedStream.deviationProbability, { type: "cubic", points: [[0, 0], [1, 1]] }));
 
   // truncate clips a typed global env past x=1.0 (object-form path).
-  const tt = U.truncateStreamEnvelopes({ id: "s7b", dephase: { type: "cubic", points: [[0, 0], [2, 1]] } });
-  assert("truncate typed global dephase env clips past 1.0",
-    eq(tt.dephase, { type: "cubic", points: [[0, 0], [1, 0.5]] }), JSON.stringify(tt.dephase));
+  const tt = U.truncateStreamEnvelopes({ id: "s7b", deviationProbability: { type: "cubic", points: [[0, 0], [2, 1]] } });
+  assert("truncate typed global deviationProbability env clips past 1.0",
+    eq(tt.deviationProbability, { type: "cubic", points: [[0, 0], [1, 0.5]] }), JSON.stringify(tt.deviationProbability));
 
   // PER-PARAM with a typed envelope value: that param rescales too.
-  const ppStream = { id: "s8", dephase: { volume: { type: "cubic", points: [[0, 0], [1, 1]] }, pan: 0.5 } };
+  const ppStream = { id: "s8", deviationProbability: { volume: { type: "cubic", points: [[0, 0], [1, 1]] }, pan: 0.5 } };
   const rp = U.rescaleStreamEnvelopes(ppStream, 10, 20);
-  assert("rescale dephase.volume typed env param",
-    eq(rp.dephase.volume, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
-  assert("dephase.pan scalar preserved alongside typed param", rp.dephase.pan === 0.5);
-  assert("streamWouldTruncate true on typed per-param dephase env",
+  assert("rescale deviationProbability.volume typed env param",
+    eq(rp.deviationProbability.volume, { type: "cubic", points: [[0, 0], [0.5, 1]] }));
+  assert("deviationProbability.pan scalar preserved alongside typed param", rp.deviationProbability.pan === 0.5);
+  assert("streamWouldTruncate true on typed per-param deviationProbability env",
     U.streamWouldTruncate(ppStream, 2) === true);
 }
 

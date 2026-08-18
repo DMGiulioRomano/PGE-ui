@@ -198,22 +198,23 @@ function listEnvelopes(stream, sampleDur) {
     list.push({ key: "voicesPanStep", label: "pan · step", group: "Voices",
       path: ["voices", "pan", "stepEnv"], unit: "°",
       visMin: -90, visMax: 90, hardMin: -3600, hardMax: 3600 });
-  // dephase env detection goes through the shared classifier (window.PGEDephase),
-  // so the typed {type, points} form (cubic global interp) registers as the
+  // deviation_probability env detection goes through the shared classifier
+  // (window.PGEDeviationProb), so the typed {type, points} form (cubic global
+  // interp) registers as the
   // global env — not silently dropped. isEnvValue is true for [[t,v],…] and
   // {type, points}; the per-param branch only runs when the value is NOT itself
   // an env (i.e. a real per-param dict).
-  const PGEDephase = window.PGEDephase;
-  if (PGEDephase.isEnvValue(stream.dephase)) {
-    list.push({ key: "dephase", label: "probability", group: "Dephase",
-      path: ["dephase"], unit: "%",
+  const PGEDeviationProb = window.PGEDeviationProb;
+  if (PGEDeviationProb.isEnvValue(stream.deviationProbability)) {
+    list.push({ key: "deviation_probability", label: "probability", group: "Deviation",
+      path: ["deviationProbability"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
-  } else if (PGEDephase.mode(stream.dephase) === "perParam") {
-    const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","read_direction","envelope"];
-    for (const pk of DEPHASE_PARAM_KEYS) {
-      if (PGEDephase.isEnvValue(stream.dephase[pk])) {
-        list.push({ key: "dephase_" + pk, label: pk, group: "Dephase",
-          path: ["dephase", pk], unit: "%",
+  } else if (PGEDeviationProb.mode(stream.deviationProbability) === "perParam") {
+    const DEVIATION_PROB_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","read_direction","envelope"];
+    for (const pk of DEVIATION_PROB_PARAM_KEYS) {
+      if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
+        list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
+          path: ["deviationProbability", pk], unit: "%",
           visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
       }
     }
