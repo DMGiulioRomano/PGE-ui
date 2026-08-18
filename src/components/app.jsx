@@ -917,6 +917,8 @@ function App() {
     setGrainData(g => { const n = { ...g }; delete n[id]; return n; });
     grainLoadedRef.current.delete(id); grainRegenRef.current.delete(id);  // ref allineati a grainData (#73)
     if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
+    const _backend = window.PGEBackend?.current;
+    if (_backend?.render?.forgetStream) _backend.render.forgetStream(activeProject.replace(/\.yml$/, ""), id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
