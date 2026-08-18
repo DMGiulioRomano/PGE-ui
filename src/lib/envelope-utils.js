@@ -131,34 +131,38 @@
     });
   }
 
-  // dephase per-parameter envelope keys (mirror EnvelopeEditor.jsx listEnvelopes).
-  const DEPHASE_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"];
+  // deviation_probability per-parameter envelope keys (mirror
+  // EnvelopeEditor.jsx listEnvelopes; same set as the engine's
+  // ParameterSpec.deviation_probability_key values).
+  const DEVIATION_PROBABILITY_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"];
 
-  // dephase is stored verbatim (yaml-bridge passes it through): it can be the
-  // DEPHASE_IMPLICIT sentinel / false / a scalar prob, a GLOBAL envelope (array
-  // [[t,v],…] OR the typed {type, points} object form wrapEnv emits for a
-  // non-linear global interp), or a per-param object whose values are scalar
-  // prob, null, or an envelope (array or typed). Rescale every time-domain
-  // envelope (window.PGEDephase.isEnvValue is the single discriminator, shared
-  // with the Inspector/EnvelopeEditor); keep all other keys/values untouched so
-  // the round trip stays lossless. rescaleEnvArray/truncateEnvArray already
-  // handle the {type, points} object form.
-  function _applyDephase(dephase, fn) {
-    const isEnv = window.PGEDephase.isEnvValue;
-    if (isEnv(dephase)) return fn(dephase);
-    if (dephase && typeof dephase === "object") {
-      return Object.fromEntries(Object.entries(dephase).map(([k, v]) =>
-        DEPHASE_PARAM_KEYS.includes(k) && isEnv(v) ? [k, fn(v)] : [k, v]));
+  // deviation_probability is stored verbatim (yaml-bridge passes it through):
+  // it can be the DEVIATION_PROBABILITY_IMPLICIT sentinel / false / a scalar
+  // prob, a GLOBAL envelope (array [[t,v],…] OR the typed {type, points} object
+  // form wrapEnv emits for a non-linear global interp), or a per-param object
+  // whose values are scalar prob, null, or an envelope (array or typed).
+  // Rescale every time-domain envelope
+  // (window.PGEDeviationProbability.isEnvValue is the single discriminator,
+  // shared with the Inspector/EnvelopeEditor); keep all other keys/values
+  // untouched so the round trip stays lossless.
+  // rescaleEnvArray/truncateEnvArray already handle the {type, points} form.
+  function _applyDeviationProbability(dp, fn) {
+    const isEnv = window.PGEDeviationProbability.isEnvValue;
+    if (isEnv(dp)) return fn(dp);
+    if (dp && typeof dp === "object") {
+      return Object.fromEntries(Object.entries(dp).map(([k, v]) =>
+        DEVIATION_PROBABILITY_PARAM_KEYS.includes(k) && isEnv(v) ? [k, fn(v)] : [k, v]));
     }
-    return dephase;
+    return dp;
   }
 
-  // Collect every time-domain envelope (array or typed) carried by a dephase.
-  function _dephaseEnvs(dephase) {
-    const isEnv = window.PGEDephase.isEnvValue;
-    if (isEnv(dephase)) return [dephase];
-    if (dephase && typeof dephase === "object")
-      return DEPHASE_PARAM_KEYS.map(k => dephase[k]).filter(isEnv);
+  // Collect every time-domain envelope (array or typed) carried by a
+  // deviation_probability.
+  function _deviationProbabilityEnvs(dp) {
+    const isEnv = window.PGEDeviationProbability.isEnvValue;
+    if (isEnv(dp)) return [dp];
+    if (dp && typeof dp === "object")
+      return DEVIATION_PROBABILITY_PARAM_KEYS.map(k => dp[k]).filter(isEnv);
     return [];
   }
 
@@ -166,7 +170,8 @@
   // dello stream, e solo read_direction ne ha uno che non sia il continuo.
   function _applyEnvFields(stream, fn) {
     const wf = (obj, key, domain) => obj[key] != null ? { [key]: fn(obj[key], domain) } : {};
-    const dephaseWalk = Array.isArray(stream.dephase) || (stream.dephase && typeof stream.dephase === "object");
+    const dp = stream.deviationProbability;
+    const dpWalk = Array.isArray(dp) || (dp && typeof dp === "object");
     return {
       ...stream,
       ...wf(stream, "densityEnv"),
@@ -190,7 +195,7 @@
       } : stream.grain,
       pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv"), ...wf(stream.pointer, "offsetRangeEnv") } : stream.pointer,
       pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "valueEnv"), ...wf(stream.pitch, "rangeEnv") } : stream.pitch,
-      ...(dephaseWalk ? { dephase: _applyDephase(stream.dephase, fn) } : {}),
+      ...(dpWalk ? { deviationProbability: _applyDeviationProbability(dp, fn) } : {}),
       voices:  stream.voices  ? {
         ...stream.voices,
         ...wf(stream.voices, "numEnv"),
@@ -287,7 +292,7 @@
       stream.pointer  && stream.pointer.offsetRangeEnv,
       stream.pitch    && stream.pitch.valueEnv,
       stream.pitch    && stream.pitch.rangeEnv,
-      ..._dephaseEnvs(stream.dephase),
+      ..._deviationProbabilityEnvs(stream.deviationProbability),
       stream.voices   && stream.voices.numEnv,
       stream.voices   && stream.voices.scatterEnv,
       stream.voices && stream.voices.pitch        && stream.voices.pitch.stepEnv,
