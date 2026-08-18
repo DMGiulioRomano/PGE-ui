@@ -131,9 +131,9 @@
     });
   }
 
-  // deviation_probability per-parameter envelope keys (mirror
-  // EnvelopeEditor.jsx listEnvelopes).
-  const DEVIATION_PROB_PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"];
+  // deviation_probability per-parameter keys — dal classificatore condiviso,
+  // letto a chiamata come isEnvValue (stesso modulo, stesso ordine di carico).
+  const paramKeys = () => window.PGEDeviationProb.PARAM_KEYS;
 
   // deviation_probability is stored verbatim (yaml-bridge passes it through):
   // it can be the DEVIATION_PROB_IMPLICIT sentinel / false / a scalar prob, a
@@ -150,7 +150,7 @@
     if (isEnv(deviationProbability)) return fn(deviationProbability);
     if (deviationProbability && typeof deviationProbability === "object") {
       return Object.fromEntries(Object.entries(deviationProbability).map(([k, v]) =>
-        DEVIATION_PROB_PARAM_KEYS.includes(k) && isEnv(v) ? [k, fn(v)] : [k, v]));
+        paramKeys().includes(k) && isEnv(v) ? [k, fn(v)] : [k, v]));
     }
     return deviationProbability;
   }
@@ -161,7 +161,7 @@
     const isEnv = window.PGEDeviationProb.isEnvValue;
     if (isEnv(deviationProbability)) return [deviationProbability];
     if (deviationProbability && typeof deviationProbability === "object")
-      return DEVIATION_PROB_PARAM_KEYS.map(k => deviationProbability[k]).filter(isEnv);
+      return paramKeys().map(k => deviationProbability[k]).filter(isEnv);
     return [];
   }
 

@@ -210,8 +210,7 @@ function listEnvelopes(stream, sampleDur) {
       path: ["deviationProbability"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
   } else if (PGEDeviationProb.mode(stream.deviationProbability) === "perParam") {
-    const DEVIATION_PROB_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","read_direction","envelope"];
-    for (const pk of DEVIATION_PROB_PARAM_KEYS) {
+    for (const pk of PGEDeviationProb.PARAM_KEYS) {
       if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
         list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
           path: ["deviationProbability", pk], unit: "%",

@@ -37,6 +37,8 @@ function AddParamMenu({ options, onAdd }) {
                        100% if present, else no variation (engine: GateFactory
                        range-only, same as deviation_probability:false for that param)
 */
+/* Le descrizioni, nell'ordine di window.PGEDeviationProb.PARAM_KEYS — che
+   resta la lista autorevole di cosa il motore consulta davvero. */
 const DEVIATION_PROB_PARAMS = [
   { key: "volume",   desc: "applies volume_range per grain" },
   { key: "pan",      desc: "applies pan_range per grain" },
@@ -66,6 +68,12 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // stops "cubic" from collapsing the envelope and flipping mode to per-param.
   const mode = PGEDeviationProb.mode(d);          // off | implicit | global | perParam
   const dIsEnv = PGEDeviationProb.isEnvValue(d);
+  // Corpi che il motore rifiuta da PGE #209 — envelope svuotato, lista senza
+  // breakpoint, dict senza points. Nessun controllo qui sotto li produce:
+  // arrivano dal tab Raw o da uno YAML scritto a mano, e prima di #209
+  // rendevano applicando la deviazione al 100% dei grani, cioe' l'opposto di
+  // quanto scritto. Ora il render esce con errore: meglio dirlo qui.
+  const bodyErr = PGEDeviationProb.error(d);
 
   function setMode(next) {
     if (next === "off")       return onChange({ deviationProbability: false });
@@ -103,6 +111,18 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
         </span>
         <span />
       </div>
+
+      {bodyErr ? (
+        <div className="pge-prow" style={{paddingTop:0}}>
+          <span className="k" /><span />
+          <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+            {bodyErr.kind === "type"
+              ? `deviation_probability${bodyErr.param ? "." + bodyErr.param : ""}: ${JSON.stringify(bodyErr.value)} non e' ne' una probabilita' (0-100) ne' un envelope: il motore rifiuta lo stream.`
+              : `deviation_probability${bodyErr.param ? "." + bodyErr.param : ""}: ${bodyErr.reason === "empty" ? "envelope senza breakpoint" : "questo corpo non si costruisce come envelope"} — il motore rifiuta lo stream (prima lo trattava come 100%).`}
+          </span>
+          <span />
+        </div>
+      ) : null}
 
       {mode === "off" ? (
         <div className="voice-empty">all _range fields ignored (unless range_always_active)</div>
@@ -159,8 +179,13 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                   <span className="v"><NumberField value={val} unit="%" width={70}
                         onChange={(nv) => onChange({ deviationProbability: { ...d, [p.key]: nv } })} /></span>
                 )}
+                {/* Tolta l'ultima chiave si torna a "off", cioe' `false`, mai alla
+                    chiave vuota: quella e' l'unico dei cinque stati che NON
+                    disattiva la deviazione (PGE #210, jitter implicito 1%), e
+                    scriverla qui trasformerebbe "nessuna probabilita'
+                    dichiarata" in "1% su tutti i parametri". */}
                 <button className="pge-icon-btn" title="Remove"
-                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ deviationProbability: Object.keys(nd).length ? nd : window.PGEYaml.DEVIATION_PROB_IMPLICIT }); }}>
+                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ deviationProbability: Object.keys(nd).length ? nd : false }); }}>
                   <Icon name="x" size={11} />
                 </button>
               </div>

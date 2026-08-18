@@ -79,5 +79,69 @@ assert("null → not env",                 D.isEnvValue(null) === false);
 assert("false → not env",                D.isEnvValue(false) === false);
 assert("string → not env",               D.isEnvValue("cubic") === false);
 
+console.log("\n── PARAM_KEYS ──");
+assert("PARAM_KEYS è la lista che il motore consulta",
+  JSON.stringify(D.PARAM_KEYS) === JSON.stringify(
+    ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"]),
+  JSON.stringify(D.PARAM_KEYS));
+
+/* error() — i corpi che il motore rifiuta da PGE #209. Prima li accettava in
+   silenzio e li leggeva come 100% (AlwaysGate): il render riusciva producendo
+   l'opposto di quanto scritto. Ora solleva, e l'Inspector lo dice prima. */
+console.log("\n── error(): i cinque stati che NON sono errori (PGE #210) ──");
+assert("chiave assente → nessun errore",      D.error(undefined) === null);
+assert("chiave vuota (sentinella) → nessun errore", D.error(DEVIATION_PROB_IMPLICIT) === null);
+assert("dict vuoto → nessun errore",          D.error({}) === null);
+assert("false → nessun errore",               D.error(false) === null);
+assert("dict con sola chiave a null → nessun errore", D.error({ reverse: null }) === null);
+assert("scalare → nessun errore",             D.error(50) === null);
+assert("scalare 0 → nessun errore",           D.error(0) === null);
+assert("true → nessun errore (per il motore è il numero 1)", D.error(true) === null);
+assert("envelope valido → nessun errore",     D.error([[0, 0], [1, 100]]) === null);
+assert("envelope tipizzato valido → nessun errore",
+  D.error({ type: "cubic", points: [[0, 0], [1, 100]] }) === null);
+assert("blocco compatto → nessun errore",     D.error([[[[0, 0], [100, 50]], 1.0, 4]]) === null);
+
+console.log("\n── error(): envelope globale malformato ──");
+assert("lista vuota → env/empty",
+  JSON.stringify(D.error([])) === JSON.stringify({ kind: "env", reason: "empty", value: [] }),
+  JSON.stringify(D.error([])));
+assert("lista senza breakpoint → env/shape", (D.error(["x"]) || {}).reason === "shape");
+assert("points vuoti → env/empty",
+  (D.error({ type: "linear", points: [] }) || {}).reason === "empty");
+// Limite noto, ereditato dal classificatore: isEnvValue chiede che `points` sia
+// una lista, mentre al motore basta che la chiave ci sia. Un `points` scalare
+// qui non è nemmeno un envelope, quindi finisce nel ramo per-parametro e passa.
+assert("points scalare → passa (il classificatore non lo legge come envelope)",
+  D.error({ type: "linear", points: 5 }) === null);
+assert("globale malformato → nessun param nominato",
+  D.error([]).param === undefined, JSON.stringify(D.error([])));
+
+console.log("\n── error(): valore per-parametro malformato ──");
+assert("volume: [] → env/empty su volume",
+  JSON.stringify(D.error({ volume: [] })) ===
+  JSON.stringify({ kind: "env", reason: "empty", param: "volume", value: [] }),
+  JSON.stringify(D.error({ volume: [] })));
+assert("pitch: {} (dict senza points) → env/shape su pitch",
+  (D.error({ pitch: {} }) || {}).param === "pitch" &&
+  (D.error({ pitch: {} }) || {}).reason === "shape");
+assert("pointer: ['x'] → env/shape su pointer",
+  (D.error({ pointer: ["x"] }) || {}).param === "pointer");
+assert("valore di tipo estraneo → type",
+  (D.error({ volume: "x" }) || {}).kind === "type");
+// Il gate chiede il dict una chiave alla volta: quelle che non è mai chiamato a
+// leggere non le legge nessuno, e un corpo rotto lì dentro non rompe il render.
+assert("chiave che il motore non consulta → nessun errore", D.error({ foo: [] }) === null);
+assert("chiave buona accanto a una ignota → nessun errore", D.error({ foo: [], volume: 50 }) === null);
+
+console.log("\n── error(): tipo di primo livello ──");
+assert("stringa → type", (D.error("ciao") || {}).kind === "type");
+assert("stringa → riporta il valore", D.error("ciao").value === "ciao");
+
+// Falso negativo dichiarato: il motore rifiuta anche la lista mista, il mirror
+// no. È la direzione voluta — un avviso in meno, mai uno su uno YAML che rende.
+assert("lista mista buono+rotto → passa (mirror conservativo)",
+  D.error([[0, 0], "x"]) === null);
+
 console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

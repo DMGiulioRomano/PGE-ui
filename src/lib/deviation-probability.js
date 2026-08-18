@@ -49,5 +49,75 @@
     return "off";
   }
 
-  window.PGEDeviationProb = { mode, isEnvValue };
+  /* Le chiavi che il motore consulta davvero in modalità per-parametro: una
+     per `deviation_probability_key` dichiarata nei ParameterSpec. Le altre
+     chiavi di quel dict non vengono mai lette (nessun gate le chiede), quindi
+     non sono un errore e non vanno validate. */
+  const PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer",
+                      "reverse", "read_direction", "envelope"];
+
+  /* Un corpo destinato a diventare envelope si costruisce? Ritorna null se sì,
+     altrimenti il motivo: "empty" (nessun breakpoint) o "shape" (niente di
+     riconoscibile dentro).
+
+     È la metà conservativa del builder del motore: segnala solo i corpi che
+     NON possono essere un envelope in nessuna lettura. Una lista con un
+     elemento buono e uno rotto (`[[0,1], 'x']`) il motore la rifiuta lo stesso,
+     qui passa — meglio un avviso in meno che un avviso su uno YAML che rende. */
+  function _envBodyError(v) {
+    const E = window.PGEEnv;
+    if (Array.isArray(v)) {
+      if (v.length === 0) return "empty";
+      const any = v.some(it => E.isBreakpoint(it) || E.isBPGroup(it) || E.isCompactBlock(it));
+      return any ? null : "shape";
+    }
+    if (v && typeof v === "object") {
+      // Il builder legge `points` senza guardare se c'è: un dict che non ce
+      // l'ha alza KeyError, ed è il terzo dei corpi malformati di PGE #209.
+      if (!Array.isArray(v.points)) return "shape";
+      return _envBodyError(v.points);
+    }
+    return null;
+  }
+
+  /* I corpi che il motore rifiuta (PGE #209). Prima li accettava in silenzio e
+     li trattava come probabilità 100% — il render riusciva producendo
+     l'opposto di quanto scritto; ora solleva e il render esce con errore.
+
+     Nessuno di questi corpi è producibile dai controlli dell'Inspector (il
+     verso "off" scrive `false`, l'EnvelopeEditor rifiuta di svuotare un
+     envelope): arrivano dal tab Raw o da uno YAML scritto a mano, e allora
+     tanto vale dirlo prima del render invece che dopo.
+
+     Ritorna null se valido, altrimenti { kind, reason?, param?, value }:
+       "type" → il corpo non è bool | numero | envelope | dict per-parametro
+       "env"  → un corpo che vuole essere envelope e non si costruisce
+     `param` è presente quando il colpevole è una chiave del dict per-parametro
+     — la stessa che il motore nomina come `deviation_probability.<chiave>`.
+     Puro: niente DOM, niente chiamate al motore. */
+  function error(d) {
+    if (d === undefined || d === null || d === false) return null;
+    if (d === window.PGEYaml.DEVIATION_PROB_IMPLICIT) return null;
+    // `true` non è un errore: per il motore è un numero, e float(True) è 1%.
+    if (typeof d === "number" || typeof d === "boolean") return null;
+    if (typeof d !== "object") return { kind: "type", value: d };
+
+    if (isEnvValue(d)) {
+      const reason = _envBodyError(d);
+      return reason ? { kind: "env", reason, value: d } : null;
+    }
+
+    for (const k of PARAM_KEYS) {
+      if (!(k in d)) continue;
+      const v = d[k];
+      // chiave a null = range-only per quel parametro, non un envelope vuoto
+      if (v === null || typeof v === "number" || typeof v === "boolean") continue;
+      if (typeof v !== "object") return { kind: "type", param: k, value: v };
+      const reason = _envBodyError(v);
+      if (reason) return { kind: "env", reason, param: k, value: v };
+    }
+    return null;
+  }
+
+  window.PGEDeviationProb = { mode, isEnvValue, error, PARAM_KEYS };
 })();
