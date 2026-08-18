@@ -1,7 +1,7 @@
 /* =============================================================================
  * test-yaml-bridge.js — test suite for yaml-bridge.js round-trip fidelity
  * (pitch units, pointer loop keys, fill_factor, per-block extras, time_mode,
- * dephase) — YAML→editor→YAML and editor→YAML→editor.
+ * deviation_probability) — YAML→editor→YAML and editor→YAML→editor.
  *
  * Run: node test-yaml-bridge.js (from tests/node/ after npm install)
  * =========================================================================== */
@@ -616,77 +616,93 @@ console.log("\n── time_mode (#35) ──");
 }
 
 /* ============================================================
- * SECTION 8c — dephase: implicit null vs absent vs explicit (#36)
+ * SECTION 8c — deviation_probability: implicit null vs absent vs explicit (#36),
+ * and the healing of the legacy `dephase` spelling (#124).
+ *
+ * PGE renamed the key in v7.0.0 ("Deviation Probability", commit 93b0a1c,
+ * PGE #204) with no back-compat alias. The engine's StreamConfig.from_yaml
+ * picks fields BY NAME, so the old spelling isn't rejected — it's dropped,
+ * and the stream renders with deviation_probability=False while the YAML
+ * says 50. Writing the old name is therefore a silent behaviour change, not
+ * a parse error.
  * ============================================================ */
 
-console.log("\n── dephase (#36) ──");
+console.log("\n── deviation_probability (#36, #124) ──");
 
-const { DEPHASE_IMPLICIT } = window.PGEYaml;
+const { DEVIATION_PROBABILITY_IMPLICIT } = window.PGEYaml;
 
 {
-  assert("DEPHASE_IMPLICIT exported", typeof DEPHASE_IMPLICIT === "string" && DEPHASE_IMPLICIT.length > 0,
-    JSON.stringify(DEPHASE_IMPLICIT));
+  assert("DEVIATION_PROBABILITY_IMPLICIT exported",
+    typeof DEVIATION_PROBABILITY_IMPLICIT === "string" && DEVIATION_PROBABILITY_IMPLICIT.length > 0,
+    JSON.stringify(DEVIATION_PROBABILITY_IMPLICIT));
 }
 
 {
   // absent → off (no key emitted)
   const data = parse(topLevelYaml([]));
-  assert("dephase absent — undefined in state", data.streams[0].dephase === undefined,
-    JSON.stringify(data.streams[0].dephase));
+  assert("deviation_probability absent — undefined in state",
+    data.streams[0].deviationProbability === undefined,
+    JSON.stringify(data.streams[0].deviationProbability));
   const y = serialize(data);
-  assert("dephase absent — not emitted", !y.includes("dephase"), y.slice(0, 400));
+  assert("deviation_probability absent — not emitted", !y.includes("deviation_probability"), y.slice(0, 400));
 }
 
 {
   // explicit false → kept
-  const data = parse(topLevelYaml(["dephase: false"]));
-  assert("dephase false — kept in state", data.streams[0].dephase === false, JSON.stringify(data.streams[0].dephase));
+  const data = parse(topLevelYaml(["deviation_probability: false"]));
+  assert("deviation_probability false — kept in state", data.streams[0].deviationProbability === false,
+    JSON.stringify(data.streams[0].deviationProbability));
   const y = serialize(data);
-  assert("dephase false — emitted", /dephase: false/.test(y), y.slice(0, 400));
-  assert("roundtrip dephase false — no diffs", roundTripDiff(data).length === 0, JSON.stringify(roundTripDiff(data)));
+  assert("deviation_probability false — emitted", /deviation_probability: false/.test(y), y.slice(0, 400));
+  assert("roundtrip deviation_probability false — no diffs", roundTripDiff(data).length === 0,
+    JSON.stringify(roundTripDiff(data)));
 }
 
 {
-  // `dephase: null` (explicit) and `dephase:` (bare) both = implicit 1%
-  for (const variant of ["dephase: null", "dephase:"]) {
+  // `deviation_probability: null` (explicit) and the bare key both = implicit 1%
+  for (const variant of ["deviation_probability: null", "deviation_probability:"]) {
     const data = parse(topLevelYaml([variant]));
-    assert(`'${variant}' — sentinel in state`, data.streams[0].dephase === DEPHASE_IMPLICIT,
-      JSON.stringify(data.streams[0].dephase));
+    assert(`'${variant}' — sentinel in state`,
+      data.streams[0].deviationProbability === DEVIATION_PROBABILITY_IMPLICIT,
+      JSON.stringify(data.streams[0].deviationProbability));
     const y = serialize(data);
-    assert(`'${variant}' — re-emitted as dephase: null`, /^\s*dephase: null$/m.test(y), y.slice(0, 500));
+    assert(`'${variant}' — re-emitted as deviation_probability: null`,
+      /^\s*deviation_probability: null$/m.test(y), y.slice(0, 500));
     assert(`'${variant}' — roundtrip no diffs`, roundTripDiff(data).length === 0,
       JSON.stringify(roundTripDiff(data)));
   }
 }
 
 {
-  // global scalar and envelope forms unchanged
-  const dataN = parse(topLevelYaml(["dephase: 50"]));
-  assert("dephase scalar — kept", dataN.streams[0].dephase === 50, JSON.stringify(dataN.streams[0].dephase));
-  assert("roundtrip dephase scalar — no diffs", roundTripDiff(dataN).length === 0,
+  // scalar and envelope forms pass through
+  const dataN = parse(topLevelYaml(["deviation_probability: 50"]));
+  assert("deviation_probability scalar — kept", dataN.streams[0].deviationProbability === 50,
+    JSON.stringify(dataN.streams[0].deviationProbability));
+  assert("roundtrip deviation_probability scalar — no diffs", roundTripDiff(dataN).length === 0,
     JSON.stringify(roundTripDiff(dataN)));
-  const dataE = parse(topLevelYaml(["dephase: [[0, 0], [30, 80]]"]));
-  assert("dephase env — kept", Array.isArray(dataE.streams[0].dephase) && dataE.streams[0].dephase.length === 2,
-    JSON.stringify(dataE.streams[0].dephase));
-  assert("roundtrip dephase env — no diffs", roundTripDiff(dataE).length === 0,
+
+  const dataE = parse(topLevelYaml(["deviation_probability: [[0, 0], [30, 80]]"]));
+  assert("deviation_probability env — kept",
+    Array.isArray(dataE.streams[0].deviationProbability) && dataE.streams[0].deviationProbability.length === 2,
+    JSON.stringify(dataE.streams[0].deviationProbability));
+  assert("roundtrip deviation_probability env — no diffs", roundTripDiff(dataE).length === 0,
     JSON.stringify(roundTripDiff(dataE)));
 }
 
 {
-  // global typed-envelope {type, points} — what the editor emits when the user
-  // picks cubic on a global dephase envelope. The engine reads it as a GLOBAL
-  // cubic envelope (is_envelope_like: dict with 'points', classified before the
-  // per-param dict branch), so it must round-trip verbatim, not be flattened or
-  // mistaken for a per-param object.
-  const dataT = parse(topLevelYaml(["dephase:", "  type: cubic", "  points: [[0, 0], [1, 100]]"]));
-  const d = dataT.streams[0].dephase;
-  assert("dephase typed env — object with type+points kept",
-    d && d.type === "cubic" && Array.isArray(d.points) && d.points.length === 2, JSON.stringify(d));
-  assert("roundtrip dephase typed env — no diffs", roundTripDiff(dataT).length === 0,
+  // Typed `{type, points}` global envelope: the form wrapEnv emits when the user
+  // picks cubic on a global deviation_probability envelope. The engine reads it
+  // as a GLOBAL envelope (Envelope.is_envelope_like tests 'points' BEFORE the
+  // dict→per-param branch), so the round trip must keep it whole.
+  const dataT = parse(topLevelYaml(["deviation_probability:", "  type: cubic", "  points: [[0, 0], [1, 100]]"]));
+  const d = dataT.streams[0].deviationProbability;
+  assert("deviation_probability typed env — object with type+points kept",
+    d && d.type === "cubic" && Array.isArray(d.points), JSON.stringify(d));
+  assert("roundtrip deviation_probability typed env — no diffs", roundTripDiff(dataT).length === 0,
     JSON.stringify(roundTripDiff(dataT)));
-  assert("dephase typed env — survives YAML→UI→YAML→UI",
-    eq(parse(serialize(dataT)).streams[0].dephase, d),
-    JSON.stringify({ before: d, after: parse(serialize(dataT)).streams[0].dephase }));
+  assert("deviation_probability typed env — survives YAML→UI→YAML→UI",
+    eq(parse(serialize(dataT)).streams[0].deviationProbability, d),
+    JSON.stringify({ before: d, after: parse(serialize(dataT)).streams[0].deviationProbability }));
 }
 
 {
@@ -697,43 +713,122 @@ const { DEPHASE_IMPLICIT } = window.PGEYaml;
     onset: 0
     duration: 5
     sample: test.wav
-    dephase:
+    deviation_probability:
       pitch: 50
       reverse:
 `;
   const data = parse(yamlPP);
-  const d = data.streams[0].dephase;
-  assert("dephase per-param — object kept", d && typeof d === "object" && !Array.isArray(d), JSON.stringify(d));
-  assert("dephase per-param — pitch 50", d.pitch === 50, JSON.stringify(d));
-  assert("dephase per-param — internal null stays null", d.reverse === null, JSON.stringify(d));
+  const d = data.streams[0].deviationProbability;
+  assert("deviation_probability per-param — object kept", d && typeof d === "object" && !Array.isArray(d), JSON.stringify(d));
+  assert("deviation_probability per-param — pitch 50", d.pitch === 50, JSON.stringify(d));
+  assert("deviation_probability per-param — internal null stays null", d.reverse === null, JSON.stringify(d));
   const y = serialize(data);
-  assert("dephase per-param — reverse: null re-emitted", /reverse: null/.test(y), y.slice(0, 500));
-  assert("roundtrip dephase per-param — no diffs", roundTripDiff(data).length === 0,
+  assert("deviation_probability per-param — reverse: null re-emitted", /reverse: null/.test(y), y.slice(0, 500));
+  assert("roundtrip deviation_probability per-param — no diffs", roundTripDiff(data).length === 0,
     JSON.stringify(roundTripDiff(data)));
 }
 
 {
   // UI→YAML→UI starting from sentinel state (e.g. set via Inspector)
   const data = parse(topLevelYaml([]));
-  data.streams[0].dephase = DEPHASE_IMPLICIT;
+  data.streams[0].deviationProbability = DEVIATION_PROBABILITY_IMPLICIT;
   const back = parse(serialize(data));
-  assert("sentinel state survives UI→YAML→UI", back.streams[0].dephase === DEPHASE_IMPLICIT,
-    JSON.stringify(back.streams[0].dephase));
+  assert("sentinel state survives UI→YAML→UI",
+    back.streams[0].deviationProbability === DEVIATION_PROBABILITY_IMPLICIT,
+    JSON.stringify(back.streams[0].deviationProbability));
 }
 
-const dephaseFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
-for (const f of dephaseFixtures) {
+/* ---- the legacy `dephase` spelling (#124) ---------------------------------
+   Same shape as `loop_duration`: a key the engine never knew, written by older
+   editor builds, healed at parse and re-emitted under the name the engine
+   reads. Without the healing a pre-v7 project reopened today would drop its
+   deviation into `_extra` and render silently flat. */
+{
+  const data = parse(topLevelYaml(["dephase: 50"]));
+  const s = data.streams[0];
+  assert("legacy dephase — healed into deviationProbability", s.deviationProbability === 50,
+    JSON.stringify(s.deviationProbability));
+  assert("legacy dephase — flagged as migrated", s.deviationProbabilityLegacy === true,
+    JSON.stringify(s.deviationProbabilityLegacy));
+  assert("legacy dephase — not left in _extra", !(s._extra && "dephase" in s._extra),
+    JSON.stringify(s._extra));
+  const y = serialize(data);
+  assert("legacy dephase — re-emitted under the new name", /^\s*deviation_probability: 50$/m.test(y), y.slice(0, 500));
+  assert("legacy dephase — old key gone from the YAML", !/\bdephase\b/.test(y), y.slice(0, 500));
+}
+
+{
+  // The healing runs once: after the migrating pass the stream is an ordinary
+  // deviation_probability stream, flag included, and stops moving.
+  const migrated = parse(serialize(parse(topLevelYaml(["dephase: 50"]))));
+  assert("legacy dephase — settles after one migration pass",
+    migrated.streams[0].deviationProbability === 50 && !migrated.streams[0].deviationProbabilityLegacy,
+    JSON.stringify({ v: migrated.streams[0].deviationProbability, legacy: migrated.streams[0].deviationProbabilityLegacy }));
+  assert("legacy dephase — migrated stream round-trips clean",
+    roundTripDiff(migrated).length === 0, JSON.stringify(roundTripDiff(migrated)));
+}
+
+{
+  // the bare legacy key is the implicit-1% sentinel, same as the new spelling
+  const data = parse(topLevelYaml(["dephase:"]));
+  assert("legacy bare dephase — sentinel", data.streams[0].deviationProbability === DEVIATION_PROBABILITY_IMPLICIT,
+    JSON.stringify(data.streams[0].deviationProbability));
+  assert("legacy bare dephase — re-emitted as deviation_probability: null",
+    /^\s*deviation_probability: null$/m.test(serialize(data)), serialize(data).slice(0, 500));
+}
+
+{
+  // both spellings present: the one the engine reads wins, the dead one is dropped
+  const data = parse(topLevelYaml(["dephase: 10", "deviation_probability: 90"]));
+  const s = data.streams[0];
+  assert("both keys — the engine's key wins", s.deviationProbability === 90,
+    JSON.stringify(s.deviationProbability));
+  assert("both keys — not flagged legacy (nothing was migrated)", !s.deviationProbabilityLegacy,
+    JSON.stringify(s.deviationProbabilityLegacy));
+  const y = serialize(data);
+  assert("both keys — only the new one emitted", /deviation_probability: 90/.test(y) && !/\bdephase\b/.test(y),
+    y.slice(0, 500));
+}
+
+{
+  // the legacy flag is provenance, not content: it must not reach the YAML,
+  // and it must not mark an untouched stem stale (like durationImplicit).
+  const data = parse(topLevelYaml(["dephase: 50"]));
+  assert("legacy flag — never serialized", !serialize(data).includes("Legacy"), serialize(data).slice(0, 400));
+  const fresh = parse(topLevelYaml(["deviation_probability: 50"]));
+  assert("legacy flag — same fingerprint as the healed stream",
+    fpIgnoresLegacyFlag(data.streams[0], fresh.streams[0]),
+    JSON.stringify({ legacy: data.streams[0], fresh: fresh.streams[0] }));
+}
+
+/* Mirrors backend.js FP_IGNORE: two streams that differ ONLY by the legacy
+   provenance flag must hash the same, or reopening a pre-v7 project would mark
+   every stem stale for a key spelling. */
+function fpIgnoresLegacyFlag(a, b) {
+  const strip = (s) => {
+    const { deviationProbabilityLegacy, color, ...rest } = s;
+    return JSON.stringify(rest, Object.keys(rest).sort());
+  };
+  return strip(a) === strip(b);
+}
+
+const deviationFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
+for (const f of deviationFixtures) {
   const p = path.join(__dirname, "../../..", "PythonGranularEngine/configs", f);
-  if (!fs.existsSync(p)) { console.log(`  SKIP dephase fixture ${f} (not found)`); continue; }
+  if (!fs.existsSync(p)) { console.log(`  SKIP deviation_probability fixture ${f} (not found)`); continue; }
   const data = parse(fs.readFileSync(p, "utf8"));
-  const flags = data.streams.map(s => s.dephase !== undefined);
+  const flags = data.streams.map(s => s.deviationProbability !== undefined);
+  // The fixtures are the engine's own configs: post-v7 they carry the new key,
+  // so this must actually observe something rather than pass on all-undefined.
+  assert(`${f} — fixture exercises deviation_probability`, flags.some(Boolean),
+    JSON.stringify(flags));
   const back = parse(serialize(data));
-  const backFlags = back.streams.map(s => s.dephase !== undefined);
-  assert(`${f} — dephase presence stable through reparse`, eq(flags, backFlags),
+  const backFlags = back.streams.map(s => s.deviationProbability !== undefined);
+  assert(`${f} — deviation_probability presence stable through reparse`, eq(flags, backFlags),
     JSON.stringify({ before: flags, after: backFlags }));
-  assert(`${f} — dephase values stable through reparse`,
-    eq(data.streams.map(s => s.dephase), back.streams.map(s => s.dephase)),
-    JSON.stringify({ before: data.streams.map(s => s.dephase), after: back.streams.map(s => s.dephase) }));
+  assert(`${f} — deviation_probability values stable through reparse`,
+    eq(data.streams.map(s => s.deviationProbability), back.streams.map(s => s.deviationProbability)),
+    JSON.stringify({ before: data.streams.map(s => s.deviationProbability), after: back.streams.map(s => s.deviationProbability) }));
 }
 
 /* ============================================================
@@ -901,7 +996,8 @@ console.log("\n── grain.envelope curve: step/cubic dict form (no crash) ─�
 /* ============================================================
  * SECTION 8f — explicit *_range: 0 is preserved (#50). Engine-side an explicit
  * range (even 0) sets has_explicit_range and DISABLES the implicit jitter the
- * dephase gate would otherwise apply (parameter.py _calculate_range: _mod_range
+ * deviation_probability gate would otherwise apply (parameter.py
+ * _calculate_range: _mod_range
  * is None -> default_jitter); absent means "use the implicit jitter". So 0 is
  * NOT equivalent to absent — same rule already applied to pitch.range (#34).
  * The old `!== 0` serialize guard dropped an explicit 0 (and parse coerced
@@ -1148,12 +1244,13 @@ assert("#42 presentation helpers loaded",
 }
 
 {
-  // dephase modes survive the per-stream round trip (implicit / false / number).
-  for (const dep of ["dephase:", "dephase: false", "dephase: 0.2"]) {
+  // deviation_probability modes survive the per-stream round trip
+  // (implicit / false / number).
+  for (const dep of ["deviation_probability:", "deviation_probability: false", "deviation_probability: 0.2"]) {
     const s = streamOf(topLevelYaml([dep]));
     const back = parseStream(serializeStream(s));
-    assert(`#42 dephase round trip — "${dep}"`, eq(stripColor(s), stripColor(back)),
-      JSON.stringify({ before: s.dephase, after: back.dephase }));
+    assert(`#42 deviation_probability round trip — "${dep}"`, eq(stripColor(s), stripColor(back)),
+      JSON.stringify({ before: s.deviationProbability, after: back.deviationProbability }));
   }
 }
 
@@ -1359,7 +1456,7 @@ const envHeavyYaml = `streams:
       pan:
         spread: [[0, 60], [0.27, 155], [1, 60]]
         strategy: stochastic
-    dephase: [[0, 100], [0.4047, 100], [1, 1]]
+    deviation_probability: [[0, 100], [0.4047, 100], [1, 1]]
 `;
 
 {
@@ -1375,7 +1472,7 @@ const envHeavyYaml = `streams:
   assert("inline — pan bracket form",          /^\s*pan: \[\[0, 0\], /m.test(y),               y.slice(0, 900));
   assert("inline — pointer.speed_ratio inline",/^\s*speed_ratio: \[\[0\.00228, 0\.07\], /m.test(y), y);
   assert("inline — grain.duration inline",     /^\s*duration: \[\[0, 0\.05\], /m.test(y),      y);
-  assert("inline — dephase inline",            /^\s*dephase: \[\[0, 100\], /m.test(y),         y);
+  assert("inline — deviation_probability inline", /^\s*deviation_probability: \[\[0, 100\], /m.test(y), y);
 
   // Per-point interp triple preserved inside the inline list.
   assert("inline — per-point interp kept inline", /\[0\.1262, 208\.37, cubic\]/.test(y), y.slice(0, 700));

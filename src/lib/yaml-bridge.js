@@ -23,10 +23,11 @@
  *     `<block>._extra` (those blocks are rebuilt in full on serialize).
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
- *   - dephase keeps all engine states: absent (off) | false (off) |
- *     null = implicit 1% (stored as the DEPHASE_IMPLICIT sentinel string,
- *     because parse/serialize plumbing collapses null and undefined) |
- *     scalar | envelope-array | per-param object.
+ *   - deviation_probability keeps all engine states: absent (off) | false (off) |
+ *     null = implicit 1% (stored as the DEVIATION_PROBABILITY_IMPLICIT sentinel
+ *     string, because parse/serialize plumbing collapses null and undefined) |
+ *     scalar | envelope-array | per-param object. The pre-v7 spelling
+ *     `dephase` is healed at parse (see LEGACY_DEVIATION_KEY).
  *   - time_mode: absence is preserved (engine default is "absolute");
  *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
@@ -82,13 +83,22 @@
 
   const PALETTE = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
 
-  /* Editor-state sentinel for `dephase: null` (key present, empty value),
-   * which the engine reads as "implicit mode, default 1% probability".
-   * A plain null cannot represent it in the editor state: it would collapse
-   * into undefined (= key absent = off) across `??` plumbing and JSON
-   * clipboard copies. A string survives all of those and never collides
-   * with legit engine values (bool | number | array | object). */
-  const DEPHASE_IMPLICIT = "implicit";
+  /* Editor-state sentinel for `deviation_probability: null` (key present,
+   * empty value), which the engine reads as "implicit mode, default 1%
+   * probability". A plain null cannot represent it in the editor state: it
+   * would collapse into undefined (= key absent = off) across `??` plumbing
+   * and JSON clipboard copies. A string survives all of those and never
+   * collides with legit engine values (bool | number | array | object). */
+  const DEVIATION_PROBABILITY_IMPLICIT = "implicit";
+
+  /* Pre-v7 spelling of the key. PGE renamed it in v7.0.0 ("Deviation
+   * Probability", PGE #204) with no back-compat alias, and its
+   * StreamConfig.from_yaml picks fields BY NAME — so the old spelling is not
+   * rejected, it is dropped, and the stream renders flat while the YAML still
+   * reads `dephase: 50`. Healed at parse and re-emitted under the new name,
+   * the same treatment `loop_duration` gets a few lines down: a key the engine
+   * never knew, written by older editor builds. #124 */
+  const LEGACY_DEVIATION_KEY = "dephase";
 
   /* Known stream-level keys we map explicitly. Everything else under a
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
@@ -99,7 +109,7 @@
     "density", "fill_factor", "distribution",
     "grain", "pointer", "pitch", "voices",
     "pan", "pan_range", "volume", "volume_range",
-    "dephase",
+    "deviation_probability", LEGACY_DEVIATION_KEY,
     "solo", "mute",
     "rng_group",
   ]);
@@ -372,8 +382,9 @@
     const grainDur = pickValueOrEnv(grain.duration, grain.durationEnv);
     const grainY = {
       duration:       grainDur,
-      // Explicit 0 is meaningful: it disables the implicit jitter the dephase
-      // gate would otherwise apply (engine parameter.py), same as pitch.range —
+      // Explicit 0 is meaningful: it disables the implicit jitter the
+      // deviation_probability gate would otherwise apply (engine parameter.py),
+      // same as pitch.range —
       // emit it. pickValueOrEnv returns undefined when truly unset (null). #50
       duration_range: pickValueOrEnv(grain.durationRange, grain.durationRangeEnv),
       // Meta-chiave (PGE #158): unità di duration/duration_range. Emessa solo
@@ -434,7 +445,8 @@
       const hasValue = pitchVal !== undefined;
       const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
       // Explicit `range: 0` is meaningful engine-side (it disables the
-      // implicit detune that dephase.pitch would otherwise apply) — emit it.
+      // implicit detune that deviation_probability.pitch would otherwise apply) —
+      // emit it.
       // Unset stays null in the editor state and is not emitted.
       const hasRange = rangeVal !== undefined;
       const pitchExtra = (pi._extra && typeof pi._extra === "object" && Object.keys(pi._extra).length) ? pi._extra : undefined;
@@ -490,8 +502,11 @@
     if (s.solo) y.solo = true;
     if (s.mute) y.mute = true;
 
-    if (s.dephase === DEPHASE_IMPLICIT) y.dephase = null; // dumps as `dephase: null`
-    else if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
+    // Always the new spelling: a healed legacy stream is written back under the
+    // name the engine reads, which is the migration PGE asks for.
+    if (s.deviationProbability === DEVIATION_PROBABILITY_IMPLICIT) y.deviation_probability = null;
+    else if (s.deviationProbability !== undefined && s.deviationProbability !== null)
+      y.deviation_probability = s.deviationProbability;
 
     // Pass through any extra top-level keys we don't model explicitly.
     if (s._extra && typeof s._extra === "object") {
@@ -529,7 +544,8 @@
   function isInlineEnvelope(node) {
     if (!Array.isArray(node) || node.length === 0) return false;
     // A list of breakpoints (array and/or dict form), e.g. density, points,
-    // states, curve, spread, dephase. Excludes `streams` (objects without t/v).
+    // states, curve, spread, deviation_probability. Excludes `streams` (objects
+    // without t/v).
     if (node.every(isBreakpointEntry)) return true;
     // Bare single compact loop block: [pattern, end_time, n_reps, interp?, dist?]
     if (Array.isArray(node[0]) && node[0].length > 0 && Array.isArray(node[0][0]) &&
@@ -801,7 +817,24 @@
       // Key present with null value = implicit 1% — distinct from key absent
       // (= off). Per-param objects pass verbatim: a null INSIDE the object
       // means "default prob for that key" and stays null.
-      dephase: ("dephase" in y) ? (y.dephase === null ? DEPHASE_IMPLICIT : y.dephase) : undefined,
+      //
+      // The legacy `dephase` spelling only fills in when the engine's key is
+      // absent: with both in the file the live key wins and the dead one is
+      // dropped, because that is what the render already does. The healing is
+      // recorded so the Inspector can say the file will be rewritten — it is
+      // provenance, not content, so it stays out of the YAML and out of the
+      // stem fingerprint (backend.js FP_IGNORE).
+      ...(() => {
+        const hasNew = "deviation_probability" in y;
+        const key = hasNew ? "deviation_probability"
+                  : (LEGACY_DEVIATION_KEY in y ? LEGACY_DEVIATION_KEY : null);
+        if (key === null) return { deviationProbability: undefined };
+        const raw = y[key];
+        return {
+          deviationProbability: raw === null ? DEVIATION_PROBABILITY_IMPLICIT : raw,
+          ...(hasNew ? {} : { deviationProbabilityLegacy: true }),
+        };
+      })(),
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -1064,6 +1097,6 @@
     emptyProject,
     computeDuration,
     roundTripDiff,
-    DEPHASE_IMPLICIT,
+    DEVIATION_PROBABILITY_IMPLICIT,
   };
 })();
