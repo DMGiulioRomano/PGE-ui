@@ -384,8 +384,8 @@
       duration:       grainDur,
       // Explicit 0 is meaningful: it disables the implicit jitter the
       // deviation_probability gate would otherwise apply (engine parameter.py),
-      // same as pitch.range —
-      // emit it. pickValueOrEnv returns undefined when truly unset (null). #50
+      // same as pitch.range — emit it. pickValueOrEnv returns undefined when
+      // truly unset (null). #50
       duration_range: pickValueOrEnv(grain.durationRange, grain.durationRangeEnv),
       // Meta-chiave (PGE #158): unità di duration/duration_range. Emessa solo
       // se impostata; assente = default engine (seconds).
@@ -444,10 +444,9 @@
       const pitchVal = pickValueOrEnv(pi.value, pi.valueEnv);
       const hasValue = pitchVal !== undefined;
       const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
-      // Explicit `range: 0` is meaningful engine-side (it disables the
-      // implicit detune that deviation_probability.pitch would otherwise apply) —
-      // emit it.
-      // Unset stays null in the editor state and is not emitted.
+      // Explicit `range: 0` is meaningful engine-side (it disables the implicit
+      // detune that deviation_probability.pitch would otherwise apply) — emit
+      // it. Unset stays null in the editor state and is not emitted.
       const hasRange = rangeVal !== undefined;
       const pitchExtra = (pi._extra && typeof pi._extra === "object" && Object.keys(pi._extra).length) ? pi._extra : undefined;
       if (hasValue || hasRange || pitchExtra) {
