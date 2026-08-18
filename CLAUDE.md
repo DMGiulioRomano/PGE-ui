@@ -99,15 +99,31 @@ Two engine failures the UI mirrors client-side, because in both the engine used
 to accept the body and now refuses it (PGE #209 / #212, PGE-ui issue #123).
 
 `deviation_probability` with a body that will not build as an envelope — `[]`,
-a list with no breakpoint, a dict without `points`, either globally or under a
-per-param key — used to be silenced into an `AlwaysGate`: the render succeeded
-applying the deviation to **100%** of the grains, the opposite of what was
-written. It now raises and the render exits. `window.PGEDeviationProb.error`
-(`src/lib/deviation-probability.js`, node-tested) is the mirror, and the
-Inspector shows it above the mode selector. It is deliberately the
-**conservative half** of the engine's builder: it flags only bodies that cannot
-be an envelope in any reading, so a mixed `[[0,1], 'x']` passes here and is
-caught by the engine — an alert fewer, never one on a YAML that renders.
+a list with no breakpoint, a dict whose `points` is missing or unusable, either
+globally or under a per-param key — used to be silenced into an `AlwaysGate`:
+the render succeeded applying the deviation to **100%** of the grains, the
+opposite of what was written. It now raises and the render exits.
+`window.PGEDeviationProb.error` (`src/lib/deviation-probability.js`,
+node-tested) is the mirror, and the Inspector shows it above the mode selector.
+It is deliberately the **conservative half** of the engine's builder: it flags
+only bodies that cannot be an envelope in any reading, so a mixed
+`[[0,1], 'x']` passes here and is caught by the engine — an alert fewer, never
+one on a YAML that renders. The two forms where the body *is* the group or the
+block (a bare BP group, a bare compact block) are tried on the whole array
+before its elements, exactly as `is_envelope_like` does, or they would be
+flagged on a YAML that renders.
+
+`isEnvValue` — which decides global-vs-per-param, and therefore which panel the
+editor opens — is the engine's dict rule verbatim: **`'points' in obj`**,
+nothing more. `isTypedEnv` next door stays stricter because there `type` is the
+datum being read; here the only question is whether the engine will treat the
+body as an envelope. Consequence to keep in mind when touching either: a bare
+`{points: [...]}` without `type` (which the editor never emits, but a
+hand-written file can carry) is a global envelope, so `unwrapEnv` reads that
+form too — declaring it an envelope without teaching `unwrapEnv` to open it
+would show it empty in the editor, and a commit there would empty it for real.
+`true` is likewise **not** off: `bool` is a subclass of `int` in Python, so the
+engine builds a `RandomGate` on `float(True)`, and `mode()` says `global`.
 
 None of the Inspector controls can produce those bodies (the EnvelopeEditor
 refuses to delete the last breakpoint), so they arrive from the Raw tab or a
@@ -123,10 +139,18 @@ alone — the constructor that receives the parameter never sees `n_reps` — so
 is not expressible as a bound, and `timeDistError(dist, nReps)` reports it as a
 third kind, `overflow`, naming both. The check runs on logarithms (computing the
 power to find out it overflows would only yield `Infinity`), and the thresholds
-are pinned against the real engine in `test-time-dist.js`. Known gap, documented
-there: in `power` the engine only overflows with a *float* exponent, and YAML
-`200` vs `200.0` reach JS as the same Number, so only a fractional exponent is
-flagged.
+are pinned against the real engine in `test-time-dist.js`. They model Python's
+**integer** semantics, the more permissive of the two: in `power` only a
+fractional exponent is flagged (with an integer one Python computes on unbounded
+ints and renders), and in `geometric`/`exponential` the float threshold sits one
+`n_reps` lower than the integer one, so there is a one-value band where the
+engine overflows and the UI stays quiet. Always the safe direction.
+
+That leaves the mirror image — pairs the engine renders and `Math.pow`
+does not — so `computeCycleDurations` has a second, cheaper net on its
+**output**: if the durations are not all finite, or do not sum to `T`, it falls
+back to equal cycles anyway. That covers the whole int/float casistica without
+enumerating it, and is the same fallback the declared-error path already takes.
 
 ### Dynamic parameter bounds
 
