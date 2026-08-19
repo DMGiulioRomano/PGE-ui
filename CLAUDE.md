@@ -142,14 +142,25 @@ and `pc_rand_envelope` is live unless `grain.envelope` is a transition
 stream so the Inspector gets those three; called without it, only the five are
 validated — fewer alerts, never one on a YAML that renders. What is **not** in
 either list is `envelope`: its spec (`grain_envelope`) is `is_smart=False`, so
-it never reaches `GateFactory` and `{envelope: 50}` builds an `AlwaysGate` —
-the window switches on every grain whatever number you write. The Inspector row
-that used to write it now writes `pc_rand_envelope`, which is the param key the
-`WindowController` actually asks for. A third list, `ALL_PARAM_KEYS`, is the
-union of everything readable in some configuration, and it exists for the
-opposite constraint: the envelope walk in `envelope-utils.js` rescales and
-truncates, where missing a key leaves an envelope out of scale on a YAML that
-renders.
+it never reaches `GateFactory`: with more than one window `{envelope: 50}`
+builds an `AlwaysGate` and with a single one a `NeverGate`, and in neither does
+the number you wrote count — the key is indistinguishable from an invented one.
+The Inspector *offers* `pc_rand_envelope` instead, which is the param key the
+`WindowController` actually asks for, but it still *shows* an `envelope` already
+written in the file, marked inert: that row is the only place the mistake is
+visible and removable.
+
+A third list, `ALL_PARAM_KEYS`, is neither of those. It is the set of per-param
+keys the editor may find written — the eight the engine reads in some
+configuration, plus the dead `envelope` that existing projects carry — and it
+exists for the constraint opposite to validation's. Two consumers need it: the
+envelope walk in `envelope-utils.js`, which rescales and truncates (a key missed
+there leaves an envelope out of scale on a YAML that renders), and
+`listEnvelopes` in the EnvelopeEditor, which is the catalog of what can be
+opened and drawn (a key missed there makes a written envelope unreachable, and
+the Inspector's env-mini click open a different one). Neither asks whether the
+engine consults the key — that is `error()`'s question, and it has the opposite
+cost.
 
 `isEnvValue` — which decides global-vs-per-param, and therefore which panel the
 editor opens — is the engine's dict rule verbatim: **`'points' in obj`**,
@@ -169,8 +180,12 @@ EnvelopeEditor's "would this leave it empty?" check lived only in the
 delete-a-breakpoint branch, while deleting a *block* (Delete key, or the loop
 panel's "remove loop") had none: an envelope made of a single loop block
 committed `[]`, which is exactly the body of PGE #209. The check is now one
-function (`wouldEmptyEnv`) used by all three paths, and the button is disabled
-rather than inert when it would empty the envelope. The other hole was the
+function (`wouldEmptyEnv`) used by all five paths — Delete on a breakpoint, on a
+block, the loop panel's button, double-click on a breakpoint, and pasting an
+envelope — and the button is disabled (with its own `:disabled` rule) rather
+than inert when it would empty the envelope. It takes the **desugared** form: on
+a bare BP group it would say "empty" about a full envelope, so a caller holding
+`rawEnvRaw` must desugar first. The other hole was the
 per-param "remove" button: emptying the dict wrote the **empty key**, which is
 the single one of the five off-ish spellings that does *not* disable the
 deviation (it is implicit 1%, PGE #210).
@@ -204,16 +219,26 @@ error, because nothing in the YAML necessarily needs fixing.
 **What that warn may not claim is what the engine will do.** The two fallbacks
 look symmetrical and are not: `distError` fires because `timeDistError` has just
 established that the engine rejects the block, so its text can say so. The
-output guard fires where `Math.pow` gave up, which says nothing about the engine
-— and the one-value band above, the one `timeDistError` deliberately lets
-through, is exactly where the engine *does* reject (`{geometric, ratio: 2}` at
-1024 cycles, `{exponential, rate: 0.5}` at 1025, both verified by running it).
-The two conditions cannot be made to coincide without replicating Python's
-integer semantics, which is what this net exists to avoid. So the message states
-only what is known: the drawn durations are not the block's. The thresholds stay
-as they are — at `ratio: 2` the parity is *exact* in double precision
-(`1024*Math.log10(2) === Math.log10(Number.MAX_VALUE)`), and tightening the
-inequality would bring back false positives.
+output guard fires where `Math.pow` gave up, which says nothing about the
+engine: inside the band `timeDistError` deliberately lets through, the engine
+*rejects* `{geometric, ratio: 2}` at 1024 cycles and `{exponential, rate: 0.5}`
+at 1025, and *renders* `{geometric, ratio: 10}` at 309 in **integer** spelling —
+which is the very pair the threshold comment cites as the reason not to adopt
+the float one. The band holds both because it holds both spellings, and Python
+tells them apart. The two conditions cannot be made to coincide without
+replicating Python's integer semantics, which is what this net exists to avoid.
+So the message states only what is known: the drawn durations are not the
+block's. The thresholds stay as they are — at `ratio: 2` the parity is *exact*
+in double precision, and tightening the inequality would bring back false
+positives.
+
+One threshold *was* misaligned, and is now the engine's: `computeCycleDurations`
+took `geometric` to be uniform below `|ratio − 1| < 1e-9`, the engine below
+`1e-6`. In the window between them the engine returned equal cycles while the
+mirror still computed `1 - Math.pow(r, N)` — catastrophic cancellation, not
+overflow — so the sum missed `T`, the output guard tripped, and the panel warned
+about a preview that was exactly right. `exponential` and `logarithmic` have no
+linear fallback engine-side, so there is nothing to align there.
 
 ### Dynamic parameter bounds
 
