@@ -546,11 +546,15 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // contraddirebbe la riga di hint due righe più sotto.
   const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
   // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
-  // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con
-  // gli stessi criteri (_pre_normalize_loop_params scala 'start' a prescindere
-  // dal loop), quindi senza blocco resterebbe senza suffisso e senza nessuno
-  // che dica perché: uno YAML scritto a mano con time_mode: normalized e nessun
-  // loop cade proprio lì.
+  // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo
+  // stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere dal
+  // loop), quindi senza blocco resterebbe senza suffisso e senza nessuno che
+  // dica perché: uno YAML scritto a mano con time_mode: normalized e nessun
+  // loop cade proprio lì. La scala sì, il bound no: 'start' è dichiarato
+  // is_smart=False nello schema del motore — valore raw, nessun Parameter e
+  // quindi nessun clamp — perciò qui NON passa da clampLoop e il Seg non lo
+  // include nel ri-clamp: sarebbe la UI a inventarsi un vincolo che il motore
+  // non ha.
   const loopBlockShown = !!(stream.pointer && (
     stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
     stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
@@ -817,7 +821,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <div className="pge-prow hint" style={{paddingTop:0}}>
                   <span className="k" /><span />
                   <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                    pointer.start ∈ [0, 1], scalato per sample_dur dal motore ({loopUnit.source === "loop_unit" ? "loop_unit" : "time_mode"}: normalized)
+                    pointer.start è scalato per sample_dur dal motore ({loopUnit.source === "loop_unit" ? "loop_unit" : "time_mode"}: normalized) — valore raw, senza bound
                   </span>
                   <span />
                 </div>
@@ -913,7 +917,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     <span className="k" /><span />
                     <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
                       {loopUnit.unit === "normalized"
-                        ? "loop_start/end/dur e pointer.start ∈ [0, 1], scalati per sample_dur dal motore"
+                        ? "loop_start/end/dur ∈ [0, 1] · pointer.start è scalato per sample_dur ma resta un valore raw, senza bound (is_smart=False)"
                         : (loopMax != null
                             ? ("loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
                             : "loop_start/end/dur in secondi · durata del sample ignota, cap statico")}

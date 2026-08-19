@@ -560,12 +560,17 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
     && (inspSrc.match(/unit=\{stream\.pointer\.loop\w+Env \? "" : loopUnitSuffix\}/g) || []).length === 3);
   assert("anche pointer.start segue l'unità (il motore scala pure quello)",
     /name="start"[\s\S]{0,160}unit=\{loopUnitSuffix\}/.test(inspSrc)
-    && /pointer\.start ∈ \[0, 1\]/.test(inspSrc));
+    && /pointer\.start è scalato per sample_dur ma resta un valore raw/.test(inspSrc));
   assert("un loop_unit ignoto scritto a mano si mostra per quello che dice lo YAML",
     /"esplicito: " \+ stream\.pointer\.loopUnit/.test(inspSrc));
   assert("senza blocco loop una riga spiega perché start ha perso il suffisso",
     /loopUnit\.unit === "normalized" && !loopBlockShown/.test(inspSrc)
-    && /pointer\.start ∈ \[0, 1\], scalato per sample_dur/.test(inspSrc));
+    && /pointer\.start è scalato per sample_dur dal motore/.test(inspSrc));
+  // start è is_smart=False lato motore (valore raw, nessun bound): clamparlo
+  // qui sarebbe la UI a inventarsi un vincolo che il render non ha.
+  assert("il ri-clamp resta sui tre estremi del loop, start fuori",
+    /for \(const k of \["loopStart", "loopEnd", "loopDur"\]\)/.test(inspSrc)
+    && !/start: clampLoop/.test(inspSrc));
   assert("cambiare unità ri-clampa gli estremi scalari col cap della nuova unità",
     /const cap = window\.PGEEnvUtils\.loopEnvMax\(\{ \.\.\.stream, pointer: np \}, sampleDur\)/.test(inspSrc)
     && /np\[k\] = clampLoop\(k, np\[k\], cap\)/.test(inspSrc));
