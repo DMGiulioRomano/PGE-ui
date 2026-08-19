@@ -325,7 +325,17 @@
     }
     if (type === "geometric" || type === "geo") {
       const r = p.ratio != null ? +p.ratio : 1.5;
-      if (Math.abs(r - 1) < 1e-9) return uniform();
+      // 1e-6, la stessa soglia del motore (time_distribution.py: `abs(ratio -
+      // 1.0) < 1e-6` -> LinearDistribution), non 1e-9. Nella finestra fra le
+      // due il motore ripiegava su cicli uguali e qui il conto si faceva
+      // davvero: `1 - Math.pow(r, N)` con r a un miliardesimo da 1 e' pura
+      // cancellazione catastrofica, la somma non torna, e la guardia
+      // sull'output segnalava un'anteprima che era invece esatta. Nessun
+      // overflow di mezzo — allineare la soglia toglie il caso, allargare il
+      // testo del warn lo avrebbe solo raccontato meglio.
+      // `exponential` e `logarithmic` non hanno un ripiego lineare nel motore:
+      // qui non c'e' niente da allineare.
+      if (Math.abs(r - 1) < 1e-6) return uniform();
       const d0 = T * (1 - r) / (1 - Math.pow(r, N));
       return guard(new Array(N).fill(0).map((_, i) => d0 * Math.pow(r, i)));
     }
@@ -357,13 +367,18 @@
 
        Quello che il flag NON dice è cosa farà il motore, e il messaggio del
        pannello non lo afferma: la guardia scatta dove `Math.pow` non arriva, e
-       lì il motore a volte rende (`{power, exponent: 1000}` su 4 cicli mette il
-       100% del tempo nell'ultimo), a volte rifiuta — tutta la banda int/float
-       che `timeDistError` lascia passare di proposito (`{geometric, ratio: 2}`
-       a 1024 cicli, `{exponential, rate: 0.5}` a 1025) alza
-       `ParameterBoundError`. Le due condizioni non coincidono e non possono:
-       distinguerle vorrebbe dire replicare la semantica intera di Python, che è
-       esattamente ciò che questa rete evita di fare. */
+       lì il motore a volte rende, a volte rifiuta. Rende con
+       `{power, exponent: 1000}` su 4 cicli (il 100% del tempo nell'ultimo), e
+       rende anche dentro la banda int/float che `timeDistError` lascia passare
+       di proposito: `{geometric, ratio: 10}` a 309 cicli, in grafia INTERA,
+       somma 2.0 esatta — è la coppia che il commento alla soglia, poco più su,
+       cita come ragione per non adottare quella float. Rifiuta invece
+       `{geometric, ratio: 2}` a 1024 e `{exponential, rate: 0.5}` a 1025, in
+       entrambe le grafie. La banda contiene tutti e due i casi perché contiene
+       entrambe le tipizzazioni, e il motore le distingue. Le due condizioni non
+       coincidono e non possono: distinguerle vorrebbe dire replicare la
+       semantica intera di Python, che è esattamente ciò che questa rete evita
+       di fare. */
     function guard(durs) {
       const sum = durs.reduce((a, b) => a + b, 0);
       const ok = durs.every(d => isFinite(d) && d >= 0) &&

@@ -333,8 +333,29 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
       E.isPreviewFallback(E.computeCycleDurations(2.0, n, spec)) === true);
   }
 
-  assert("la parità esatta a ratio: 2 è ancora quella su cui poggia la banda",
-    1024 * Math.log10(2) === Math.log10(Number.MAX_VALUE));
+  // Nota, non asserzione: `1024*Math.log10(2) === Math.log10(Number.MAX_VALUE)`
+  // è una proprietà di IEEE754, che nessuna modifica a questo repo può far
+  // cadere — è la stessa classe della tautologia rimossa nel giro precedente.
+  // È la ragione per cui la disuguaglianza in _overflowError deve restare `>`:
+  // il comportamento che ne dipende è già fissato dalla riga qui sopra, che a
+  // `ratio: 2` @1024 pretende `timeDistError` null.
+
+  /* La finestra lineare del motore: `abs(ratio - 1.0) < 1e-6` ripiega su
+     LinearDistribution (time_distribution.py). Il mirror la teneva a 1e-9, e
+     nella finestra fra le due faceva il conto per davvero: `1 - Math.pow(r, N)`
+     con r a un miliardesimo da 1 è cancellazione catastrofica, la somma non
+     torna a T, la guardia scattava — e il pannello avvisava su un'anteprima
+     esatta. Le durate qui sotto sono le stesse su entrambi i lati, verificate
+     eseguendo il motore. */
+  for (const [r, n] of [[1.000000002, 4], [0.999999998, 4], [1.00000001, 8]]) {
+    const durs = E.computeCycleDurations(2.0, n, { type: "geometric", ratio: r });
+    assert(`geometric ratio=${r} @${n}: nessun ripiego (è la finestra lineare del motore)`,
+      E.isPreviewFallback(durs) === false);
+    assert(`geometric ratio=${r} @${n}: cicli uguali, come il motore`,
+      durs.every(d => Math.abs(d - 2.0 / n) < 1e-12), JSON.stringify(durs));
+  }
+  // `exponential` e `logarithmic` non hanno un ripiego lineare nel motore:
+  // niente da allineare, e nessuna trip muta nello sweep sui parametri ordinari.
 
   const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
   const warn = (eeSrc.split("block.previewFallback ?")[1] || "").slice(0, 700);
