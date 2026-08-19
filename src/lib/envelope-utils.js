@@ -309,13 +309,18 @@
   // only grow — leaving an envelope whose points sit in a small sub-range
   // squashed against one edge. With no finite points it falls back to the
   // [visMin,visMax] default window; a constant set opens a minimal window
-  // (0.01 for seconds, else 1) so a flat curve isn't pinned to an edge.
+  // (0.01 on a fine-grained parameter, else 1) so a flat curve isn't pinned to
+  // an edge. `fine` is the caller's precision declaration, NOT the display unit:
+  // the loop window is fine-grained in both its units, and in normalized it has
+  // no unit string at all (issue #126) — reading the unit here would have
+  // silently coarsened it to a 1-wide window on a [0,1] axis.
   // Pure: EnvelopeEditor recomputes it on open / param change / end-of-drag and
   // freezes the returned window during a drag (so the dragged point can't
   // "run away" under a rescaling axis). Returns { ymin, ymax }, ymax > ymin.
   function computeYFit(values, opts) {
     opts = opts || {};
-    const { visMin, visMax, hardMin, hardMax, unit } = opts;
+    const { visMin, visMax, hardMin, hardMax } = opts;
+    const fine = !!opts.fine;
     const padFrac = opts.padFrac == null ? 0.10 : opts.padFrac;
     const nums = (values || []).filter(v => typeof v === "number" && isFinite(v));
     let lo, hi;
@@ -326,13 +331,13 @@
       lo = (typeof visMin === "number") ? visMin : 0;
       hi = (typeof visMax === "number") ? visMax : lo + 1;
     }
-    if (lo === hi) hi = lo + (unit === "s" ? 0.01 : 1);
+    if (lo === hi) hi = lo + (fine ? 0.01 : 1);
     const range = hi - lo;
     hi = hi + range * padFrac;
     lo = lo - range * padFrac;
     if (typeof hardMax === "number") hi = Math.min(hardMax, hi);
     if (typeof hardMin === "number") lo = Math.max(hardMin, lo);
-    if (!(hi > lo)) hi = lo + (unit === "s" ? 0.01 : 1);
+    if (!(hi > lo)) hi = lo + (fine ? 0.01 : 1);
     return { ymin: lo, ymax: hi };
   }
 
@@ -350,11 +355,38 @@
   // Returns null when the sample duration is unknown (file:// / server down /
   // unreadable file / sample not found) so callers keep the static fallback cap.
   function loopEnvMax(stream, sampleDur) {
-    const unit = (stream && stream.pointer && stream.pointer.loopUnit)
-      || (stream && stream.timeMode) || "absolute";
+    const unit = loopUnitInfo(stream).unit;
     if (unit === "normalized") return 1;
     return (typeof sampleDur === "number" && isFinite(sampleDur) && sampleDur > 0)
       ? sampleDur : null;
+  }
+
+  // Which unit the loop window is written in, and WHERE that unit comes from.
+  // Same resolution as the engine (PointerController._pre_normalize_loop_params:
+  // `loop_unit = params.get('loop_unit') or self._config.time_mode`), but it also
+  // reports the provenance, because the provenance is the whole usability
+  // problem: every stream the editor creates is born `time_mode: normalized`, so
+  // the loop coordinates silently live in [0,1] — and the cap of 1 looks
+  // arbitrary — even though no `loop_unit` key was ever written (issue #126).
+  // The Inspector needs the source to (a) label the loop_unit control as
+  // inherited and (b) delete the key instead of materializing a redundant one
+  // when the user picks the value that was already in force.
+  //   source "loop_unit" → pointer.loop_unit is explicit in the YAML
+  //   source "time_mode" → inherited from the stream's time_mode
+  //   source "default"   → neither key present, engine default "absolute"
+  // Anything other than "normalized" means absolute seconds — the engine only
+  // ever tests `!= 'normalized'` — so an unknown string resolves to "absolute"
+  // here too, keeping the mirror faithful for hand-written YAML.
+  function loopUnitInfo(stream) {
+    const explicit = stream && stream.pointer && stream.pointer.loopUnit;
+    if (explicit) {
+      return { unit: explicit === "normalized" ? "normalized" : "absolute", source: "loop_unit" };
+    }
+    const tm = stream && stream.timeMode;
+    if (tm) {
+      return { unit: tm === "normalized" ? "normalized" : "absolute", source: "time_mode" };
+    }
+    return { unit: "absolute", source: "default" };
   }
 
   // Mirror of the engine's static loop-window validation (PGE issue #97 / engine
@@ -467,6 +499,7 @@
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,
+    loopUnitInfo,
     loopBoundsError,
     grainDurationUnitError,
   };

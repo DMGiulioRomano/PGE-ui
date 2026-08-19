@@ -534,10 +534,39 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // duration is unknown) keeps the static PGE_BOUNDS max. Mirrors the
   // sample-driven hardMax the EnvelopeEditor applies to the same params.
   const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
-  const clampLoop = (key, v) => {
+  // Which unit the loop coordinates are in, and where it comes from (issue
+  // #126). Every stream the editor creates is born `time_mode: normalized`, so
+  // the loop window silently lives in [0,1] and the cap of 1 reads as arbitrary
+  // — the YAML never mentions loop_unit. `loopUnitInherited` is what would be in
+  // force with the key absent: picking it in the control deletes the key instead
+  // of materializing a redundant one.
+  const loopUnit = window.PGEEnvUtils.loopUnitInfo(stream);
+  const loopUnitInherited = window.PGEEnvUtils.loopUnitInfo({ timeMode: stream.timeMode }).unit;
+  // In normalized le coordinate del loop non sono secondi: un suffisso "s"
+  // contraddirebbe la riga di hint due righe più sotto.
+  const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
+  // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
+  // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo
+  // stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere dal
+  // loop), quindi senza blocco resterebbe senza suffisso e senza nessuno che
+  // dica perché: uno YAML scritto a mano con time_mode: normalized e nessun
+  // loop cade proprio lì. La scala sì, il bound no: 'start' è dichiarato
+  // is_smart=False nello schema del motore — valore raw, nessun Parameter e
+  // quindi nessun clamp — perciò qui NON passa da clampLoop e il Seg non lo
+  // include nel ri-clamp: sarebbe la UI a inventarsi un vincolo che il motore
+  // non ha.
+  const loopBlockShown = !!(stream.pointer && (
+    stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
+    stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
+    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null ||
+    stream.pointer.loopUnit  != null));
+  // `cap` overrides the current loop cap — the unit control needs to clamp
+  // against the cap the NEW unit brings, before the new pointer is state.
+  const clampLoop = (key, v, cap) => {
     const b = window.PGE_BOUNDS[key];
-    const hi = loopMax != null ? loopMax : (b ? b.max : Infinity);
-    return Math.max(b ? b.min : 0, Math.min(hi, v));
+    const hi = cap === undefined ? loopMax : cap;
+    const max = hi != null ? hi : (b ? b.max : Infinity);
+    return Math.max(b ? b.min : 0, Math.min(max, v));
   };
 
   // Loop semantics (issue #97): with a loop active the engine confines the grain
@@ -785,14 +814,23 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         onSelect={() => setSelRow("speed")} selected={selRow==="speed"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, speedRatio: v}})} />
               <ParamRow name="start" mode="scalar"
-                        value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
+                        value={stream.pointer.start != null ? stream.pointer.start : 0} unit={loopUnitSuffix}
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
+              {loopUnit.unit === "normalized" && !loopBlockShown ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                    pointer.start è scalato per sample_dur dal motore ({loopUnit.source === "loop_unit" ? "loop_unit" : "time_mode"}: normalized) — valore raw, senza bound
+                  </span>
+                  <span />
+                </div>
+              ) : null}
+              {loopBlockShown ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
-                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : (stream.pointer.loopStartEnv ? "—" : 0)} unit={stream.pointer.loopStartEnv ? "" : "s"}
+                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : (stream.pointer.loopStartEnv ? "—" : 0)} unit={stream.pointer.loopStartEnv ? "" : loopUnitSuffix}
                             accent={stream.pointer.loopStartEnv != null}
                             envValue={stream.pointer.loopStartEnv}
                             onEditEnv={focusEnv("loopStart")}
@@ -828,7 +866,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
                     <ParamRow name="loop_end"
                               mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
-                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : "s"}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopEndEnv != null}
                               envValue={stream.pointer.loopEndEnv}
                               onEditEnv={focusEnv("loopEnd")}
@@ -836,22 +874,56 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
-                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
+                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
                               onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: clampLoop("loopDur", v)}})} />
                   )}
-                  {stream.pointer.loopUnit ? (
-                    <div className="pge-prow">
-                      <span className="k">loop_unit</span><span />
-                      <span className="v"><span style={{color:"var(--accent)"}}>{stream.pointer.loopUnit}</span></span>
-                      <button className="pge-icon-btn" title="Remove"
-                              onClick={() => { const np = { ...stream.pointer }; delete np.loopUnit; onChange({ pointer: np }); }}>
-                        <Icon name="x" size={11} />
-                      </button>
-                    </div>
-                  ) : null}
+                  <div className="pge-prow">
+                    <span className="k" title="unità delle coordinate del loop: absolute → secondi, cap = durata del sample · normalized → [0,1] × sample_dur. Assente = ereditata da time_mode (motore: loop_unit or time_mode)">loop_unit</span>
+                    <Seg size="xs" value={loopUnit.unit}
+                         onChange={(u) => {
+                           const np = { ...stream.pointer };
+                           // The unit already in force needs no key: absence
+                           // means "inherit from time_mode", and writing it out
+                           // would change the YAML without changing the render.
+                           if (u === loopUnitInherited) delete np.loopUnit; else np.loopUnit = u;
+                           // The cap travels with the unit (1 in normalized,
+                           // sample_dur in seconds), so the endpoints get the
+                           // same clamp a typed edit gets — otherwise switching
+                           // to normalized would leave a 12 s loop_start sitting
+                           // in a [0,1] field, which the engine silently clamps
+                           // at render. Envelope endpoints are per-grain and
+                           // exempt, as everywhere else in the loop block.
+                           const cap = window.PGEEnvUtils.loopEnvMax({ ...stream, pointer: np }, sampleDur);
+                           for (const k of ["loopStart", "loopEnd", "loopDur"]) {
+                             if (typeof np[k] === "number") np[k] = clampLoop(k, np[k], cap);
+                           }
+                           onChange({ pointer: np });
+                         }}
+                         options={[{label:"absolute",value:"absolute"},{label:"normalized",value:"normalized"}]} />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)"}}>
+                      {loopUnit.source === "loop_unit"
+                        ? (stream.pointer.loopUnit === loopUnit.unit
+                            ? "esplicito"
+                            : ("esplicito: " + stream.pointer.loopUnit))
+                        : loopUnit.source === "time_mode" ? ("da time_mode: " + stream.timeMode)
+                        : "default"}
+                    </span>
+                    <span />
+                  </div>
+                  <div className="pge-prow hint" style={{paddingTop:0}}>
+                    <span className="k" /><span />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                      {loopUnit.unit === "normalized"
+                        ? "loop_start/end/dur ∈ [0, 1] · pointer.start è scalato per sample_dur ma resta un valore raw, senza bound (is_smart=False)"
+                        : (loopMax != null
+                            ? ("loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
+                            : "loop_start/end/dur in secondi · durata del sample ignota, cap statico")}
+                    </span>
+                    <span />
+                  </div>
                   {loopBoundsErr ? (
                     <div className="pge-prow" style={{paddingTop:0}}>
                       <span className="k" /><span />
@@ -905,17 +977,15 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
                   { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s) — loop_start+loop_dur > sample_dur ⇒ loop straddling the file end",
                     exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
-                  { key: "loopUnit",    label: "loop_unit",    desc: "\"normalized\" → loop coords ∈ [0,1] × sample_dur",
-                    exists: stream.pointer.loopUnit != null, def: "normalized" },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
                 ]}
                 onAdd={(o) => {
                   const np = { ...stream.pointer, [o.key]: o.def };
                   // Loop fields only render together — if the user introduces
-                  // loop_end/loop_dur/loop_unit without loop_start, seed it to 0
-                  // so the row block appears.
-                  if ((o.key === "loopEnd" || o.key === "loopDur" || o.key === "loopUnit")
+                  // loop_end/loop_dur without loop_start, seed it to 0 so the
+                  // row block appears.
+                  if ((o.key === "loopEnd" || o.key === "loopDur")
                        && np.loopStart == null) {
                     np.loopStart = 0;
                   }
