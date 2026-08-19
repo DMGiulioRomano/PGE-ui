@@ -17,6 +17,21 @@ function pitchEnvBounds(unit, semis, signed) {
     : { visMin: 0,    visMax: vis, hardMin: 0,     hardMax: hard };
 }
 
+/* Un envelope resterebbe senza contenuto? Un array senza nessun breakpoint
+   isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il primo
+   dei corpi che il motore rifiuta da PGE #209 (InvalidFieldValueError). Nessuna
+   cancellazione dell'editor deve poterci arrivare: il guard sta qui una volta
+   sola perche' le vie sono tre (Delete su un breakpoint, Delete su un blocco,
+   il bottone "remove loop"), e finche' ne restava una scoperta la riga di
+   CLAUDE.md che dichiara l'editor incapace di produrre quei corpi era falsa. */
+function wouldEmptyEnv(next) {
+  const E = window.PGEEnv;
+  if (!Array.isArray(next)) return true;
+  const bps   = next.filter(E.isBreakpoint).length;
+  const loops = next.filter(E.isCompactBlock).length;
+  return bps + loops < 1;
+}
+
 /* ---------- Envelope catalog ---------- */
 function listEnvelopes(stream, sampleDur) {
   if (!stream) return [];
@@ -348,7 +363,7 @@ const DIST_PARAM = {
 function distType(d) {return typeof d === "string" ? d : d && d.type || "linear";}
 function distParams(d) {return typeof d === "object" && d ? d : {};}
 
-function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
+function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, interpTypes }) {
   // interpTypes: ristretto a ["step"] sui domini discreti (read_direction),
   // dove gli altri valori sono errori di parse e non curve alternative.
   const INTERP_TYPES = interpTypes || _INTERP_TYPES;
@@ -392,7 +407,12 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
           [{block.start.toFixed(3)} → {block.end.toFixed(3)}] · {block.pattern.length}pt × {n} cycles
         </span>
         <span style={{ flex: 1 }} />
-        <button className="ee-loop-panel-del" title="remove loop" onClick={onDelete}>
+        {/* Disabilitato quando questo blocco e' tutto l'envelope: toglierlo
+            scriverebbe `[]`, che il motore rifiuta (PGE #209). Un bottone
+            inerte e spiegato e' meglio di un click che non fa niente. */}
+        <button className="ee-loop-panel-del" disabled={!!onDeleteBlocked}
+                title={onDeleteBlocked ? "e' l'unico contenuto dell'envelope: aggiungi un breakpoint o un altro loop prima di rimuoverlo" : "remove loop"}
+                onClick={onDelete}>
           <Icon name="trash" size={11} />
         </button>
       </div>
@@ -673,13 +693,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         // Allow deletion unless it would leave the envelope without any
         // standalone BP AND without any loop block (i.e. truly empty).
         const next = cur.filter((_, i) => i !== selectedBP);
-        const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
-        const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
-        if (remainingBPs + remainingLoops < 1) {setSelectedBP(null);return;}
+        if (wouldEmptyEnv(next)) {setSelectedBP(null);return;}
         commitCur(next);
         setSelectedBP(null);
       } else if (selectedBlock != null) {
+        // Stesso guard del ramo qui sopra: un envelope fatto di UN solo blocco
+        // loop si svuotava premendo Delete, e `[]` e' esattamente il corpo che
+        // il motore rifiuta da PGE #209 — l'editor produceva da solo lo YAML
+        // che questa PR insegna a segnalare.
         const next = cur.filter((_, i) => i !== selectedBlock);
+        if (wouldEmptyEnv(next)) {setSelectedBlock(null);return;}
         commitCur(next);
         setSelectedBlock(null);
       }
@@ -1545,6 +1568,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function deleteSelectedLoop() {
     if (selectedBlock == null) return;
     const next = rawEnv.filter((_, i) => i !== selectedBlock);
+    // Il bottone "remove loop" e' l'altra via per svuotare l'envelope: stesso
+    // guard della tastiera. Il bottone e' gia' disabilitato in questo caso
+    // (`onDeleteBlocked`), questo e' il presidio dietro.
+    if (wouldEmptyEnv(next)) return;
     commit(next);
     setSelectedBlock(null);
     setSelectedPattern(null);
@@ -1885,7 +1912,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       <LoopBlockPanel block={selectedBlockObj} color={stream.color}
       interpTypes={interpTypes}
       onUpdate={(newRaw) => updateBlock(selectedBlock, newRaw)}
-      onDelete={deleteSelectedLoop} /> :
+      onDelete={deleteSelectedLoop}
+      onDeleteBlocked={wouldEmptyEnv(rawEnv.filter((_, i) => i !== selectedBlock))} /> :
       selZoneObj ?
       <BPZonePanel zone={selZoneObj} color={stream.color}
       interp={zoneEffInterp(selZoneObj) || defaultInterp}

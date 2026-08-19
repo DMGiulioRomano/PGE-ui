@@ -263,5 +263,36 @@ assert("stringa → riporta il valore", D.error("ciao").value === "ciao");
 assert("lista mista buono+rotto → passa (mirror conservativo)",
   D.error([[0, 0], "x"]) === null);
 
+/* Cablaggio: i due posti che devono usare il modulo come si deve.
+   Sono guardie sul sorgente perche' vivono in JSX, che i test node non
+   eseguono — ma sono esattamente le righe che, restando indietro, hanno reso
+   false due dichiarazioni di CLAUDE.md. */
+console.log("\n── cablaggio UI ──");
+const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+const eeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+
+assert("l'Inspector passa lo stream a error() (chiavi condizionali)",
+  /\.error\(\s*d\s*,\s*stream\s*\)/.test(inspSrc));
+assert("l'Inspector offre pc_rand_envelope, non la chiave morta envelope",
+  /key:\s*"pc_rand_envelope"/.test(inspSrc) && !/key:\s*"envelope"/.test(inspSrc));
+assert("le righe offerte seguono le chiavi vive",
+  /liveParamKeys\(stream\)/.test(inspSrc));
+
+/* PGE #209: `[]` e' il primo dei corpi che il motore rifiuta, e l'editor non
+   deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
+   guard c'era solo su una (Delete su un breakpoint), quindi un envelope fatto
+   di un solo blocco loop si svuotava con "remove loop" o con Delete. */
+assert("il guard 'non svuotare' esiste una volta sola",
+  (eeSrc.match(/function wouldEmptyEnv/g) || []).length === 1);
+const guardCalls = (eeSrc.match(/wouldEmptyEnv\(/g) || []).length;
+assert("ed e' usato da tutte e tre le vie di cancellazione (+ il bottone disabilitato)",
+  guardCalls >= 4, "chiamate: " + guardCalls);
+assert("il ramo del blocco selezionato lo usa",
+  /selectedBlock\s*!=\s*null\)\s*\{[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
+assert("deleteSelectedLoop lo usa",
+  /function deleteSelectedLoop\(\)[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
+assert("il bottone 'remove loop' e' disabilitato quando svuoterebbe",
+  /disabled=\{!!onDeleteBlocked\}/.test(eeSrc));
+
 console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
