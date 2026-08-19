@@ -542,6 +542,9 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // of materializing a redundant one.
   const loopUnit = window.PGEEnvUtils.loopUnitInfo(stream);
   const loopUnitInherited = window.PGEEnvUtils.loopUnitInfo({ timeMode: stream.timeMode }).unit;
+  // In normalized le coordinate del loop non sono secondi: un suffisso "s"
+  // contraddirebbe la riga di hint due righe più sotto.
+  const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
   // `cap` overrides the current loop cap — the unit control needs to clamp
   // against the cap the NEW unit brings, before the new pointer is state.
   const clampLoop = (key, v, cap) => {
@@ -796,14 +799,14 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         onSelect={() => setSelRow("speed")} selected={selRow==="speed"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, speedRatio: v}})} />
               <ParamRow name="start" mode="scalar"
-                        value={stream.pointer.start != null ? stream.pointer.start : 0} unit="s"
+                        value={stream.pointer.start != null ? stream.pointer.start : 0} unit={loopUnitSuffix}
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
               {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
-                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : (stream.pointer.loopStartEnv ? "—" : 0)} unit={stream.pointer.loopStartEnv ? "" : "s"}
+                            value={stream.pointer.loopStart != null ? stream.pointer.loopStart : (stream.pointer.loopStartEnv ? "—" : 0)} unit={stream.pointer.loopStartEnv ? "" : loopUnitSuffix}
                             accent={stream.pointer.loopStartEnv != null}
                             envValue={stream.pointer.loopStartEnv}
                             onEditEnv={focusEnv("loopStart")}
@@ -839,7 +842,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
                     <ParamRow name="loop_end"
                               mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
-                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : "s"}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopEndEnv != null}
                               envValue={stream.pointer.loopEndEnv}
                               onEditEnv={focusEnv("loopEnd")}
@@ -847,7 +850,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
-                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : "s"}
+                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
@@ -877,7 +880,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                          }}
                          options={[{label:"absolute",value:"absolute"},{label:"normalized",value:"normalized"}]} />
                     <span className="v mono" style={{fontSize:9, color:"var(--fg-4)"}}>
-                      {loopUnit.source === "loop_unit" ? "esplicito"
+                      {loopUnit.source === "loop_unit"
+                        ? (stream.pointer.loopUnit === loopUnit.unit
+                            ? "esplicito"
+                            : ("esplicito: " + stream.pointer.loopUnit))
                         : loopUnit.source === "time_mode" ? ("da time_mode: " + stream.timeMode)
                         : "default"}
                     </span>
@@ -887,7 +893,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                     <span className="k" /><span />
                     <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
                       {loopUnit.unit === "normalized"
-                        ? "loop_start/end/dur ∈ [0, 1], scalati per sample_dur dal motore"
+                        ? "loop_start/end/dur e pointer.start ∈ [0, 1], scalati per sample_dur dal motore"
                         : (loopMax != null
                             ? ("loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
                             : "loop_start/end/dur in secondi · durata del sample ignota, cap statico")}

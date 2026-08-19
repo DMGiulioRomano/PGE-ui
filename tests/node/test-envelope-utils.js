@@ -547,6 +547,14 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
     /durata del sample/.test(inspSrc));
   assert("loop_unit non è più nell'AddParamMenu (il controllo lo rimpiazza)",
     !/key: "loopUnit"/.test(inspSrc));
+  assert("in normalized le righe del loop non mostrano il suffisso in secondi",
+    /const loopUnitSuffix = loopUnit\.unit === "normalized" \? "" : "s"/.test(inspSrc)
+    && (inspSrc.match(/unit=\{stream\.pointer\.loop\w+Env \? "" : loopUnitSuffix\}/g) || []).length === 3);
+  assert("anche pointer.start segue l'unità (il motore scala pure quello)",
+    /name="start"[\s\S]{0,160}unit=\{loopUnitSuffix\}/.test(inspSrc)
+    && /pointer\.start ∈ \[0, 1\]/.test(inspSrc));
+  assert("un loop_unit ignoto scritto a mano si mostra per quello che dice lo YAML",
+    /"esplicito: " \+ stream\.pointer\.loopUnit/.test(inspSrc));
   assert("cambiare unità ri-clampa gli estremi scalari col cap della nuova unità",
     /const cap = window\.PGEEnvUtils\.loopEnvMax\(\{ \.\.\.stream, pointer: np \}, sampleDur\)/.test(inspSrc)
     && /np\[k\] = clampLoop\(k, np\[k\], cap\)/.test(inspSrc));
