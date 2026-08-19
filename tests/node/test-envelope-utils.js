@@ -236,8 +236,16 @@ console.log("\n── computeYFit ──");
   assert("constant value → window straddles it", r4.ymin < 3 && r4.ymax > 3, JSON.stringify(r4));
 
   // constant in seconds uses the finer 0.01 minimum span.
-  const r5 = U.computeYFit([0.5, 0.5], { visMin: 0, visMax: 1, hardMin: 0, hardMax: 10, unit: "s" });
-  assert("constant (s) opens a fine window", r5.ymax > 0.5 && r5.ymin < 0.5 && (r5.ymax - r5.ymin) < 0.1, JSON.stringify(r5));
+  const r5 = U.computeYFit([0.5, 0.5], { visMin: 0, visMax: 1, hardMin: 0, hardMax: 10, fine: true });
+  assert("constant (fine) opens a fine window", r5.ymax > 0.5 && r5.ymin < 0.5 && (r5.ymax - r5.ymin) < 0.1, JSON.stringify(r5));
+  // La finestra minima segue `fine`, non il suffisso: una curva del loop in
+  // normalized non ha unità ma resta a grana fine (issue #126).
+  const r5b = U.computeYFit([0.5, 0.5], { visMin: 0, visMax: 1, hardMin: 0, hardMax: 1, unit: "s" });
+  assert("unit \"s\" da solo non basta più a stringere la finestra",
+    (r5b.ymax - r5b.ymin) > 0.5, JSON.stringify(r5b));
+  const r5c = U.computeYFit([0.5, 0.5], { visMin: 0, visMax: 1, hardMin: 0, hardMax: 1, fine: true, unit: "" });
+  assert("senza unità ma fine → finestra stretta lo stesso",
+    (r5c.ymax - r5c.ymin) < 0.1, JSON.stringify(r5c));
 
   // signed values (pan-like): window hugs [-30,40], not the ±360 vis window.
   const r6 = U.computeYFit([-30, 40], { visMin: -360, visMax: 360, hardMin: -3600, hardMax: 3600, unit: "°" });
@@ -555,9 +563,30 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
     && /pointer\.start ∈ \[0, 1\]/.test(inspSrc));
   assert("un loop_unit ignoto scritto a mano si mostra per quello che dice lo YAML",
     /"esplicito: " \+ stream\.pointer\.loopUnit/.test(inspSrc));
+  assert("senza blocco loop una riga spiega perché start ha perso il suffisso",
+    /loopUnit\.unit === "normalized" && !loopBlockShown/.test(inspSrc)
+    && /pointer\.start ∈ \[0, 1\], scalato per sample_dur/.test(inspSrc));
   assert("cambiare unità ri-clampa gli estremi scalari col cap della nuova unità",
     /const cap = window\.PGEEnvUtils\.loopEnvMax\(\{ \.\.\.stream, pointer: np \}, sampleDur\)/.test(inspSrc)
     && /np\[k\] = clampLoop\(k, np\[k\], cap\)/.test(inspSrc));
+}
+
+console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
+{
+  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+
+  assert("le curve del loop non hardcodano più il suffisso in secondi",
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
+    && (eeSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
+  assert("nessun consumatore deduce più la precisione dal suffisso",
+    !/unit === "s"/.test(eeSrc));
+  assert("la precisione viaggia su `fine` (formato, nudge, editing)",
+    /if \(env\.fine\) return v\.toFixed\(3\)/.test(eeSrc)
+    && (eeSrc.match(/integer \? 0 : \(\w+\.fine \? 4 : 2\)/g) || []).length === 2);
+  assert("computeYFit riceve `fine`, non l'unità",
+    /hardMax: env\.hardMax, fine: env\.fine,/.test(eeSrc));
+  assert("le altre grandezze a grana fine dichiarano `fine`",
+    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 4);
 }
 
 console.log(`\n${"─".repeat(50)}`);

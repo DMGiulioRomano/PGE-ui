@@ -309,13 +309,18 @@
   // only grow — leaving an envelope whose points sit in a small sub-range
   // squashed against one edge. With no finite points it falls back to the
   // [visMin,visMax] default window; a constant set opens a minimal window
-  // (0.01 for seconds, else 1) so a flat curve isn't pinned to an edge.
+  // (0.01 on a fine-grained parameter, else 1) so a flat curve isn't pinned to
+  // an edge. `fine` is the caller's precision declaration, NOT the display unit:
+  // the loop window is fine-grained in both its units, and in normalized it has
+  // no unit string at all (issue #126) — reading the unit here would have
+  // silently coarsened it to a 1-wide window on a [0,1] axis.
   // Pure: EnvelopeEditor recomputes it on open / param change / end-of-drag and
   // freezes the returned window during a drag (so the dragged point can't
   // "run away" under a rescaling axis). Returns { ymin, ymax }, ymax > ymin.
   function computeYFit(values, opts) {
     opts = opts || {};
-    const { visMin, visMax, hardMin, hardMax, unit } = opts;
+    const { visMin, visMax, hardMin, hardMax } = opts;
+    const fine = !!opts.fine;
     const padFrac = opts.padFrac == null ? 0.10 : opts.padFrac;
     const nums = (values || []).filter(v => typeof v === "number" && isFinite(v));
     let lo, hi;
@@ -326,13 +331,13 @@
       lo = (typeof visMin === "number") ? visMin : 0;
       hi = (typeof visMax === "number") ? visMax : lo + 1;
     }
-    if (lo === hi) hi = lo + (unit === "s" ? 0.01 : 1);
+    if (lo === hi) hi = lo + (fine ? 0.01 : 1);
     const range = hi - lo;
     hi = hi + range * padFrac;
     lo = lo - range * padFrac;
     if (typeof hardMax === "number") hi = Math.min(hardMax, hi);
     if (typeof hardMin === "number") lo = Math.max(hardMin, lo);
-    if (!(hi > lo)) hi = lo + (unit === "s" ? 0.01 : 1);
+    if (!(hi > lo)) hi = lo + (fine ? 0.01 : 1);
     return { ymin: lo, ymax: hi };
   }
 

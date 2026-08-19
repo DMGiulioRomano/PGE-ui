@@ -25,6 +25,11 @@ function listEnvelopes(stream, sampleDur) {
   // (or to 1.0 in normalized mode). null when the duration is unknown, in
   // which case we fall back to the static PGE_BOUNDS cap. See loopEnvMax.
   const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
+  // …e il suffisso segue la stessa risoluzione, come nell'Inspector (issue
+  // #126): in normalized le coordinate del loop non sono secondi, e un "s"
+  // qui contraddirebbe l'asse tappato a 1 e la riga dell'Inspector accanto.
+  // La precisione NON viaggia sull'unità — vedi `fine` sotto.
+  const loopUnitSuffix = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized" ? "" : "s";
   const list = [];
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
@@ -48,19 +53,19 @@ function listEnvelopes(stream, sampleDur) {
   }
   if (stream.pointer && stream.pointer.loopStartEnv) {
     list.push({ key: "loopStart", label: "loop_start", group: "Pointer",
-      path: ["pointer", "loopStartEnv"], unit: "s",
+      path: ["pointer", "loopStartEnv"], unit: loopUnitSuffix, fine: true,
       visMin: 0, visMax: loopMax != null ? loopMax : 10,
       hardMin: PB.loopStart.min, hardMax: loopMax != null ? loopMax : PB.loopStart.max });
   }
   if (stream.pointer && stream.pointer.loopDurEnv) {
     list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
-      path: ["pointer", "loopDurEnv"], unit: "s",
+      path: ["pointer", "loopDurEnv"], unit: loopUnitSuffix, fine: true,
       visMin: 0, visMax: loopMax != null ? loopMax : 10,
       hardMin: PB.loopDur.min, hardMax: loopMax != null ? loopMax : PB.loopDur.max });
   }
   if (stream.pointer && stream.pointer.loopEndEnv) {
     list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
-      path: ["pointer", "loopEndEnv"], unit: "s",
+      path: ["pointer", "loopEndEnv"], unit: loopUnitSuffix, fine: true,
       visMin: 0, visMax: loopMax != null ? loopMax : 10,
       hardMin: PB.loopEnd.min, hardMax: loopMax != null ? loopMax : PB.loopEnd.max });
   }
@@ -71,12 +76,12 @@ function listEnvelopes(stream, sampleDur) {
   }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
-      path: ["grain", "durationEnv"], unit: "s",
+      path: ["grain", "durationEnv"], unit: "s", fine: true,
       visMin: 0.001, visMax: 0.1, hardMin: PB.grainDur.min, hardMax: PB.grainDur.max });
   }
   if (stream.grain && stream.grain.durationRangeEnv) {
     list.push({ key: "durationRange", label: "duration_range", group: "Grain",
-      path: ["grain", "durationRangeEnv"], unit: "s",
+      path: ["grain", "durationRangeEnv"], unit: "s", fine: true,
       visMin: 0, visMax: 0.5, hardMin: PB.durationRange.min, hardMax: PB.durationRange.max });
   }
   if (stream.grain && stream.grain.readDirectionEnv) {
@@ -172,7 +177,7 @@ function listEnvelopes(stream, sampleDur) {
   }
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
     list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
-      path: ["voices", "onset_offset", "stepEnv"], unit: "s",
+      path: ["voices", "onset_offset", "stepEnv"], unit: "s", fine: true,
       visMin: 0, visMax: 1, hardMin: 0, hardMax: 60 });
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.baseEnv)
     list.push({ key: "voicesOnsetBase", label: "onset · base", group: "Voices",
@@ -180,7 +185,7 @@ function listEnvelopes(stream, sampleDur) {
       visMin: 1, visMax: 4, hardMin: 0.01, hardMax: 100 });
   if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.max_offsetEnv)
     list.push({ key: "voicesOnsetMaxOffset", label: "onset · max_offset", group: "Voices",
-      path: ["voices", "onset_offset", "max_offsetEnv"], unit: "s",
+      path: ["voices", "onset_offset", "max_offsetEnv"], unit: "s", fine: true,
       visMin: 0, visMax: 2, hardMin: 0, hardMax: 60 });
   if (stream.voices && stream.voices.pointer && stream.voices.pointer.stepEnv)
     list.push({ key: "voicesPointerStep", label: "pointer · step", group: "Voices",
@@ -243,8 +248,12 @@ function patchForPath(stream, path, value) {
   return { [path[0]]: { ...top, [path[1]]: { ...(top[path[1]] || {}), [path[2]]: value } } };
 }
 
+// `fine` è la dichiarazione di precisione della voce di catalogo, non il suo
+// suffisso: le curve del loop restano a grana fine anche in normalized, dove
+// unit è la stringa vuota (issue #126). Legare i decimali all'unità le avrebbe
+// portate da 0.250 a 0.25 proprio dove servono più decimali, non meno.
 function fmtY(v, env) {
-  if (env.unit === "s") return v.toFixed(3);
+  if (env.fine) return v.toFixed(3);
   if (env.unit === "%") return Math.round(v).toString();
   if (env.unit === "°") return Math.round(v).toString();
   if (Math.abs(v) >= 100) return v.toFixed(0);
@@ -722,7 +731,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const step = e.shiftKey ? 1 : e.altKey ? 0.01 : 0.1;
       const axis = (e.key === "ArrowLeft" || e.key === "ArrowRight") ? "time" : "value";
       const delta = (e.key === "ArrowLeft" || e.key === "ArrowDown") ? -step : step;
-      const yPrec = e2.integer ? 0 : (e2.unit === "s" ? 4 : 2);
+      const yPrec = e2.integer ? 0 : (e2.fine ? 4 : 2);
       const next = window.PGEEnvUtils.nudgeBreakpoint(items, selectedBP, axis, delta, {
         hardMin: e2.hardMin, hardMax: e2.hardMax, xPrec: 4, yPrec,
         // Dominio discreto (read_direction): sull'asse valore la freccia
@@ -932,7 +941,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const _yVals = exp.points.length ? exp.points.map((p) => p[1]) : [];
   const _liveFit = window.PGEEnvUtils.computeYFit(_yVals, {
     visMin: env.visMin, visMax: env.visMax,
-    hardMin: env.hardMin, hardMax: env.hardMax, unit: env.unit,
+    hardMin: env.hardMin, hardMax: env.hardMax, fine: env.fine,
   });
   if (!dragging) yFitFrozenRef.current = _liveFit;
   const _fit = (dragging && yFitFrozenRef.current) ? yFitFrozenRef.current : _liveFit;
@@ -944,7 +953,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function valOfY(yPx) {return ymin + (1 - (yPx - PAD_T) / innerH) * (ymax - ymin);}
 
   const xPrec = 4;
-  const yPrec = env.integer ? 0 : (env.unit === "s" ? 4 : 2);
+  const yPrec = env.integer ? 0 : (env.fine ? 4 : 2);
   const xMin = 0,xMax = 1;
 
   /* Ogni y prodotto dal puntatore passa di qui. Su un parametro continuo è il

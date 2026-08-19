@@ -545,6 +545,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
   // contraddirebbe la riga di hint due righe più sotto.
   const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
+  // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
+  // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con
+  // gli stessi criteri (_pre_normalize_loop_params scala 'start' a prescindere
+  // dal loop), quindi senza blocco resterebbe senza suffisso e senza nessuno
+  // che dica perché: uno YAML scritto a mano con time_mode: normalized e nessun
+  // loop cade proprio lì.
+  const loopBlockShown = !!(stream.pointer && (
+    stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
+    stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
+    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null ||
+    stream.pointer.loopUnit  != null));
   // `cap` overrides the current loop cap — the unit control needs to clamp
   // against the cap the NEW unit brings, before the new pointer is state.
   const clampLoop = (key, v, cap) => {
@@ -802,7 +813,16 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit={loopUnitSuffix}
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {(stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopUnit != null) ? (
+              {loopUnit.unit === "normalized" && !loopBlockShown ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                    pointer.start ∈ [0, 1], scalato per sample_dur dal motore ({loopUnit.source === "loop_unit" ? "loop_unit" : "time_mode"}: normalized)
+                  </span>
+                  <span />
+                </div>
+              ) : null}
+              {loopBlockShown ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
