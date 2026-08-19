@@ -21,9 +21,18 @@ function pitchEnvBounds(unit, semis, signed) {
    isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il primo
    dei corpi che il motore rifiuta da PGE #209 (InvalidFieldValueError). Nessuna
    cancellazione dell'editor deve poterci arrivare: il guard sta qui una volta
-   sola perche' le vie sono tre (Delete su un breakpoint, Delete su un blocco,
-   il bottone "remove loop"), e finche' ne restava una scoperta la riga di
-   CLAUDE.md che dichiara l'editor incapace di produrre quei corpi era falsa. */
+   sola perche' le vie sono cinque (Delete su un breakpoint, Delete su un
+   blocco, il bottone "remove loop", il doppio click su un breakpoint, e il
+   paste di un envelope vuoto), e
+   finche' ne restava una scoperta la riga di CLAUDE.md che dichiara l'editor
+   incapace di produrre quei corpi era falsa.
+
+   Riceve la forma DESUGARATA: su un BP group nudo
+   (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe `true` su un
+   envelope pieno, perche' ne' isBreakpoint ne' isCompactBlock riconoscono il
+   gruppo. Tutti i chiamanti attuali passano la forma desugarata; chi non lo
+   facesse (`handleCopyEnv` maneggia `rawEnvRaw`, che i gruppi li ha) deve
+   desugarare prima. */
 function wouldEmptyEnv(next) {
   const E = window.PGEEnv;
   if (!Array.isArray(next)) return true;
@@ -700,7 +709,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         // Allow deletion unless it would leave the envelope without any
         // standalone BP AND without any loop block (i.e. truly empty).
         const next = cur.filter((_, i) => i !== selectedBP);
-        if (wouldEmptyEnv(next)) {setSelectedBP(null);return;}
+        // Rifiuto senza deselezionare: deselezionare toglie anche l'elemento su
+        // cui si stava agendo, e nel ramo del blocco chiude il pannello che
+        // contiene l'unica spiegazione (il title del bottone). Come il
+        // dblclick, che si limita al return.
+        if (wouldEmptyEnv(next)) return;
         commitCur(next);
         setSelectedBP(null);
       } else if (selectedBlock != null) {
@@ -709,7 +722,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         // il motore rifiuta da PGE #209 — l'editor produceva da solo lo YAML
         // che questa PR insegna a segnalare.
         const next = cur.filter((_, i) => i !== selectedBlock);
-        if (wouldEmptyEnv(next)) {setSelectedBlock(null);return;}
+        if (wouldEmptyEnv(next)) return;
         commitCur(next);
         setSelectedBlock(null);
       }
@@ -913,8 +926,13 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envClipboard) return;
     const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
     const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
-    onChange(patchForPath(stream, env.path,
-      window.PGEEnv.wrapEnv(window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp)));
+    const next = window.PGEEnv.wrapEnv(
+      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp);
+    // Quinta via per scrivere `[]` su un envelope: handleCopyEnv accetta un
+    // `rawEnv` vuoto (un array e' truthy), quindi il paste puo' propagare un
+    // vuoto gia' esistente. Non ne crea mai uno, ma lo stesso guard vale.
+    if (wouldEmptyEnv(window.PGEEnv.desugarBPGroups(next))) return;
+    onChange(patchForPath(stream, env.path, next));
   }
 
   /* ============ Empty states ============ */
@@ -1271,9 +1289,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (tgt && tgt.classList && tgt.classList.contains("ee-bp")) {
       const idx = +tgt.dataset.idx;
       const next = rawEnv.filter((_, i) => i !== idx);
-      const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
-      const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
-      if (remainingBPs + remainingLoops < 1) return;
+      // Quarta via di cancellazione: stesso guard delle altre tre, non una
+      // copia del conteggio.
+      if (wouldEmptyEnv(next)) return;
       commit(next);
       return;
     }

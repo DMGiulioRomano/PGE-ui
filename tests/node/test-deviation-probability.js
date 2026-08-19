@@ -294,15 +294,27 @@ assert("le righe offerte seguono le chiavi vive",
    di un solo blocco loop si svuotava con "remove loop" o con Delete. */
 assert("il guard 'non svuotare' esiste una volta sola",
   (eeSrc.match(/function wouldEmptyEnv/g) || []).length === 1);
-const guardCalls = (eeSrc.match(/wouldEmptyEnv\(/g) || []).length;
-assert("ed e' usato da tutte e tre le vie di cancellazione (+ il bottone disabilitato)",
-  guardCalls >= 4, "chiamate: " + guardCalls);
+/* Una asserzione NOMINATA per ciascuna via, non un conteggio: il conteggio
+   includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
+   e quella scoperta era proprio il ramo del breakpoint, la via storica e
+   l'unica che esisteva prima di questa PR. */
+// La finestra esclude `selectedBlock`, cosi' il ramo del breakpoint non puo'
+// passare grazie alla chiamata del ramo successivo.
+assert("il ramo del breakpoint selezionato lo usa",
+  /selectedBP\s*!=\s*null\)\s*\{(?:(?!selectedBlock)[\s\S]){0,900}?wouldEmptyEnv\(/.test(eeSrc));
 assert("il ramo del blocco selezionato lo usa",
-  /selectedBlock\s*!=\s*null\)\s*\{[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
+  /selectedBlock\s*!=\s*null\)\s*\{[\s\S]{0,600}?wouldEmptyEnv\(/.test(eeSrc));
 assert("deleteSelectedLoop lo usa",
   /function deleteSelectedLoop\(\)[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
+assert("il dblclick sul canvas lo usa, invece di ricontare a mano",
+  /onCanvasDblClick[\s\S]{0,1600}?wouldEmptyEnv\(/.test(eeSrc));
+// Il `disabled` guarda solo dentro LoopBlockPanel: senza questa seconda
+// asserzione il genitore potrebbe smettere di passare il prop e il bottone
+// resterebbe sempre abilitato con la suite verde.
 assert("il bottone 'remove loop' e' disabilitato quando svuoterebbe",
   /disabled=\{!!onDeleteBlocked\}/.test(eeSrc));
+assert("e il genitore gli passa davvero la condizione",
+  /onDeleteBlocked=\{wouldEmptyEnv\(/.test(eeSrc));
 
 console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
