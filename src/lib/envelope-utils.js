@@ -133,7 +133,11 @@
 
   // deviation_probability per-parameter keys — dal classificatore condiviso,
   // letto a chiamata come isEnvValue (stesso modulo, stesso ordine di carico).
-  const paramKeys = () => window.PGEDeviationProb.PARAM_KEYS;
+  // Qui serve l'UNIONE (ALL_PARAM_KEYS), non le sole chiavi sempre vive: il
+  // walk riscala e tronca, e una chiave saltata lascia un envelope fuori scala
+  // su uno YAML che rende. La lista ristretta e' quella della validazione, che
+  // ha il vincolo opposto.
+  const paramKeys = () => window.PGEDeviationProb.ALL_PARAM_KEYS;
 
   // deviation_probability is stored verbatim (yaml-bridge passes it through):
   // it can be the DEVIATION_PROB_IMPLICIT sentinel / false / a scalar prob, a

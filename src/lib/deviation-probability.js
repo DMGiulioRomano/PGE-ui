@@ -64,12 +64,71 @@
     return "off";
   }
 
-  /* Le chiavi che il motore consulta davvero in modalità per-parametro: una
-     per `deviation_probability_key` dichiarata nei ParameterSpec. Le altre
-     chiavi di quel dict non vengono mai lette (nessun gate le chiede), quindi
-     non sono un errore e non vanno validate. */
-  const PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer",
-                      "reverse", "read_direction", "envelope"];
+  /* Le chiavi del dict per-parametro che il motore consulta SEMPRE, qualunque
+     sia il resto dello stream. Non è la lista dei `deviation_probability_key`
+     dichiarati negli spec — sono due insiemi diversi, ed è la differenza che
+     conta qui:
+
+       - `envelope` è dichiarata da `grain_envelope`, che è `is_smart=False`
+         (parameter_schema.py): l'orchestratore la manda al ramo `_raw_value` e
+         non passa mai da GateFactory. Per il motore è come una chiave
+         inventata — `{envelope: 50}` costruisce un AlwaysGate, cioè la finestra
+         cambia al 100% dei grani qualunque numero si scriva. La probabilità
+         della finestra si dichiara su `pc_rand_envelope` (window_controller.py),
+         l'unico param_key costruito a runtime fuori dallo schema.
+       - `pc_rand_envelope`, `reverse` e `read_direction` sono invece VIVE ma
+         condizionali: dipendono da com'è scritto il blocco `grain`, che qui non
+         si vede. Stanno in `liveParamKeys(stream)`, non qui.
+
+     Le chiavi che nessun gate chiede non sono un errore e non vanno validate:
+     il motore le scarta in silenzio. */
+  const PARAM_KEYS = ["volume", "pan", "duration", "pitch", "pointer"];
+
+  /* Le due chiavi che il blocco `grain` accende o spegne, e la regola con cui
+     lo fa. Verificate eseguendo il motore, non leggendolo:
+
+       - `reverse` / `read_direction` sono un gruppo esclusivo
+         (`grain_direction`). ExclusiveGroupSelector ne sceglie UNA: quella
+         scritta in `grain`, e con nessuna delle due scritte vince `reverse`
+         (priorità 1, default non-None). Il perdente va a None senza che nessun
+         gate venga creato, quindi la sua chiave in deviation_probability è
+         inerte. Con ENTRAMBE scritte il motore rifiuta lo stream prima di
+         arrivare qui (Stream._init_grain_reverse), e l'Inspector lo segnala
+         già per conto suo: qui si sceglie comunque `read_direction`, perché è
+         quella che il selettore prenderebbe.
+       - `pc_rand_envelope` è viva quando `grain.envelope` NON è uno spec
+         transition (`{from, to}`) o multistate (`{states}`):
+         `uses_gate = not (_is_transition_spec or _is_multistate_spec)`
+         (window_controller.py). Con la forma comune — una stringa, o una lista
+         di finestre — il gate riceve il deviation_probability vero e valida. */
+  /* Ogni chiave che in QUALCHE configurazione il motore legge: l'unione di
+     PARAM_KEYS e delle condizionali. Non serve a validare — validare su questa
+     lista rimetterebbe i falsi positivi che liveParamKeys esiste per togliere —
+     ma a camminare gli envelope (envelope-utils: rescale e truncate al resize
+     dello stream), dove sbagliare per eccesso costa un envelope riscalato che
+     il motore non guarda, e sbagliare per difetto costa un envelope che resta
+     fuori scala su uno YAML che rende. `envelope` c'è per i progetti che la
+     portano ancora scritta: è inerte per il motore, ma finché sta nel file il
+     round trip la deve trattare come le altre. */
+  const ALL_PARAM_KEYS = PARAM_KEYS.concat(
+    ["reverse", "read_direction", "pc_rand_envelope", "envelope"]);
+
+  function liveParamKeys(stream) {
+    const keys = PARAM_KEYS.slice();
+    const grain = (stream && typeof stream.grain === "object" && stream.grain) || {};
+    // "read_direction scritta" è la stessa condizione con cui il serializer
+    // decide di riemettere la chiave: lo scalare può essere undefined mentre
+    // l'envelope c'è, e la chiave nuda vale null (che è comunque scritta).
+    const rdWritten = grain.readDirection !== undefined || grain.readDirectionEnv != null;
+    keys.push(rdWritten ? "read_direction" : "reverse");
+    const envSpec = grain.envelope;
+    const envDict = !!(envSpec && typeof envSpec === "object" && !Array.isArray(envSpec));
+    // transition = dict con ENTRAMBE 'from' e 'to'; multistate = dict con 'states'.
+    const isTransition = envDict && "from" in envSpec && "to" in envSpec;
+    const isMultistate = envDict && "states" in envSpec;
+    if (!isTransition && !isMultistate) keys.push("pc_rand_envelope");
+    return keys;
+  }
 
   /* Un corpo destinato a diventare envelope si costruisce? Ritorna null se sì,
      altrimenti il motivo: "empty" (nessun breakpoint) o "shape" (niente di
@@ -79,7 +138,19 @@
      NON possono essere un envelope in nessuna lettura. Una lista con un
      elemento buono e uno rotto (`[[0,1], 'x']`) il motore la rifiuta lo stesso,
      qui passa — meglio un avviso in meno che un avviso su uno YAML che rende. */
-  function _envBodyError(v) {
+  /* Un breakpoint in forma dict `{t, v, type?}`. Il builder del motore lo
+     normalizza in `[t, v, type?]` prima di guardarlo
+     (envelope_builder.py:132), quindi è un formato di prima classe, non un
+     residuo. `PGEEnv.isBreakpoint` esige `Array.isArray` e non lo vede — e non
+     va allargata: la usa anche l'EnvelopeEditor per decidere cosa è
+     trascinabile, e i breakpoint dict il canvas non li disegna. Il predicato
+     resta quindi locale a questo modulo, dove la domanda è solo se il motore
+     costruirà il corpo. */
+  function _isDictBP(it) {
+    return !!(it && typeof it === "object" && !Array.isArray(it) && "t" in it && "v" in it);
+  }
+
+  function _envBodyError(v, dictBPOk) {
     const E = window.PGEEnv;
     if (Array.isArray(v)) {
       if (v.length === 0) return "empty";
@@ -89,14 +160,17 @@
       // compatto nudo `[[[0,0],[100,50]], 1.0, 4]`. Guardando solo gli elementi
       // finivano segnalate come non costruibili, e il motore le costruisce.
       if (E.isBPGroup(v) || E.isCompactBlock(v)) return null;
-      const any = v.some(it => E.isBreakpoint(it) || E.isBPGroup(it) || E.isCompactBlock(it));
+      const any = v.some(it => E.isBreakpoint(it) || E.isBPGroup(it) || E.isCompactBlock(it) ||
+                               (dictBPOk && _isDictBP(it)));
       return any ? null : "shape";
     }
     if (v && typeof v === "object") {
       // Il builder legge `points` senza guardare se c'è: un dict che non ce
       // l'ha alza KeyError, ed è il terzo dei corpi malformati di PGE #209.
       if (!Array.isArray(v.points)) return "shape";
-      return _envBodyError(v.points);
+      // Dentro `points` il dict per-punto è normalizzato: il gate arriva a
+      // _parse_raw_value e il corpo si costruisce.
+      return _envBodyError(v.points, true);
     }
     return null;
   }
@@ -110,13 +184,19 @@
      envelope): arrivano dal tab Raw o da uno YAML scritto a mano, e allora
      tanto vale dirlo prima del render invece che dopo.
 
+     `stream` è opzionale e serve solo alle chiavi per-parametro condizionali
+     (vedi liveParamKeys): passandolo si guadagnano gli avvisi su
+     `pc_rand_envelope` e sulla chiave del verso effettivamente in vigore, che
+     senza il blocco `grain` non si possono attribuire. Senza, si validano solo
+     le cinque chiavi sempre vive — meno avvisi, mai uno su uno YAML che rende.
+
      Ritorna null se valido, altrimenti { kind, reason?, param?, value }:
        "type" → il corpo non è bool | numero | envelope | dict per-parametro
        "env"  → un corpo che vuole essere envelope e non si costruisce
      `param` è presente quando il colpevole è una chiave del dict per-parametro
      — la stessa che il motore nomina come `deviation_probability.<chiave>`.
      Puro: niente DOM, niente chiamate al motore. */
-  function error(d) {
+  function error(d, stream) {
     if (d === undefined || d === null || d === false) return null;
     if (d === window.PGEYaml.DEVIATION_PROB_IMPLICIT) return null;
     // `true` non è un errore: per il motore è un numero, e float(True) è 1%.
@@ -128,17 +208,21 @@
       return reason ? { kind: "env", reason, value: d } : null;
     }
 
-    for (const k of PARAM_KEYS) {
+    for (const k of (stream ? liveParamKeys(stream) : PARAM_KEYS)) {
       if (!(k in d)) continue;
       const v = d[k];
       // chiave a null = range-only per quel parametro, non un envelope vuoto
       if (v === null || typeof v === "number" || typeof v === "boolean") continue;
       if (typeof v !== "object") return { kind: "type", param: k, value: v };
-      const reason = _envBodyError(v);
+      // Sotto una chiave per-parametro il corpo arriva a _parse_raw_value, che
+      // normalizza i breakpoint dict — a differenza del valore GLOBALE, dove
+      // prima passa da is_envelope_like e una lista di soli dict non è
+      // envelope-like (il motore la rifiuta). L'asimmetria è del motore.
+      const reason = _envBodyError(v, true);
       if (reason) return { kind: "env", reason, param: k, value: v };
     }
     return null;
   }
 
-  window.PGEDeviationProb = { mode, isEnvValue, error, PARAM_KEYS };
+  window.PGEDeviationProb = { mode, isEnvValue, error, PARAM_KEYS, ALL_PARAM_KEYS, liveParamKeys };
 })();

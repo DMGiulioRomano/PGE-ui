@@ -100,11 +100,90 @@ assert("null → not env",                 D.isEnvValue(null) === false);
 assert("false → not env",                D.isEnvValue(false) === false);
 assert("string → not env",               D.isEnvValue("cubic") === false);
 
-console.log("\n── PARAM_KEYS ──");
-assert("PARAM_KEYS è la lista che il motore consulta",
-  JSON.stringify(D.PARAM_KEYS) === JSON.stringify(
-    ["volume", "pan", "duration", "pitch", "pointer", "reverse", "read_direction", "envelope"]),
-  JSON.stringify(D.PARAM_KEYS));
+/* PARAM_KEYS / liveParamKeys — legate a un COMPORTAMENTO, non confrontate con
+   una loro copia letterale: un'asserzione che ripete la lista passa con
+   qualunque contenuto, ed e' come `envelope` (chiave morta) era rimasta dentro
+   e `pc_rand_envelope` (viva) fuori senza che niente lo dicesse.
+
+   Il criterio e' quello del motore, verificato eseguendolo: un corpo rotto
+   sotto una chiave che GateFactory consulta deve essere segnalato; sotto una
+   chiave che il motore scarta, no. `envelope` e' scartata perche' il suo spec
+   (`grain_envelope`) e' is_smart=False e non passa mai da GateFactory —
+   `{envelope: 50}` costruisce un AlwaysGate, cioe' ignora il numero. */
+console.log("\n── PARAM_KEYS: chiavi vive vs chiavi morte ──");
+const BROKEN = [];  // corpo che il motore rifiuta ovunque sia letto
+for (const k of ["volume", "pan", "duration", "pitch", "pointer"])
+  assert("chiave sempre viva segnalata: " + k,
+    D.error({ [k]: BROKEN }) !== null, k);
+for (const k of ["envelope", "foo", "pc_rand", "grain_envelope"])
+  assert("chiave che il motore scarta → nessun avviso: " + k,
+    D.error({ [k]: BROKEN }) === null, k);
+
+/* Le condizionali: senza stream restano fuori (nessun avviso che potrebbe
+   cadere su uno YAML che rende), con lo stream si risolvono esattamente come
+   fa il motore. */
+console.log("\n── liveParamKeys: le chiavi che dipendono dal blocco grain ──");
+const grainOf = (g) => ({ grain: g || {} });
+for (const k of ["reverse", "read_direction", "pc_rand_envelope"])
+  assert("senza stream la condizionale non viene validata: " + k,
+    D.error({ [k]: BROKEN }) === null, k);
+
+// Gruppo esclusivo grain_direction: ExclusiveGroupSelector ne sceglie UNA.
+// Senza `grain.read_direction` vince `reverse` (priorita' 1, default non-None).
+assert("senza read_direction la chiave viva è reverse",
+  D.error({ reverse: BROKEN }, grainOf({})) !== null);
+assert("senza read_direction read_direction è inerte",
+  D.error({ read_direction: BROKEN }, grainOf({})) === null);
+assert("con grain.read_direction la chiave viva è read_direction",
+  D.error({ read_direction: BROKEN }, grainOf({ readDirection: 1 })) !== null);
+assert("con grain.read_direction reverse è inerte",
+  D.error({ reverse: BROKEN }, grainOf({ readDirection: 1 })) === null);
+// La chiave puo' essere scritta come envelope: lo scalare resta undefined,
+// e la condizione deve guardare anche il campo parallelo.
+assert("read_direction in forma envelope conta come scritta",
+  D.error({ read_direction: BROKEN }, grainOf({ readDirectionEnv: [[0, 1], [1, -1]] })) !== null);
+// La chiave nuda (`read_direction:` senza valore) e' comunque scritta.
+assert("read_direction nuda conta come scritta",
+  D.error({ read_direction: BROKEN }, grainOf({ readDirection: null })) !== null);
+
+// pc_rand_envelope: viva salvo spec transition ({from,to}) o multistate.
+assert("pc_rand_envelope viva con grain.envelope stringa",
+  D.error({ pc_rand_envelope: BROKEN }, grainOf({ envelope: "hanning" })) !== null);
+assert("pc_rand_envelope viva con grain.envelope lista",
+  D.error({ pc_rand_envelope: BROKEN }, grainOf({ envelope: ["hanning", "gaussian"] })) !== null);
+assert("pc_rand_envelope inerte con spec transition",
+  D.error({ pc_rand_envelope: BROKEN }, grainOf({ envelope: { from: "hanning", to: "gaussian" } })) === null);
+assert("pc_rand_envelope inerte con spec multistate",
+  D.error({ pc_rand_envelope: BROKEN }, grainOf({ envelope: { states: ["hanning", "gaussian"] } })) === null);
+// `from` senza `to` non e' una transition per il motore (esige entrambe).
+assert("pc_rand_envelope viva con un dict che non è transition né multistate",
+  D.error({ pc_rand_envelope: BROKEN }, grainOf({ envelope: { from: "hanning" } })) !== null);
+
+// ALL_PARAM_KEYS serve al walk degli envelope, non alla validazione: contiene
+// tutte le chiavi che in qualche configurazione il motore legge.
+for (const k of ["volume", "pan", "duration", "pitch", "pointer",
+                 "reverse", "read_direction", "pc_rand_envelope", "envelope"])
+  assert("ALL_PARAM_KEYS contiene " + k, D.ALL_PARAM_KEYS.includes(k), k);
+
+/* Breakpoint in forma dict {t, v, type?}: il builder del motore li normalizza
+   in [t, v, type?] (envelope_builder.py:132), quindi sotto `points` e sotto una
+   chiave per-parametro il corpo si costruisce. L'asimmetria e' del motore: la
+   lista NUDA di soli dict a livello globale non passa is_envelope_like, e li'
+   il rifiuto e' vero. Tutte e cinque verificate eseguendo il motore. */
+console.log("\n── breakpoint in forma dict {t, v} ──");
+const dictBPs = [{ t: 0, v: 1 }, { t: 1, v: 50 }];
+assert("{points: [{t,v}…]} → nessun avviso",
+  D.error({ points: dictBPs }) === null, JSON.stringify(D.error({ points: dictBPs })));
+assert("{type, points: [{t,v}…]} → nessun avviso",
+  D.error({ type: "cubic", points: dictBPs }) === null);
+assert("per-param [{t,v}…] → nessun avviso",
+  D.error({ pitch: dictBPs }) === null);
+assert("per-param con interp per-punto → nessun avviso",
+  D.error({ volume: [{ t: 0, v: 1, type: "cubic" }, { t: 1, v: 50 }] }) === null);
+assert("lista NUDA di soli dict → segnalata (il motore la rifiuta)",
+  D.error(dictBPs) !== null, JSON.stringify(D.error(dictBPs)));
+assert("lista mista [[t,v], {t,v}] → nessun avviso (il motore la costruisce)",
+  D.error([[0, 1], { t: 1, v: 50 }]) === null);
 
 /* error() — i corpi che il motore rifiuta da PGE #209. Prima li accettava in
    silenzio e li leggeva come 100% (AlwaysGate): il render riusciva producendo

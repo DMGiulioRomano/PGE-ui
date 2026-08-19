@@ -31,14 +31,16 @@ function AddParamMenu({ options, onAdd }) {
      - off           → deviation_probability: false        (ranges only active if range_always_active)
      - implicit      → deviation_probability: null/absent  (default ~1% global probability)
      - global        → deviation_probability: number | [[t,v],…]  (probability 0–100, same for all params)
-     - per-parameter → deviation_probability: { volume?, pan?, duration?, pitch?, pointer?, reverse?, envelope? }
+     - per-parameter → deviation_probability: { volume?, pan?, duration?, pitch?, pointer?,
+                                                 reverse? | read_direction?, pc_rand_envelope? }
                        each value scalar or envelope (0–100); a key left out (or
                        null) is range-only for that param — its _range applies at
                        100% if present, else no variation (engine: GateFactory
                        range-only, same as deviation_probability:false for that param)
 */
-/* Le descrizioni, nell'ordine di window.PGEDeviationProb.PARAM_KEYS — che
-   resta la lista autorevole di cosa il motore consulta davvero. */
+/* Le descrizioni, nell'ordine di window.PGEDeviationProb.liveParamKeys — che
+   resta la lista autorevole di cosa il motore consulta davvero, e che dipende
+   dal blocco `grain`: la riga offerta e' quella della chiave viva. */
 const DEVIATION_PROB_PARAMS = [
   { key: "volume",   desc: "applies volume_range per grain" },
   { key: "pan",      desc: "applies pan_range per grain" },
@@ -49,9 +51,17 @@ const DEVIATION_PROB_PARAMS = [
   // Voce distinta da `reverse`, non un suo alias (PGE #207): ciascuna governa
   // la propria chiave del blocco grain e non tocca l'altra. Un
   // `deviation_probability: {reverse: N}` scritto prima non ribalta un
-  // `read_direction` aggiunto dopo.
+  // `read_direction` aggiunto dopo. Sono un gruppo esclusivo: il motore ne
+  // legge UNA sola, quella del verso dichiarato in grain, e l'altra la scarta.
   { key: "read_direction", desc: "flip the declared grain.read_direction" },
-  { key: "envelope", desc: "switch window when grain.envelope is a list" },
+  // La probabilita' di cambio finestra si dichiara su `pc_rand_envelope`, non
+  // su `envelope`: quest'ultima e' il deviation_probability_key di
+  // `grain_envelope`, che pero' e' `is_smart=False` e non passa mai da
+  // GateFactory — `{envelope: 50}` costruisce un AlwaysGate, cioe' la finestra
+  // cambia al 100% dei grani qualunque numero si scriva. Verificato eseguendo
+  // il motore. `pc_rand_envelope` e' il param_key vero (window_controller.py),
+  // e con esso `{pc_rand_envelope: 50}` costruisce il RandomGate atteso.
+  { key: "pc_rand_envelope", desc: "switch window when grain.envelope is a list" },
 ];
 
 function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
@@ -66,13 +76,21 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // interpolation (cubic/exp). Treating the typed form as a global env is what
   // stops "cubic" from collapsing the envelope and flipping mode to per-param.
   const mode = PGEDeviationProb.mode(d);          // off | implicit | global | perParam
+  // Le chiavi che questo stream fa consultare davvero al motore: la voce da
+  // aggiungere e' quella, non entrambe le meta' del gruppo esclusivo.
+  const liveKeys = PGEDeviationProb.liveParamKeys(stream);
   const dIsEnv = PGEDeviationProb.isEnvValue(d);
   // Corpi che il motore rifiuta da PGE #209 — envelope svuotato, lista senza
   // breakpoint, dict senza points. Nessun controllo qui sotto li produce:
   // arrivano dal tab Raw o da uno YAML scritto a mano, e prima di #209
   // rendevano applicando la deviazione al 100% dei grani, cioe' l'opposto di
   // quanto scritto. Ora il render esce con errore: meglio dirlo qui.
-  const bodyErr = PGEDeviationProb.error(d);
+  // Lo stream serve alle chiavi condizionali: quale del verso `reverse` /
+  // `read_direction` il motore legge davvero (gruppo esclusivo, decide il
+  // blocco grain) e se `pc_rand_envelope` e' viva (lo e' salvo grain.envelope
+  // in forma transition o multistate). Senza, quelle tre non si possono
+  // attribuire e resterebbero non validate.
+  const bodyErr = PGEDeviationProb.error(d, stream);
   // `true` è un modo globale valido, non off: il motore lo legge come
   // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
   // "true", senza riscrivere lo YAML finché non lo si tocca.
@@ -195,7 +213,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
             );
           })}
           <AddParamMenu
-            options={DEVIATION_PROB_PARAMS.map(p => ({
+            options={DEVIATION_PROB_PARAMS.filter(p => liveKeys.includes(p.key) || (d && d[p.key] != null)).map(p => ({
               key: p.key, label: p.key, desc: p.desc,
               exists: d && d[p.key] != null, def: 50
             }))}
