@@ -57,11 +57,20 @@ const DEVIATION_PROB_PARAMS = [
   // La probabilita' di cambio finestra si dichiara su `pc_rand_envelope`, non
   // su `envelope`: quest'ultima e' il deviation_probability_key di
   // `grain_envelope`, che pero' e' `is_smart=False` e non passa mai da
-  // GateFactory — `{envelope: 50}` costruisce un AlwaysGate, cioe' la finestra
-  // cambia al 100% dei grani qualunque numero si scriva. Verificato eseguendo
-  // il motore. `pc_rand_envelope` e' il param_key vero (window_controller.py),
-  // e con esso `{pc_rand_envelope: 50}` costruisce il RandomGate atteso.
+  // GateFactory — con piu' di una finestra `{envelope: 50}` costruisce un
+  // AlwaysGate (con una sola, un NeverGate): in nessuno dei due casi il numero
+  // scritto conta, ed e' indistinguibile da una chiave inventata. Verificato
+  // eseguendo il motore. `pc_rand_envelope` e' il param_key vero
+  // (window_controller.py), e con esso `{pc_rand_envelope: 50}` costruisce il
+  // RandomGate atteso.
   { key: "pc_rand_envelope", desc: "switch window when grain.envelope is a list" },
+  // Chiave morta, tenuta nel catalogo per un motivo solo: i progetti che la
+  // portano scritta. Il catalogo governa le RIGHE, il menu di aggiunta e'
+  // filtrato a parte su liveParamKeys — quindi questa voce non e' offerta a
+  // nessuno, ma un `{envelope: 50}` gia' nel file resta visibile, spiegato e
+  // cancellabile. Toglierla del tutto cancellava l'unico posto in cui quello
+  // sbaglio era correggibile.
+  { key: "envelope", desc: "chiave morta: il motore non la legge — usa pc_rand_envelope" },
 ];
 
 function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
@@ -184,7 +193,18 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
             const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
             return (
               <div key={p.key} className="pge-prow">
-                <span className="k">{p.key}</span>
+                {/* Scritta ma inerte su QUESTO stream: la chiave morta
+                    `envelope`, e il perdente del gruppo esclusivo
+                    reverse/read_direction. Il motore non le consulta, quindi il
+                    numero scritto non fa niente — la riga resta (e' scritta,
+                    va vista e tolta) ma lo dice. */}
+                <span className="k" style={liveKeys.includes(p.key) ? undefined : {opacity:.55}}
+                      title={liveKeys.includes(p.key) ? undefined
+                             : (p.key === "envelope"
+                                ? "il motore non legge questa chiave: la probabilita' di cambio finestra e' pc_rand_envelope"
+                                : "su questo stream il verso e' governato dall'altra chiave del gruppo: questa non viene letta")}>
+                  {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
+                </span>
                 <Seg size="xs" value={isEnv ? "env" : "scalar"}
                      onChange={(m) => {
                        const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : ((items && items[0] && items[0][1]) || 1);

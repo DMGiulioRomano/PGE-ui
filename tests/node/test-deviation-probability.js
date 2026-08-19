@@ -273,8 +273,18 @@ const eeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/Envel
 
 assert("l'Inspector passa lo stream a error() (chiavi condizionali)",
   /\.error\(\s*d\s*,\s*stream\s*\)/.test(inspSrc));
-assert("l'Inspector offre pc_rand_envelope, non la chiave morta envelope",
-  /key:\s*"pc_rand_envelope"/.test(inspSrc) && !/key:\s*"envelope"/.test(inspSrc));
+/* «offre pc_rand_envelope, non la chiave morta envelope» e' un'affermazione sul
+   COMPORTAMENTO, non sulla presenza di una stringa nel file: la chiave morta
+   resta nel catalogo apposta (le sue righe devono essere visibili e
+   cancellabili sui progetti che la portano scritta), ed e' liveParamKeys a
+   decidere cosa viene offerto. */
+assert("pc_rand_envelope e' fra le chiavi offerte",
+  D.liveParamKeys(grainOf({ envelope: "hanning" })).includes("pc_rand_envelope"));
+assert("la chiave morta envelope non e' mai offerta",
+  ["hanning", ["hanning", "gaussian"], { from: "h", to: "g" }, { states: ["h", "g"] }, undefined]
+    .every(e => !D.liveParamKeys(grainOf({ envelope: e })).includes("envelope")));
+assert("ma resta nel catalogo dell'Inspector, per i file che la portano scritta",
+  /key:\s*"envelope"/.test(inspSrc.split("const DEVIATION_PROB_PARAMS")[1].split("];")[0]));
 assert("le righe offerte seguono le chiavi vive",
   /liveParamKeys\(stream\)/.test(inspSrc));
 

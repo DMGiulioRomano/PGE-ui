@@ -72,10 +72,12 @@
        - `envelope` è dichiarata da `grain_envelope`, che è `is_smart=False`
          (parameter_schema.py): l'orchestratore la manda al ramo `_raw_value` e
          non passa mai da GateFactory. Per il motore è come una chiave
-         inventata — `{envelope: 50}` costruisce un AlwaysGate, cioè la finestra
-         cambia al 100% dei grani qualunque numero si scriva. La probabilità
-         della finestra si dichiara su `pc_rand_envelope` (window_controller.py),
-         l'unico param_key costruito a runtime fuori dallo schema.
+         inventata: `{envelope: 50}` e `{foo: 50}` danno lo stesso gate — un
+         AlwaysGate con più di una finestra, un NeverGate con una sola — e in
+         nessuno dei due casi il numero scritto conta. La probabilità della
+         finestra si dichiara su `pc_rand_envelope` (window_controller.py),
+         uno dei due param_key costruiti a runtime fuori dallo schema:
+         l'altro è `pitch` (pitch_controller.py).
        - `pc_rand_envelope`, `reverse` e `read_direction` sono invece VIVE ma
          condizionali: dipendono da com'è scritto il blocco `grain`, che qui non
          si vede. Stanno in `liveParamKeys(stream)`, non qui.
