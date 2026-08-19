@@ -225,7 +225,14 @@ function listEnvelopes(stream, sampleDur) {
       path: ["deviationProbability"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
   } else if (PGEDeviationProb.mode(stream.deviationProbability) === "perParam") {
-    for (const pk of PGEDeviationProb.PARAM_KEYS) {
+    // ALL_PARAM_KEYS, non PARAM_KEYS: questo e' il catalogo, e ha lo stesso
+    // vincolo del walk di envelope-utils — sbagliare per difetto lascia un
+    // envelope scritto senza voce, cioe' non apribile e non disegnabile, e il
+    // click sull'env mini dell'Inspector apre un altro envelope invece di
+    // dirlo. Le condizionali (reverse / read_direction / pc_rand_envelope) e
+    // la chiave inerte `envelope` sono scrivibili, quindi vanno mostrate:
+    // quali il motore CONSULTI e' la domanda di error(), non di questa.
+    for (const pk of PGEDeviationProb.ALL_PARAM_KEYS) {
       if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
         list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
           path: ["deviationProbability", pk], unit: "%",
