@@ -461,15 +461,21 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
         </div>
       ) : null}
 
-      {/* Il ripiego opposto, e per questo con parole opposte: qui lo YAML è
-          buono e il motore lo rende: è il conto in doppia precisione
-          dell'anteprima a non arrivarci, e cicli uguali sono plausibili e
-          sbagliati. Non è un errore da correggere, è un limite del disegno —
-          quindi warn, non error, e nessun invito a cambiare il valore. */}
+      {/* Il ripiego opposto a quello di distError, e per questo con parole
+          opposte: la' il messaggio puo' dire che il motore rifiuta il blocco,
+          perche' `timeDistError` ha appena stabilito che lo rifiuta. Qui no —
+          la guardia scatta quando il conto in doppia precisione dell'anteprima
+          non arriva, e questo non dice niente su cosa fara' il motore: dentro
+          la banda int/float ({geometric, ratio: 2} a 1024 cicli, {exponential,
+          rate: 0.5} a 1025) il motore rifiuta comunque. Il testo si limita
+          quindi a quello che si sa: i numeri disegnati non sono le durate del
+          blocco. Resta warn e non error, e senza inviti a cambiare il valore,
+          perche' nello YAML puo' non esserci niente da correggere. */}
       {!block.distError && block.previewFallback ? (
         <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-warn)" }}>
-          l'anteprima non sa disegnare questa distribuzione e mostra cicli di durata
-          uguale: il motore la rende, fortemente sbilanciata verso l'ultimo ciclo.
+          l'anteprima non arriva al conto di questa distribuzione — i valori escono dal
+          range dei float — e ripiega su cicli di durata uguale: le durate qui sopra non
+          sono quelle del blocco.
         </div>
       ) : null}
       <div className="ee-loop-panel-hint mono">

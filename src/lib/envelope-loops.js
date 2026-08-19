@@ -272,6 +272,11 @@
     if (name === "power") {
       const e = p.exponent != null ? +p.exponent : 2.0;
       // weights[i] = (i+1) ** exponent: il massimo è N ** exponent.
+      // `!isFinite(e)` non è raggiungibile dall'unico call site (i parametri
+      // non finiti escono già come kind "param" nel loop qui sopra); resta
+      // perché questa funzione dichiara di lavorare sui numeri che riceve, e
+      // un secondo chiamante che saltasse quel controllo non deve poter
+      // ottenere un `mag` NaN letto come "non trabocca".
       if (!isFinite(e) || e <= 0 || Number.isInteger(e)) return null;
       const mag = e * Math.log10(N);
       return mag > LOG10_MAX ? mk("exponent", e) : null;
@@ -342,16 +347,23 @@
        copre tutta: se le durate non sono finite, o non sommano a T, il disegno
        torna a cicli uguali — lo stesso ripiego dell'altro ramo.
 
-       Ma qui il ripiego non può essere muto come là, e per la ragione opposta:
-       quando parla `timeDistError` il motore RIFIUTA il blocco, e il pannello
-       lo dice; qui il motore lo RENDE, spesso fortemente sbilanciato (con
-       `{power, exponent: 1000}` e 4 cicli mette il 100% del tempo nell'ultimo),
-       e cicli uguali sono un'anteprima plausibile e sbagliata — peggio delle
-       NaN di prima, che almeno erano rotte a vista. Il ripiego marca quindi
-       l'array con `previewFallback`, che `expandMixed` porta sul blocco e il
-       pannello traduce in un messaggio suo, diverso da quello dell'overflow.
-       Il flag nasce dalla guardia, cioè esattamente dove il conto JS ha
-       fallito: nessuna soglia in più da tenere allineata al motore. */
+       Ma qui il ripiego non può essere muto: cicli uguali sono un'anteprima
+       plausibile e sbagliata — peggio delle NaN di prima, che almeno erano
+       rotte a vista. Il ripiego marca quindi l'array con `previewFallback`,
+       che `expandMixed` porta sul blocco e il pannello traduce in un messaggio
+       suo, diverso da quello dell'overflow. Il flag nasce dalla guardia, cioè
+       esattamente dove il conto JS ha fallito: nessuna soglia in più da tenere
+       allineata al motore.
+
+       Quello che il flag NON dice è cosa farà il motore, e il messaggio del
+       pannello non lo afferma: la guardia scatta dove `Math.pow` non arriva, e
+       lì il motore a volte rende (`{power, exponent: 1000}` su 4 cicli mette il
+       100% del tempo nell'ultimo), a volte rifiuta — tutta la banda int/float
+       che `timeDistError` lascia passare di proposito (`{geometric, ratio: 2}`
+       a 1024 cicli, `{exponential, rate: 0.5}` a 1025) alza
+       `ParameterBoundError`. Le due condizioni non coincidono e non possono:
+       distinguerle vorrebbe dire replicare la semantica intera di Python, che è
+       esattamente ciò che questa rete evita di fare. */
     function guard(durs) {
       const sum = durs.reduce((a, b) => a + b, 0);
       const ok = durs.every(d => isFinite(d) && d >= 0) &&

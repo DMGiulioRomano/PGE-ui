@@ -308,6 +308,45 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
     JSON.stringify(rottoParam.points));
 }
 
+/* La banda int/float e cosa il pannello puo' dirne.
+   `timeDistError` tace di proposito su una fascia di coppie che il motore
+   rifiuta comunque (la soglia intera e' la piu' permissiva delle due, e
+   stringerla reintrodurrebbe falsi positivi: a `ratio: 2` la parita' e'
+   ESATTA in doppia precisione). Dentro quella fascia scatta la guardia
+   sull'output, che sa solo che il conto JS non e' arrivato — non cosa fara' il
+   motore. Il messaggio del pannello non deve quindi affermarlo: verificato
+   eseguendo il motore, {geometric, ratio: 2} a 1024 cicli e {exponential,
+   rate: 0.5} a 1025 alzano ParameterBoundError mentre la UI ripiega. */
+{
+  console.log("\n── la banda int/float: la guardia parla, ma non del motore ──");
+  const banda = [
+    [{ type: "geometric",   ratio: 2   }, 1024],
+    [{ type: "exponential", rate:  0.5 }, 1025],
+    [{ type: "geometric",   ratio: 2.5 }, 775],
+    [{ type: "exponential", rate:  0.25 }, 513],
+  ];
+  for (const [spec, n] of banda) {
+    const label = `${spec.type} @${n}`;
+    assert(`${label}: timeDistError tace (soglia intera, voluto)`,
+      E.timeDistError(spec, n) === null, JSON.stringify(E.timeDistError(spec, n)));
+    assert(`${label}: la guardia sull'output ripiega e lo dichiara`,
+      E.isPreviewFallback(E.computeCycleDurations(2.0, n, spec)) === true);
+  }
+
+  assert("la parità esatta a ratio: 2 è ancora quella su cui poggia la banda",
+    1024 * Math.log10(2) === Math.log10(Number.MAX_VALUE));
+
+  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const warn = (eeSrc.split("block.previewFallback ?")[1] || "").slice(0, 700);
+  assert("il pannello ha un messaggio per previewFallback", warn.length > 0);
+  assert("e non afferma che il motore la rende",
+    !/il motore la rende|il motore lo rende/.test(warn), warn.slice(0, 200));
+  assert("dice invece che le durate disegnate non sono quelle del blocco",
+    /non\s+sono\s+quelle\s+del\s+blocco/.test(warn), warn.slice(0, 200));
+  assert("e resta un warn, non un error",
+    /--status-warn/.test(warn), warn.slice(0, 200));
+}
+
 console.log("\n" + "─".repeat(50));
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
