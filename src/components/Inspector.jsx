@@ -38,9 +38,13 @@ function AddParamMenu({ options, onAdd }) {
                        100% if present, else no variation (engine: GateFactory
                        range-only, same as deviation_probability:false for that param)
 */
-/* Le descrizioni, nell'ordine di window.PGEDeviationProb.liveParamKeys — che
-   resta la lista autorevole di cosa il motore consulta davvero, e che dipende
-   dal blocco `grain`: la riga offerta e' quella della chiave viva. */
+/* Il catalogo governa le RIGHE: tutte e nove le chiavi che l'editor puo'
+   trovare scritte, comprese le inerti, che restano visibili (marcate) e
+   cancellabili. Non e' la lista di cosa il motore consulta — quella e'
+   window.PGEDeviationProb.liveParamKeys, che dipende dal blocco `grain` e ne
+   ammette al massimo sette — e sono le voci del MENU di aggiunta a seguirla,
+   con un filtro a parte. L'ordine e' quello di liveParamKeys, con in coda le
+   due chiavi che quella lista non nomina mai. */
 const DEVIATION_PROB_PARAMS = [
   { key: "volume",   desc: "applies volume_range per grain" },
   { key: "pan",      desc: "applies pan_range per grain" },
@@ -72,6 +76,33 @@ const DEVIATION_PROB_PARAMS = [
   // sbaglio era correggibile.
   { key: "envelope", desc: "chiave morta: il motore non la legge — usa pc_rand_envelope" },
 ];
+
+/* Perche' una chiave scritta in deviation_probability e' inerte su QUESTO
+   stream — undefined se e' viva. I casi sono TRE, quanti sono gli insiemi che
+   liveParamKeys esclude, e il ternario inline che stava nel title ne
+   distingueva due:
+     - `envelope`, sempre: il motore non la legge mai (il suo spec
+       `grain_envelope` e' is_smart=False, non raggiunge GateFactory);
+     - il perdente del gruppo esclusivo reverse/read_direction, sempre: il
+       motore legge quella dichiarata in grain e scarta l'altra;
+     - `pc_rand_envelope`, quando grain.envelope e' in forma transition
+       (`{from, to}`) o multistate (`{states}`): li' il gate e' spento a monte
+       (uses_gate, window_controller.py) e la finestra la sceglie la curva.
+   Il terzo cadeva nel ramo `else`, cioe' in quello del verso: la spiegazione
+   era falsa e mandava a cercare il problema in grain.reverse, mentre la causa
+   e' grain.envelope e il rimedio e' cambiare quello. Sullo stesso stream il
+   rimando di `envelope` a `pc_rand_envelope` diventa a sua volta fuorviante —
+   quella riga e' inerte anche lei — quindi e' condizionato. */
+function deviationProbInertReason(key, liveKeys) {
+  if (liveKeys.includes(key)) return undefined;
+  if (key === "pc_rand_envelope")
+    return "grain.envelope e' in forma transition o multistate: li' la finestra la sceglie la curva, non un gate — il rimedio e' cambiare la forma della finestra";
+  if (key === "envelope")
+    return liveKeys.includes("pc_rand_envelope")
+      ? "il motore non legge questa chiave: la probabilita' di cambio finestra e' pc_rand_envelope"
+      : "il motore non legge questa chiave; e su questo stream non e' letta nemmeno pc_rand_envelope, perche' grain.envelope e' in forma transition o multistate";
+  return "su questo stream il verso e' governato dall'altra chiave del gruppo: questa non viene letta";
+}
 
 function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Icon, Tag, NumberField } = window.PGE;
@@ -199,10 +230,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                     numero scritto non fa niente — la riga resta (e' scritta,
                     va vista e tolta) ma lo dice. */}
                 <span className="k" style={liveKeys.includes(p.key) ? undefined : {opacity:.55}}
-                      title={liveKeys.includes(p.key) ? undefined
-                             : (p.key === "envelope"
-                                ? "il motore non legge questa chiave: la probabilita' di cambio finestra e' pc_rand_envelope"
-                                : "su questo stream il verso e' governato dall'altra chiave del gruppo: questa non viene letta")}>
+                      title={deviationProbInertReason(p.key, liveKeys)}>
                   {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
                 </span>
                 <Seg size="xs" value={isEnv ? "env" : "scalar"}

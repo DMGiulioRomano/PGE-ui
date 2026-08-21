@@ -327,6 +327,48 @@ assert("la riga inerte e' marcata, non solo spiegata dal title",
   /style=\{liveKeys\.includes\(p\.key\) \? undefined : \{opacity/.test(inspSrc) &&
   /liveKeys\.includes\(p\.key\) \? null : <span[\s\S]{0,60}?> · inerte<\/span>/.test(inspSrc));
 
+/* Il motivo dell'inerzia: `liveParamKeys` esclude TRE insiemi, e il title ne
+   distingueva due. `pc_rand_envelope`, escluso quando grain.envelope e'
+   transition o multistate, cadeva nel ramo `else` — quello del verso — e
+   riceveva una spiegazione falsa che manda a cercare il problema in
+   grain.reverse mentre la causa e' grain.envelope. E il rimando di `envelope`
+   a `pc_rand_envelope` era incondizionato: su quello stream le due righe si
+   mandavano l'una all'altra e nessuna diceva la verita'. */
+console.log("\n── il motivo dell'inerzia: tre casi, non due ──");
+const inertReason = (() => {
+  try {
+    return new Function(extractFn(inspSrc, "deviationProbInertReason") +
+                        "\nreturn deviationProbInertReason;")();
+  } catch (e) { return null; }
+})();
+assert("l'Inspector ha una funzione sola per il motivo dell'inerzia",
+  typeof inertReason === "function");
+const reason = (key, grain) =>
+  typeof inertReason === "function"
+    ? inertReason(key, D.liveParamKeys(grainOf(grain))) : "(assente)";
+
+const TRANSITION = { envelope: { from: "hanning", to: "bartlett" } };
+const MULTISTATE = { envelope: { states: [[0, "hanning"], [1, "bartlett"]] } };
+
+assert("chiave viva → nessun motivo",
+  reason("pc_rand_envelope", { envelope: "hanning" }) === undefined);
+assert("pc_rand_envelope con envelope transition → il motivo nomina grain.envelope",
+  /grain\.envelope/.test(reason("pc_rand_envelope", TRANSITION)));
+assert("pc_rand_envelope con envelope multistate → il motivo nomina grain.envelope",
+  /grain\.envelope/.test(reason("pc_rand_envelope", MULTISTATE)));
+assert("e non parla del verso, che con questa chiave non c'entra",
+  !/verso/.test(reason("pc_rand_envelope", TRANSITION)) &&
+  !/verso/.test(reason("pc_rand_envelope", MULTISTATE)));
+assert("il perdente del gruppo esclusivo parla invece del verso",
+  /verso/.test(reason("read_direction", { envelope: "hanning" })));
+assert("envelope, con pc_rand_envelope viva → rimanda a pc_rand_envelope",
+  /pc_rand_envelope/.test(reason("envelope", { envelope: "hanning" })));
+assert("envelope, con pc_rand_envelope a sua volta inerte → dice anche quello",
+  /grain\.envelope/.test(reason("envelope", TRANSITION)) &&
+  /grain\.envelope/.test(reason("envelope", MULTISTATE)));
+assert("il title della riga viene da li', non da un ternario inline",
+  /title=\{deviationProbInertReason\(p\.key, liveKeys\)\}/.test(inspSrc));
+
 /* PGE #209: `[]` e' il primo dei corpi che il motore rifiuta, e l'editor non
    deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
    guard c'era solo su una (Delete su un breakpoint), quindi un envelope fatto
