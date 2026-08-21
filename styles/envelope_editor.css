@@ -54,6 +54,9 @@
 .ee-psel-item.on .ee-psel-item-l { color: var(--accent); }
 .ee-psel-item .ee-psel-item-l { font: 11px var(--font-mono); color: var(--fg-1); }
 .ee-psel-item .ee-psel-item-u { font: 10px var(--font-mono); color: var(--fg-3); }
+/* Chiave inerte su questo stream: il motore non la legge, e il selettore lo
+   dice come lo dice l'Inspector — stessa opacita' di .track-head.muted. */
+.ee-psel-inert { color: var(--fg-4); opacity: 0.55; }
 
 /* Canvas — fills body width; x ∈ [0,1] always (decoupled from timeline) */
 .pge-envedit .ee-body { flex: 1; min-height: 0; min-width: 0; overflow: hidden; background: var(--bg-grid); position: relative; }
@@ -238,7 +241,7 @@
    bottone inerte che il guard esiste per non essere. Il `title` esplicativo non
    basta: sui bottoni disabilitati Chrome e Safari non lo mostrano, quindi lo
    stato deve leggersi dal bottone. */
-.pge-envedit .ee-loop-panel-del:disabled { color: var(--fg-4); border-color: var(--border-default); cursor: not-allowed; opacity: 0.5; }
+.pge-envedit .ee-loop-panel-del:disabled { color: var(--fg-4); cursor: not-allowed; opacity: 0.5; }
 .pge-envedit .ee-loop-panel-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
 }

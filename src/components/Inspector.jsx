@@ -1352,4 +1352,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   );
 }
 window.PGE = window.PGE || {};
-window.PGE.Inspector = Inspector;
+/* Il motivo dell'inerzia esce dal file perche' anche il catalogo
+   dell'EnvelopeEditor deve marcare quelle chiavi: due copie della stessa prosa
+   divergerebbero al primo cambio di regola. */
+Object.assign(window.PGE, { Inspector, deviationProbInertReason });

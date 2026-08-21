@@ -24,6 +24,9 @@ global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
+// envelope-utils.js serve al catalogo dell'EnvelopeEditor (loopEnvMax), che
+// piu' sotto viene estratto dal JSX ed eseguito davvero.
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const D = window.PGEDeviationProb;
 const { DEVIATION_PROB_IMPLICIT } = window.PGEYaml;
@@ -368,6 +371,45 @@ assert("envelope, con pc_rand_envelope a sua volta inerte → dice anche quello"
   /grain\.envelope/.test(reason("envelope", MULTISTATE)));
 assert("il title della riga viene da li', non da un ternario inline",
   /title=\{deviationProbInertReason\(p\.key, liveKeys\)\}/.test(inspSrc));
+
+/* Il catalogo dell'EnvelopeEditor metteva le chiavi inerti nel selettore con la
+   stessa dignita' delle altre, mentre l'Inspector le marca: si poteva disegnare
+   una curva su una chiave che il motore non legge, nell'unico posto dove non lo
+   si diceva. Il motivo e' lo stesso dell'Inspector — una funzione sola,
+   pubblicata su window.PGE — cosi' le due viste non possono divergere. */
+console.log("\n── il catalogo dell'editor marca le chiavi inerti ──");
+const ENV = [[0, 0], [1, 100]];
+const catalog = (() => {
+  try {
+    const fn = new Function(extractFn(eeSrc, "listEnvelopes") + "\nreturn listEnvelopes;")();
+    return (stream) => fn(stream, undefined).filter(e => /^deviation_probability_/.test(e.key));
+  } catch (e) { return () => []; }
+})();
+window.PGE = window.PGE || {};
+window.PGE.deviationProbInertReason = inertReason;
+
+const catLive = catalog({ grain: { envelope: "hanning" },
+  deviationProbability: { volume: ENV, envelope: ENV, pc_rand_envelope: ENV } });
+const catSpec = catalog({ grain: TRANSITION,
+  deviationProbability: { volume: ENV, pc_rand_envelope: ENV } });
+const entry = (list, pk) => list.find(e => e.key === "deviation_probability_" + pk) || {};
+
+assert("il catalogo elenca comunque le chiavi inerti (sono scritte, vanno aperte)",
+  entry(catLive, "envelope").key === "deviation_probability_envelope");
+assert("una chiave viva non porta il marcatore", entry(catLive, "volume").inert === undefined);
+assert("la chiave morta envelope lo porta",
+  typeof entry(catLive, "envelope").inert === "string");
+assert("pc_rand_envelope viva non lo porta",
+  entry(catLive, "pc_rand_envelope").inert === undefined);
+assert("pc_rand_envelope con grain.envelope transition lo porta, e nomina la causa",
+  /grain\.envelope/.test(entry(catSpec, "pc_rand_envelope").inert || ""));
+assert("il motivo e' lo stesso dell'Inspector, non una seconda copia",
+  entry(catLive, "envelope").inert === inertReason("envelope",
+    D.liveParamKeys(grainOf({ envelope: "hanning" }))));
+assert("l'Inspector pubblica il motivo su window.PGE",
+  /Object\.assign\(window\.PGE,[\s\S]{0,200}?deviationProbInertReason/.test(inspSrc));
+assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
+  (eeSrc.match(/it\.inert/g) || []).length >= 2 && /cur\.inert/.test(eeSrc));
 
 /* PGE #209: `[]` e' il primo dei corpi che il motore rifiuta, e l'editor non
    deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
