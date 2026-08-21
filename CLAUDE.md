@@ -151,7 +151,15 @@ indistinguishable from an invented one.
 The Inspector *offers* `pc_rand_envelope` instead, which is the param key the
 `WindowController` actually asks for, but it still *shows* an `envelope` already
 written in the file, marked inert: that row is the only place the mistake is
-visible and removable.
+visible and removable. Which keys are inert is a per-stream question with
+**three** answers, not two — `envelope` always, the loser of the
+`reverse`/`read_direction` exclusive group always, and `pc_rand_envelope`
+whenever `grain.envelope` is a transition or multistate spec — and the reason
+text is one function, `window.PGE.deviationProbInertReason`, shared by the
+Inspector's rows and by the EnvelopeEditor's catalog, which marks the same keys
+in its selector. Two copies of that prose would drift the first time the rule
+moves; and a key marked in one view and not the other lets you draw a curve on
+a key the engine never reads.
 
 A third list, `ALL_PARAM_KEYS`, is neither of those. It is the set of per-param
 keys the editor may find written — the eight the engine reads in some
@@ -186,9 +194,22 @@ committed `[]`, which is exactly the body of PGE #209. The check is now one
 function (`wouldEmptyEnv`) used by all five paths — Delete on a breakpoint, on a
 block, the loop panel's button, double-click on a breakpoint, and pasting an
 envelope — and the button is disabled (with its own `:disabled` rule) rather
-than inert when it would empty the envelope. It takes the **desugared** form: on
-a bare BP group it would say "empty" about a full envelope, so a caller holding
-`rawEnvRaw` must desugar first. The other hole was the
+than inert when it would empty the envelope. It takes the **items**: desugared,
+and *not* wrapped. On a bare BP group it would say "empty" about a full
+envelope, so a caller holding `rawEnvRaw` must desugar first — but a caller
+holding a **wrapped** value must `unwrapEnv` instead, and desugaring is no
+remedy there: `wrapEnv` returns the `{type, points}` dict for a pure-breakpoint
+envelope with a non-linear global interp, `desugarBPGroups` leaves a non-array
+untouched, and a non-array here is "empty". That is exactly how the paste came
+to reject in silence every typed envelope — the form the editor writes itself
+the moment you pick `cubic` in the header. Two contents the count could not see
+on its own are now recognized inside the function, because for both the caller
+has nothing to normalize: a **bare compact block** (where the value *is* the
+block, a form neither `desugarBPGroups` nor `unwrapEnv` touches) and a
+breakpoint in **dict** form `{t, v}`, which the engine normalizes to `[t, v]`
+before looking at it. `PGEEnv.isBreakpoint` stays narrow — the editor uses it to
+decide what is draggable — so that predicate is local to the guard. The other
+hole was the
 per-param "remove" button: emptying the dict wrote the **empty key**, which is
 the single one of the five off-ish spellings that does *not* disable the
 deviation (it is implicit 1%, PGE #210).
