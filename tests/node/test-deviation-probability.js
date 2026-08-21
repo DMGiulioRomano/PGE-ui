@@ -316,5 +316,74 @@ assert("il bottone 'remove loop' e' disabilitato quando svuoterebbe",
 assert("e il genitore gli passa davvero la condizione",
   /onDeleteBlocked=\{wouldEmptyEnv\(/.test(eeSrc));
 
+/* La quinta via — il paste — e' l'unica che il guard non copriva con una
+   asserzione di COMPORTAMENTO, e per questo il guard messo sul valore
+   sbagliato e' passato verde: `wrapEnv` restituisce il dict {type, points}
+   per un envelope di soli breakpoint con interp globale non lineare, e
+   `wouldEmptyEnv` respinge tutto cio' che non e' un array. Una regex sulla
+   riga non lo avrebbe visto: la chiamata c'era, era l'argomento a essere
+   sbagliato. Quindi qui si esegue davvero il paste, con le funzioni estratte
+   dal sorgente spedito e le PGEEnv vere. */
+console.log("\n── il paste (quinta via): esecuzione, non regex ──");
+
+/* Estrae una funzione top-level dal JSX per brace matching. Nessuna di quelle
+   che servono qui ha graffe dentro stringhe o commenti. */
+function extractFn(src, name) {
+  const head = src.indexOf("function " + name + "(");
+  if (head < 0) throw new Error("funzione non trovata nel sorgente: " + name);
+  let i = src.indexOf("{", head), depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) return src.slice(head, j + 1);
+  }
+  throw new Error("graffe non bilanciate su " + name);
+}
+
+/* handlePasteEnv vive dentro il componente: si prende il suo corpo e lo si
+   rimonta su un harness che fornisce le variabili di chiusura. Tutto il resto
+   (unwrapEnv, wrapEnv, desugarBPGroups, remapEnvY, patchForPath,
+   wouldEmptyEnv) e' il codice vero. */
+const pasteSrc = [
+  extractFn(eeSrc, "wouldEmptyEnv"),
+  extractFn(eeSrc, "remapEnvY"),
+  extractFn(eeSrc, "patchForPath"),
+  extractFn(eeSrc, "handlePasteEnv"),
+  "return handlePasteEnv;",
+].join("\n");
+
+function runPaste(rawEnv) {
+  let patched = null;
+  const envClipboard = { sourceStreamId: "s1", sourceParam: "volume",
+                         srcHardMin: 0, srcHardMax: 100,
+                         rawEnv: JSON.parse(JSON.stringify(rawEnv)) };
+  const env = { key: "volume", path: ["volumeEnv"], hardMin: 0, hardMax: 100 };
+  const stream = { id: "s1" };
+  const onChange = (p) => { patched = p; };
+  new Function("envClipboard", "env", "stream", "onChange", pasteSrc)(
+    envClipboard, env, stream, onChange)();
+  return patched;
+}
+
+// Le tre forme che l'editor scrive da solo: il selettore di interp in testata
+// su un envelope di soli breakpoint produce proprio il dict {type, points}.
+assert("paste di un envelope cubic (dict {type, points}) → scrive",
+  runPaste({ type: "cubic", points: [[0, 0], [0.5, 50], [1, 100]] }) !== null);
+assert("paste di un envelope step (dict {type, points}) → scrive",
+  runPaste({ type: "step", points: [[0, 0], [1, 100]] }) !== null);
+assert("paste di un envelope lineare (array piatto) → scrive",
+  runPaste([[0, 0], [0.5, 50], [1, 100]]) !== null);
+// Il blocco compatto NUDO e i breakpoint in forma dict sono i due falsi
+// positivi del guard: il primo e' un envelope pieno che il motore rende, il
+// secondo un corpo che il motore normalizza sotto una chiave per-parametro.
+assert("paste di un blocco loop nudo → scrive",
+  runPaste([[[0, 0], [100, 1]], 1, 4]) !== null);
+assert("paste di breakpoint in forma dict → scrive",
+  runPaste([{ t: 0, v: 1 }, { t: 1, v: 1 }]) !== null);
+// E il guard resta: le due forme vuote non passano.
+assert("paste di `[]` → rifiutato (e' il corpo che il motore rifiuta)",
+  runPaste([]) === null);
+assert("paste di un envelope tipizzato senza punti → rifiutato",
+  runPaste({ type: "step", points: [] }) === null);
+
 console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
