@@ -271,6 +271,32 @@ console.log("\n── cablaggio UI ──");
 const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
 const eeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
 
+/* Il blocco graffato che apre a `from`, per brace matching. Le asserzioni sui
+   rami di Delete lo usano al posto di una finestra fissa di caratteri: quella
+   aveva 405 caratteri di margine (misurati), e sei righe di commento dentro il
+   ramo la facevano fallire a comportamento invariato. Nessuno dei blocchi
+   coinvolti ha graffe dentro stringhe o commenti. */
+function blockFrom(src, from) {
+  let i = src.indexOf("{", from), depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
+  }
+  return "";
+}
+/* Il corpo del ramo che apre con `re` (una regex che finisce sulla graffa). */
+function branchBody(src, re) {
+  const m = re.exec(src);
+  return m ? blockFrom(src, m.index + m[0].length - 1) : "";
+}
+/* Una funzione top-level del JSX, dal `function` alla graffa che la chiude. */
+function extractFn(src, name) {
+  const head = src.indexOf("function " + name + "(");
+  if (head < 0) throw new Error("funzione non trovata nel sorgente: " + name);
+  return src.slice(head, head + blockFrom(src, head).length +
+                   (src.indexOf("{", head) - head));
+}
+
 assert("l'Inspector passa lo stream a error() (chiavi condizionali)",
   /\.error\(\s*d\s*,\s*stream\s*\)/.test(inspSrc));
 /* «offre pc_rand_envelope, non la chiave morta envelope» e' un'affermazione sul
@@ -287,6 +313,19 @@ assert("ma resta nel catalogo dell'Inspector, per i file che la portano scritta"
   /key:\s*"envelope"/.test(inspSrc.split("const DEVIATION_PROB_PARAMS")[1].split("];")[0]));
 assert("le righe offerte seguono le chiavi vive",
   /liveParamKeys\(stream\)/.test(inspSrc));
+/* Le due asserzioni qui sopra interrogano `liveParamKeys`, cioe' il modulo:
+   dicono qualcosa di vero sulla lista e niente sul CABLAGGIO. Tutta la
+   reintroduzione della chiave morta nel catalogo sta in piedi sul fatto che il
+   menu non la offra — e togliendo il filtro al menu la suite restava verde
+   (verificato: 111/111). Stesso difetto che questa PR ha corretto sui rami di
+   Delete, ricreato sull'affermazione piu' carica che introduce. */
+assert("il menu di aggiunta filtra sulle chiavi vive (la chiave morta non e' offerta)",
+  /options=\{DEVIATION_PROB_PARAMS\.filter\(p => liveKeys\.includes\(p\.key\)/.test(inspSrc));
+/* Il marcatore e' l'unica cosa che l'interfaccia aggiunge sulle righe inerti,
+   ed era invisibile alla suite: tolti sia l'opacita' sia lo span, verde. */
+assert("la riga inerte e' marcata, non solo spiegata dal title",
+  /style=\{liveKeys\.includes\(p\.key\) \? undefined : \{opacity/.test(inspSrc) &&
+  /liveKeys\.includes\(p\.key\) \? null : <span[\s\S]{0,60}?> · inerte<\/span>/.test(inspSrc));
 
 /* PGE #209: `[]` e' il primo dei corpi che il motore rifiuta, e l'editor non
    deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
@@ -298,12 +337,13 @@ assert("il guard 'non svuotare' esiste una volta sola",
    includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
    e quella scoperta era proprio il ramo del breakpoint, la via storica e
    l'unica che esisteva prima di questa PR. */
-// La finestra esclude `selectedBlock`, cosi' il ramo del breakpoint non puo'
-// passare grazie alla chiamata del ramo successivo.
+// Il corpo del ramo si estrae per graffe, non con una finestra di caratteri:
+// cosi' il ramo del breakpoint non puo' passare grazie alla chiamata del ramo
+// successivo, e restare dentro il proprio ramo non costa margine da misurare.
 assert("il ramo del breakpoint selezionato lo usa",
-  /selectedBP\s*!=\s*null\)\s*\{(?:(?!selectedBlock)[\s\S]){0,900}?wouldEmptyEnv\(/.test(eeSrc));
+  /wouldEmptyEnv\(/.test(branchBody(eeSrc, /selectedBP\s*!=\s*null\)\s*\{/)));
 assert("il ramo del blocco selezionato lo usa",
-  /selectedBlock\s*!=\s*null\)\s*\{[\s\S]{0,600}?wouldEmptyEnv\(/.test(eeSrc));
+  /wouldEmptyEnv\(/.test(branchBody(eeSrc, /selectedBlock\s*!=\s*null\)\s*\{/)));
 assert("deleteSelectedLoop lo usa",
   /function deleteSelectedLoop\(\)[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
 assert("il dblclick sul canvas lo usa, invece di ricontare a mano",
@@ -325,19 +365,6 @@ assert("e il genitore gli passa davvero la condizione",
    sbagliato. Quindi qui si esegue davvero il paste, con le funzioni estratte
    dal sorgente spedito e le PGEEnv vere. */
 console.log("\n── il paste (quinta via): esecuzione, non regex ──");
-
-/* Estrae una funzione top-level dal JSX per brace matching. Nessuna di quelle
-   che servono qui ha graffe dentro stringhe o commenti. */
-function extractFn(src, name) {
-  const head = src.indexOf("function " + name + "(");
-  if (head < 0) throw new Error("funzione non trovata nel sorgente: " + name);
-  let i = src.indexOf("{", head), depth = 0;
-  for (let j = i; j < src.length; j++) {
-    if (src[j] === "{") depth++;
-    else if (src[j] === "}" && --depth === 0) return src.slice(head, j + 1);
-  }
-  throw new Error("graffe non bilanciate su " + name);
-}
 
 /* handlePasteEnv vive dentro il componente: si prende il suo corpo e lo si
    rimonta su un harness che fornisce le variabili di chiusura. Tutto il resto
