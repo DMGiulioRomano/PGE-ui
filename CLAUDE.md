@@ -142,9 +142,12 @@ and `pc_rand_envelope` is live unless `grain.envelope` is a transition
 stream so the Inspector gets those three; called without it, only the five are
 validated — fewer alerts, never one on a YAML that renders. What is **not** in
 either list is `envelope`: its spec (`grain_envelope`) is `is_smart=False`, so
-it never reaches `GateFactory`: with more than one window `{envelope: 50}`
-builds an `AlwaysGate` and with a single one a `NeverGate`, and in neither does
-the number you wrote count — the key is indistinguishable from an invented one.
+it never reaches `GateFactory`: `{envelope: 50}` builds an `AlwaysGate` when
+the gate is live and more than one window is declared (a list, or `all`), and a
+`NeverGate` in every other case — including the transition/multistate dict,
+where the gate is switched off upstream (`uses_gate`) and the window count is
+two all the same. In neither does the number you wrote count — the key is
+indistinguishable from an invented one.
 The Inspector *offers* `pc_rand_envelope` instead, which is the param key the
 `WindowController` actually asks for, but it still *shows* an `envelope` already
 written in the file, marked inert: that row is the only place the mistake is

@@ -61,10 +61,12 @@ const DEVIATION_PROB_PARAMS = [
   // La probabilita' di cambio finestra si dichiara su `pc_rand_envelope`, non
   // su `envelope`: quest'ultima e' il deviation_probability_key di
   // `grain_envelope`, che pero' e' `is_smart=False` e non passa mai da
-  // GateFactory — con piu' di una finestra `{envelope: 50}` costruisce un
-  // AlwaysGate (con una sola, un NeverGate): in nessuno dei due casi il numero
-  // scritto conta, ed e' indistinguibile da una chiave inventata. Verificato
-  // eseguendo il motore. `pc_rand_envelope` e' il param_key vero
+  // GateFactory — `{envelope: 50}` costruisce un AlwaysGate quando il gate e'
+  // attivo e le finestre dichiarate sono piu' di una (lista o `all`), un
+  // NeverGate in ogni altro caso, compreso il dict transition/multistate, dove
+  // il gate e' spento a monte e le finestre sono comunque due. In nessuno dei
+  // due casi il numero scritto conta, ed e' indistinguibile da una chiave
+  // inventata. Verificato eseguendo il motore. `pc_rand_envelope` e' il param_key vero
   // (window_controller.py), e con esso `{pc_rand_envelope: 50}` costruisce il
   // RandomGate atteso.
   { key: "pc_rand_envelope", desc: "switch window when grain.envelope is a list" },
