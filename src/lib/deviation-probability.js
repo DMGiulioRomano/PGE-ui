@@ -73,7 +73,15 @@
          (parameter_schema.py): l'orchestratore la manda al ramo `_raw_value` e
          non passa mai da GateFactory. Per il motore è come una chiave
          inventata: `{envelope: 50}` e `{foo: 50}` danno lo stesso gate — un
-         AlwaysGate con più di una finestra, un NeverGate con una sola — e in
+         AlwaysGate quando il gate è attivo e le finestre dichiarate sono più
+         di una (lista o `all`), un NeverGate in ogni altro caso, compreso il
+         dict transition/multistate. Il discriminante non è il numero di
+         finestre: con transition o multistate il gate è spento a monte
+         (`uses_gate = not (transition or multistate)`, window_controller.py),
+         il deviation_probability arriva a GateFactory come `False` e
+         has_explicit_range è False a prescindere — e le finestre lì sono
+         proprio DUE, perché parse_window_list per `{from, to}` ritorna i due
+         nomi. È la stessa condizione che liveParamKeys applica qui sotto. E in
          nessuno dei due casi il numero scritto conta. La probabilità della
          finestra si dichiara su `pc_rand_envelope` (window_controller.py),
          uno dei due param_key costruiti a runtime fuori dallo schema:

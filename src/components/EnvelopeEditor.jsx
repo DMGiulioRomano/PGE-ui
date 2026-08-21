@@ -27,16 +27,33 @@ function pitchEnvBounds(unit, semis, signed) {
    finche' ne restava una scoperta la riga di CLAUDE.md che dichiara l'editor
    incapace di produrre quei corpi era falsa.
 
-   Riceve la forma DESUGARATA: su un BP group nudo
-   (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe `true` su un
+   Riceve gli ITEM: la forma desugarata, e non quella wrappata. Su un BP group
+   nudo (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe `true` su un
    envelope pieno, perche' ne' isBreakpoint ne' isCompactBlock riconoscono il
-   gruppo. Tutti i chiamanti attuali passano la forma desugarata; chi non lo
-   facesse (`handleCopyEnv` maneggia `rawEnvRaw`, che i gruppi li ha) deve
-   desugarare prima. */
+   gruppo — quello lo normalizza desugarBPGroups, che ogni chiamante applica.
+   E chi ha in mano una forma wrappata deve prima passare da `unwrapEnv`, non
+   da desugarBPGroups: `wrapEnv` restituisce il dict {type, points} per un
+   envelope di soli breakpoint con interp globale non lineare, desugarBPGroups
+   su un non-array lo lascia intatto, e qui un non-array e' "vuoto". Era il
+   difetto del paste (`handlePasteEnv`), che valutava l'output di wrapEnv e
+   rifiutava in silenzio ogni envelope tipizzato.
+
+   Due contenuti che il conteggio non vedeva da se', ed erano falsi positivi:
+     - il blocco compatto NUDO (`[[[0,0],[100,1]],1,4]`), dove il valore E' il
+       blocco invece di contenerlo. Si normalizza qui, come desugarBPGroups fa
+       con il BP group diretto: quella forma desugarBPGroups non la tocca, e
+       neanche unwrapEnv, quindi desugarare non basterebbe.
+     - il breakpoint in forma dict `{t, v, type?}`, che il motore normalizza in
+       `[t, v]` prima di guardarlo (envelope_builder.py:132). isBreakpoint non
+       va allargata — la usa l'editor per decidere cosa e' trascinabile — e il
+       predicato sta qui, dove la domanda e' solo se c'e' contenuto. */
 function wouldEmptyEnv(next) {
   const E = window.PGEEnv;
+  if (E.isCompactBlock(next)) return false;   // il valore E' il blocco
   if (!Array.isArray(next)) return true;
-  const bps   = next.filter(E.isBreakpoint).length;
+  const isDictBP = (it) => !!it && typeof it === "object" && !Array.isArray(it) &&
+                           typeof it.t === "number" && typeof it.v === "number";
+  const bps   = next.filter((it) => E.isBreakpoint(it) || isDictBP(it)).length;
   const loops = next.filter(E.isCompactBlock).length;
   return bps + loops < 1;
 }
@@ -246,10 +263,17 @@ function listEnvelopes(stream, sampleDur) {
     // dirlo. Le condizionali (reverse / read_direction / pc_rand_envelope) e
     // la chiave inerte `envelope` sono scrivibili, quindi vanno mostrate:
     // quali il motore CONSULTI e' la domanda di error(), non di questa.
+    // ...ma elencarle non basta: su questo stream alcune sono INERTI, e senza
+    // marcatore si disegna una curva su una chiave che il motore non legge,
+    // nell'unico posto in cui non lo si dice — l'Inspector le marca gia'. Il
+    // motivo e' quello dell'Inspector, non una seconda copia della stessa
+    // prosa (window.PGE.deviationProbInertReason).
+    const liveKeys = PGEDeviationProb.liveParamKeys(stream);
     for (const pk of PGEDeviationProb.ALL_PARAM_KEYS) {
       if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
         list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
           path: ["deviationProbability", pk], unit: "%",
+          inert: window.PGE.deviationProbInertReason(pk, liveKeys),
           visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
       }
     }
@@ -334,7 +358,8 @@ function EnvParamSelect({ envelopes, value, onChange, compact }) {
       <button className="ee-psel-btn" ref={btnRef} onClick={() => setOpen((o) => !o)}>
         {compact ? null : <span className="ee-psel-grp">{cur.group}</span>}
         {compact ? null : <span className="ee-psel-sep">/</span>}
-        <span className="ee-psel-lbl">{cur.label}</span>
+        <span className="ee-psel-lbl" title={cur.inert}>{cur.label}
+          {cur.inert ? <span className="ee-psel-inert"> · inerte</span> : null}</span>
         <Icon name="chevronDown" size={11} />
       </button>
       {open ?
@@ -352,8 +377,9 @@ function EnvParamSelect({ envelopes, value, onChange, compact }) {
               {items.map((it) =>
           <button key={it.key}
           className={"ee-psel-item" + (it.key === cur.key ? " on" : "")}
-          onClick={() => {onChange(it.key);setOpen(false);}}>
-                  <span className="ee-psel-item-l">{it.label}</span>
+          onClick={() => {onChange(it.key);setOpen(false);}} title={it.inert}>
+                  <span className="ee-psel-item-l">{it.label}
+                    {it.inert ? <span className="ee-psel-inert"> · inerte</span> : null}</span>
                   <span className="ee-psel-item-u">{it.unit || "·"}</span>
                 </button>
           )}
@@ -719,9 +745,13 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         // standalone BP AND without any loop block (i.e. truly empty).
         const next = cur.filter((_, i) => i !== selectedBP);
         // Rifiuto senza deselezionare: deselezionare toglie anche l'elemento su
-        // cui si stava agendo, e nel ramo del blocco chiude il pannello che
-        // contiene l'unica spiegazione (il title del bottone). Come il
-        // dblclick, che si limita al return.
+        // cui si stava agendo. Qui il pannello non c'e' affatto e Delete e'
+        // completamente muto, quindi almeno la selezione resta dov'era; nel
+        // ramo del blocco la deselezione chiuderebbe il pannello, cioe' l'unico
+        // posto in cui lo stato "svuoterebbe" si legge — dal bottone
+        // disabilitato, non dal suo title, che sui bottoni disabled Chrome e
+        // Safari non mostrano (cfr. envelope_editor.css). Come il dblclick,
+        // che si limita al return.
         if (wouldEmptyEnv(next)) return;
         commitCur(next);
         setSelectedBP(null);
@@ -940,7 +970,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     // Quinta via per scrivere `[]` su un envelope: handleCopyEnv accetta un
     // `rawEnv` vuoto (un array e' truthy), quindi il paste puo' propagare un
     // vuoto gia' esistente. Non ne crea mai uno, ma lo stesso guard vale.
-    if (wouldEmptyEnv(window.PGEEnv.desugarBPGroups(next))) return;
+    // Il guard va sugli ITEM, non su `next`: `wrapEnv` per un envelope di soli
+    // breakpoint con interp non lineare restituisce il dict {type, points}, e
+    // wouldEmptyEnv un dict lo dichiara vuoto — cioe' rifiutava in silenzio
+    // proprio la forma che l'editor scrive da solo appena si tocca il
+    // selettore di interp in testata.
+    if (wouldEmptyEnv(window.PGEEnv.desugarBPGroups(remapped))) return;
     onChange(patchForPath(stream, env.path, next));
   }
 

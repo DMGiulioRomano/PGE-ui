@@ -24,6 +24,9 @@ global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
+// envelope-utils.js serve al catalogo dell'EnvelopeEditor (loopEnvMax), che
+// piu' sotto viene estratto dal JSX ed eseguito davvero.
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const D = window.PGEDeviationProb;
 const { DEVIATION_PROB_IMPLICIT } = window.PGEYaml;
@@ -271,6 +274,32 @@ console.log("\n── cablaggio UI ──");
 const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
 const eeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
 
+/* Il blocco graffato che apre a `from`, per brace matching. Le asserzioni sui
+   rami di Delete lo usano al posto di una finestra fissa di caratteri: quella
+   aveva 405 caratteri di margine (misurati), e sei righe di commento dentro il
+   ramo la facevano fallire a comportamento invariato. Nessuno dei blocchi
+   coinvolti ha graffe dentro stringhe o commenti. */
+function blockFrom(src, from) {
+  let i = src.indexOf("{", from), depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === "{") depth++;
+    else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
+  }
+  return "";
+}
+/* Il corpo del ramo che apre con `re` (una regex che finisce sulla graffa). */
+function branchBody(src, re) {
+  const m = re.exec(src);
+  return m ? blockFrom(src, m.index + m[0].length - 1) : "";
+}
+/* Una funzione top-level del JSX, dal `function` alla graffa che la chiude. */
+function extractFn(src, name) {
+  const head = src.indexOf("function " + name + "(");
+  if (head < 0) throw new Error("funzione non trovata nel sorgente: " + name);
+  return src.slice(head, head + blockFrom(src, head).length +
+                   (src.indexOf("{", head) - head));
+}
+
 assert("l'Inspector passa lo stream a error() (chiavi condizionali)",
   /\.error\(\s*d\s*,\s*stream\s*\)/.test(inspSrc));
 /* «offre pc_rand_envelope, non la chiave morta envelope» e' un'affermazione sul
@@ -287,6 +316,100 @@ assert("ma resta nel catalogo dell'Inspector, per i file che la portano scritta"
   /key:\s*"envelope"/.test(inspSrc.split("const DEVIATION_PROB_PARAMS")[1].split("];")[0]));
 assert("le righe offerte seguono le chiavi vive",
   /liveParamKeys\(stream\)/.test(inspSrc));
+/* Le due asserzioni qui sopra interrogano `liveParamKeys`, cioe' il modulo:
+   dicono qualcosa di vero sulla lista e niente sul CABLAGGIO. Tutta la
+   reintroduzione della chiave morta nel catalogo sta in piedi sul fatto che il
+   menu non la offra — e togliendo il filtro al menu la suite restava verde
+   (verificato: 111/111). Stesso difetto che questa PR ha corretto sui rami di
+   Delete, ricreato sull'affermazione piu' carica che introduce. */
+assert("il menu di aggiunta filtra sulle chiavi vive (la chiave morta non e' offerta)",
+  /options=\{DEVIATION_PROB_PARAMS\.filter\(p => liveKeys\.includes\(p\.key\)/.test(inspSrc));
+/* Il marcatore e' l'unica cosa che l'interfaccia aggiunge sulle righe inerti,
+   ed era invisibile alla suite: tolti sia l'opacita' sia lo span, verde. */
+assert("la riga inerte e' marcata, non solo spiegata dal title",
+  /style=\{liveKeys\.includes\(p\.key\) \? undefined : \{opacity/.test(inspSrc) &&
+  /liveKeys\.includes\(p\.key\) \? null : <span[\s\S]{0,60}?> · inerte<\/span>/.test(inspSrc));
+
+/* Il motivo dell'inerzia: `liveParamKeys` esclude TRE insiemi, e il title ne
+   distingueva due. `pc_rand_envelope`, escluso quando grain.envelope e'
+   transition o multistate, cadeva nel ramo `else` — quello del verso — e
+   riceveva una spiegazione falsa che manda a cercare il problema in
+   grain.reverse mentre la causa e' grain.envelope. E il rimando di `envelope`
+   a `pc_rand_envelope` era incondizionato: su quello stream le due righe si
+   mandavano l'una all'altra e nessuna diceva la verita'. */
+console.log("\n── il motivo dell'inerzia: tre casi, non due ──");
+const inertReason = (() => {
+  try {
+    return new Function(extractFn(inspSrc, "deviationProbInertReason") +
+                        "\nreturn deviationProbInertReason;")();
+  } catch (e) { return null; }
+})();
+assert("l'Inspector ha una funzione sola per il motivo dell'inerzia",
+  typeof inertReason === "function");
+const reason = (key, grain) =>
+  typeof inertReason === "function"
+    ? inertReason(key, D.liveParamKeys(grainOf(grain))) : "(assente)";
+
+const TRANSITION = { envelope: { from: "hanning", to: "bartlett" } };
+const MULTISTATE = { envelope: { states: [[0, "hanning"], [1, "bartlett"]] } };
+
+assert("chiave viva → nessun motivo",
+  reason("pc_rand_envelope", { envelope: "hanning" }) === undefined);
+assert("pc_rand_envelope con envelope transition → il motivo nomina grain.envelope",
+  /grain\.envelope/.test(reason("pc_rand_envelope", TRANSITION)));
+assert("pc_rand_envelope con envelope multistate → il motivo nomina grain.envelope",
+  /grain\.envelope/.test(reason("pc_rand_envelope", MULTISTATE)));
+assert("e non parla del verso, che con questa chiave non c'entra",
+  !/verso/.test(reason("pc_rand_envelope", TRANSITION)) &&
+  !/verso/.test(reason("pc_rand_envelope", MULTISTATE)));
+assert("il perdente del gruppo esclusivo parla invece del verso",
+  /verso/.test(reason("read_direction", { envelope: "hanning" })));
+assert("envelope, con pc_rand_envelope viva → rimanda a pc_rand_envelope",
+  /pc_rand_envelope/.test(reason("envelope", { envelope: "hanning" })));
+assert("envelope, con pc_rand_envelope a sua volta inerte → dice anche quello",
+  /grain\.envelope/.test(reason("envelope", TRANSITION)) &&
+  /grain\.envelope/.test(reason("envelope", MULTISTATE)));
+assert("il title della riga viene da li', non da un ternario inline",
+  /title=\{deviationProbInertReason\(p\.key, liveKeys\)\}/.test(inspSrc));
+
+/* Il catalogo dell'EnvelopeEditor metteva le chiavi inerti nel selettore con la
+   stessa dignita' delle altre, mentre l'Inspector le marca: si poteva disegnare
+   una curva su una chiave che il motore non legge, nell'unico posto dove non lo
+   si diceva. Il motivo e' lo stesso dell'Inspector — una funzione sola,
+   pubblicata su window.PGE — cosi' le due viste non possono divergere. */
+console.log("\n── il catalogo dell'editor marca le chiavi inerti ──");
+const ENV = [[0, 0], [1, 100]];
+const catalog = (() => {
+  try {
+    const fn = new Function(extractFn(eeSrc, "listEnvelopes") + "\nreturn listEnvelopes;")();
+    return (stream) => fn(stream, undefined).filter(e => /^deviation_probability_/.test(e.key));
+  } catch (e) { return () => []; }
+})();
+window.PGE = window.PGE || {};
+window.PGE.deviationProbInertReason = inertReason;
+
+const catLive = catalog({ grain: { envelope: "hanning" },
+  deviationProbability: { volume: ENV, envelope: ENV, pc_rand_envelope: ENV } });
+const catSpec = catalog({ grain: TRANSITION,
+  deviationProbability: { volume: ENV, pc_rand_envelope: ENV } });
+const entry = (list, pk) => list.find(e => e.key === "deviation_probability_" + pk) || {};
+
+assert("il catalogo elenca comunque le chiavi inerti (sono scritte, vanno aperte)",
+  entry(catLive, "envelope").key === "deviation_probability_envelope");
+assert("una chiave viva non porta il marcatore", entry(catLive, "volume").inert === undefined);
+assert("la chiave morta envelope lo porta",
+  typeof entry(catLive, "envelope").inert === "string");
+assert("pc_rand_envelope viva non lo porta",
+  entry(catLive, "pc_rand_envelope").inert === undefined);
+assert("pc_rand_envelope con grain.envelope transition lo porta, e nomina la causa",
+  /grain\.envelope/.test(entry(catSpec, "pc_rand_envelope").inert || ""));
+assert("il motivo e' lo stesso dell'Inspector, non una seconda copia",
+  entry(catLive, "envelope").inert === inertReason("envelope",
+    D.liveParamKeys(grainOf({ envelope: "hanning" }))));
+assert("l'Inspector pubblica il motivo su window.PGE",
+  /Object\.assign\(window\.PGE,[\s\S]{0,200}?deviationProbInertReason/.test(inspSrc));
+assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
+  (eeSrc.match(/it\.inert/g) || []).length >= 2 && /cur\.inert/.test(eeSrc));
 
 /* PGE #209: `[]` e' il primo dei corpi che il motore rifiuta, e l'editor non
    deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
@@ -298,12 +421,13 @@ assert("il guard 'non svuotare' esiste una volta sola",
    includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
    e quella scoperta era proprio il ramo del breakpoint, la via storica e
    l'unica che esisteva prima di questa PR. */
-// La finestra esclude `selectedBlock`, cosi' il ramo del breakpoint non puo'
-// passare grazie alla chiamata del ramo successivo.
+// Il corpo del ramo si estrae per graffe, non con una finestra di caratteri:
+// cosi' il ramo del breakpoint non puo' passare grazie alla chiamata del ramo
+// successivo, e restare dentro il proprio ramo non costa margine da misurare.
 assert("il ramo del breakpoint selezionato lo usa",
-  /selectedBP\s*!=\s*null\)\s*\{(?:(?!selectedBlock)[\s\S]){0,900}?wouldEmptyEnv\(/.test(eeSrc));
+  /wouldEmptyEnv\(/.test(branchBody(eeSrc, /selectedBP\s*!=\s*null\)\s*\{/)));
 assert("il ramo del blocco selezionato lo usa",
-  /selectedBlock\s*!=\s*null\)\s*\{[\s\S]{0,600}?wouldEmptyEnv\(/.test(eeSrc));
+  /wouldEmptyEnv\(/.test(branchBody(eeSrc, /selectedBlock\s*!=\s*null\)\s*\{/)));
 assert("deleteSelectedLoop lo usa",
   /function deleteSelectedLoop\(\)[\s\S]{0,400}?wouldEmptyEnv\(/.test(eeSrc));
 assert("il dblclick sul canvas lo usa, invece di ricontare a mano",
@@ -315,6 +439,62 @@ assert("il bottone 'remove loop' e' disabilitato quando svuoterebbe",
   /disabled=\{!!onDeleteBlocked\}/.test(eeSrc));
 assert("e il genitore gli passa davvero la condizione",
   /onDeleteBlocked=\{wouldEmptyEnv\(/.test(eeSrc));
+
+/* La quinta via — il paste — e' l'unica che il guard non copriva con una
+   asserzione di COMPORTAMENTO, e per questo il guard messo sul valore
+   sbagliato e' passato verde: `wrapEnv` restituisce il dict {type, points}
+   per un envelope di soli breakpoint con interp globale non lineare, e
+   `wouldEmptyEnv` respinge tutto cio' che non e' un array. Una regex sulla
+   riga non lo avrebbe visto: la chiamata c'era, era l'argomento a essere
+   sbagliato. Quindi qui si esegue davvero il paste, con le funzioni estratte
+   dal sorgente spedito e le PGEEnv vere. */
+console.log("\n── il paste (quinta via): esecuzione, non regex ──");
+
+/* handlePasteEnv vive dentro il componente: si prende il suo corpo e lo si
+   rimonta su un harness che fornisce le variabili di chiusura. Tutto il resto
+   (unwrapEnv, wrapEnv, desugarBPGroups, remapEnvY, patchForPath,
+   wouldEmptyEnv) e' il codice vero. */
+const pasteSrc = [
+  extractFn(eeSrc, "wouldEmptyEnv"),
+  extractFn(eeSrc, "remapEnvY"),
+  extractFn(eeSrc, "patchForPath"),
+  extractFn(eeSrc, "handlePasteEnv"),
+  "return handlePasteEnv;",
+].join("\n");
+
+function runPaste(rawEnv) {
+  let patched = null;
+  const envClipboard = { sourceStreamId: "s1", sourceParam: "volume",
+                         srcHardMin: 0, srcHardMax: 100,
+                         rawEnv: JSON.parse(JSON.stringify(rawEnv)) };
+  const env = { key: "volume", path: ["volumeEnv"], hardMin: 0, hardMax: 100 };
+  const stream = { id: "s1" };
+  const onChange = (p) => { patched = p; };
+  new Function("envClipboard", "env", "stream", "onChange", pasteSrc)(
+    envClipboard, env, stream, onChange)();
+  return patched;
+}
+
+// Le tre forme che l'editor scrive da solo: il selettore di interp in testata
+// su un envelope di soli breakpoint produce proprio il dict {type, points}.
+assert("paste di un envelope cubic (dict {type, points}) → scrive",
+  runPaste({ type: "cubic", points: [[0, 0], [0.5, 50], [1, 100]] }) !== null);
+assert("paste di un envelope step (dict {type, points}) → scrive",
+  runPaste({ type: "step", points: [[0, 0], [1, 100]] }) !== null);
+assert("paste di un envelope lineare (array piatto) → scrive",
+  runPaste([[0, 0], [0.5, 50], [1, 100]]) !== null);
+// Il blocco compatto NUDO e i breakpoint in forma dict sono i due falsi
+// positivi del guard: il primo e' un envelope pieno che il motore rende, il
+// secondo un corpo che il motore normalizza sotto una chiave per-parametro.
+assert("paste di un blocco loop nudo → scrive",
+  runPaste([[[0, 0], [100, 1]], 1, 4]) !== null);
+assert("paste di breakpoint in forma dict → scrive",
+  runPaste([{ t: 0, v: 1 }, { t: 1, v: 1 }]) !== null);
+// E il guard resta: le due forme vuote non passano.
+assert("paste di `[]` → rifiutato (e' il corpo che il motore rifiuta)",
+  runPaste([]) === null);
+assert("paste di un envelope tipizzato senza punti → rifiutato",
+  runPaste({ type: "step", points: [] }) === null);
 
 console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

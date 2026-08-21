@@ -367,18 +367,26 @@
 
        Quello che il flag NON dice è cosa farà il motore, e il messaggio del
        pannello non lo afferma: la guardia scatta dove `Math.pow` non arriva, e
-       lì il motore a volte rende, a volte rifiuta. Rende con
-       `{power, exponent: 1000}` su 4 cicli (il 100% del tempo nell'ultimo), e
-       rende anche dentro la banda int/float che `timeDistError` lascia passare
-       di proposito: `{geometric, ratio: 10}` a 309 cicli, in grafia INTERA,
-       somma 2.0 esatta — è la coppia che il commento alla soglia, poco più su,
-       cita come ragione per non adottare quella float. Rifiuta invece
-       `{geometric, ratio: 2}` a 1024 e `{exponential, rate: 0.5}` a 1025, in
-       entrambe le grafie. La banda contiene tutti e due i casi perché contiene
-       entrambe le tipizzazioni, e il motore le distingue. Le due condizioni non
-       coincidono e non possono: distinguerle vorrebbe dire replicare la
-       semantica intera di Python, che è esattamente ciò che questa rete evita
-       di fare. */
+       lì il motore a volte rende, a volte rifiuta — e in questo paragrafo la
+       grafia conta a ogni riga. Rende con `{power, exponent: 1000}` su 4 cicli
+       (il 100% del tempo nell'ultimo), ma in grafia INTERA: `1000.0` sulla
+       stessa coppia alza. Rende anche dentro la banda int/float che
+       `timeDistError` lascia passare di proposito: `{geometric, ratio: 10}` a
+       309 cicli, in grafia intera, somma 2.0 esatta, mentre `10.0` alza — è
+       l'unico esempio in cui il motore distingue davvero le due tipizzazioni,
+       ed è la coppia che il commento alla soglia, poco più su, cita come
+       ragione per non adottare quella float.
+
+       Rifiuta invece `{geometric, ratio: 2}` a 1024, e lì le tipizzazioni non
+       le distingue affatto: alza in entrambe. Rifiuta anche
+       `{exponential, rate: 0.5}` a 1025, che di grafie ne ha una sola — un
+       rate fra 0 e 1 è float per costruzione — e il cui meccanismo non è
+       int/float ma `rate < 1`: i pesi sono `rate ** -i`, e `0.5 ** -1024` è
+       `2^1024`, che trabocca, mentre `2 ** -i` in Python è già float e degrada
+       a subnormale (`{exponential, rate: 2}` a 1025 rende, in entrambe le
+       grafie). Le due condizioni non coincidono e non possono: distinguerle
+       vorrebbe dire replicare la semantica intera di Python, che è esattamente
+       ciò che questa rete evita di fare. */
     function guard(durs) {
       const sum = durs.reduce((a, b) => a + b, 0);
       const ok = durs.every(d => isFinite(d) && d >= 0) &&
