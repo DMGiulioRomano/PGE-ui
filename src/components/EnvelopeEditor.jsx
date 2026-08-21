@@ -17,6 +17,30 @@ function pitchEnvBounds(unit, semis, signed) {
     : { visMin: 0,    visMax: vis, hardMin: 0,     hardMax: hard };
 }
 
+/* Un envelope resterebbe senza contenuto? Un array senza nessun breakpoint
+   isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il primo
+   dei corpi che il motore rifiuta da PGE #209 (InvalidFieldValueError). Nessuna
+   cancellazione dell'editor deve poterci arrivare: il guard sta qui una volta
+   sola perche' le vie sono cinque (Delete su un breakpoint, Delete su un
+   blocco, il bottone "remove loop", il doppio click su un breakpoint, e il
+   paste di un envelope vuoto), e
+   finche' ne restava una scoperta la riga di CLAUDE.md che dichiara l'editor
+   incapace di produrre quei corpi era falsa.
+
+   Riceve la forma DESUGARATA: su un BP group nudo
+   (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe `true` su un
+   envelope pieno, perche' ne' isBreakpoint ne' isCompactBlock riconoscono il
+   gruppo. Tutti i chiamanti attuali passano la forma desugarata; chi non lo
+   facesse (`handleCopyEnv` maneggia `rawEnvRaw`, che i gruppi li ha) deve
+   desugarare prima. */
+function wouldEmptyEnv(next) {
+  const E = window.PGEEnv;
+  if (!Array.isArray(next)) return true;
+  const bps   = next.filter(E.isBreakpoint).length;
+  const loops = next.filter(E.isCompactBlock).length;
+  return bps + loops < 1;
+}
+
 /* ---------- Envelope catalog ---------- */
 function listEnvelopes(stream, sampleDur) {
   if (!stream) return [];
@@ -203,22 +227,29 @@ function listEnvelopes(stream, sampleDur) {
     list.push({ key: "voicesPanStep", label: "pan · step", group: "Voices",
       path: ["voices", "pan", "stepEnv"], unit: "°",
       visMin: -90, visMax: 90, hardMin: -3600, hardMax: 3600 });
-  // dephase env detection goes through the shared classifier (window.PGEDephase),
-  // so the typed {type, points} form (cubic global interp) registers as the
+  // deviation_probability env detection goes through the shared classifier
+  // (window.PGEDeviationProb), so the typed {type, points} form (cubic global
+  // interp) registers as the
   // global env — not silently dropped. isEnvValue is true for [[t,v],…] and
   // {type, points}; the per-param branch only runs when the value is NOT itself
   // an env (i.e. a real per-param dict).
-  const PGEDephase = window.PGEDephase;
-  if (PGEDephase.isEnvValue(stream.dephase)) {
-    list.push({ key: "dephase", label: "probability", group: "Dephase",
-      path: ["dephase"], unit: "%",
+  const PGEDeviationProb = window.PGEDeviationProb;
+  if (PGEDeviationProb.isEnvValue(stream.deviationProbability)) {
+    list.push({ key: "deviation_probability", label: "probability", group: "Deviation",
+      path: ["deviationProbability"], unit: "%",
       visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
-  } else if (PGEDephase.mode(stream.dephase) === "perParam") {
-    const DEPHASE_PARAM_KEYS = ["volume","pan","duration","pitch","pointer","reverse","read_direction","envelope"];
-    for (const pk of DEPHASE_PARAM_KEYS) {
-      if (PGEDephase.isEnvValue(stream.dephase[pk])) {
-        list.push({ key: "dephase_" + pk, label: pk, group: "Dephase",
-          path: ["dephase", pk], unit: "%",
+  } else if (PGEDeviationProb.mode(stream.deviationProbability) === "perParam") {
+    // ALL_PARAM_KEYS, non PARAM_KEYS: questo e' il catalogo, e ha lo stesso
+    // vincolo del walk di envelope-utils — sbagliare per difetto lascia un
+    // envelope scritto senza voce, cioe' non apribile e non disegnabile, e il
+    // click sull'env mini dell'Inspector apre un altro envelope invece di
+    // dirlo. Le condizionali (reverse / read_direction / pc_rand_envelope) e
+    // la chiave inerte `envelope` sono scrivibili, quindi vanno mostrate:
+    // quali il motore CONSULTI e' la domanda di error(), non di questa.
+    for (const pk of PGEDeviationProb.ALL_PARAM_KEYS) {
+      if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
+        list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
+          path: ["deviationProbability", pk], unit: "%",
           visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
       }
     }
@@ -357,7 +388,7 @@ const DIST_PARAM = {
 function distType(d) {return typeof d === "string" ? d : d && d.type || "linear";}
 function distParams(d) {return typeof d === "object" && d ? d : {};}
 
-function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
+function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, interpTypes }) {
   // interpTypes: ristretto a ["step"] sui domini discreti (read_direction),
   // dove gli altri valori sono errori di parse e non curve alternative.
   const INTERP_TYPES = interpTypes || _INTERP_TYPES;
@@ -401,7 +432,12 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
           [{block.start.toFixed(3)} → {block.end.toFixed(3)}] · {block.pattern.length}pt × {n} cycles
         </span>
         <span style={{ flex: 1 }} />
-        <button className="ee-loop-panel-del" title="remove loop" onClick={onDelete}>
+        {/* Disabilitato quando questo blocco e' tutto l'envelope: toglierlo
+            scriverebbe `[]`, che il motore rifiuta (PGE #209). Un bottone
+            inerte e spiegato e' meglio di un click che non fa niente. */}
+        <button className="ee-loop-panel-del" disabled={!!onDeleteBlocked}
+                title={onDeleteBlocked ? "e' l'unico contenuto dell'envelope: aggiungi un breakpoint o un altro loop prima di rimuoverlo" : "remove loop"}
+                onClick={onDelete}>
           <Icon name="trash" size={11} />
         </button>
       </div>
@@ -460,8 +496,31 @@ function LoopBlockPanel({ block, onUpdate, onDelete, color, interpTypes }) {
         <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-error)" }}>
           {block.distError.kind === "name"
             ? `time_dist "${block.distError.name}" non esiste: il motore rifiuta il blocco. Validi: ${window.PGEEnv.TIME_DIST_NAMES.join(", ")}.`
+            : block.distError.kind === "overflow"
+            // Né il parametro né n_reps è fuori posto da solo: è la coppia a
+            // esplodere, quindi il messaggio nomina entrambi e lascia scegliere
+            // quale ridurre — come fa l'hint del motore (PGE #212).
+            ? `time_dist ${block.distError.name}: ${block.distError.param}=${block.distError.value} con n_reps=${block.distError.nReps} non sta in un float e il motore rifiuta il blocco. Riduci n_reps, oppure ${window.PGEEnv.TIME_DIST_OVERFLOW_FIX[block.distError.param] || `riduci ${block.distError.param}`}.`
             : `time_dist ${block.distError.name}: il parametro "${block.distError.param}" non è valido e il motore rifiuta il blocco.`}
           {" "}L'anteprima qui sopra usa cicli di durata uguale.
+        </div>
+      ) : null}
+
+      {/* Il ripiego opposto a quello di distError, e per questo con parole
+          opposte: la' il messaggio puo' dire che il motore rifiuta il blocco,
+          perche' `timeDistError` ha appena stabilito che lo rifiuta. Qui no —
+          la guardia scatta quando il conto in doppia precisione dell'anteprima
+          non arriva, e questo non dice niente su cosa fara' il motore: dentro
+          la banda int/float ({geometric, ratio: 2} a 1024 cicli, {exponential,
+          rate: 0.5} a 1025) il motore rifiuta comunque. Il testo si limita
+          quindi a quello che si sa: i numeri disegnati non sono le durate del
+          blocco. Resta warn e non error, e senza inviti a cambiare il valore,
+          perche' nello YAML puo' non esserci niente da correggere. */}
+      {!block.distError && block.previewFallback ? (
+        <div className="ee-loop-panel-hint mono" style={{ color: "var(--status-warn)" }}>
+          l'anteprima non arriva al conto di questa distribuzione — i valori escono dal
+          range dei float — e ripiega su cicli di durata uguale: le durate qui sopra non
+          sono quelle del blocco.
         </div>
       ) : null}
       <div className="ee-loop-panel-hint mono">
@@ -659,13 +718,20 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         // Allow deletion unless it would leave the envelope without any
         // standalone BP AND without any loop block (i.e. truly empty).
         const next = cur.filter((_, i) => i !== selectedBP);
-        const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
-        const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
-        if (remainingBPs + remainingLoops < 1) {setSelectedBP(null);return;}
+        // Rifiuto senza deselezionare: deselezionare toglie anche l'elemento su
+        // cui si stava agendo, e nel ramo del blocco chiude il pannello che
+        // contiene l'unica spiegazione (il title del bottone). Come il
+        // dblclick, che si limita al return.
+        if (wouldEmptyEnv(next)) return;
         commitCur(next);
         setSelectedBP(null);
       } else if (selectedBlock != null) {
+        // Stesso guard del ramo qui sopra: un envelope fatto di UN solo blocco
+        // loop si svuotava premendo Delete, e `[]` e' esattamente il corpo che
+        // il motore rifiuta da PGE #209 — l'editor produceva da solo lo YAML
+        // che questa PR insegna a segnalare.
         const next = cur.filter((_, i) => i !== selectedBlock);
+        if (wouldEmptyEnv(next)) return;
         commitCur(next);
         setSelectedBlock(null);
       }
@@ -869,8 +935,13 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envClipboard) return;
     const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
     const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
-    onChange(patchForPath(stream, env.path,
-      window.PGEEnv.wrapEnv(window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp)));
+    const next = window.PGEEnv.wrapEnv(
+      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp);
+    // Quinta via per scrivere `[]` su un envelope: handleCopyEnv accetta un
+    // `rawEnv` vuoto (un array e' truthy), quindi il paste puo' propagare un
+    // vuoto gia' esistente. Non ne crea mai uno, ma lo stesso guard vale.
+    if (wouldEmptyEnv(window.PGEEnv.desugarBPGroups(next))) return;
+    onChange(patchForPath(stream, env.path, next));
   }
 
   /* ============ Empty states ============ */
@@ -1227,9 +1298,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (tgt && tgt.classList && tgt.classList.contains("ee-bp")) {
       const idx = +tgt.dataset.idx;
       const next = rawEnv.filter((_, i) => i !== idx);
-      const remainingBPs = next.filter(PGEEnv.isBreakpoint).length;
-      const remainingLoops = next.filter(PGEEnv.isCompactBlock).length;
-      if (remainingBPs + remainingLoops < 1) return;
+      // Quarta via di cancellazione: stesso guard delle altre tre, non una
+      // copia del conteggio.
+      if (wouldEmptyEnv(next)) return;
       commit(next);
       return;
     }
@@ -1531,6 +1602,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function deleteSelectedLoop() {
     if (selectedBlock == null) return;
     const next = rawEnv.filter((_, i) => i !== selectedBlock);
+    // Il bottone "remove loop" e' l'altra via per svuotare l'envelope: stesso
+    // guard della tastiera. Il bottone e' gia' disabilitato in questo caso
+    // (`onDeleteBlocked`), questo e' il presidio dietro.
+    if (wouldEmptyEnv(next)) return;
     commit(next);
     setSelectedBlock(null);
     setSelectedPattern(null);
@@ -1871,7 +1946,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       <LoopBlockPanel block={selectedBlockObj} color={stream.color}
       interpTypes={interpTypes}
       onUpdate={(newRaw) => updateBlock(selectedBlock, newRaw)}
-      onDelete={deleteSelectedLoop} /> :
+      onDelete={deleteSelectedLoop}
+      onDeleteBlocked={wouldEmptyEnv(rawEnv.filter((_, i) => i !== selectedBlock))} /> :
       selZoneObj ?
       <BPZonePanel zone={selZoneObj} color={stream.color}
       interp={zoneEffInterp(selZoneObj) || defaultInterp}

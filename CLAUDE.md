@@ -32,8 +32,14 @@ make tests            # full suite: tests-node + tests-python
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
   `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
   `test-time-dist.js` (the compact block's time-distribution registry mirror —
-  `window.PGEEnv.timeDistError` plus the no-longer-silent fallback in
-  `computeCycleDurations`).
+  `window.PGEEnv.timeDistError`, including the `(param, n_reps)` overflow whose
+  thresholds are checked against the real engine, plus the no-longer-silent
+  fallback in `computeCycleDurations` and the band where its warn may not speak
+  for the engine), and `test-deviation-probability.js`
+  (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier,
+  `error()` as the mirror of the bodies the engine rejects, the live/dead
+  per-param keys tied to behaviour rather than to a copy of the list, and source
+  guards on the UI wiring).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -90,9 +96,153 @@ The request body carries `yamlContent` (the editor state serialized on every ren
 
 Consequence: a render persists the current editor state to the source config even if the user never hit Save (Save only additionally clears the in-UI `dirty` flag). There is no "draft" copy. **Git is the versioning/rollback mechanism**: to discard unsaved edits, reset `configs/<basename>.yml` to the last commit (`git checkout -- configs/<basename>.yml`). Keep `configs/` under version control for this reason.
 
+### YAML bodies that can kill a render
+
+Two engine failures the UI mirrors client-side, because in both the engine used
+to accept the body and now refuses it (PGE #209 / #212, PGE-ui issue #123).
+
+`deviation_probability` with a body that will not build as an envelope — `[]`,
+a list with no breakpoint, a dict whose `points` is missing or unusable, either
+globally or under a per-param key — used to be silenced into an `AlwaysGate`:
+the render succeeded applying the deviation to **100%** of the grains, the
+opposite of what was written. It now raises and the render exits.
+`window.PGEDeviationProb.error` (`src/lib/deviation-probability.js`,
+node-tested) is the mirror, and the Inspector shows it right below the mode
+selector.
+It is deliberately the **conservative half** of the engine's builder: it flags
+only bodies that cannot be an envelope in any reading, so a mixed
+`[[0,1], 'x']` passes here and is caught by the engine — an alert fewer, never
+one on a YAML that renders. The two forms where the body *is* the group or the
+block (a bare BP group, a bare compact block) are tried on the whole array
+before its elements, exactly as `is_envelope_like` does, or they would be
+flagged on a YAML that renders.
+
+A breakpoint can also be written as a **dict** `{t, v, type?}`: the engine's
+builder normalizes it into `[t, v, type?]` before looking at it
+(`envelope_builder.py`), so it is a first-class form, not a leftover. `PGEEnv.isBreakpoint`
+does not see it (it requires an array) and must not be widened — the
+EnvelopeEditor uses it to decide what is draggable, and the canvas does not draw
+dict breakpoints. The predicate that accepts them is therefore local to
+`deviation-probability.js`, and it is applied **only where the engine
+normalizes**: inside `points:` and under a per-param key. A *bare* list of only
+dicts at the global level stays flagged, because there the value first passes
+`is_envelope_like`, which says False and makes the engine refuse. The asymmetry
+is the engine's, and flattening it would trade four false positives for one
+false negative.
+
+The per-param key list is not the set of `deviation_probability_key` values
+declared in the specs — those are two different things, and the difference is
+the whole point. `PARAM_KEYS` holds the five the engine consults **always**
+(`volume`, `pan`, `duration`, `pitch`, `pointer`). Three more are live but
+**conditional on the `grain` block**, so they live in `liveParamKeys(stream)`:
+`reverse` and `read_direction` are an exclusive group where the engine reads
+exactly one (the direction written in `grain`, or `reverse` when neither is),
+and `pc_rand_envelope` is live unless `grain.envelope` is a transition
+(`{from, to}`) or multistate (`{states}`) spec. `error(d, stream)` takes the
+stream so the Inspector gets those three; called without it, only the five are
+validated — fewer alerts, never one on a YAML that renders. What is **not** in
+either list is `envelope`: its spec (`grain_envelope`) is `is_smart=False`, so
+it never reaches `GateFactory`: with more than one window `{envelope: 50}`
+builds an `AlwaysGate` and with a single one a `NeverGate`, and in neither does
+the number you wrote count — the key is indistinguishable from an invented one.
+The Inspector *offers* `pc_rand_envelope` instead, which is the param key the
+`WindowController` actually asks for, but it still *shows* an `envelope` already
+written in the file, marked inert: that row is the only place the mistake is
+visible and removable.
+
+A third list, `ALL_PARAM_KEYS`, is neither of those. It is the set of per-param
+keys the editor may find written — the eight the engine reads in some
+configuration, plus the dead `envelope` that existing projects carry — and it
+exists for the constraint opposite to validation's. Two consumers need it: the
+envelope walk in `envelope-utils.js`, which rescales and truncates (a key missed
+there leaves an envelope out of scale on a YAML that renders), and
+`listEnvelopes` in the EnvelopeEditor, which is the catalog of what can be
+opened and drawn (a key missed there makes a written envelope unreachable, and
+the Inspector's env-mini click open a different one). Neither asks whether the
+engine consults the key — that is `error()`'s question, and it has the opposite
+cost.
+
+`isEnvValue` — which decides global-vs-per-param, and therefore which panel the
+editor opens — is the engine's dict rule verbatim: **`'points' in obj`**,
+nothing more. `isTypedEnv` next door stays stricter because there `type` is the
+datum being read; here the only question is whether the engine will treat the
+body as an envelope. Consequence to keep in mind when touching either: a bare
+`{points: [...]}` without `type` (which the editor never emits, but a
+hand-written file can carry) is a global envelope, so `unwrapEnv` reads that
+form too — declaring it an envelope without teaching `unwrapEnv` to open it
+would show it empty in the editor, and a commit there would empty it for real.
+`true` is likewise **not** off: `bool` is a subclass of `int` in Python, so the
+engine builds a `RandomGate` on `float(True)`, and `mode()` says `global`.
+
+None of the Inspector controls can produce those bodies, so they arrive from the
+Raw tab or a hand-written file — but that took closing two holes. The
+EnvelopeEditor's "would this leave it empty?" check lived only in the
+delete-a-breakpoint branch, while deleting a *block* (Delete key, or the loop
+panel's "remove loop") had none: an envelope made of a single loop block
+committed `[]`, which is exactly the body of PGE #209. The check is now one
+function (`wouldEmptyEnv`) used by all five paths — Delete on a breakpoint, on a
+block, the loop panel's button, double-click on a breakpoint, and pasting an
+envelope — and the button is disabled (with its own `:disabled` rule) rather
+than inert when it would empty the envelope. It takes the **desugared** form: on
+a bare BP group it would say "empty" about a full envelope, so a caller holding
+`rawEnvRaw` must desugar first. The other hole was the
+per-param "remove" button: emptying the dict wrote the **empty key**, which is
+the single one of the five off-ish spellings that does *not* disable the
+deviation (it is implicit 1%, PGE #210).
+The off state must serialize as `false` or as no key at all — never as an empty
+key. That rule holds for any future on/off control over this key.
+
+The compact block's time distribution has a second one: `{type: geometric,
+ratio: 10}` with `n_reps: 400` overflows a float. Neither value is out of place
+alone — the constructor that receives the parameter never sees `n_reps` — so it
+is not expressible as a bound, and `timeDistError(dist, nReps)` reports it as a
+third kind, `overflow`, naming both. The check runs on logarithms (computing the
+power to find out it overflows would only yield `Infinity`), and the thresholds
+are pinned against the real engine in `test-time-dist.js`. They model Python's
+**integer** semantics, the more permissive of the two: in `power` only a
+fractional exponent is flagged (with an integer one Python computes on unbounded
+ints and renders), and in `geometric`/`exponential` the float threshold sits one
+`n_reps` lower than the integer one, so there is a one-value band where the
+engine overflows and the UI stays quiet. Always the safe direction.
+
+That leaves the mirror image — pairs the engine renders and `Math.pow`
+does not — so `computeCycleDurations` has a second, cheaper net on its
+**output**: if the durations are not all finite, or do not sum to `T`, it falls
+back to equal cycles anyway. That covers the whole int/float casistica without
+enumerating it. It must not be silent, because equal cycles are a plausible
+wrong preview — worse than the old NaNs, which were at least visibly broken. The
+guard marks the array `previewFallback` (non-enumerable, so no existing
+comparison on the durations changes), `expandMixed` carries it onto the block
+next to `distError`, and the loop panel says it in its own words — warn, not
+error, because nothing in the YAML necessarily needs fixing.
+
+**What that warn may not claim is what the engine will do.** The two fallbacks
+look symmetrical and are not: `distError` fires because `timeDistError` has just
+established that the engine rejects the block, so its text can say so. The
+output guard fires where `Math.pow` gave up, which says nothing about the
+engine: inside the band `timeDistError` deliberately lets through, the engine
+*rejects* `{geometric, ratio: 2}` at 1024 cycles and `{exponential, rate: 0.5}`
+at 1025, and *renders* `{geometric, ratio: 10}` at 309 in **integer** spelling —
+which is the very pair the threshold comment cites as the reason not to adopt
+the float one. The band holds both because it holds both spellings, and Python
+tells them apart. The two conditions cannot be made to coincide without
+replicating Python's integer semantics, which is what this net exists to avoid.
+So the message states only what is known: the drawn durations are not the
+block's. The thresholds stay as they are — at `ratio: 2` the parity is *exact*
+in double precision, and tightening the inequality would bring back false
+positives.
+
+One threshold *was* misaligned, and is now the engine's: `computeCycleDurations`
+took `geometric` to be uniform below `|ratio − 1| < 1e-9`, the engine below
+`1e-6`. In the window between them the engine returned equal cycles while the
+mirror still computed `1 - Math.pow(r, N)` — catastrophic cancellation, not
+overflow — so the sum missed `T`, the output guard tripped, and the panel warned
+about a preview that was exactly right. `exponential` and `logarithmic` have no
+linear fallback engine-side, so there is nothing to align there.
+
 ### Dynamic parameter bounds
 
-The UI's clamps (min/max/range for every control + envelope, and the pitch-unit bounds) are sourced from the engine rather than hardcoded. `GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` (EDO `edoFactor` + `RatioUnit`) under `src/pge/parameters/` (falling back to the pre-#162 flat `src/parameters/` for older engine checkouts; same layout dance for `/envelope-keys`, whose `ENVELOPE_COLORS` literal now lives in `src/pge/rendering/envelope_extractor.py`) — same venv-less trick in both, so it works before the engine venv exists; returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested in `test-bounds.js`) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param **and** whether it reads the value bounds (`min_val/max_val`) or the range bounds (`min_range/max_range`, e.g. `offsetRange`←`pointer_deviation`, `durationRange`←`grain_duration`). `window.PGE_BOUNDS` in `yaml-bridge.js` is now just the **static fallback** (used on `file://` / server down); the dynamic path overrides it. A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose engine `max_val` is `null` precisely because the real cap is the **chosen sample's duration** (`sample_dur_sec`). `loopEnvMax` in `envelope-utils.js` (node-tested) drives the EnvelopeEditor `hardMax` + the Inspector scalar clamp from that duration (the sample's `duration` from `GET /media`), unit-aware like the engine's `PointerController` (`loop_unit || time_mode`: seconds → `sample_dur`, normalized → `1`), and falls back to the static cap only when the duration is unknown (`file://` / server down / unreadable file / sample not found). UI controls with no engine counterpart (voices onset_offset, pan spread, dephase %, grain-env curve) stay static. **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
+The UI's clamps (min/max/range for every control + envelope, and the pitch-unit bounds) are sourced from the engine rather than hardcoded. `GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` (EDO `edoFactor` + `RatioUnit`) under `src/pge/parameters/` (falling back to the pre-#162 flat `src/parameters/` for older engine checkouts; same layout dance for `/envelope-keys`, whose `ENVELOPE_COLORS` literal now lives in `src/pge/rendering/envelope_extractor.py`) — same venv-less trick in both, so it works before the engine venv exists; returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested in `test-bounds.js`) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param **and** whether it reads the value bounds (`min_val/max_val`) or the range bounds (`min_range/max_range`, e.g. `offsetRange`←`pointer_deviation`, `durationRange`←`grain_duration`). `window.PGE_BOUNDS` in `yaml-bridge.js` is now just the **static fallback** (used on `file://` / server down); the dynamic path overrides it. A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose engine `max_val` is `null` precisely because the real cap is the **chosen sample's duration** (`sample_dur_sec`). `loopEnvMax` in `envelope-utils.js` (node-tested) drives the EnvelopeEditor `hardMax` + the Inspector scalar clamp from that duration (the sample's `duration` from `GET /media`), unit-aware like the engine's `PointerController` (`loop_unit || time_mode`: seconds → `sample_dur`, normalized → `1`), and falls back to the static cap only when the duration is unknown (`file://` / server down / unreadable file / sample not found). UI controls with no engine counterpart (voices onset_offset, pan spread, deviation_probability %, grain-env curve) stay static. **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
 
 Loop-window semantics (engine confinement, PGE-ui issue #97). With a loop active the engine confines the grain read position — base + `pointer.offset_range` + voice pointer offsets (`voices` → `pointer_range`/`step`) — to `[loop_start, loop_end)` via modular wrap (without a loop it scales/wraps over the whole file, unchanged). A loop straddling the file end is expressible **only** via `loop_dur` (`loop_start + loop_dur > sample_dur`); `loop_end` stays bound to `[0, sample_dur]`. The engine rejects a degenerate static window (`loop_end <= loop_start` → `InvalidFieldValueError`; envelope endpoints are dynamic → exempt). `loopBoundsError` in `envelope-utils.js` (node-tested) mirrors that static check so the Inspector can warn pre-render; the Inspector also surfaces the confinement in the `offset_range` / voices-pointer hints. The grain visualizations (`grain-map.js`) need no change — they plot the engine's post-render sidecar JSON, so the new confinement shows through automatically.
 
@@ -127,7 +277,7 @@ The fresh/stale/never *classification* built on top of the hash (not the hash it
 
 ### YAML round-trip (`yaml-bridge.js`)
 
-Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model; unknown keys *inside* `pointer`/`grain`/`pitch`/`voices` (blocks the serializer rebuilds in full) are preserved the same way under `<block>._extra`. `dephase: null` (engine: implicit 1% mode, distinct from key-absent = off) is stored in editor state as the sentinel `window.PGEYaml.DEPHASE_IMPLICIT` and serialized back to `dephase: null`.
+Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` is a number, `densityEnv` is an array — exactly one is non-null). YAML on disk is snake_case with a **single field** that's either scalar OR envelope. `parse()` and `serialize()` translate between the two. Unknown stream keys are preserved verbatim under `_extra` so the round trip stays lossless for fields the editor doesn't model; unknown keys *inside* `pointer`/`grain`/`pitch`/`voices` (blocks the serializer rebuilds in full) are preserved the same way under `<block>._extra`. `deviation_probability: null` (engine: implicit 1% mode, distinct from key-absent = off) is stored in editor state as the sentinel `window.PGEYaml.DEVIATION_PROB_IMPLICIT` and serialized back to `deviation_probability: null`. That key was called `dephase` before PGE #204, which renamed it **without a back-compat alias** — a config still carrying the old spelling renders with no gate at all and the engine says nothing. So `parse()` reads either spelling into the single state field `deviationProbability`, and `serialize()` only ever writes the current one: opening and saving an old project migrates it. `window.PGEDeviationProb` (`src/lib/deviation-probability.js`, node-tested) classifies the value into off / implicit / global / perParam, mirroring the engine's `GateFactory._classify_deviation_probability`.
 
 The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine resolves by **refusing**, not by priority — unlike `loop_end`/`loop_dur` next door, where the serializer drops one. Here both are kept in state and both are re-emitted: the two keys say opposite things, so dropping one would hide the author's mistake, which is exactly what the engine declines to do. The Inspector flags the pair and the single direction control resolves it by writing exactly one key. The bare `read_direction:` is likewise kept verbatim (it is an engine error, unlike the bare `reverse:` which is that key's whole syntax), and **absence is preserved** for both: with neither key present the engine uses `auto` mode, where the direction follows the sign of `pointer.speed_ratio`, so materializing a `+1` would change what an untouched stream renders.
 
@@ -152,7 +302,7 @@ The pure stack mechanics (the 200-cap, gesture collapse, undo/redo, redo-clearin
 
 Sources live under `src/lib/` (the `.js` logic — `window.*` globals, no modules), `src/components/` (the `.jsx` UI), and `styles/` (the `.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all, so the same relative paths work over `file://` and over the bridge. Node tests in `tests/node/` load the libs via relative paths (`../../src/lib/…`, `../../src/components/…`).
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` (needs `window.PGE_BOUNDS` from yaml-bridge) → `src/lib/envelope-loops.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` (needs `window.PGE_BOUNDS` from yaml-bridge) → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` (needs `window.PGEBackend`) → `src/lib/history-core.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

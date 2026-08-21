@@ -25,19 +25,23 @@ function AddParamMenu({ options, onAdd }) {
   );
 }
 
-/* ---------- Dephase Section ----------
+/* ---------- Deviation probability Section ----------
    Per YAML reference: top-level stream param, not part of grain.
    Modes:
-     - off           → dephase: false        (ranges only active if range_always_active)
-     - implicit      → dephase: null/absent  (default ~1% global probability)
-     - global        → dephase: number | [[t,v],…]  (probability 0–100, same for all params)
-     - per-parameter → dephase: { volume?, pan?, duration?, pitch?, pointer?, reverse?, envelope? }
+     - off           → deviation_probability: false        (ranges only active if range_always_active)
+     - implicit      → deviation_probability: null/absent  (default ~1% global probability)
+     - global        → deviation_probability: number | [[t,v],…]  (probability 0–100, same for all params)
+     - per-parameter → deviation_probability: { volume?, pan?, duration?, pitch?, pointer?,
+                                                 reverse? | read_direction?, pc_rand_envelope? }
                        each value scalar or envelope (0–100); a key left out (or
                        null) is range-only for that param — its _range applies at
                        100% if present, else no variation (engine: GateFactory
-                       range-only, same as dephase:false for that param)
+                       range-only, same as deviation_probability:false for that param)
 */
-const DEPHASE_PARAMS = [
+/* Le descrizioni, nell'ordine di window.PGEDeviationProb.liveParamKeys — che
+   resta la lista autorevole di cosa il motore consulta davvero, e che dipende
+   dal blocco `grain`: la riga offerta e' quella della chiave viva. */
+const DEVIATION_PROB_PARAMS = [
   { key: "volume",   desc: "applies volume_range per grain" },
   { key: "pan",      desc: "applies pan_range per grain" },
   { key: "duration", desc: "applies grain.duration_range" },
@@ -46,30 +50,66 @@ const DEPHASE_PARAMS = [
   { key: "reverse",  desc: "flip grain reverse flag" },
   // Voce distinta da `reverse`, non un suo alias (PGE #207): ciascuna governa
   // la propria chiave del blocco grain e non tocca l'altra. Un
-  // `dephase: {reverse: N}` scritto prima non ribalta un read_direction
-  // aggiunto dopo.
+  // `deviation_probability: {reverse: N}` scritto prima non ribalta un
+  // `read_direction` aggiunto dopo. Sono un gruppo esclusivo: il motore ne
+  // legge UNA sola, quella del verso dichiarato in grain, e l'altra la scarta.
   { key: "read_direction", desc: "flip the declared grain.read_direction" },
-  { key: "envelope", desc: "switch window when grain.envelope is a list" },
+  // La probabilita' di cambio finestra si dichiara su `pc_rand_envelope`, non
+  // su `envelope`: quest'ultima e' il deviation_probability_key di
+  // `grain_envelope`, che pero' e' `is_smart=False` e non passa mai da
+  // GateFactory — con piu' di una finestra `{envelope: 50}` costruisce un
+  // AlwaysGate (con una sola, un NeverGate): in nessuno dei due casi il numero
+  // scritto conta, ed e' indistinguibile da una chiave inventata. Verificato
+  // eseguendo il motore. `pc_rand_envelope` e' il param_key vero
+  // (window_controller.py), e con esso `{pc_rand_envelope: 50}` costruisce il
+  // RandomGate atteso.
+  { key: "pc_rand_envelope", desc: "switch window when grain.envelope is a list" },
+  // Chiave morta, tenuta nel catalogo per un motivo solo: i progetti che la
+  // portano scritta. Il catalogo governa le RIGHE, il menu di aggiunta e'
+  // filtrato a parte su liveParamKeys — quindi questa voce non e' offerta a
+  // nessuno, ma un `{envelope: 50}` gia' nel file resta visibile, spiegato e
+  // cancellabile. Toglierla del tutto cancellava l'unico posto in cui quello
+  // sbaglio era correggibile.
+  { key: "envelope", desc: "chiave morta: il motore non la legge — usa pc_rand_envelope" },
 ];
 
-function DephaseSection({ stream, onChange, onFocusEnvParam }) {
+function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Icon, Tag, NumberField } = window.PGE;
-  const PGEDephase = window.PGEDephase, PGEEnv = window.PGEEnv;
-  const d = stream.dephase;
-  // Classification lives in the shared window.PGEDephase (single source of
-  // truth, mirrors the engine's GateFactory._classify_dephase). `dIsEnv` is
-  // true when the global value is an envelope — array [[t,v],…] OR the typed
+  const PGEDeviationProb = window.PGEDeviationProb, PGEEnv = window.PGEEnv;
+  const d = stream.deviationProbability;
+  // Classification lives in the shared window.PGEDeviationProb (single source
+  // of truth, mirrors the engine's
+  // GateFactory._classify_deviation_probability). `dIsEnv` is true when the
+  // global value is an envelope — array [[t,v],…] OR the typed
   // {type, points} object form the EnvelopeEditor emits for a non-linear global
   // interpolation (cubic/exp). Treating the typed form as a global env is what
   // stops "cubic" from collapsing the envelope and flipping mode to per-param.
-  const mode = PGEDephase.mode(d);          // off | implicit | global | perParam
-  const dIsEnv = PGEDephase.isEnvValue(d);
+  const mode = PGEDeviationProb.mode(d);          // off | implicit | global | perParam
+  // Le chiavi che questo stream fa consultare davvero al motore: la voce da
+  // aggiungere e' quella, non entrambe le meta' del gruppo esclusivo.
+  const liveKeys = PGEDeviationProb.liveParamKeys(stream);
+  const dIsEnv = PGEDeviationProb.isEnvValue(d);
+  // Corpi che il motore rifiuta da PGE #209 — envelope svuotato, lista senza
+  // breakpoint, dict senza points. Nessun controllo qui sotto li produce:
+  // arrivano dal tab Raw o da uno YAML scritto a mano, e prima di #209
+  // rendevano applicando la deviazione al 100% dei grani, cioe' l'opposto di
+  // quanto scritto. Ora il render esce con errore: meglio dirlo qui.
+  // Lo stream serve alle chiavi condizionali: quale del verso `reverse` /
+  // `read_direction` il motore legge davvero (gruppo esclusivo, decide il
+  // blocco grain) e se `pc_rand_envelope` e' viva (lo e' salvo grain.envelope
+  // in forma transition o multistate). Senza, quelle tre non si possono
+  // attribuire e resterebbero non validate.
+  const bodyErr = PGEDeviationProb.error(d, stream);
+  // `true` è un modo globale valido, non off: il motore lo legge come
+  // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
+  // "true", senza riscrivere lo YAML finché non lo si tocca.
+  const dScalar = typeof d === "boolean" ? 1 : d;
 
   function setMode(next) {
-    if (next === "off")       return onChange({ dephase: false });
-    if (next === "implicit")  return onChange({ dephase: window.PGEYaml.DEPHASE_IMPLICIT });
-    if (next === "global")    return onChange({ dephase: typeof d === "number" ? d : (dIsEnv ? d : 1) });
-    if (next === "perParam")  return onChange({ dephase: mode === "perParam" ? d : { volume: 50 } });
+    if (next === "off")       return onChange({ deviationProbability: false });
+    if (next === "implicit")  return onChange({ deviationProbability: window.PGEYaml.DEVIATION_PROB_IMPLICIT });
+    if (next === "global")    return onChange({ deviationProbability: typeof d === "number" ? d : (dIsEnv ? d : 1) });
+    if (next === "perParam")  return onChange({ deviationProbability: mode === "perParam" ? d : { volume: 50 } });
   }
 
   // Mini-badge mostra mode + sintesi numerica
@@ -78,14 +118,14 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
     if (mode === "implicit")  return <span className="mono" style={{color:"var(--fg-3)"}}>implicit · 1%</span>;
     if (mode === "global")    {
       if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items).length} bp</span>;
-      return <span className="mono" style={{color:"var(--accent)"}}>{d}%</span>;
+      return <span className="mono" style={{color:"var(--accent)"}}>{dScalar}%</span>;
     }
     const n = Object.keys(d || {}).length;
     return <span className="mono" style={{color:"var(--accent)"}}>per-param · {n}</span>;
   })();
 
   return (
-    <Section title="Dephase" badge={badge}
+    <Section title="Deviation prob" badge={badge}
              right={<span className="mono" style={{fontSize:9, color:"var(--fg-4)"}}>stochastic ·_range gate</span>}>
       <div className="pge-prow">
         <span className="k">mode</span>
@@ -102,6 +142,18 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
         <span />
       </div>
 
+      {bodyErr ? (
+        <div className="pge-prow" style={{paddingTop:0}}>
+          <span className="k" /><span />
+          <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+            {bodyErr.kind === "type"
+              ? `deviation_probability${bodyErr.param ? "." + bodyErr.param : ""}: ${JSON.stringify(bodyErr.value)} non e' ne' una probabilita' (0-100) ne' un envelope: il motore rifiuta lo stream.`
+              : `deviation_probability${bodyErr.param ? "." + bodyErr.param : ""}: ${bodyErr.reason === "empty" ? "envelope senza breakpoint" : "questo corpo non si costruisce come envelope"} — il motore rifiuta lo stream (prima lo trattava come 100%).`}
+          </span>
+          <span />
+        </div>
+      ) : null}
+
       {mode === "off" ? (
         <div className="voice-empty">all _range fields ignored (unless range_always_active)</div>
       ) : null}
@@ -115,61 +167,77 @@ function DephaseSection({ stream, onChange, onFocusEnvParam }) {
                   mode={dIsEnv ? "env" : "scalar"}
                   onMode={(m) => {
                     if (m === "env") {
-                      const v = typeof d === "number" ? d : 1;
-                      onChange({ dephase: [[0, v], [1, v]] });
+                      const v = typeof dScalar === "number" ? dScalar : 1;
+                      onChange({ deviationProbability: [[0, v], [1, v]] });
                     } else {
                       const items = dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null;
                       const v = (items && items[0] && items[0][1]) || 1;
-                      onChange({ dephase: v });
+                      onChange({ deviationProbability: v });
                     }
                   }}
-                  value={dIsEnv ? "—" : d}
+                  value={dIsEnv ? "—" : dScalar}
                   unit={dIsEnv ? "" : "%"}
                   accent={dIsEnv}
                   envValue={dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null}
-                  onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("dephase") : undefined}
-                  onValue={(v) => onChange({dephase: v})} />
+                  onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("deviation_probability") : undefined}
+                  onValue={(v) => onChange({deviationProbability: v})} />
       ) : null}
 
       {mode === "perParam" ? (
         <>
-          {DEPHASE_PARAMS.filter(p => (d && d[p.key] != null)).map(p => {
+          {DEVIATION_PROB_PARAMS.filter(p => (d && d[p.key] != null)).map(p => {
             const val = d[p.key];
             // Same typed-env handling per parameter: a per-param value can also
-            // take the {type, points} form (cubic on a per-param dephase env).
-            const isEnv = PGEDephase.isEnvValue(val);
+            // take the {type, points} form (cubic on a per-param envelope).
+            const isEnv = PGEDeviationProb.isEnvValue(val);
             const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
             return (
               <div key={p.key} className="pge-prow">
-                <span className="k">{p.key}</span>
+                {/* Scritta ma inerte su QUESTO stream: la chiave morta
+                    `envelope`, e il perdente del gruppo esclusivo
+                    reverse/read_direction. Il motore non le consulta, quindi il
+                    numero scritto non fa niente — la riga resta (e' scritta,
+                    va vista e tolta) ma lo dice. */}
+                <span className="k" style={liveKeys.includes(p.key) ? undefined : {opacity:.55}}
+                      title={liveKeys.includes(p.key) ? undefined
+                             : (p.key === "envelope"
+                                ? "il motore non legge questa chiave: la probabilita' di cambio finestra e' pc_rand_envelope"
+                                : "su questo stream il verso e' governato dall'altra chiave del gruppo: questa non viene letta")}>
+                  {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
+                </span>
                 <Seg size="xs" value={isEnv ? "env" : "scalar"}
                      onChange={(m) => {
                        const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : ((items && items[0] && items[0][1]) || 1);
-                       onChange({ dephase: { ...d, [p.key]: nv } });
+                       onChange({ deviationProbability: { ...d, [p.key]: nv } });
                      }}
                      options={[{label:"scalar",value:"scalar"},{label:"env",value:"env"}]} />
                 {isEnv ? (
-                  <span className="v env" onClick={onFocusEnvParam ? () => onFocusEnvParam("dephase_" + p.key) : undefined} style={onFocusEnvParam ? {cursor:"pointer"} : undefined}>
+                  <span className="v env" onClick={onFocusEnvParam ? () => onFocusEnvParam("deviation_probability_" + p.key) : undefined} style={onFocusEnvParam ? {cursor:"pointer"} : undefined}>
                     <span className="env-mini"><svg viewBox="0 0 100 16" preserveAspectRatio="none"><polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={items.map((q,i) => `${(q[0]/(items[items.length-1][0]||1)*100).toFixed(1)},${(14 - q[1]/100*12).toFixed(1)}`).join(" ")} /></svg></span>
                     <span className="env-label">{items.length} bp</span>
                   </span>
                 ) : (
                   <span className="v"><NumberField value={val} unit="%" width={70}
-                        onChange={(nv) => onChange({ dephase: { ...d, [p.key]: nv } })} /></span>
+                        onChange={(nv) => onChange({ deviationProbability: { ...d, [p.key]: nv } })} /></span>
                 )}
+                {/* Tolta l'ultima chiave si torna a "off", cioe' `false`, mai alla
+                    chiave vuota: quella e' l'unico dei cinque stati che NON
+                    disattiva la deviazione (PGE #210, jitter implicito 1%), e
+                    scriverla qui trasformerebbe "nessuna probabilita'
+                    dichiarata" in "1% su tutti i parametri". */}
                 <button className="pge-icon-btn" title="Remove"
-                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ dephase: Object.keys(nd).length ? nd : window.PGEYaml.DEPHASE_IMPLICIT }); }}>
+                        onClick={() => { const nd = { ...d }; delete nd[p.key]; onChange({ deviationProbability: Object.keys(nd).length ? nd : false }); }}>
                   <Icon name="x" size={11} />
                 </button>
               </div>
             );
           })}
           <AddParamMenu
-            options={DEPHASE_PARAMS.map(p => ({
+            options={DEVIATION_PROB_PARAMS.filter(p => liveKeys.includes(p.key) || (d && d[p.key] != null)).map(p => ({
               key: p.key, label: p.key, desc: p.desc,
               exists: d && d[p.key] != null, def: 50
             }))}
-            onAdd={(o) => onChange({ dephase: { ...(d || {}), [o.key]: o.def } })} />
+            onAdd={(o) => onChange({ deviationProbability: { ...(d || {}), [o.key]: o.def } })} />
           <div className="voice-empty">unlisted params apply their _range at 100% (off if none) — add one only to lower its probability</div>
         </>
       ) : null}
@@ -705,7 +773,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <span />
               </div>
               <div className="pge-prow">
-                <span className="k" title="when true, *_range fields apply even with dephase off">range_always_active</span>
+                <span className="k" title="when true, *_range fields apply even with deviation_probability off">range_always_active</span>
                 <span />
                 <span className="v">
                   <Switch value={!!stream.rangeAlwaysActive}
@@ -1309,7 +1377,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                         onValue={(v) => onChange({panRange: v})} />
             </Section>
 
-            <DephaseSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} />
+            <DeviationProbabilitySection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} />
 
             {window.PGE.VoicesSection ? <window.PGE.VoicesSection stream={stream} onChange={onChange} onFocusEnvParam={onFocusEnvParam} /> : null}
 

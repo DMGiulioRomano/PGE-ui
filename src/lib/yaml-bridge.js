@@ -23,10 +23,13 @@
  *     `<block>._extra` (those blocks are rebuilt in full on serialize).
  *   - Loop entries inside envelopes (5-tuples with nested breakpoints) pass
  *     through unchanged.
- *   - dephase keeps all engine states: absent (off) | false (off) |
- *     null = implicit 1% (stored as the DEPHASE_IMPLICIT sentinel string,
- *     because parse/serialize plumbing collapses null and undefined) |
- *     scalar | envelope-array | per-param object.
+ *   - deviation_probability keeps all engine states: absent (off) | false
+ *     (off) | null = implicit 1% (stored as the DEVIATION_PROB_IMPLICIT
+ *     sentinel string, because parse/serialize plumbing collapses null and
+ *     undefined) | scalar | envelope-array | per-param object.
+ *     The legacy `dephase` spelling (PGE < #204) is read on parse and written
+ *     back under the new key — a one-way migration, since the engine dropped
+ *     the old key without an alias and would silently ignore it.
  *   - time_mode: absence is preserved (engine default is "absolute");
  *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
@@ -82,13 +85,31 @@
 
   const PALETTE = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
 
-  /* Editor-state sentinel for `dephase: null` (key present, empty value),
-   * which the engine reads as "implicit mode, default 1% probability".
+  /* Editor-state sentinel for `deviation_probability: null` (key present, empty
+   * value), which the engine reads as "implicit mode, default 1% probability".
    * A plain null cannot represent it in the editor state: it would collapse
    * into undefined (= key absent = off) across `??` plumbing and JSON
    * clipboard copies. A string survives all of those and never collides
    * with legit engine values (bool | number | array | object). */
-  const DEPHASE_IMPLICIT = "implicit";
+  const DEVIATION_PROB_IMPLICIT = "implicit";
+
+  /* The pre-#204 spelling of `deviation_probability`. The engine renamed the
+   * key with NO back-compat alias, so a config still carrying it renders with
+   * no gate at all and says nothing — the editor is the only place left that
+   * can still read it. Read-only: parse accepts it, serialize never writes it
+   * back, so opening and saving an old project migrates it. */
+  const LEGACY_DEVIATION_PROB_KEY = "dephase";
+
+  /* The stream's deviation_probability as editor state, from either spelling.
+   * Key present with a null value = implicit 1% — distinct from key absent
+   * (= off), which is why the sentinel exists. The current key wins when both
+   * are written (the engine reads only that one). */
+  function readDeviationProbability(y) {
+    const key = ("deviation_probability" in y) ? "deviation_probability"
+              : ((LEGACY_DEVIATION_PROB_KEY in y) ? LEGACY_DEVIATION_PROB_KEY : null);
+    if (key === null) return undefined;
+    return y[key] === null ? DEVIATION_PROB_IMPLICIT : y[key];
+  }
 
   /* Known stream-level keys we map explicitly. Everything else under a
    * stream node is preserved as-is in `_extra` and re-emitted on serialize. */
@@ -99,7 +120,7 @@
     "density", "fill_factor", "distribution",
     "grain", "pointer", "pitch", "voices",
     "pan", "pan_range", "volume", "volume_range",
-    "dephase",
+    "deviation_probability", LEGACY_DEVIATION_PROB_KEY,
     "solo", "mute",
     "rng_group",
   ]);
@@ -372,8 +393,9 @@
     const grainDur = pickValueOrEnv(grain.duration, grain.durationEnv);
     const grainY = {
       duration:       grainDur,
-      // Explicit 0 is meaningful: it disables the implicit jitter the dephase
-      // gate would otherwise apply (engine parameter.py), same as pitch.range —
+      // Explicit 0 is meaningful: it disables the implicit jitter the
+      // deviation_probability gate would otherwise apply (engine
+      // parameter.py), same as pitch.range —
       // emit it. pickValueOrEnv returns undefined when truly unset (null). #50
       duration_range: pickValueOrEnv(grain.durationRange, grain.durationRangeEnv),
       // Meta-chiave (PGE #158): unità di duration/duration_range. Emessa solo
@@ -434,7 +456,8 @@
       const hasValue = pitchVal !== undefined;
       const rangeVal = pickValueOrEnv(pi.range, pi.rangeEnv);
       // Explicit `range: 0` is meaningful engine-side (it disables the
-      // implicit detune that dephase.pitch would otherwise apply) — emit it.
+      // implicit detune that deviation_probability.pitch would otherwise
+      // apply) — emit it.
       // Unset stays null in the editor state and is not emitted.
       const hasRange = rangeVal !== undefined;
       const pitchExtra = (pi._extra && typeof pi._extra === "object" && Object.keys(pi._extra).length) ? pi._extra : undefined;
@@ -490,8 +513,12 @@
     if (s.solo) y.solo = true;
     if (s.mute) y.mute = true;
 
-    if (s.dephase === DEPHASE_IMPLICIT) y.dephase = null; // dumps as `dephase: null`
-    else if (s.dephase !== undefined && s.dephase !== null) y.dephase = s.dephase;
+    // Always emitted under the current engine key, whatever the file was
+    // written with: PGE #204 renamed it with no alias, so re-emitting a legacy
+    // `dephase` would hand the engine a key it silently ignores — the whole
+    // section would stop gating without saying so.
+    if (s.deviationProbability === DEVIATION_PROB_IMPLICIT) y.deviation_probability = null; // dumps as `deviation_probability: null`
+    else if (s.deviationProbability !== undefined && s.deviationProbability !== null) y.deviation_probability = s.deviationProbability;
 
     // Pass through any extra top-level keys we don't model explicitly.
     if (s._extra && typeof s._extra === "object") {
@@ -529,7 +556,8 @@
   function isInlineEnvelope(node) {
     if (!Array.isArray(node) || node.length === 0) return false;
     // A list of breakpoints (array and/or dict form), e.g. density, points,
-    // states, curve, spread, dephase. Excludes `streams` (objects without t/v).
+    // states, curve, spread, deviation_probability. Excludes `streams`
+    // (objects without t/v).
     if (node.every(isBreakpointEntry)) return true;
     // Bare single compact loop block: [pattern, end_time, n_reps, interp?, dist?]
     if (Array.isArray(node[0]) && node[0].length > 0 && Array.isArray(node[0][0]) &&
@@ -801,7 +829,7 @@
       // Key present with null value = implicit 1% — distinct from key absent
       // (= off). Per-param objects pass verbatim: a null INSIDE the object
       // means "default prob for that key" and stays null.
-      dephase: ("dephase" in y) ? (y.dephase === null ? DEPHASE_IMPLICIT : y.dephase) : undefined,
+      deviationProbability: readDeviationProbability(y),
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -1064,6 +1092,6 @@
     emptyProject,
     computeDuration,
     roundTripDiff,
-    DEPHASE_IMPLICIT,
+    DEVIATION_PROB_IMPLICIT,
   };
 })();
