@@ -26,6 +26,10 @@
  * ===========================================================================*/
 
 (function () {
+  // Output format → stem extension. One table: the index key, the playback URL
+  // and the render bookkeeping must all agree on it.
+  const EXT_OF = { wav: ".wav", aiff: ".aif", flac: ".flac" };
+
   // Fast string hash → 16 hex chars. Not cryptographic but stable enough
   // to match Python's per-stream fingerprint behavior.
   function fnv1a(str) {
@@ -172,8 +176,14 @@
       },
     };
 
-    // local stem index — populated as renders complete or restored from localStorage.
-    // key: `${yamlBasename}__${streamId}` (internal key, not the filename)
+    // local stem index — populated as renders complete or restored from
+    // localStorage. Keyed by the *filename* `${basename}__${streamId}${ext}`,
+    // extension included: a stem is playable only in the format stemUrl() will
+    // ask for, and a stem present as .aif only is not playable while the
+    // Settings format is wav (the request 404s and the <audio> element reports
+    // it by never firing `canplay` — a silently silent clip). Entries persisted
+    // by an older build carry no extension; they simply never match, and the
+    // next loadCache refills the index from disk.
     let stemIndex = {};
     try {
       stemIndex = JSON.parse(localStorage.getItem("pge-local-stems") || "{}");
@@ -196,8 +206,8 @@
         try {
           const sd = await jget(`/stems/${encodeURIComponent(yamlBasename)}`);
           if (sd && Array.isArray(sd.stems)) {
-            for (const { streamId, mtime } of sd.stems) {
-              stemIndex[`${yamlBasename}__${streamId}`] = mtime * 1000;
+            for (const { streamId, ext, mtime } of sd.stems) {
+              stemIndex[`${yamlBasename}__${streamId}${ext || ""}`] = mtime * 1000;
             }
             _persistStemIndex();
           }
@@ -224,9 +234,10 @@
         const localFps = {};   // computed browser-side per stream as we go
         if (opts.preclean) {
           // wipe cached stem knowledge for this project so stale entries don't linger
+          const suffix = EXT_OF[opts.outputFormat] || EXT_OF.wav;
           const prefix = `${opts.yamlBasename}__`;
           for (const k of Object.keys(stemIndex)) {
-            if (k.startsWith(prefix)) delete stemIndex[k];
+            if (k.startsWith(prefix) && k.endsWith(suffix)) delete stemIndex[k];
           }
           _persistStemIndex();
         }
@@ -268,7 +279,7 @@
                     if (!stem.startsWith(prefix)) continue;
                     const streamId = stem.slice(prefix.length);
                     if (!streamId) continue;
-                    const key = `${opts.yamlBasename}__${streamId}`;
+                    const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
                     if (stemIndex[key]) continue;  // already handled
                     stemIndex[key] = Date.now();
                     const s = (opts.streams || []).find(x => x.id === streamId);
@@ -278,7 +289,7 @@
                   _persistStemIndex();
                 }
                 if (ev.type === "stream-done") {
-                  stemIndex[`${opts.yamlBasename}__${ev.streamId}`] = Date.now();
+                  stemIndex[`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`] = Date.now();
                   _persistStemIndex();
                   // freeze the browser-side fingerprint for this stream so the
                   // UI can mark it fresh (and detect later edits as stale).
@@ -305,11 +316,17 @@
           cancelAbort = null;
         }
       },
-      hasStem(yamlBasename, streamId) {
-        return !!stemIndex[`${yamlBasename}__${streamId}`];
+      // Playable *now*: a stem in the format stemUrl() is about to request.
+      hasStem(yamlBasename, streamId, format) {
+        return !!stemIndex[`${yamlBasename}__${streamId}${EXT_OF[format] || EXT_OF.wav}`];
       },
-      stemMtime(yamlBasename, streamId) {
-        return stemIndex[`${yamlBasename}__${streamId}`] || null;
+      // Claims the id: any format counts. Id allocation asks this, and must not
+      // be format-specific or it would recycle an id whose stem is on disk in
+      // the other format — the new stream would inherit the dead one's audio
+      // the moment the Settings format switched back.
+      ownsStem(yamlBasename, streamId) {
+        return Object.values(EXT_OF).some(
+          (e) => !!stemIndex[`${yamlBasename}__${streamId}${e}`]);
       },
       stemUrl(yamlBasename, streamId, format) {
         // aiff → /audio/ (server transcodes to WAV via sox; browsers can't decode AIFF natively)
@@ -317,8 +334,7 @@
         if (!format || format === "aiff") {
           return `${baseUrl}/audio/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
         }
-        const extMap = { wav: ".wav", flac: ".flac" };
-        const ext = extMap[format] || ".wav";
+        const ext = EXT_OF[format] || EXT_OF.wav;
         return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
       // Server-side waveform peaks (~128 KB float32). Extension is irrelevant —

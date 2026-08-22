@@ -469,13 +469,27 @@ function App() {
     () => window.PGEYaml ? window.PGEYaml.computeDuration(data.streams) : data.duration,
     [data.streams]);
 
-  // hasStem(id): does this stream have a stem on disk? Falls back to "we have a
-  // last-rendered fingerprint for it" when the backend can't answer. Closes over
-  // the live lastRenderedFps so the per-stream fallback stays correct.
+  // hasStem(id): is there a stem this editor can actually *play* — i.e. one in
+  // the Settings output format, which is the extension stemUrl() will request?
+  // A stem rendered only in the other format is not playable: the request 404s
+  // and the <audio> element says so by never firing `canplay`. Falls back to "we
+  // have a last-rendered fingerprint for it" when the backend can't answer.
+  // Closes over the live lastRenderedFps so the per-stream fallback stays right.
   const hasStemFor = (id) => {
     const basename = activeProject.replace(/\.yml$/, "");
     const backend = window.PGEBackend.current;
-    return backend.render.hasStem ? backend.render.hasStem(basename, id) : !!lastRenderedFps[id];
+    return backend.render.hasStem
+      ? backend.render.hasStem(basename, id, tweaks.outputFormat || "wav")
+      : !!lastRenderedFps[id];
+  };
+  // ownsStem(id): does a file on disk still claim this id, in any format? Only
+  // id allocation asks — it must reject an id whose stem survives in the format
+  // the editor isn't currently rendering, or the new stream inherits the dead
+  // one's audio as soon as the format flips back.
+  const ownsStemFor = (id) => {
+    const basename = activeProject.replace(/\.yml$/, "");
+    const backend = window.PGEBackend.current;
+    return backend.render.ownsStem ? backend.render.ownsStem(basename, id) : !!lastRenderedFps[id];
   };
 
   /* Aggregate render summary: counts of fresh / stale / never */
@@ -498,6 +512,27 @@ function App() {
     function onTick(e) { setTime(e.detail); }
     window.addEventListener("pge-audio-tick", onTick);
     return () => window.removeEventListener("pge-audio-tick", onTick);
+  }, []);
+
+  // A clip that cannot sound must not do it quietly. The engine raises one
+  // pge-audio-error per stream per schedule (a missing stem, a rejected play);
+  // every one goes to the terminal, and the first of each playback raises a
+  // single toast pointing there — a project with ten broken stems must not mean
+  // ten toasts.
+  const audioErrToastedRef = useRefApp(false);
+  useEffectApp(() => {
+    function onErr(e) {
+      const { streamId, message } = e.detail || {};
+      logToTerminal(`[audio] ${streamId}: ${message}`, "err");
+      if (audioErrToastedRef.current) return;
+      audioErrToastedRef.current = true;
+      pushToast({
+        kind: "warn", title: `${streamId} resta muto`, message, duration: 6000,
+        action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
+      });
+    }
+    window.addEventListener("pge-audio-error", onErr);
+    return () => window.removeEventListener("pge-audio-error", onErr);
   }, []);
 
   // Auto-stop when audio reaches duration (skip if looping)
@@ -813,18 +848,13 @@ function App() {
     const shift = Math.max(0, time) - minOnset;
     const newIds = [];
     setData(d => {
-      const usedIds = new Set(d.streams.map(s => s.id));
-      let counter = d.streams.length + 1;
-      function freshId() {
-        while (usedIds.has("stream" + counter)) counter++;
-        const id = "stream" + counter++;
-        usedIds.add(id);
-        return id;
-      }
-      const pasted = copied.map(s => {
-        const id = freshId();
-        newIds.push(id);
-        return { ...JSON.parse(JSON.stringify(s)), id, onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+      // hasStemFor as the oracle: an id whose stem is still on disk must not be
+      // recycled, or the paste inherits a deleted stream's audio (see
+      // allocStreamIds in yaml-bridge.js).
+      const ids = window.PGEYaml.allocStreamIds(d.streams, copied.length, ownsStemFor);
+      const pasted = copied.map((s, i) => {
+        newIds.push(ids[i]);
+        return { ...JSON.parse(JSON.stringify(s)), id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
       return { ...d, streams: [...d.streams, ...pasted] };
     });
@@ -909,14 +939,14 @@ function App() {
   }
   function deleteStream(id) {
     if (!id) return;
+    // Data only: setData is undoable, everything else here would not be. The
+    // per-id caches (lastRenderedFps, waveforms, grainData, the grain refs, the
+    // backend stem index) are deliberately left alone — wiping them made the
+    // stream come back from Ctrl+Z silent and marked "never rendered", and now
+    // that ids are never recycled (allocStreamIds) a leftover entry can never
+    // be picked up by a different stream. It is simply what this stream had,
+    // waiting for it if the delete is undone.
     setData(d => ({ ...d, streams: d.streams.filter(s => s.id !== id) }));
-    // collateral cleanup
-    setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
-    setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
-    setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
-    setGrainData(g => { const n = { ...g }; delete n[id]; return n; });
-    grainLoadedRef.current.delete(id); grainRegenRef.current.delete(id);  // ref allineati a grainData (#73)
-    if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
@@ -927,9 +957,9 @@ function App() {
     const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
     const palette = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
     setData(d => {
-      const n = d.streams.length + 1;
+      const [newId] = window.PGEYaml.allocStreamIds(d.streams, 1, ownsStemFor);
       const newStream = {
-        id: "stream" + n, onset: Math.max(0, +onset.toFixed(2)),
+        id: newId, onset: Math.max(0, +onset.toFixed(2)),
         duration: Math.min(d.duration - onset, Math.max(2, sampleRec.duration)),
         sample: sampleName, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
@@ -1250,6 +1280,7 @@ function App() {
     await Promise.all(preloads);
 
     engine.syncMuteSoloFromStreams(data.streams);
+    audioErrToastedRef.current = false;      // one toast per playback, not per session
     engine.scheduleStreams(data.streams, basename, time);
     engine.play();
     setPlaying(true);

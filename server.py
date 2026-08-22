@@ -831,21 +831,26 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
 
     @app.get("/stems/<basename>")
     def list_stems(basename):
-        """Return stream IDs that have a rendered stem file on disk.
-        The browser uses this to populate its stem index on page load
-        so hasStem() works without requiring a render in the current session."""
+        """Return the rendered stems on disk, one entry per file.
+
+        The browser populates its stem index from this on page load, so hasStem()
+        works without a render in the current session. The extension is part of
+        the answer, not a detail: playback requests the extension of the Settings
+        output format, so a stem that exists only as .aif is *not* playable while
+        the format is wav. Collapsing the formats to a bare id made that clip
+        read as rendered and then go silent — a 404 the <audio> element reports
+        by never firing `canplay`, with no error anywhere."""
         if "/" in basename or ".." in basename: abort(400)
-        stream_ids = []
+        stems = []
         prefix = basename + "__"
-        seen = set()
         for p in sorted(output.glob(f"{basename}__*.*")):
             if p.suffix.lower() not in {".aif", ".aiff", ".wav", ".flac"}:
                 continue
             sid = p.stem[len(prefix):]
-            if sid and sid not in seen:
-                seen.add(sid)
-                stream_ids.append({"streamId": sid, "mtime": p.stat().st_mtime})
-        return jsonify({"basename": basename, "stems": stream_ids})
+            if sid:
+                stems.append({"streamId": sid, "ext": p.suffix,
+                              "mtime": p.stat().st_mtime})
+        return jsonify({"basename": basename, "stems": stems})
 
     @app.get("/grains/<basename>/<streamId>")
     def serve_grains(basename, streamId):
