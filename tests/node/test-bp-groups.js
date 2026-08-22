@@ -17,7 +17,7 @@ const path = require("path");
 
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
-eval(fs.readFileSync(path.join(__dirname, "../../src/lib/dephase.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
 
 const E = window.PGEEnv;

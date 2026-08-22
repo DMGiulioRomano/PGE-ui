@@ -28,8 +28,8 @@
   // "value" → {min_val, max_val}; "range" → {min_range, max_range}.
   // Pitch bounds are handled separately (engine ships them pre-computed per unit).
   // UI controls with no engine counterpart (voices onset_offset, pan spread,
-  // dephase %, grain-env curve) are intentionally absent: they keep the static
-  // fallback.
+  // deviation_probability %, grain-env curve) are intentionally absent: they
+  // keep the static fallback.
   const ENGINE_PARAM_MAP = {
     volume:             { param: "volume",              field: "value" },
     volumeRange:        { param: "volume",              field: "range" },

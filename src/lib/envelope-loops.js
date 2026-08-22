@@ -48,6 +48,14 @@
     if (isTypedEnv(env)) {
       return { interp: env.type || "linear", items: env.points.slice() };
     }
+    // Dict con `points` ma senza `type`: forma che l'editor non emette mai
+    // (wrapEnv scrive il dict solo per dire un interp non lineare) ma che il
+    // motore accetta — `is_envelope_like` guarda solo che `points` ci sia. Va
+    // letta qui, altrimenti chi la dichiara envelope a monte se la vede aprire
+    // vuota, e un commit su quell'editor la svuoterebbe davvero.
+    if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
+      return { interp: "linear", items: env.points.slice() };
+    }
     return { interp: "linear", items: Array.isArray(env) ? env.slice() : [] };
   }
   function wrapEnv(items, interp) {
@@ -180,28 +188,111 @@
   // `linear` e sembra corretto, `{base: 1}` produce durate NaN e non lo dice.
   //
   // Ritorna null se valida, altrimenti { kind, name?, param? } —
-  //   "name"  → il nome non è nel registro
-  //   "param" → il parametro esiste ma è fuori dal bound del costruttore, o è
-  //             estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
-  //             inatteso). Puro, node-testabile.
-  function timeDistError(dist) {
+  //   "name"     → il nome non è nel registro
+  //   "param"    → il parametro esiste ma è fuori dal bound del costruttore, o è
+  //                estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
+  //                inatteso).
+  //   "overflow" → parametro e n_reps sono entrambi legittimi da soli, ma la
+  //                potenza che la distribuzione calcola con quella coppia non
+  //                sta in un float (vedi _overflowError). Riportato solo se
+  //                `nReps` è noto. Puro, node-testabile.
+  function timeDistError(dist, nReps) {
     if (dist == null) return null;
     if (typeof dist !== "string" && typeof dist !== "object") return { kind: "name" };
     const rawName = typeof dist === "string" ? dist : (dist.type != null ? dist.type : "linear");
     if (typeof rawName !== "string") return { kind: "name" };
     const name = rawName.toLowerCase();
     if (!TIME_DIST_NAMES.includes(name)) return { kind: "name", name: rawName };
-    if (typeof dist !== "object") return null;
 
-    const ammessi = TIME_DIST_SPECS[name];
-    for (const k of Object.keys(dist)) {
-      if (k === "type") continue;
-      const num = typeof dist[k] === "number" && isFinite(dist[k]);
-      if (!(k in ammessi) || !num || !ammessi[k](dist[k]))
-        return { kind: "param", name, param: k };
+    if (typeof dist === "object") {
+      const ammessi = TIME_DIST_SPECS[name];
+      for (const k of Object.keys(dist)) {
+        if (k === "type") continue;
+        const num = typeof dist[k] === "number" && isFinite(dist[k]);
+        if (!(k in ammessi) || !num || !ammessi[k](dist[k]))
+          return { kind: "param", name, param: k };
+      }
     }
-    return null;
+    // Anche la forma stringa entra qui: i default del costruttore sono quelli
+    // del motore, e con abbastanza cicli traboccano pure loro.
+    return _overflowError(name, (typeof dist === "object" && dist) ? dist : {}, nReps);
   }
+
+  // L'ordine di grandezza oltre cui un float non c'è più.
+  const LOG10_MAX = Math.log10(Number.MAX_VALUE); // ≈ 308.25
+
+  /* Mirror dell'overflow che il motore intercetta costruendo i pesi dei cicli
+     (PGE #212, review #216). Non è un bound su un valore e non poteva esserlo:
+     `ratio: 10` e `n_reps: 400` sono legittimi da soli, e il costruttore che
+     riceve il primo non vede il secondo — è la coppia a esplodere. In JS non
+     c'è OverflowError: la potenza diventa Infinity e le durate NaN o zero, così
+     il blocco veniva disegnato collassato senza che niente lo dicesse.
+
+     Il conto si fa sui logaritmi, mai sulla potenza: calcolarla per scoprire
+     che trabocca darebbe Infinity e basta.
+
+     Un caso resta fuori, e per una differenza che questo lato non può vedere:
+     in `power` il motore trabocca solo se l'esponente è un float, perché con un
+     intero Python calcola su interi illimitati e la divisione successiva torna
+     buona. Ma `200` e `200.0` in YAML arrivano qui come lo stesso Number, e
+     `Number.isInteger` non li distingue. Segnaliamo quindi solo l'esponente
+     frazionario: chi scrive `exponent: 200.0` con troppi cicli vede l'errore
+     del motore, non l'avviso — un avviso in meno, mai uno di troppo.
+
+     La stessa ambiguità int/float c'è in `geometric` e in `exponential`, ma lì
+     non si può scegliere allo stesso modo: la potenza sta dentro
+     un'espressione, e la soglia intera e quella float distano un n_reps. Il
+     conto qui modella il quoziente `(1 - r**N)/(1 - r)`, cioè la semantica
+     INTERA, che è la più permissiva delle due: `ratio: 10` con `n_reps: 309`
+     rende davvero, e adottare la soglia float lo segnalerebbe per sbaglio.
+     Il prezzo è una banda di un valore dove il float trabocca e noi taciamo —
+     `ratio: 10.0` a 309, `ratio: 2` a 1024, `rate: 0.5` a 1025 — sempre nella
+     direzione dichiarata sicura. I bordi sono fissati nei test. */
+  function _overflowError(name, p, nReps) {
+    const N = +nReps;
+    if (!isFinite(N) || N < 1) return null;
+    const mk = (param, value) => ({ kind: "overflow", name, param, value, nReps: N });
+
+    if (name === "geometric" || name === "geo") {
+      const r = p.ratio != null ? +p.ratio : 1.5;
+      // ratio ≈ 1 → il motore devia su linear prima di elevare; ratio < 1 → la
+      // potenza tende a zero. Trabocca solo la crescita.
+      if (!(r > 1) || Math.abs(r - 1) < 1e-6) return null;
+      // sum_geometric = (1 - ratio**N) / (1 - ratio)
+      const mag = N * Math.log10(r) - Math.log10(Math.abs(1 - r));
+      return mag > LOG10_MAX ? mk("ratio", r) : null;
+    }
+    if (name === "exponential" || name === "exp") {
+      const rate = p.rate != null ? +p.rate : 2.0;
+      // weights[i] = rate ** -i: cresce solo se rate < 1, e al massimo in i=N-1.
+      if (!(rate > 0) || rate >= 1) return null;
+      const mag = (N - 1) * Math.log10(1 / rate);
+      return mag > LOG10_MAX ? mk("rate", rate) : null;
+    }
+    if (name === "power") {
+      const e = p.exponent != null ? +p.exponent : 2.0;
+      // weights[i] = (i+1) ** exponent: il massimo è N ** exponent.
+      // `!isFinite(e)` non è raggiungibile dall'unico call site (i parametri
+      // non finiti escono già come kind "param" nel loop qui sopra); resta
+      // perché questa funzione dichiara di lavorare sui numeri che riceve, e
+      // un secondo chiamante che saltasse quel controllo non deve poter
+      // ottenere un `mag` NaN letto come "non trabocca".
+      if (!isFinite(e) || e <= 0 || Number.isInteger(e)) return null;
+      const mag = e * Math.log10(N);
+      return mag > LOG10_MAX ? mk("exponent", e) : null;
+    }
+    return null; // linear e logarithmic non elevano niente a potenza
+  }
+
+  // Il rimedio dipende dal parametro, non dalla distribuzione (PGE #216):
+  // `ratio` e `rate` sono fattori di una progressione, e verso 1 la
+  // progressione si appiattisce; `exponent` è una scala, dove 1 è un valore
+  // ordinario ed è l'ordine di grandezza a essere fuori misura.
+  const TIME_DIST_OVERFLOW_FIX = {
+    ratio:    "avvicina ratio a 1",
+    rate:     "avvicina rate a 1",
+    exponent: "riduci exponent in valore assoluto",
+  };
 
   /* vincolo invariante: sum(cycleDurs) === T
      Su una spec non valida si RIPIEGA su linear per poter comunque disegnare
@@ -211,39 +302,108 @@
      `{base: 1}` / `{exponent: 'x'}` non ripiegava affatto, produceva durate
      NaN che nessuno segnalava. */
   function computeCycleDurations(T, N, dist) {
+    const uniform = () => new Array(N).fill(T / N);
     if (T <= 0 || N < 1) return [];
-    const type = timeDistError(dist)
+    const type = timeDistError(dist, N)
       ? "linear"
       : (typeof dist === "string" ? dist : (dist && dist.type) || "linear");
     const p    = (typeof dist === "object" && dist) ? dist : {};
 
-    if (type === "linear") return new Array(N).fill(T / N);
+    if (type === "linear") return uniform();
 
     if (type === "exponential" || type === "exp") {
       const rate = p.rate != null ? +p.rate : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.pow(rate, -i); w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
     if (type === "logarithmic" || type === "log") {
       const base = p.base != null ? +p.base : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.log(i + 1) / Math.log(base) + 1; w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
     if (type === "geometric" || type === "geo") {
       const r = p.ratio != null ? +p.ratio : 1.5;
-      if (Math.abs(r - 1) < 1e-9) return new Array(N).fill(T / N);
+      // 1e-6, la stessa soglia del motore (time_distribution.py: `abs(ratio -
+      // 1.0) < 1e-6` -> LinearDistribution), non 1e-9. Nella finestra fra le
+      // due il motore ripiegava su cicli uguali e qui il conto si faceva
+      // davvero: `1 - Math.pow(r, N)` con r a un miliardesimo da 1 e' pura
+      // cancellazione catastrofica, la somma non torna, e la guardia
+      // sull'output segnalava un'anteprima che era invece esatta. Nessun
+      // overflow di mezzo — allineare la soglia toglie il caso, allargare il
+      // testo del warn lo avrebbe solo raccontato meglio.
+      // `exponential` e `logarithmic` non hanno un ripiego lineare nel motore:
+      // qui non c'e' niente da allineare.
+      if (Math.abs(r - 1) < 1e-6) return uniform();
       const d0 = T * (1 - r) / (1 - Math.pow(r, N));
-      return new Array(N).fill(0).map((_, i) => d0 * Math.pow(r, i));
+      return guard(new Array(N).fill(0).map((_, i) => d0 * Math.pow(r, i)));
     }
     if (type === "power") {
       const e = p.exponent != null ? +p.exponent : 2.0;
       const w = []; let sum = 0;
       for (let i = 0; i < N; i++) { const x = Math.pow(i + 1, e); w.push(x); sum += x; }
-      return w.map(x => x / sum * T);
+      return guard(w.map(x => x / sum * T));
     }
-    return new Array(N).fill(T / N);
+    return uniform();
+
+    /* Ultima rete, sull'OUTPUT invece che sulla spec. `timeDistError` sa dire
+       quali coppie (parametro, n_reps) il MOTORE rifiuta, e su quelle ripiega
+       già; ma qui `Math.pow` trabocca anche dove il motore no — con un
+       esponente o un ratio interi Python calcola su interi illimitati e
+       renderizza, mentre di qua uscivano durate NaN o tutte zero, disegnate
+       senza dire niente. Enumerare quei casi vorrebbe dire replicare la
+       distinzione int/float che il JS non vede; guardare cosa è uscito la
+       copre tutta: se le durate non sono finite, o non sommano a T, il disegno
+       torna a cicli uguali — lo stesso ripiego dell'altro ramo.
+
+       Ma qui il ripiego non può essere muto: cicli uguali sono un'anteprima
+       plausibile e sbagliata — peggio delle NaN di prima, che almeno erano
+       rotte a vista. Il ripiego marca quindi l'array con `previewFallback`,
+       che `expandMixed` porta sul blocco e il pannello traduce in un messaggio
+       suo, diverso da quello dell'overflow. Il flag nasce dalla guardia, cioè
+       esattamente dove il conto JS ha fallito: nessuna soglia in più da tenere
+       allineata al motore.
+
+       Quello che il flag NON dice è cosa farà il motore, e il messaggio del
+       pannello non lo afferma: la guardia scatta dove `Math.pow` non arriva, e
+       lì il motore a volte rende, a volte rifiuta — e in questo paragrafo la
+       grafia conta a ogni riga. Rende con `{power, exponent: 1000}` su 4 cicli
+       (il 100% del tempo nell'ultimo), ma in grafia INTERA: `1000.0` sulla
+       stessa coppia alza. Rende anche dentro la banda int/float che
+       `timeDistError` lascia passare di proposito: `{geometric, ratio: 10}` a
+       309 cicli, in grafia intera, somma 2.0 esatta, mentre `10.0` alza — è
+       l'unico esempio in cui il motore distingue davvero le due tipizzazioni,
+       ed è la coppia che il commento alla soglia, poco più su, cita come
+       ragione per non adottare quella float.
+
+       Rifiuta invece `{geometric, ratio: 2}` a 1024, e lì le tipizzazioni non
+       le distingue affatto: alza in entrambe. Rifiuta anche
+       `{exponential, rate: 0.5}` a 1025, che di grafie ne ha una sola — un
+       rate fra 0 e 1 è float per costruzione — e il cui meccanismo non è
+       int/float ma `rate < 1`: i pesi sono `rate ** -i`, e `0.5 ** -1024` è
+       `2^1024`, che trabocca, mentre `2 ** -i` in Python è già float e degrada
+       a subnormale (`{exponential, rate: 2}` a 1025 rende, in entrambe le
+       grafie). Le due condizioni non coincidono e non possono: distinguerle
+       vorrebbe dire replicare la semantica intera di Python, che è esattamente
+       ciò che questa rete evita di fare. */
+    function guard(durs) {
+      const sum = durs.reduce((a, b) => a + b, 0);
+      const ok = durs.every(d => isFinite(d) && d >= 0) &&
+                 isFinite(sum) && Math.abs(sum - T) <= 1e-9 * Math.max(1, Math.abs(T));
+      return ok ? durs : _markPreviewFallback(uniform());
+    }
+  }
+
+  /* Marca un array di durate come ripiego dell'anteprima. Non enumerabile:
+     JSON, spread e Object.keys non lo vedono, così nessun confronto esistente
+     sulle durate cambia significato. Si legge con `isPreviewFallback`. */
+  function _markPreviewFallback(durs) {
+    Object.defineProperty(durs, "previewFallback", { value: true, enumerable: false });
+    return durs;
+  }
+  function isPreviewFallback(durs) {
+    return !!(durs && durs.previewFallback);
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
@@ -306,7 +466,12 @@
         // Non null quando la distribuzione dichiarata non è costruibile: i
         // cicli qui sotto sono disegnati con il ripiego lineare, ma il motore
         // rifiuterebbe questo blocco. Chi disegna può dirlo.
-        distError: timeDistError(dist),
+        distError: timeDistError(dist, nReps),
+        // L'altro ripiego, che è il contrario: la spec è buona e il motore la
+        // rende, ma il conto in doppia precisione è uscito inservibile e i
+        // cicli qui sotto sono uguali per forza. Chi disegna deve dirlo con
+        // parole diverse — qui non c'è niente di sbagliato nello YAML.
+        previewFallback: isPreviewFallback(cycleDurs),
         cycles: []
       };
       let t = blockStart;
@@ -651,8 +816,8 @@
     isBreakpoint, isCompactBlock, envHasLoop,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
-    computeCycleDurations, expandMixed,
-    TIME_DIST_NAMES, timeDistError,
+    computeCycleDurations, isPreviewFallback, expandMixed,
+    TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,
