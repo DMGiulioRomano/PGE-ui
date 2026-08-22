@@ -819,25 +819,45 @@ ${body}
 
   // Il draft che il tab mostra davvero: gia' sotto la chiave viva.
   const draft = serializeStream(live);
-  assert("Raw tab — the draft already shows the live key, so `dephase` is not editable there",
+  assert("Raw tab — the draft already shows the live key, so `dephase` is never on screen",
     !/dephase/.test(draft) && /deviation_probability/.test(draft), draft.slice(0, 300));
 
-  // applyEdits, alla lettera (YamlEditor.jsx).
+  // applyEdits, alla lettera (YamlEditor.jsx). Se cambi il predicato qui devi
+  // cambiarlo anche nel JSX e nella guardia sul sorgente piu' sotto: le tre
+  // copie dicono la stessa cosa, quindi possono confermare il predicato che
+  // c'e', mai accorgersi che sia quello sbagliato.
   const applyEdits = (l, d) => {
     const parsed = parseStream(d, 0, { samples: [] });
     return applyStreamPatch(l, { ...parsed, color: l.color, id: l.id,
-      deviationProbabilityLegacy: !!l.deviationProbabilityLegacy && parsed.deviationProbability !== undefined });
+      deviationProbabilityLegacy: parsed.deviationProbabilityLegacy
+        || (!!l.deviationProbabilityLegacy && parsed.deviationProbability !== undefined) });
   };
   assert("Raw tab — an Apply that writes nothing to disk keeps the flag lit",
     applyEdits(live, draft).deviationProbabilityLegacy === true);
   assert("Raw tab — editing another key keeps the flag lit too",
     applyEdits(live, draft.replace(/onset: 0/, "onset: 2")).deviationProbabilityLegacy === true);
 
+  // Non mostrato non e' non scrivibile: la textarea e' libera, e chi ha in mano
+  // un progetto pre-v7 la grafia morta la conosce. Digitarla qui introduce la
+  // chiave che il motore non legge, e senza il primo ramo dell'OR il
+  // salvataggio la riscriverebbe in silenzio — il guasto stesso della #130,
+  // sull'unica superficie dove `dephase` e' ancora digitabile.
+  const sano = rawStream("deviation_probability: 50");
+  assert("Raw tab — precondizione: su un progetto sano il flag e' spento",
+    sano.deviationProbabilityLegacy === false);
+  const digitato = applyEdits(sano, serializeStream(sano).replace(/deviation_probability: 50/, "dephase: 99"));
+  assert("Raw tab — scrivere `dephase` a mano accende il flag su un progetto sano",
+    digitato.deviationProbabilityLegacy === true, JSON.stringify(digitato.deviationProbabilityLegacy));
+  assert("Raw tab — e il valore digitato passa comunque",
+    digitato.deviationProbability === 99, JSON.stringify(digitato.deviationProbability));
+
   // L'unica uscita dal tab Raw: tolta la deviazione, non c'e' nessuna chiave da
   // riscrivere e l'avviso non ha piu' niente da annunciare.
   const noKey = serializeStream(rawStream("volume: 0.5"));
   assert("Raw tab — removing the deviation altogether clears the flag",
     applyEdits(live, noKey).deviationProbabilityLegacy === false);
+  assert("Raw tab — un Apply innocuo su un progetto sano lascia il flag spento",
+    applyEdits(sano, serializeStream(sano)).deviationProbabilityLegacy === false);
 }
 
 {
@@ -887,8 +907,8 @@ ${body}
   assert("wiring — onSaveAs NON lo spegne: scrive un altro file, l'originale porta ancora dephase",
     saveAsBody.length > 100 && !/clearDeviationProbabilityLegacy/.test(saveAsBody),
     `len=${saveAsBody.length}`);
-  assert("wiring — YamlEditor.applyEdits riporta il flag accanto a color/id",
-    /deviationProbabilityLegacy:\s*\n?\s*!!stream\.deviationProbabilityLegacy && parsed\.deviationProbability !== undefined/.test(yeSrc));
+  assert("wiring — YamlEditor.applyEdits fa l'OR fra la provenienza del draft e quella dello stream vivo",
+    /deviationProbabilityLegacy:\s*\n?\s*parsed\.deviationProbabilityLegacy\s*\|\|\s*\n?\s*\(!!stream\.deviationProbabilityLegacy && parsed\.deviationProbability !== undefined\)/.test(yeSrc));
 }
 
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];

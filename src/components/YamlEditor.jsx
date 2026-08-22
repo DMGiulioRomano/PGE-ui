@@ -113,15 +113,29 @@ function YamlEditor({ stream, onChange, samples }) {
         ...parsed,
         color: stream.color,   // synthesized by streamFromYaml, never in YAML
         id:    stream.id,       // keep identity stable even if stream_id blanked
-        // Anche questo e' sintetizzato dal parse del progetto e non sta in
-        // questo YAML: `generated` riserializza lo stream sotto la chiave viva,
-        // quindi `dephase` qui non e' nemmeno visibile e ogni ri-parse
-        // spegnerebbe il flag — mentre il file su disco porta ancora la grafia
-        // morta e la riscrittura e' ancora da fare. Si spegne solo se la
-        // deviazione sparisce del tutto: senza valore non c'e' nessuna chiave
-        // da riscrivere, e l'avviso non avrebbe piu' niente da annunciare.
+        // Il flag e' l'OR fra quello che il draft dichiara e quello che il file
+        // su disco porta ancora, perche' la grafia morta puo' entrare da tutte
+        // e due le parti.
+        //
+        // Da destra: `generated` riserializza lo stream sotto la chiave viva,
+        // quindi `dephase` non e' MOSTRATO qui e un ri-parse nudo leggerebbe
+        // false — mentre il file su disco porta ancora la grafia morta e la
+        // riscrittura e' da fare. Quel ramo si spegne solo se la deviazione
+        // sparisce del tutto: senza valore non c'e' nessuna chiave da
+        // riscrivere, e l'avviso non avrebbe piu' niente da annunciare.
+        //
+        // Da sinistra: non mostrato non e' non scrivibile. La textarea e'
+        // libera, e chi ha in mano un progetto pre-v7 la grafia morta la
+        // conosce: digitando `dephase: 99` qui si introduce la chiave che il
+        // motore non legge, e senza questo ramo il salvataggio la riscriverebbe
+        // in silenzio — il guasto stesso della #130, sull'unica superficie dove
+        // `dephase` e' ancora digitabile. L'OR non contraddice l'altro ramo:
+        // con la chiave presente readDeviationProbability restituisce il valore
+        // o la sentinella, mai undefined, quindi `parsed.…Legacy === true`
+        // implica sempre `parsed.deviationProbability !== undefined`.
         deviationProbabilityLegacy:
-          !!stream.deviationProbabilityLegacy && parsed.deviationProbability !== undefined,
+          parsed.deviationProbabilityLegacy ||
+          (!!stream.deviationProbabilityLegacy && parsed.deviationProbability !== undefined),
       });
       setParseErr(null);
       setMode("view");
