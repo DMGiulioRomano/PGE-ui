@@ -760,6 +760,14 @@ for (const f of deviationProbFixtures) {
   if (!fs.existsSync(p)) { console.log(`  SKIP deviationProbability fixture ${f} (not found)`); continue; }
   const data = parse(fs.readFileSync(p, "utf8"));
   const flags = data.streams.map(s => s.deviationProbability !== undefined);
+  // The two asserts below compare lists computed the same way, so they pass on
+  // all-false too: if the fixtures stop carrying the key — the engine renames it
+  // again, the configs change — the loop would go on observing nothing. That is
+  // exactly what happened between PGE #204 and #125, with the round trip broken
+  // and this loop green over all-undefined. The fixtures are the engine's own
+  // configs: post-v7 they carry the current key. (#131)
+  assert(`${f} — fixture exercises deviation_probability`, flags.some(Boolean),
+    JSON.stringify(flags));
   const back = parse(serialize(data));
   const backFlags = back.streams.map(s => s.deviationProbability !== undefined);
   assert(`${f} — deviationProbability presence stable through reparse`, eq(flags, backFlags),
