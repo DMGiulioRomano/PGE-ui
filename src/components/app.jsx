@@ -904,16 +904,14 @@ function App() {
   }
   function deleteStream(id) {
     if (!id) return;
+    // Data only: setData is undoable, everything else here would not be. The
+    // per-id caches (lastRenderedFps, waveforms, grainData, the grain refs, the
+    // backend stem index) are deliberately left alone — wiping them made the
+    // stream come back from Ctrl+Z silent and marked "never rendered", and now
+    // that ids are never recycled (allocStreamIds) a leftover entry can never
+    // be picked up by a different stream. It is simply what this stream had,
+    // waiting for it if the delete is undone.
     setData(d => ({ ...d, streams: d.streams.filter(s => s.id !== id) }));
-    // collateral cleanup
-    setLastRenderedFps(fps => { const n = { ...fps }; delete n[id]; return n; });
-    setStreamProgress(p => { const n = { ...p }; delete n[id]; return n; });
-    setWaveforms(w => { const n = { ...w }; delete n[id]; return n; });
-    setGrainData(g => { const n = { ...g }; delete n[id]; return n; });
-    grainLoadedRef.current.delete(id); grainRegenRef.current.delete(id);  // ref allineati a grainData (#73)
-    if (window.PGEAudio?.engine?.invalidateStream) window.PGEAudio.engine.invalidateStream(id);
-    const _backend = window.PGEBackend?.current;
-    if (_backend?.render?.forgetStream) _backend.render.forgetStream(activeProject.replace(/\.yml$/, ""), id);
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);

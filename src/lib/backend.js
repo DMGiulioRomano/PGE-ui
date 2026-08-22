@@ -299,14 +299,6 @@
           cancelAbort = null;
         }
       },
-      forgetStream(yamlBasename, streamId) {
-        delete stemIndex[`${yamlBasename}__${streamId}`];
-        _persistStemIndex();
-        try {
-          const all = JSON.parse(localStorage.getItem("pge-local-fp") || "{}");
-          if (all[yamlBasename]) { delete all[yamlBasename][streamId]; localStorage.setItem("pge-local-fp", JSON.stringify(all)); }
-        } catch {}
-      },
       hasStem(yamlBasename, streamId) {
         return !!stemIndex[`${yamlBasename}__${streamId}`];
       },

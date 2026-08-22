@@ -56,6 +56,27 @@ console.log("\n── app.jsx wiring (source guard) ──");
          calls.every(c => /hasStem/.test(c)), JSON.stringify(calls));
 }
 
+console.log("\n── deleting a stream is undoable (source guard) ──");
+{
+  // setData pushes to the history stack, so Ctrl+Z restores data.streams. It
+  // restores nothing else. Any collateral wipe deleteStream performs on state
+  // undo cannot reach (lastRenderedFps, waveforms, grainData, the grain refs,
+  // the backend stem index) survives the undo and leaves the resurrected stream
+  // silent and marked "never rendered". With ids that no longer recycle, those
+  // per-id entries are inert for every other stream, so the cure is to not wipe.
+  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const m = appSrc.match(/function deleteStream\(id\) \{[\s\S]*?\n  \}/);
+  assert("deleteStream found in app.jsx", !!m);
+  const body = m ? m[0] : "";
+  for (const wipe of ["setLastRenderedFps", "setWaveforms", "setGrainData",
+                      "grainLoadedRef", "grainRegenRef", "forgetStream",
+                      "invalidateStream", "setStreamProgress"]) {
+    assert(`does not wipe ${wipe} (undo could not restore it)`, !body.includes(wipe));
+  }
+  assert("still mutates through setData so the delete is undoable",
+         /setData\(/.test(body));
+}
+
 console.log(`\n${"─".repeat(50)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
