@@ -526,3 +526,43 @@ def test_bounds_endpoint_empty_when_engine_absent(tmp_path):
     client = app.test_client()
     body = client.get("/bounds").get_json()
     assert body == {"ok": True, "bounds": {}}
+
+
+# ---------------------------------------------------------------------------
+# /stems reports the extension, not just the id
+# ---------------------------------------------------------------------------
+
+def test_list_stems_reports_each_format_separately(tmp_path):
+    """A stem is playable only in the format the editor is about to request.
+
+    The browser builds its stem index from this payload and looks it up by
+    filename (basename__id + ext), so /stems must say which extensions exist.
+    Collapsing them to a bare id made a project rendered as .aif read as
+    "rendered" while the editor asked for .wav — a 404 the <audio> element
+    reports by never firing `canplay`, i.e. a clip that goes silent with no
+    error anywhere.
+    """
+    import server
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    out = tmp_path / "output"
+    out.mkdir()
+    (out / "proj__stream1.wav").write_bytes(b"x")
+    (out / "proj__stream2.aif").write_bytes(b"x")
+    (out / "proj__stream3.wav").write_bytes(b"x")
+    (out / "proj__stream3.aif").write_bytes(b"x")
+    (out / "proj__stream1__grains.json").write_text("{}")   # not a stem
+    (out / "proj__stream1.wav.reapeaks").write_bytes(b"x")  # not a stem
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    stems = client.get("/stems/proj").get_json()["stems"]
+    got = sorted((s["streamId"], s["ext"]) for s in stems)
+
+    assert got == [
+        ("stream1", ".wav"),
+        ("stream2", ".aif"),
+        ("stream3", ".aif"),
+        ("stream3", ".wav"),
+    ]

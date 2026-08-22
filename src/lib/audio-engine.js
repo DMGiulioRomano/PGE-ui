@@ -73,6 +73,7 @@
       this.tickRaf = null;
       this.lastStreams = [];              // streams we last scheduled
       this.lastBasename = null;
+      this._reportedErrors = new Set();   // stream ids already reported this schedule
     }
 
     _ensureContext() {
@@ -252,6 +253,7 @@
     scheduleStreams(streams, basename, fromTime) {
       this._stopAllSources();
       if (!this.ctx) return;
+      this._reportedErrors.clear();
       this.lastStreams = streams;
       this.lastBasename = basename;
       // Anchor the master clock a short lead into the future. Buffer sources are
@@ -325,6 +327,13 @@
         el.src = url;
         el.preload = "auto";
         el.crossOrigin = "anonymous";
+        // A missing/undecodable stem is otherwise indistinguishable from a
+        // silent one: `canplay` simply never fires and the clip stays quiet
+        // forever with nothing logged anywhere. Say it out loud instead.
+        el.addEventListener("error", () => {
+          if (entry.dead) return;            // teardown clears el.src, which fires `error`
+          this._reportStreamError(s.id, `stem non caricabile (${url.replace(/^.*\//, "")})`);
+        }, { once: true });
         const mediaSource = this.ctx.createMediaElementSource(el);
         const gainNode = this.ctx.createGain();
         gainNode.gain.value = entry.gainBase * this._effectiveMuteSoloGain(s, this.anySolo);
@@ -338,7 +347,10 @@
           if (this.activeNodes.get(s.id) !== entry) return;
           const late = Math.max(0, this.ctx.currentTime - playAtCtx);
           try { el.currentTime = offset + late; } catch {}
-          el.play().catch(() => {});
+          el.play().catch((e) => {
+            if (entry.dead) return;
+            this._reportStreamError(s.id, e && e.message ? e.message : String(e));
+          });
         };
         const gate = () => {
           if (this.activeNodes.get(s.id) !== entry) return;
@@ -362,6 +374,15 @@
       }
     }
 
+    // One report per stream per schedule: a broken project would otherwise fire
+    // on every retry and drown the channel it is trying to use.
+    _reportStreamError(id, message) {
+      if (this._reportedErrors.has(id)) return;
+      this._reportedErrors.add(id);
+      window.dispatchEvent(new CustomEvent("pge-audio-error",
+        { detail: { streamId: id, message } }));
+    }
+
     _tapTrackAnalyser(id, gainNode) {
       let ta = this.trackAnalysers.get(id);
       if (!ta) {
@@ -379,6 +400,7 @@
     _teardownNode(id) {
       const n = this.activeNodes.get(id);
       if (!n) return;
+      n.dead = true;                  // silences the `error` that clearing src fires
       if (n.timers) for (const t of n.timers) clearTimeout(t);
       if (n.el) {
         try { n.el.pause(); } catch {}
@@ -399,18 +421,7 @@
     }
 
     _stopAllSources() {
-      for (const [, n] of this.activeNodes) {
-        if (n.timers) for (const t of n.timers) clearTimeout(t);
-        if (n.el) {
-          try { n.el.pause(); } catch {}
-          try { n.mediaSource.disconnect(); } catch {}
-          try { n.gainNode.disconnect(); } catch {}
-          n.el.src = "";
-        } else if (n.source) {
-          try { n.source.stop(0); } catch {}
-        }
-      }
-      this.activeNodes.clear();
+      for (const id of [...this.activeNodes.keys()]) this._teardownNode(id);
     }
 
     // -------- transport --------
