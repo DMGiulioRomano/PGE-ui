@@ -1054,6 +1054,32 @@
     return { ...data, streams, samples: samples || [] };
   }
 
+  /* Allocate `count` fresh stream ids.
+   *
+   * The id is the stem filename on disk (<basename>__<id>.<ext>), the key of
+   * the engine's cache manifest and of the browser's stem index — so reusing
+   * one makes a brand-new stream inherit a deleted stream's audio, waveform and
+   * render dot. The engine's GC won't save us: it only removes stems whose id
+   * is *absent* from the YAML, and a recycled id is present again.
+   *
+   * `isTaken(id)` is the caller's "this id still owns a stem" oracle (backend
+   * hasStem). Optional: without it (file:// / server down) we only avoid the
+   * ids currently in `streams`, which is the best that can be known offline.
+   */
+  function allocStreamIds(streams, count = 1, isTaken) {
+    const used = new Set((streams || []).map(s => s.id));
+    const taken = (id) => used.has(id) || (isTaken ? !!isTaken(id) : false);
+    const out = [];
+    let counter = used.size + 1;
+    for (let i = 0; i < count; i++) {
+      while (taken("stream" + counter)) counter++;
+      const id = "stream" + counter++;
+      used.add(id);
+      out.push(id);
+    }
+    return out;
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
@@ -1063,6 +1089,7 @@
     parseStream,
     emptyProject,
     computeDuration,
+    allocStreamIds,
     roundTripDiff,
     DEPHASE_IMPLICIT,
   };

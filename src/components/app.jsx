@@ -813,18 +813,13 @@ function App() {
     const shift = Math.max(0, time) - minOnset;
     const newIds = [];
     setData(d => {
-      const usedIds = new Set(d.streams.map(s => s.id));
-      let counter = d.streams.length + 1;
-      function freshId() {
-        while (usedIds.has("stream" + counter)) counter++;
-        const id = "stream" + counter++;
-        usedIds.add(id);
-        return id;
-      }
-      const pasted = copied.map(s => {
-        const id = freshId();
-        newIds.push(id);
-        return { ...JSON.parse(JSON.stringify(s)), id, onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+      // hasStemFor as the oracle: an id whose stem is still on disk must not be
+      // recycled, or the paste inherits a deleted stream's audio (see
+      // allocStreamIds in yaml-bridge.js).
+      const ids = window.PGEYaml.allocStreamIds(d.streams, copied.length, hasStemFor);
+      const pasted = copied.map((s, i) => {
+        newIds.push(ids[i]);
+        return { ...JSON.parse(JSON.stringify(s)), id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
       return { ...d, streams: [...d.streams, ...pasted] };
     });
@@ -929,11 +924,9 @@ function App() {
     const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
     const palette = ["#5C8868","#B89241","#3F8884","#5965A8","#8E5F8E","#C97A6E","#7A8DB0"];
     setData(d => {
-      const usedIds = new Set(d.streams.map(s => s.id));
-      let counter = d.streams.length + 1;
-      while (usedIds.has("stream" + counter)) counter++;
+      const [newId] = window.PGEYaml.allocStreamIds(d.streams, 1, hasStemFor);
       const newStream = {
-        id: "stream" + counter, onset: Math.max(0, +onset.toFixed(2)),
+        id: newId, onset: Math.max(0, +onset.toFixed(2)),
         duration: Math.min(d.duration - onset, Math.max(2, sampleRec.duration)),
         sample: sampleName, color: palette[(d.streams.length) % palette.length],
         mute: false, solo: false,
