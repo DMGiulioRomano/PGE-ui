@@ -52,8 +52,11 @@ console.log("\n── app.jsx wiring (source guard) ──");
   const calls = appSrc.match(/allocStreamIds\([^)]*\)/g) || [];
   assert("both call sites (paste + create) go through allocStreamIds",
          calls.length === 2, JSON.stringify(calls));
-  assert("both pass the stem oracle so a deleted id is not recycled",
-         calls.every(c => /hasStem/.test(c)), JSON.stringify(calls));
+  // ownsStem, not hasStem: allocation must reject an id that owns a stem in
+  // *any* format, or it recycles one whose .aif is on disk while the editor is
+  // rendering .wav — and the ghost audio surfaces the moment the format flips.
+  assert("both pass the format-agnostic ownership oracle",
+         calls.every(c => /ownsStem/.test(c)), JSON.stringify(calls));
 }
 
 console.log("\n── deleting a stream is undoable (source guard) ──");
