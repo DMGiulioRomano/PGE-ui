@@ -56,8 +56,14 @@
   // or inherited from the sample. The renderer only ever sees the resolved
   // number, which IS hashed — so typing the value the sample already implied
   // must leave the stem green instead of going stale on a flag flip.
+  // deviationProbabilityLegacy (PGE #204) is the same kind of bookkeeping: it
+  // records WHICH spelling the deviation came from, `dephase` or the current
+  // key, not what it says. Reopening a pre-v7 project must not mark every stem
+  // stale over a key name — the healed value is hashed, so the migration still
+  // marks stale exactly what it changes.
   const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
-                             "durationImplicit", "durationUnresolved"]);
+                             "durationImplicit", "durationUnresolved",
+                             "deviationProbabilityLegacy"]);
 
   function canonicalJSON(v, ignore) {
     if (v === null || v === undefined) return "null";

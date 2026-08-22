@@ -55,10 +55,25 @@ const ignored = {
   // audio — only the resolved number does, and that IS hashed.
   durationImplicit: true,
   durationUnresolved: true,
+  // Same class (PGE #204): it records WHICH spelling the deviation came from,
+  // `dephase` or the current key, not what it says. Reopening a pre-v7 project
+  // must not mark every stem stale over a key name.
+  deviationProbabilityLegacy: true,
 };
 for (const [k, v] of Object.entries(ignored)) {
   const s = base(); s[k] = v;
   assert(`ignores ${k}`, fp(s) === fp0, `${k}: fp changed`);
+}
+
+{
+  // The healed VALUE is still hashed, so the migration marks stale exactly what
+  // it changes: only the flag is free.
+  const pre  = { ...base(), deviationProbability: 50, deviationProbabilityLegacy: true };
+  const post = { ...base(), deviationProbability: 50, deviationProbabilityLegacy: false };
+  assert("healing dephase → deviation_probability leaves the stem fresh",
+    fp(pre) === fp(post), "fp changed");
+  const changed = { ...post, deviationProbability: 80 };
+  assert("changing the healed value still marks the stem stale", fp(changed) !== fp(post));
 }
 
 {

@@ -29,7 +29,9 @@
  *     undefined) | scalar | envelope-array | per-param object.
  *     The legacy `dephase` spelling (PGE < #204) is read on parse and written
  *     back under the new key — a one-way migration, since the engine dropped
- *     the old key without an alias and would silently ignore it.
+ *     the old key without an alias and would silently ignore it. The stream
+ *     carries `deviationProbabilityLegacy` to say the rewrite is pending, so
+ *     the Inspector can announce it instead of letting it happen in silence.
  *   - time_mode: absence is preserved (engine default is "absolute");
  *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
@@ -100,13 +102,21 @@
    * back, so opening and saving an old project migrates it. */
   const LEGACY_DEVIATION_PROB_KEY = "dephase";
 
+  /* Which of the two spellings the value comes from — null when neither is
+   * written. The current key wins when both are: the engine reads only that
+   * one, so the dead one is dropped rather than migrated, which is what the
+   * render already does. */
+  function deviationProbabilityKey(y) {
+    if ("deviation_probability" in y) return "deviation_probability";
+    if (LEGACY_DEVIATION_PROB_KEY in y) return LEGACY_DEVIATION_PROB_KEY;
+    return null;
+  }
+
   /* The stream's deviation_probability as editor state, from either spelling.
    * Key present with a null value = implicit 1% — distinct from key absent
-   * (= off), which is why the sentinel exists. The current key wins when both
-   * are written (the engine reads only that one). */
+   * (= off), which is why the sentinel exists. */
   function readDeviationProbability(y) {
-    const key = ("deviation_probability" in y) ? "deviation_probability"
-              : ((LEGACY_DEVIATION_PROB_KEY in y) ? LEGACY_DEVIATION_PROB_KEY : null);
+    const key = deviationProbabilityKey(y);
     if (key === null) return undefined;
     return y[key] === null ? DEVIATION_PROB_IMPLICIT : y[key];
   }
@@ -830,6 +840,22 @@
       // (= off). Per-param objects pass verbatim: a null INSIDE the object
       // means "default prob for that key" and stays null.
       deviationProbability: readDeviationProbability(y),
+      // Provenance, not content: true when the value was read from the dead
+      // `dephase` spelling, i.e. when saving will rewrite the key under the
+      // name the engine reads. The migration is otherwise mute — a render
+      // persists the editor state to configs/<basename>.yml even without a
+      // Save, so the rewrite would only ever surface in a `git diff`.
+      //
+      // Emitted ALWAYS, false included, for the same reason as
+      // durationImplicit: the Raw tab spreads a whole re-parsed stream over the
+      // live one (applyStreamPatch), so an omitted key would leave a previous
+      // `true` lit after the author fixed the spelling by hand and the
+      // Inspector would keep announcing a migration already done.
+      //
+      // Out of the stem fingerprint (backend.js FP_IGNORE) and out of the
+      // round-trip diff (IGNORE_FIELDS): how the key is spelled is not what it
+      // says, and the healed value itself is hashed and diffed as usual.
+      deviationProbabilityLegacy: deviationProbabilityKey(y) === LEGACY_DEVIATION_PROB_KEY,
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -936,7 +962,15 @@
   // through the YAML (#63). This diverges from backend FP_IGNORE, which still
   // excludes them: serializing solo/mute changes WHICH streams render, not a
   // single stem's audio, so it must not mark a rendered stem stale.
-  const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw"]);
+  // deviationProbabilityLegacy is provenance too, and the one field here that
+  // legitimately CHANGES across the round trip: parse reads `dephase` and sets
+  // it, serialize writes the current key, the re-parse clears it. That flip is
+  // the migration, not a loss — diffing it would raise "YAML lossy round-trip"
+  // on every pre-v7 project opened, about the one rewrite the editor performs
+  // on purpose. (It also reads undefined on a stream the UI created rather than
+  // parsed, which the re-parse would turn into false.)
+  const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw",
+                                 "deviationProbabilityLegacy"]);
 
   function deepDiff(a, b, path, out) {
     if (a === b) return;

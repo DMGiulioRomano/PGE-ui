@@ -754,6 +754,70 @@ const { DEVIATION_PROB_IMPLICIT } = window.PGEYaml;
     serialize(dataBoth).slice(0, 500));
 }
 
+/* ---- deviationProbabilityLegacy: the provenance flag (#130) ----------------
+   The migration above is one-way and, without this flag, mute: the Inspector
+   reads it to say the file will be rewritten on save. */
+{
+  const legacy = parse(topLevelYaml(["dephase: 50"]));
+  assert("legacy flag — true when the value came from the dead key",
+    legacy.streams[0].deviationProbabilityLegacy === true,
+    JSON.stringify(legacy.streams[0].deviationProbabilityLegacy));
+
+  // Emitted always, false included: an omitted key would survive the Raw tab's
+  // shallow merge and leave a previous `true` lit (asserted below).
+  const current = parse(topLevelYaml(["deviation_probability: 50"]));
+  assert("legacy flag — present and false on the current spelling",
+    current.streams[0].deviationProbabilityLegacy === false,
+    JSON.stringify(current.streams[0].deviationProbabilityLegacy));
+
+  // A stream with no deviation at all still carries the flag, for the same
+  // reason: the Raw tab can remove the key entirely.
+  const none = parse(topLevelYaml([]));
+  assert("legacy flag — present and false with no deviation key at all",
+    none.streams[0].deviationProbabilityLegacy === false,
+    JSON.stringify(none.streams[0].deviationProbabilityLegacy));
+
+  // Both written: nothing is migrated — the dead key is dropped, which is what
+  // the render already does — so there is no rewrite to announce.
+  const both = parse(topLevelYaml(["deviation_probability: 10", "dephase: 90"]));
+  assert("legacy flag — false with both keys (nothing migrated, the dead one is dropped)",
+    both.streams[0].deviationProbabilityLegacy === false,
+    JSON.stringify(both.streams[0].deviationProbabilityLegacy));
+
+  // The healing happens once: after a save the stream is an ordinary
+  // deviation_probability stream and the notice must stop.
+  const healed = parse(serialize(legacy));
+  assert("legacy flag — cleared after one serialize→parse (the healing runs once)",
+    healed.streams[0].deviationProbability === 50 && healed.streams[0].deviationProbabilityLegacy === false,
+    JSON.stringify({ v: healed.streams[0].deviationProbability, legacy: healed.streams[0].deviationProbabilityLegacy }));
+
+  // Provenance, not content: it must not reach the YAML, and it must not make
+  // the round-trip check cry "lossy" over the one rewrite the editor performs
+  // on purpose (deepDiff IGNORE_FIELDS).
+  assert("legacy flag — never serialized", !/Legacy/.test(serialize(legacy)), serialize(legacy).slice(0, 400));
+  assert("legacy flag — the migration still round-trips clean",
+    roundTripDiff(legacy).length === 0, JSON.stringify(roundTripDiff(legacy)));
+}
+
+{
+  // Raw tab: applyEdits spreads a whole re-parsed stream over the live one
+  // (applyStreamPatch). Fixing the spelling by hand there has to clear the
+  // flag, or the Inspector would keep announcing a migration already done.
+  const rawStream = (key) => parseStream(`stream_id: s1
+sample: test.wav
+onset: 0
+duration: 5
+${key}: 50
+`, 0, { samples: [] });
+
+  const live = rawStream("dephase");
+  assert("Raw tab — the legacy spelling flags the stream",
+    live.deviationProbabilityLegacy === true, JSON.stringify(live.deviationProbabilityLegacy));
+  const merged = applyStreamPatch(live, { ...rawStream("deviation_probability"), id: live.id, color: live.color });
+  assert("Raw tab — fixing the spelling by hand clears the flag through the shallow merge",
+    merged.deviationProbabilityLegacy === false, JSON.stringify(merged.deviationProbabilityLegacy));
+}
+
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
 for (const f of deviationProbFixtures) {
   const p = path.join(__dirname, "../../..", "PythonGranularEngine/configs", f);
