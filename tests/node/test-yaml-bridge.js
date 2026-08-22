@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations } = window.PGEYaml;
+const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations, clearDeviationProbabilityLegacy } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -800,22 +800,95 @@ const { DEVIATION_PROB_IMPLICIT } = window.PGEYaml;
 }
 
 {
-  // Raw tab: applyEdits spreads a whole re-parsed stream over the live one
-  // (applyStreamPatch). Fixing the spelling by hand there has to clear the
-  // flag, or the Inspector would keep announcing a migration already done.
-  const rawStream = (key) => parseStream(`stream_id: s1
+  // Raw tab: applyEdits re-parses the draft and spreads the whole stream over
+  // the live one (applyStreamPatch). The draft is `serializeStream(stream)`, so
+  // it already shows the LIVE key — `dephase` is never on screen there — and a
+  // bare re-parse would read the flag as false on a file that still carries the
+  // dead spelling. applyEdits therefore carries the flag over explicitly,
+  // alongside color/id: nothing has been written, the migration is still due.
+  const rawStream = (body) => parseStream(`stream_id: s1
 sample: test.wav
 onset: 0
 duration: 5
-${key}: 50
+${body}
 `, 0, { samples: [] });
 
-  const live = rawStream("dephase");
+  const live = rawStream("dephase: 50");
   assert("Raw tab — the legacy spelling flags the stream",
     live.deviationProbabilityLegacy === true, JSON.stringify(live.deviationProbabilityLegacy));
-  const merged = applyStreamPatch(live, { ...rawStream("deviation_probability"), id: live.id, color: live.color });
-  assert("Raw tab — fixing the spelling by hand clears the flag through the shallow merge",
-    merged.deviationProbabilityLegacy === false, JSON.stringify(merged.deviationProbabilityLegacy));
+
+  // Il draft che il tab mostra davvero: gia' sotto la chiave viva.
+  const draft = serializeStream(live);
+  assert("Raw tab — the draft already shows the live key, so `dephase` is not editable there",
+    !/dephase/.test(draft) && /deviation_probability/.test(draft), draft.slice(0, 300));
+
+  // applyEdits, alla lettera (YamlEditor.jsx).
+  const applyEdits = (l, d) => {
+    const parsed = parseStream(d, 0, { samples: [] });
+    return applyStreamPatch(l, { ...parsed, color: l.color, id: l.id,
+      deviationProbabilityLegacy: !!l.deviationProbabilityLegacy && parsed.deviationProbability !== undefined });
+  };
+  assert("Raw tab — an Apply that writes nothing to disk keeps the flag lit",
+    applyEdits(live, draft).deviationProbabilityLegacy === true);
+  assert("Raw tab — editing another key keeps the flag lit too",
+    applyEdits(live, draft.replace(/onset: 0/, "onset: 2")).deviationProbabilityLegacy === true);
+
+  // L'unica uscita dal tab Raw: tolta la deviazione, non c'e' nessuna chiave da
+  // riscrivere e l'avviso non ha piu' niente da annunciare.
+  const noKey = serializeStream(rawStream("volume: 0.5"));
+  assert("Raw tab — removing the deviation altogether clears the flag",
+    applyEdits(live, noKey).deviationProbabilityLegacy === false);
+}
+
+{
+  // Il flag e' provenienza del PARSE, e ne' Save ne' render ri-parsano: senza
+  // spegnerlo esplicitamente l'Inspector annuncerebbe per tutta la sessione una
+  // riscrittura gia' avvenuta — proprio il guasto che la #130 voleva evitare,
+  // sul percorso piu' battuto.
+  const data = parse(topLevelYaml(["dephase: 50"]));
+  assert("clear — precondizione: il flag e' acceso", data.streams[0].deviationProbabilityLegacy === true);
+
+  const cleared = clearDeviationProbabilityLegacy(data);
+  assert("clear — dopo la scrittura il flag e' spento",
+    cleared.streams[0].deviationProbabilityLegacy === false);
+  assert("clear — il valore guarito resta intatto",
+    cleared.streams[0].deviationProbability === 50);
+  assert("clear — non muta lo stato in place (setData/undo leggono l'oggetto precedente)",
+    data.streams[0].deviationProbabilityLegacy === true);
+  assert("clear — il giro resta lossless dopo lo spegnimento",
+    roundTripDiff(cleared).length === 0, JSON.stringify(roundTripDiff(cleared)));
+
+  // Identita' quando non c'e' niente da spegnere: il chiamante la invoca senza
+  // guardie a ogni Save e a ogni render, e _setDataRaw scarta un `next === prev`.
+  const clean = parse(topLevelYaml(["deviation_probability: 50"]));
+  assert("clear — stesso oggetto quando nessuno stream porta il flag",
+    clearDeviationProbabilityLegacy(clean) === clean);
+  assert("clear — idempotente", clearDeviationProbabilityLegacy(cleared) === cleared);
+  assert("clear — sopporta uno stato senza streams",
+    clearDeviationProbabilityLegacy(null) === null &&
+    clearDeviationProbabilityLegacy({}).streams === undefined);
+}
+
+/* Guardie sul sorgente: i due punti di scrittura e il tab Raw vivono in JSX,
+   che i test node non eseguono. Sono esattamente le righe la cui assenza fa
+   mentire l'avviso, nelle due direzioni opposte. */
+{
+  const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const yeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
+  const calls = (appSrc.match(/clearDeviationProbabilityLegacy/g) || []).length;
+  assert("wiring — app.jsx spegne il flag a entrambi i punti di scrittura (Save e render)",
+    calls === 2, `chiamate trovate: ${calls}`);
+  assert("wiring — lo spegnimento passa da _setDataRaw (non sporca, non e' undo)",
+    /_setDataRaw\(d => window\.PGEYaml \? window\.PGEYaml\.clearDeviationProbabilityLegacy\(d\) : d\)/.test(appSrc));
+  // Il corpo di onSaveAs soltanto — la finestra fissa prendeva dentro il punto
+  // di scrittura del render, che sta piu' avanti nel file.
+  const saveAsBody = appSrc.slice(appSrc.indexOf("async function onSaveAs()"))
+                           .split("async function onNewProject()")[0];
+  assert("wiring — onSaveAs NON lo spegne: scrive un altro file, l'originale porta ancora dephase",
+    saveAsBody.length > 100 && !/clearDeviationProbabilityLegacy/.test(saveAsBody),
+    `len=${saveAsBody.length}`);
+  assert("wiring — YamlEditor.applyEdits riporta il flag accanto a color/id",
+    /deviationProbabilityLegacy:\s*\n?\s*!!stream\.deviationProbabilityLegacy && parsed\.deviationProbability !== undefined/.test(yeSrc));
 }
 
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
@@ -830,7 +903,11 @@ for (const f of deviationProbFixtures) {
   // exactly what happened between PGE #204 and #125, with the round trip broken
   // and this loop green over all-undefined. The fixtures are the engine's own
   // configs: post-v7 they carry the current key. (#131)
-  assert(`${f} — fixture exercises deviation_probability`, flags.some(Boolean),
+  // La chiave viva, non una qualsiasi delle due: `flags` e' vero anche su una
+  // fixture tornata a `dephase`, che e' lo scenario stesso da cui il canarino
+  // deve difendere.
+  assert(`${f} — fixture exercises deviation_probability`,
+    data.streams.some(s => s.deviationProbability !== undefined && !s.deviationProbabilityLegacy),
     JSON.stringify(flags));
   const back = parse(serialize(data));
   const backFlags = back.streams.map(s => s.deviationProbability !== undefined);

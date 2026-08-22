@@ -113,6 +113,15 @@ function YamlEditor({ stream, onChange, samples }) {
         ...parsed,
         color: stream.color,   // synthesized by streamFromYaml, never in YAML
         id:    stream.id,       // keep identity stable even if stream_id blanked
+        // Anche questo e' sintetizzato dal parse del progetto e non sta in
+        // questo YAML: `generated` riserializza lo stream sotto la chiave viva,
+        // quindi `dephase` qui non e' nemmeno visibile e ogni ri-parse
+        // spegnerebbe il flag — mentre il file su disco porta ancora la grafia
+        // morta e la riscrittura e' ancora da fare. Si spegne solo se la
+        // deviazione sparisce del tutto: senza valore non c'e' nessuna chiave
+        // da riscrivere, e l'avviso non avrebbe piu' niente da annunciare.
+        deviationProbabilityLegacy:
+          !!stream.deviationProbabilityLegacy && parsed.deviationProbability !== undefined,
       });
       setParseErr(null);
       setMode("view");

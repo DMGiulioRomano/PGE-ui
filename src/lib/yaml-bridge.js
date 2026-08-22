@@ -846,11 +846,17 @@
       // persists the editor state to configs/<basename>.yml even without a
       // Save, so the rewrite would only ever surface in a `git diff`.
       //
-      // Emitted ALWAYS, false included, for the same reason as
-      // durationImplicit: the Raw tab spreads a whole re-parsed stream over the
-      // live one (applyStreamPatch), so an omitted key would leave a previous
-      // `true` lit after the author fixed the spelling by hand and the
-      // Inspector would keep announcing a migration already done.
+      // Emitted ALWAYS, false included, so a parsed stream always carries the
+      // boolean, same shape rule as durationImplicit. It is NOT what keeps the
+      // Raw tab honest: there the stream is re-serialized under the live key,
+      // so `dephase` is never on screen and every re-parse would read false —
+      // YamlEditor.applyEdits therefore carries the flag over explicitly,
+      // alongside color/id, because the file on disk has not moved.
+      //
+      // Nor does the flag go out on its own once the file IS migrated: it is
+      // parse-time provenance, and a Save or a render never re-parses, so
+      // app.jsx clears it through clearDeviationProbabilityLegacy at both
+      // write sites.
       //
       // Out of the stem fingerprint (backend.js FP_IGNORE) and out of the
       // round-trip diff (IGNORE_FIELDS): how the key is spelled is not what it
@@ -1116,12 +1122,32 @@
     return { ...data, streams, samples: samples || [] };
   }
 
+  /* La migrazione e' compiuta nel momento in cui lo YAML serializzato tocca il
+   * disco: il flag dice "il file porta ancora `dephase`", quindi un Save — e un
+   * render, che persiste configs/<basename>.yml prima ancora di lanciare il
+   * motore — devono spegnerlo, o l'Inspector continua ad annunciare una
+   * riscrittura gia' avvenuta per tutta la sessione. Restituisce lo stesso
+   * oggetto quando non c'e' niente da spegnere, cosi' il chiamante puo'
+   * chiamarla senza guardie.
+   *
+   * E' ottimistica di proposito: se la scrittura non fosse mai atterrata, il
+   * flag si riaccende da solo alla prossima apertura del progetto, perche' lo
+   * calcola il parse dal file vero. Meglio un avviso perso e recuperato al
+   * reload che un avviso permanente che non vuol piu' dire niente. */
+  function clearDeviationProbabilityLegacy(data) {
+    if (!data || !Array.isArray(data.streams)) return data;
+    if (!data.streams.some(s => s && s.deviationProbabilityLegacy)) return data;
+    return { ...data, streams: data.streams.map(s =>
+      (s && s.deviationProbabilityLegacy) ? { ...s, deviationProbabilityLegacy: false } : s) };
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
     serializeStream,
     applyStreamPatch,
     resolveImplicitDurations,
+    clearDeviationProbabilityLegacy,
     parseStream,
     emptyProject,
     computeDuration,
