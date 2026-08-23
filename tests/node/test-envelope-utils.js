@@ -931,6 +931,12 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     !/durationEnv: \[\[0, v\], \[1, v\]\][\s\S]{0,80}0\.05/.test(inspSrc)
     && !/grainDur: 0\.05/.test(inspSrc)
     && !/cur\.durationEnv\[0\]\[1\]\) \|\| 0\.05/.test(inspSrc));
+  // La scala di step è in unità del parametro: quella di default è scritta per
+  // i secondi e in campioni (valore tipico 2400) il gradino più grosso vale 10.
+  assert("le manopole di durata hanno step nell'unità in vigore",
+    /const grainSteps = GRAIN_STEPS\[grainUnit\] \|\| GRAIN_STEPS\.seconds/.test(inspSrc)
+    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 2
+    && /samples: \[1, 100, 1000, 10000\]/.test(inspSrc));
   assert("il tooltip della chiave elenca le tre unità",
     /title=\{`unità di grain\.duration e duration_range[^`]*milliseconds/.test(inspSrc));
 }

@@ -679,6 +679,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // l'unità non è riconosciuta sarebbero due affermazioni opposte.
   const grainUnitSuffix = window.PGEEnvUtils.grainUnitSuffix(grainUnit);
   const grainUnitError = window.PGEEnvUtils.grainDurationUnitError(stream.grain);
+  // La scala di step di NumberField è in unità del parametro, e il default
+  // [0.01 … 10] è scritto per i secondi: in campioni il valore tipico è 2400 e
+  // il gradino più grosso vale 10 campioni, cioè 0.2 ms — la manopola non
+  // arriva da nessuna parte. Un ordine di grandezza per gradino, a partire dal
+  // minimo sensato dell'unità; unità ignota ricade sui secondi, come il fattore.
+  const GRAIN_STEPS = {
+    seconds: [0.001, 0.01, 0.1, 1],
+    milliseconds: [1, 10, 100, 1000],
+    samples: [1, 100, 1000, 10000],
+  };
+  const grainSteps = GRAIN_STEPS[grainUnit] || GRAIN_STEPS.seconds;
   // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
   // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo
   // stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere dal
@@ -1131,7 +1142,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               <ParamRow name="duration"
                         mode={getMode("grainDur")} onMode={(m) => toggleMode("grainDur", m)}
                         value={stream.grain.duration != null ? stream.grain.duration : "—"}
-                        unit={stream.grain.durationEnv ? "" : grainUnitSuffix}
+                        unit={stream.grain.durationEnv ? "" : grainUnitSuffix} steps={grainSteps}
                         range={stream.grain.durationRange != null && !stream.grain.durationRangeEnv ? stream.grain.durationRange : undefined}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
@@ -1141,7 +1152,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               {(stream.grain.durationRange != null || stream.grain.durationRangeEnv != null) ? (
                 <ParamRow name="duration_range"
                           mode={getMode("durationRange")} onMode={(m) => toggleMode("durationRange", m)}
-                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : grainUnitSuffix}
+                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : grainUnitSuffix} steps={grainSteps}
                           accent={stream.grain.durationRangeEnv != null}
                           envValue={stream.grain.durationRangeEnv}
                           onEditEnv={focusEnv("durationRange")}
