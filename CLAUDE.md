@@ -43,11 +43,15 @@ make tests            # full suite: tests-node + tests-python
   reuses an id that still owns a stem, plus source guards on the two call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
-  guards on the audio-error path).
+  guards on the audio-error path), and `test-suite-harness.js` (the suite's own
+  exit contract: the verdict is an `exit` handler, verified by running it, plus
+  a guard that every `tests/node/*.js` uses it and none went back to a
+  positional exit gate).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
-  (path/security helpers), `test_yaml_structure.py`, and `test_engine_render.py`
+  (path/security helpers), `test_yaml_structure.py` (the engine config corpus,
+  gated by `engine_corpus.py`), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 
@@ -57,7 +61,65 @@ the fixture-dependent parts run on a PR — a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary). The
 assertion count is engine-dependent: a config added/removed upstream moves it by
 three (three assertions per file), so a local total that differs from CI's is
-that, not a lost test. There is no linter or typechecker; UI verification is
+that, not a lost test.
+
+**Engine fixtures never skip silently** (#132), on both halves of the suite.
+`test-yaml-bridge.js` routes every engine config through `engineFixture(name)`;
+`test_yaml_structure.py` goes through `tests/python/engine_corpus.py`. Same three
+outcomes:
+
+| situation | outcome |
+| --- | --- |
+| sibling engine checkout absent | SKIP — the only legitimate one (local dev, fork PR without the secret) |
+| checkout present, named fixture (node) or non-empty `configs/` (python) missing | **FAIL** — renamed or deleted upstream: update the check, don't ignore it |
+| `PGE_REQUIRE_ENGINE_FIXTURES=1` and the checkout is absent | **FAIL** |
+
+Both CI jobs pass `PGE_REQUIRE_ENGINE_FIXTURES=1` when their engine checkout step
+reports **`outcome`** (not `conclusion` — with `continue-on-error: true` that one
+is `success` even on failure, which would make the gate inert), so even that last
+skip can't go green in CI. The env var is read as `=== "1"` / `== "1"`, so `=0`
+turns it off as expected. The node run ends with a fixture tally
+(`N eseguite (M usi), K mancanti, corpus J config` — distinct names, `PGE_pino2.yml`
+is used by two blocks); pytest prints the corpus line from
+`pytest_terminal_summary` — at the end of the run, and it survives `-q`, where
+the report header does not.
+
+The two halves don't cover the same thing: only the node half expects **names**.
+`engine_corpus.py` runs over whatever `*.yml` it finds, so an upstream deletion
+thins the python corpus without turning it red — the seven named fixtures in
+`test-yaml-bridge.js` are the presidio, over the same directory.
+
+Still legitimately skippable: `test_engine_render.py`, which needs the engine's
+**venv**, not just its checkout.
+
+The engine checkout is not pinned to a ref — it tracks the engine's default
+branch. That's the point (an upstream `configs/` change can turn PGE-ui red on
+purpose, the #131/#132 canary), but the red then hits **every** open PGE-ui PR,
+including unrelated ones. The way out is to update the name in the
+`engineFixture(...)` call (or the config's own name upstream), not to re-silence
+the check.
+
+**That bill has come due before**, so budget for it rather than being surprised:
+engine commit `a666fce` renamed `pino2.yml`→`PGE_pino2.yml`,
+`pino3.yml`→`PGE_pino3.yml` and `PGE_pino.yaml`→`PGE_test.yml` while deleting
+three more configs, all in one commit. Four of the seven names the node suite now
+requires come out of that rename; `PGE_test.yml` and `PGE_detune_implicito_test.yml`
+read like throwaway configs and are the likeliest to move next. Pinning the
+checkout to a ref would stop the noise and kill the canary with it — the trade is
+deliberate.
+
+**The suite's verdict is an `exit` handler, not a line at the bottom.** Every
+`tests/node/*.js` registers `process.on("exit", (code) => …)` that prints the
+summary and sets `process.exitCode`; nothing calls `process.exit(…)` directly.
+That's what makes an appended section count: `test-yaml-bridge.js` used to run 24
+asserts *after* its positional exit gate, printing FAIL and exiting 0. The `code`
+argument covers the other half of the same lie: a file that dies mid-run (an
+exception in an appended section) exits 1 but its counters still read `0 failed`,
+so the handler prints `interrotto prima della fine` instead of a clean summary
+under a stack trace. `test-suite-harness.js` verifies all of it — the idiom, by
+running it, and every suite file, by source guard.
+
+There is no linter or typechecker; UI verification is
 manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
 
 ## Architecture

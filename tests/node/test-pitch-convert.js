@@ -96,5 +96,11 @@ console.log("\n── round-trip stability ──");
 const back = E.convertPitchValue(E.convertPitchValue(700, "cents", "ratio"), "ratio", "cents");
 assert("cents 700 → ratio → cents ≈ 700", near(back, 700, 1));
 
-console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

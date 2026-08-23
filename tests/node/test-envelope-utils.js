@@ -947,6 +947,12 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
     && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
 }
 
-console.log(`\n${"─".repeat(50)}`);
-console.log(`${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

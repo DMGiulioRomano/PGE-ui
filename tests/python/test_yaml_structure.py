@@ -1,13 +1,26 @@
-import glob
 import os
 import pytest
 import yaml
 
-CONFIGS_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../..", "PythonGranularEngine/configs")
-)
-CONFIGS = sorted(glob.glob(os.path.join(CONFIGS_DIR, "*.yml")))
+from engine_corpus import CONFIGS, CONFIGS_DIR, corpus_error, skip_reason, status_line
+
 VALID_UNITS = {"semitones", "cents", "quarter_tone", "eighth_tone", "edo", "ratio"}
+
+
+def test_engine_corpus_available():
+    """Il corpus non sparisce in silenzio (#132).
+
+    Le due `parametrize` qui sotto girano sui config veri del motore: senza
+    quel checkout diventano una lista vuota, cioe' uno skip che non dice
+    niente. Questo test rende visibile quale delle tre situazioni e' in
+    corso, e fallisce nelle due che non sono legittime.
+    """
+    err = corpus_error()
+    assert err is None, err
+    reason = skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+    assert CONFIGS, status_line()
 
 
 @pytest.mark.parametrize("path", CONFIGS, ids=lambda p: os.path.basename(p))
