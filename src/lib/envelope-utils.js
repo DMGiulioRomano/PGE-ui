@@ -2,8 +2,11 @@
  * envelope-utils.js — pure envelope rescale/truncate math (freeze-on-resize).
  *
  * Extracted from app.jsx (#44) so it can be unit-tested in node like
- * yaml-bridge.js. No React, no DOM — depends only on window.PGEEnv
- * (envelope-loops.js, loaded before this file). Attaches to window.PGEEnvUtils.
+ * yaml-bridge.js. No React, no DOM. Reads window.PGEEnv (envelope-loops.js) at
+ * IIFE time, window.PGEDeviationProb (deviation-probability.js) and
+ * window.PGE_OUTPUT_SR (yaml-bridge.js, the engine sample rate behind the
+ * 'samples' factor) at call time — load all three first, or the grain-unit
+ * helpers return NaN. Attaches to window.PGEEnvUtils.
  *
  * Field shapes handled: standard breakpoints [t, v], compact loop blocks, and
  * the object form {type, points}. The stream-level helpers walk every

@@ -16,6 +16,10 @@ const fs   = require("fs");
 const path = require("path");
 
 global.window = { jsyaml: require("js-yaml") };
+// yaml-bridge per primo come nell'editor: pubblica window.PGE_OUTPUT_SR, che
+// envelope-utils legge a chiamata per il fattore di 'samples'. Senza, quel
+// ramo restituisce NaN invece di fallire — una trappola armata, non un errore.
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
