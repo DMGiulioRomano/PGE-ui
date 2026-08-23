@@ -125,9 +125,24 @@ console.log("\n── colliding ids never merge two lanes ──");
   const tr = T.deriveTracks(d);
   assert("two distinct lanes survive", tr.length === 2, JSON.stringify(shape(tr)));
   assert("their ids are distinct", tr[0].id !== tr[1].id, JSON.stringify(shape(tr)));
+  // WHICH lane gives way matters: the singleton is the one whose id is also its
+  // laneHeights key, so the shadowing group is the one that gets suffixed.
+  assert("the shadowed stream keeps its own lane id (its saved height with it)",
+         tr.find(x => x.streamIds.includes("stream2")).id === "stream2",
+         JSON.stringify(shape(tr)));
   const fresh = T.newTrackId(tr);
   assert("a fresh id collides with neither a track id nor a stream id",
          !tr.some(t => t.id === fresh || t.streamIds.includes(fresh)), fresh);
+}
+{
+  // Two streams with the SAME id collapse onto one lane, and that is the
+  // documented limit rather than a hole to patch: the id is the stem filename
+  // and the cache-manifest key, so a duplicate is already fatal a layer down —
+  // and no `ui_tracks` could round-trip two lanes pointing at one id anyway.
+  // Pinned here so the behaviour is a decision, not a surprise.
+  const tr = T.deriveTracks({ streams: [{ id: "a" }, { id: "a" }] });
+  assert("a duplicated stream id yields one lane, not a broken pair",
+         tr.length === 1 && tr[0].id === "a", JSON.stringify(shape(tr)));
 }
 
 console.log("\n── applyTracks never rewrites a stream (the fingerprint stays put) ──");

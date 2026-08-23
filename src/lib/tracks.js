@@ -77,8 +77,12 @@
 
   /* ---------- derive ---------- */
 
-  /* data → ordered [{id, name, streamIds}]. Total: every live stream appears in
-   * exactly one track, whatever `ui_tracks` says (or fails to say). */
+  /* data → ordered [{id, name, streamIds}]. Total over well-formed input: every
+   * live stream appears in exactly one track, whatever `ui_tracks` says (or
+   * fails to say). The one exception is two streams sharing an id, which land
+   * on one lane — a duplicate id is already fatal a layer down (it is the stem
+   * filename and the cache-manifest key), and no `ui_tracks` could round-trip
+   * two lanes pointing at the same id. */
   function deriveTracks(data) {
     const streams = (data && Array.isArray(data.streams)) ? data.streams : [];
     // Stream ids are normalized to strings on both sides. `parse` already
@@ -92,6 +96,27 @@
     const placed = new Set();
     const usedIds = new Set();
     const out = [];
+
+    // A singleton lane's id IS its stream id, so track ids and stream ids share
+    // one namespace — and that id is the `laneHeights` key. Reserve up front the
+    // ids of the streams `ui_tracks` does not place: each will become a
+    // singleton lane and needs its own name. Without this a hand-written group
+    // calling itself `stream2` takes the name first, and the real stream2's lane
+    // comes out as `stream2_`, silently losing its saved height.
+    {
+      const claimed = new Set();
+      for (const t of raw) {
+        if (!t || typeof t !== "object") continue;
+        for (const entry of (Array.isArray(t.streams) ? t.streams : [])) {
+          const id = String(entry);
+          if (live.has(id)) claimed.add(id);
+        }
+      }
+      for (const s of streams) {
+        const sid = String(s.id);
+        if (!claimed.has(sid)) usedIds.add(sid);
+      }
+    }
 
     const claim = (want, fallback) => {
       let id = (want != null && String(want)) || String(fallback);
@@ -127,6 +152,10 @@
       const sid = String(s.id);
       if (placed.has(sid)) continue;
       placed.add(sid);
+      // Spend the reservation made above. `claim` still runs, so a `streams`
+      // list that repeats an id (hand-edited file) gets the second lane
+      // suffixed rather than colliding on the React key.
+      usedIds.delete(sid);
       out.push({ id: claim(sid, sid), name: sid, streamIds: [sid] });
     }
     return out;
