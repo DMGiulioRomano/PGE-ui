@@ -14,6 +14,12 @@ Le tre situazioni sono distinte come in `tests/node/test-yaml-bridge.js`:
 * ``PGE_REQUIRE_ENGINE_FIXTURES=1``  -> errore anche sul checkout assente. La CI
                                         la passa quando lo step di checkout del
                                         motore ha riportato successo.
+
+Qui non c'e' l'equivalente delle fixture nominate del lato node: i test girano
+su tutti gli ``*.yml`` che trovano, nessun nome e' atteso, quindi una cancellata
+a monte assottiglia il corpus senza far rosso. Il presidio sui nomi sta in
+``tests/node/test-yaml-bridge.js`` e guarda la stessa directory: e' li' che una
+config rinominata o rimossa si fa sentire, e vale per tutta la suite.
 """
 
 import glob
