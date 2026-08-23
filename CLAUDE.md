@@ -14,10 +14,12 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 make install          # pip install -r requirements.txt  (flask, flask-cors, gunicorn, numpy, soundfile)
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
-make tests            # full suite: tests-node + tests-python
+make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there)
+make tests-parity     # only the JS↔engine parity suites
 ```
 
-`make tests` runs both halves of the suite:
+`make tests` runs three parts (the third only when the sibling engine checkout
+exists):
 
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
@@ -50,11 +52,17 @@ make tests            # full suite: tests-node + tests-python
   (path/security helpers), `test_yaml_structure.py`, and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
+- **`make tests-parity`** (node + python, needs the engine checkout) — the
+  suites in `tests/parity/`, which ask the **engine itself** the questions the
+  mirrors in `src/lib/` answer from memory. See "Parity harness" below and
+  `tests/parity/README.md`.
 
-CI runs both on push and PR (`.github/workflows/ci.yml`). The python job checks
-out the sibling engine and builds its venv. The node job checks it out too so
-the fixture-dependent parts run on a PR — a `configs/` change in
-`PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary). The
+CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
+checks out the sibling engine and builds its venv. The node job checks it out
+too, for the fixture-dependent parts and for `make tests-parity` (which needs no
+engine venv at all), so both run on a PR: a `configs/` change in
+`PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary), and
+so can a change to any surface the parity suites pin. The
 assertion count is engine-dependent: a config added/removed upstream moves it by
 three (three assertions per file), so a local total that differs from CI's is
 that, not a lost test. There is no linter or typechecker; UI verification is
@@ -84,7 +92,7 @@ fallback).
 Two options exit 1 (taking audio with them): unknown `--plot-envelopes` name, malformed `--magnify-at` SPEC. Both are filtered before reaching argv, but in different places:
 
 - **Envelope names** → filtered *server-side* (`server.py` intersects them with `engine_envelope_keys(root)`) because the valid set lives in engine source.
-- **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, `window.PGEMagnifySpec.error`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing.
+- **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, `window.PGEMagnifySpec.error`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing. The grammar mirrors Python's `float()`, not JS's `Number()` — they disagree on `0x10`, `1_000`, `inf` — and `tests/parity/test-magnify-parity.js` checks the whole corpus against the engine.
 
 The request body carries `yamlContent`. `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* a throwaway temp file. A temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY, defeating incremental caching. Writing the stable basename keeps the manifest persistent. Consequence: a render persists the editor state to the source config even if the user never hit Save. **Git is the rollback mechanism** (`git checkout -- configs/<basename>.yml`).
 
@@ -107,7 +115,7 @@ The `envelope` per-param key is always inert (its spec is `is_smart=False`). The
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
-**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-utils.js` checks on logarithms. Thresholds are pinned against the real engine in `test-time-dist.js` and model Python **integer** semantics (more permissive). There is a one-value band where the engine overflows and the UI stays quiet — always the safe direction. `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
+**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-utils.js` checks on logarithms. Thresholds model Python **integer** semantics (more permissive) and are re-derived from the running engine on every parity run (`tests/parity/test-time-dist-parity.js` bisects for the first rejected `n_reps` on both sides); the constants in `test-time-dist.js` are the transcript of an older run of the same question. There is a one-value band where the engine overflows and the UI stays quiet — always the safe direction. `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
 
 ### Dynamic parameter bounds
 
@@ -121,7 +129,40 @@ Loop-window semantics: with a loop active the engine confines the grain read pos
 
 Discrete-domain parameters (`grain.read_direction`): engine bounds are `-1`/`+1` but the domain is the **set** `{-1, +1}` — the engine rejects `0` at parse time. Every place the UI *computes* a y must **snap to the sign**, not clamp to the range. `snapDirection`/`snapForDomain` in `envelope-utils.js` are the single source; the envelope entry carries `domain: "direction"`. Interpolation is `step`, imposed and implicit; the editor hides the interp selectors. The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine refuses (not resolves by priority) — both are kept in state and re-emitted so the author's mistake is visible; the Inspector flags the pair. Absence is preserved: with neither key present the engine uses `auto` mode.
 
-**If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
+**If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.** `tests/parity/test-bounds-parity.js` checks the AST read against the imported registry, that every `ENGINE_PARAM_MAP` entry names a parameter that exists, and that the static fallback never admits a value the engine rejects.
+
+### Parity harness (`tests/parity/`)
+
+Everything in the two sections that follow — and the bounds, magnify-spec,
+deviation-probability and time-distribution mirrors above — is a **parity pact**
+with the engine. Those pacts used to live only in prose. They are now executable:
+`tests/parity/engine_oracle.py` imports the engine and answers JSON lines
+(`fingerprint`, `parse_magnify_spec`, `classify_deviation_probability`,
+`build_time_distribution`, `parameter_bounds`, `constants`);
+`tests/parity/oracle.js` is the node client (one python process per suite);
+`tests/parity/harness.js` runs the suites and, crucially, **counts and names the
+cases that did not run** when the engine is absent — a skipped parity case is a
+failure under `PGE_PARITY_STRICT=1` and in CI when the engine is present.
+
+Two rules when touching it:
+
+- **The oracle imports from the engine, it never reimplements it.** A copy would
+  be a third mirror to keep aligned. The one exception is the `--magnify-at`
+  grammar, which lives in `pge.cli` (unimportable without numpy/soundfile/
+  matplotlib): the oracle extracts those AST nodes from `cli.py` and executes
+  them — the engine's own bytes.
+- **No op may need the engine venv.** The CI node job checks the engine out but
+  builds no venv, and that is where parity runs. Verified module by module; if
+  you add an op that drags in numpy, it will silently stop running there.
+
+Deliberate divergences are listed in `tests/parity/README.md` **and asserted by
+the suites**, so a divergence that disappears makes a test speak instead of
+leaving a stale comment. The README also records the engine commit the pacts
+were written against — the datum that tells "we broke it" from "the engine moved".
+
+Engine-source introspection (`engine_introspect.py`) was split out of
+`server.py` for this: it AST-parses the engine with the stdlib alone, so both the
+bridge and the oracle can use it.
 
 ### Fingerprint parity
 
@@ -131,7 +172,7 @@ The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 
 - `duration*` flags: provenance of the length, not the length itself.
 - `deviationProbabilityLegacy`: provenance (which spelling), not content — reopening a pre-v7 project shouldn't mark every stem stale.
 
-The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.**
+The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
 
 ### YAML round-trip (`yaml-bridge.js`)
 
@@ -179,7 +220,7 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 
 ## File layout & load order (matters)
 
-Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
+Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 

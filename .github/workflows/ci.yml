@@ -6,7 +6,7 @@ on:
 
 jobs:
   node:
-    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures)
+    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures · parity)
     runs-on: ubuntu-latest
     steps:
       - name: checkout PGE-ui
@@ -35,6 +35,20 @@ jobs:
       - name: run node test suite
         working-directory: PGE-ui
         run: make tests-node
+      # Parita' JS↔motore (#133): le suite in tests/parity avviano
+      # tests/parity/engine_oracle.py, che importa dal motore e risponde a
+      # righe JSON. Nessuna delle sue op ha bisogno di numpy/soundfile, quindi
+      # il python3 del runner basta e il venv del motore non serve — che e' il
+      # motivo per cui questo passo sta qui e non nel job python.
+      #
+      # Se il checkout sopra e' fallito (fork PR, token assente) le suite
+      # saltano rumorosamente ed escono 0, come gia' fanno le fixture
+      # `configs/*.yml`. Se invece il motore c'e', l'harness accende da solo la
+      # modalita' stretta (CI + motore presente) e un caso saltato diventa
+      # rosso: vedi tests/parity/harness.js.
+      - name: run parity suite (mirror JS ↔ engine)
+        working-directory: PGE-ui
+        run: make tests-parity
 
   python:
     name: python tests (render_pipeline · audio_pipeline · engine render)

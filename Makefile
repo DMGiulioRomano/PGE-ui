@@ -9,7 +9,11 @@ ROOT     ?= ../PythonGranularEngine
 VENV     := .venv
 VENV_BIN := $(VENV)/bin
 
-.PHONY: help serve install dev-clean tests tests-node tests-python
+# I test di parita' girano da tests/parity/, quindi il path del motore va
+# assolutizzato qui: relativo si romperebbe al primo cd.
+ENGINE_ROOT := $(abspath $(ROOT))
+
+.PHONY: help serve install dev-clean tests tests-node tests-python tests-parity
 
 help:
 	@echo " PGE-ui · targets"
@@ -18,10 +22,14 @@ help:
 	@echo "  make serve           avvia il bridge locale su :$(PORT)"
 	@echo "                       (default ROOT=$(ROOT))"
 	@echo ""
+	@echo "  make tests           suite completa (node + python + parita')"
+	@echo "  make tests-parity    solo i confronti con il motore vero"
+	@echo ""
 	@echo " Variables:"
 	@echo "  PORT=7878            porta"
 	@echo "  ROOT=../PythonGranularEngine   path al repo engine"
 	@echo "  PYTHON=python3       interprete usato per creare il venv"
+	@echo "  PGE_PARITY_STRICT=1  un caso di parita' saltato diventa un errore"
 
 $(VENV_BIN)/pip:
 	$(PYTHON) -m venv $(VENV)
@@ -32,9 +40,21 @@ install: $(VENV_BIN)/pip
 serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) --port $(PORT)
 
-.PHONY: tests tests-node tests-python
+.PHONY: tests tests-node tests-python tests-parity
 
+# La parita' entra in `make tests` solo se il motore c'e': senza repo fratello
+# non c'e' niente da confrontare, e fallire li' punirebbe un clone appena
+# fatto. Quando invece il motore c'e', i confronti girano e contano — e in CI
+# (dove il motore viene fatto il checkout) un caso saltato e' un errore, vedi
+# tests/parity/harness.js.
 tests: tests-node tests-python
+	@if [ -d "$(ENGINE_ROOT)/src/pge" ]; then \
+	  $(MAKE) --no-print-directory tests-parity; \
+	else \
+	  echo ""; \
+	  echo "parita' saltata: nessun motore in $(ENGINE_ROOT)"; \
+	  echo "  clona PythonGranularEngine accanto a PGE-ui, oppure: make tests ROOT=/path/to/engine"; \
+	fi
 	@echo ""
 	@echo "All tests passed."
 
@@ -43,6 +63,12 @@ tests-node:
 
 tests-python:
 	$(VENV_BIN)/python -m pytest tests/python/ -v
+
+# js-yaml sta in tests/node/node_modules (unico package.json del repo): le
+# suite di parita' che serializzano uno stream lo caricano da li'.
+tests-parity:
+	cd tests/node && npm install --silent
+	cd tests/parity && for f in test-*.js; do echo "▶ $$f"; PGE_ENGINE_ROOT="$(ENGINE_ROOT)" node "$$f" || exit 1; done
 
 dev-clean:
 	@echo "Reset the editor's cached stem index: open devtools and run"
