@@ -650,8 +650,10 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
     && (eeSrc.match(/integer \? 0 : \(\w+\.fine \? 4 : 2\)/g) || []).length === 2);
   assert("computeYFit riceve `fine`, non l'unità",
     /hardMax: env\.hardMax, fine: env\.fine,/.test(eeSrc));
+  // Due delle quattro voci "in secondi" sono passate all'unità dichiarata di
+  // grain.duration (issue #114): restano le due di voices.onset_offset.
   assert("le altre grandezze a grana fine dichiarano `fine`",
-    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 4);
+    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 2);
 }
 
 /* ===========================================================================
@@ -819,6 +821,28 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a 48000 Hz/.test(inspSrc));
   assert("il tooltip della chiave elenca le tre unità",
     /title="unità di grain\.duration e duration_range[^"]*milliseconds/.test(inspSrc));
+}
+
+console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
+{
+  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+
+  // I bound statici di grain_duration sono in secondi (max 10); i valori di un
+  // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
+  // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
+  // il punto al primo drag, che è perdita di dati, non solo una vista storta.
+  assert("i bound delle curve di durata seguono l'unità dichiarata",
+    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(eeSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(eeSrc)
+    && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(eeSrc)
+    && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(eeSrc));
+  assert("anche la finestra di partenza è espressa nell'unità",
+    !/visMin: 0\.001, visMax: 0\.1/.test(eeSrc)
+    && !/visMin: 0, visMax: 0\.5,/.test(eeSrc)
+    && /grainDurVis/.test(eeSrc) && /grainRangeVis/.test(eeSrc));
+  assert("il suffisso è quello condiviso con l'Inspector",
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
+    && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
 }
 
 console.log(`\n${"─".repeat(50)}`);
