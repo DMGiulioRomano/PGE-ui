@@ -160,15 +160,19 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   return (
     <Section title="Deviation prob" badge={badge}
              right={<span className="mono" style={{fontSize:9, color:"var(--fg-4)"}}>stochastic ·_range gate</span>}>
-      {/* Provenienza, non errore: il valore arriva dalla grafia morta e al
-          salvataggio la chiave viene riscritta. E' la conversione che il motore
-          chiede, quindi `voice-empty` e non `--status-error` — che in questa
-          sezione e' gia' preso dagli errori di corpo envelope. Senza questa
-          riga la migrazione e' muta: in questo repo un render persiste lo stato
-          dell'editor su configs/<basename>.yml anche senza Save, quindi la
-          riscrittura si scoprirebbe solo dal `git diff`, o non si scoprirebbe. */}
+      {/* Provenienza, non errore: il valore arriva dalla grafia morta e la
+          chiave verra' riscritta. E' la conversione che il motore chiede,
+          quindi `voice-empty` e non `--status-error` — che in questa sezione
+          e' gia' preso dagli errori di corpo envelope.
+          La riga nomina il render accanto al Save perche' non e' un dettaglio
+          di implementazione: `server.py` scrive `yamlContent` su
+          configs/<basename>.yml PRIMA ancora di costruire lo stream di eventi,
+          quindi chi renderizza senza salvare mai si ritrova il file migrato lo
+          stesso. Dirgli solo "al salvataggio" lo lascerebbe senza preavviso
+          proprio nel caso che rende questo avviso necessario: senza, la
+          migrazione si scoprirebbe dal `git diff`, o non si scoprirebbe. */}
       {stream.deviationProbabilityLegacy ? (
-        <div className="voice-empty">letto da <code>dephase</code>, chiave che il motore non legge piu&#39; (PGE v7.0.0): al salvataggio viene riscritta come <code>deviation_probability</code></div>
+        <div className="voice-empty">letto da <code>dephase</code>, chiave che il motore non legge piu&#39; (PGE v7.0.0): al salvataggio (o al primo render) viene riscritta come <code>deviation_probability</code></div>
       ) : null}
       <div className="pge-prow">
         <span className="k">mode</span>
