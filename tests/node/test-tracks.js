@@ -287,6 +287,41 @@ console.log("\n── a new stream gets its own lane at the drop index ──");
 
 console.log("\n── UI wiring (source guards) ──");
 {
+console.log("\n── renameStreamId: la rinomina non deve costare la chiave ──");
+{
+  // A plain rename on a project that never grouped must stay trivial: no
+  // `ui_tracks` in the file afterwards. That only holds if the lane id AND the
+  // default lane name follow the stream.
+  const d = data(["stream1", "stream2"]);
+  const tr = T.renameStreamId(T.deriveTracks(d), "stream1", "bassi");
+  assert("the lane id follows (it is the laneHeights key)",
+         tr[0].id === "bassi", JSON.stringify(shape(tr)));
+  assert("a default lane name follows too", tr[0].name === "bassi", JSON.stringify(shape(tr)));
+  assert("the layout stays trivial", T.isTrivial(tr), JSON.stringify(shape(tr)));
+  const renamed = { ...d, streams: d.streams.map(s => s.id === "stream1" ? { ...s, id: "bassi" } : s) };
+  const out = T.applyTracks(renamed, tr);
+  assert("so the rename writes no ui_tracks at all",
+         !out._extra || !out._extra.ui_tracks, JSON.stringify(out._extra));
+  assert("and the streams keep their order", eq(out.streams.map(s => s.id), ["bassi", "stream2"]));
+}
+{
+  // A lane the user actually named keeps that name: it was chosen, not derived.
+  const d = data(["stream1", "stream2"], [
+    { id: "t1", name: "bassi", streams: ["stream1", "stream2"] },
+  ]);
+  const tr = T.renameStreamId(T.deriveTracks(d), "stream2", "acuti");
+  assert("a chosen lane name survives the rename", tr[0].name === "bassi", JSON.stringify(shape(tr)));
+  assert("the member list is rewritten", eq(tr[0].streamIds, ["stream1", "acuti"]),
+         JSON.stringify(shape(tr)));
+  assert("a group id that is not a stream id is left alone", tr[0].id === "t1");
+}
+{
+  const tr = T.deriveTracks(data(["a", "b"]));
+  assert("renaming to the same id is identity", T.renameStreamId(tr, "a", "a") === tr);
+  assert("an empty new id is refused", T.renameStreamId(tr, "a", "") === tr);
+  assert("an unknown old id changes nothing", eq(shape(T.renameStreamId(tr, "zzz", "q")), shape(tr)));
+}
+
   const tlSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
   // Guards that assert the ABSENCE of a pattern read the code with comments
   // stripped: a comment explaining why the pattern is gone would otherwise
@@ -321,6 +356,23 @@ console.log("\n── UI wiring (source guards) ──");
   assert("the clip's canvases follow the clip box, not the lane",
          /const clipH = Math\.max\(1, laneH - top - CLIP_PAD\)/.test(tlCode) &&
          !/<Clip(Waveform|Spectrogram|Grains)[^>]*height=\{laneH\}/.test(tlCode));
+
+  // Renaming a stream is an identity change, not a patch: it must not travel
+  // through updateStream, and it must refuse a name a stem on disk still owns —
+  // otherwise the renamed stream inherits a dead one's audio.
+  assert("the rename does not ride on updateStream",
+         /function renameStream\(oldId, rawName\)/.test(appSrc) &&
+         /TR\.renameStreamId\(/.test(appSrc));
+  assert("it refuses a name a stem still claims", /ownsStemFor\(newId\)/.test(appSrc));
+  assert("it refuses a name that is already a stream",
+         /d\.streams\.some\(s => s\.id === newId\)/.test(appSrc));
+  assert("it re-checks inside the updater, where a stale read would duplicate an id",
+         /setData\(d => \{[\s\S]{0,400}?d\.streams\.some\(s => s\.id === newId\)/.test(appSrc));
+  assert("the selection and the render sidecars follow the new id",
+         /ids\.map\(x => x === oldId \? newId : x\)/.test(appSrc) &&
+         /setWaveforms\(drop\); setSpectrograms\(drop\); setGrainData\(drop\)/.test(appSrc));
+  assert("the Inspector field is wired to it", /onRename=\{\(name\) =>/.test(appSrc) &&
+         /onRename/.test(fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8")));
 
   // Alt is sampled during the drag, so the highlight and the outcome agree.
   assert("the extract modifier is read while dragging, not at release",

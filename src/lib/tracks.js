@@ -324,6 +324,37 @@
     })));
   }
 
+  /* A stream changed its id. Rewrite every reference the layout holds.
+   *
+   * Two of the three rewrites exist to keep the rename FREE — that is, to keep
+   * `isTrivial` true so a plain rename does not materialize `ui_tracks`:
+   *   - a singleton lane's id IS its stream id, and it is also the
+   *     `laneHeights` key, so following the rename is what keeps the lane's
+   *     saved height applying;
+   *   - a lane whose name is still the default (the stream id) follows too,
+   *     otherwise the header would keep showing the old name and the layout
+   *     would stop looking trivial for no reason at all.
+   * A lane the user actually named keeps that name: it was chosen, not derived.
+   *
+   * The engine side is NOT this function's business. Renaming a stream moves
+   * its fingerprint (the id is hashed on both sides) and reseeds its RNG
+   * (`rng_id = rng_group or stream_id`, shared/seeding.py), so the stem goes
+   * stale and the audio changes on the next render. That is the declared
+   * behaviour, not an accident to compensate for. */
+  function renameStreamId(tracks, oldId, newId) {
+    const from = String(oldId), to = String(newId);
+    if (!to || from === to) return tracks;
+    return (tracks || []).map(t => {
+      if (!t.streamIds.includes(from)) return t;
+      return {
+        ...t,
+        id:   t.id === from ? to : t.id,
+        name: t.name === from ? to : t.name,
+        streamIds: t.streamIds.map(id => id === from ? to : id),
+      };
+    });
+  }
+
   function renameTrack(tracks, trackId, name) {
     const clean = String(name == null ? "" : name).trim();
     if (!clean) return tracks;
@@ -344,6 +375,7 @@
     addStreamToTrackOf,
     insertStreamTrack,
     removeStreams,
+    renameStreamId,
     renameTrack,
   };
 })();

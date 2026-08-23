@@ -1002,6 +1002,52 @@ function App() {
     });
     setDirty(true);
   }
+  /* Renaming a stream is an IDENTITY change, not a patch, so it does not go
+   * through `updateStream`: the id is the stem filename, the cache-manifest
+   * key, the RNG identity and what `ui_tracks` points at. Validate first, then
+   * rewrite the stream and every layout reference in one step.
+   *
+   * The sound is deliberately NOT preserved. `rng_id = rng_group or stream_id`
+   * (engine shared/seeding.py), so a renamed stream reseeds and draws different
+   * grains. Writing `rng_group: <old id>` would pin it bit-for-bit, at the price
+   * of a YAML carrying the old name forever and of a `rng_group` that means
+   * "renamed" instead of "shares an RNG" — we would rather a rename be a rename.
+   * The id is hashed on both sides, so the stem goes stale on its own: the 🟡
+   * dot says so and the next render is the whole story.
+   *
+   * Returns null on success, or a message for the field to show. */
+  function renameStream(oldId, rawName) {
+    const newId = String(rawName == null ? "" : rawName).trim();
+    if (!newId || newId === oldId) return null;
+    // The id becomes a filename (`<basename>__<id>.<ext>`) and a path segment
+    // on the way to server.py. Keep it to what is safe in both, and refuse a
+    // leading dot so it cannot land as a hidden file.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newId))
+      return "letters, digits, . _ - only, and must start with a letter or digit";
+    if (data.streams.some(s => s.id === newId)) return `"${newId}" is already a stream`;
+    // A stem still on disk under that name would be picked up as this stream's
+    // audio the moment it plays. Same hazard `allocStreamIds` guards against,
+    // same oracle — and it is format-agnostic on purpose.
+    if (ownsStemFor(newId)) return `a stem on disk still claims "${newId}"`;
+
+    setData(d => {
+      // Re-checked inside the updater: `data` in the closure may be a snapshot
+      // behind, and this is the one mutation where a stale read would produce
+      // two streams sharing an id.
+      if (!d.streams.some(s => s.id === oldId) || d.streams.some(s => s.id === newId)) return d;
+      const next = { ...d, streams: d.streams.map(s => s.id === oldId ? { ...s, id: newId } : s) };
+      return TR.applyTracks(next, TR.renameStreamId(TR.deriveTracks(d), oldId, newId));
+    });
+    setSelectedIds(ids => ids.map(x => x === oldId ? newId : x));
+    if (anchorIdRef.current === oldId) anchorIdRef.current = newId;
+    // The render sidecars are keyed by stream id. Nothing reads the old key any
+    // more, but leaving it means a stream that is one day allocated that id
+    // would show a dead stream's waveform.
+    const drop = (m) => { if (!(oldId in m)) return m; const n = { ...m }; delete n[oldId]; return n; };
+    setWaveforms(drop); setSpectrograms(drop); setGrainData(drop);
+    setDirty(true);
+    return null;
+  }
   function deleteStream(id) {
     if (!id) return;
     // Data only: setData is undoable, everything else here would not be. The
@@ -1533,6 +1579,7 @@ function App() {
                     playhead={time}
                     samples={mediaList.files}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
+               onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
                     onLoopPanelChange={setLoopPanelOpen}
                     focusKey={envFocusKey}
                     arrowOwnerRef={envArrowRef} />
@@ -1552,6 +1599,7 @@ function App() {
     <ErrorBoundary label="Inspector">
     <Inspector stream={selected() || null}
                onChange={(p) => selectedId && updateStream(selectedId, p)}
+               onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab}
                samples={mediaList.files}

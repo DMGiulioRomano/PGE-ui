@@ -309,6 +309,26 @@ A singleton track's **id is its stream id**. That is what keeps pre-#141
 `laneHeights` entries applying, and what lets pulling the last clip out of a
 group land back on the trivial layout instead of leaving a `t1` behind.
 
+**Renaming a stream** (`renameStream` in `app.jsx`, `renameStreamId` in
+`tracks.js`) is an identity change, not a patch, so it does not go through
+`updateStream`. The lane id *and* a still-default lane name follow the stream —
+that is what keeps `isTrivial` true, so a plain rename on an ungrouped project
+writes no `ui_tracks` at all; a lane the user actually named keeps its name.
+Three refusals, all at the trust boundary: a charset (the id becomes a filename
+and a path segment), a live stream already holding the name, and `ownsStemFor`
+— a stem still on disk under that name would be picked up as the renamed
+stream's audio, the same hazard `allocStreamIds` guards against.
+
+**The sound is deliberately not preserved.** `rng_id = rng_group or stream_id`
+(engine `shared/seeding.py`, and every seeding site goes through it), so a
+renamed stream reseeds and draws different grains. Writing
+`rng_group: <old id>` would pin it bit-for-bit — the option was weighed and
+declined: it makes the YAML carry the old name forever and makes `rng_group`
+mean "renamed" instead of "shares an RNG". The id is hashed on both sides, so
+the stem goes stale by itself and the 🟡 dot is the whole warning. (With no
+top-level `seed` the point is moot anyway: `voice_rng` falls back to
+`hash(stream_id + …)`, which Python randomizes per process.)
+
 `app.jsx` derives `tracks` with `useMemo` and routes every layout change
 through `mutateTracks`. Mute/solo do **not**: they stay per-stream because
 that's what the engine filters on (`Generator._filter_solo_mute`) and what the
