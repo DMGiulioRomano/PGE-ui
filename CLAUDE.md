@@ -43,7 +43,13 @@ make tests            # full suite: tests-node + tests-python
   reuses an id that still owns a stem, plus source guards on the two call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
-  guards on the audio-error path).
+  guards on the audio-error path), and `test-tracks.js` (the track model:
+  `deriveTracks` totality against hand-edited `ui_tracks`, `applyTracks` never
+  rewriting a stream object, the key appearing only when it says something, plus
+  source guards on the Timeline/app wiring), and `test-jsx-parse.js` (every
+  `.jsx` file parses — there is no build step, so a syntax error would only
+  surface as a blank editor, and the regex source guards stay green on a file
+  that cannot run).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -57,8 +63,9 @@ the fixture-dependent parts run on a PR — a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary). The
 assertion count is engine-dependent: a config added/removed upstream moves it by
 three (three assertions per file), so a local total that differs from CI's is
-that, not a lost test. There is no linter or typechecker; UI verification is
-manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
+that, not a lost test. There is no linter or typechecker — `test-jsx-parse.js`
+is the whole static net, and it only proves a component parses; UI verification
+is manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
 
 ## Architecture
 
@@ -171,6 +178,62 @@ The stem index is keyed by **filename, extension included**:
 
 `GET /stems/<basename>` returns one entry per **file** (with its `ext`), not one per stream id.
 
+### Tracks: a lane holds N streams (`tracks.js`)
+
+A timeline lane is a **track**, and a track holds one or more streams. Before
+#141 there was no track entity: `Timeline.jsx` mapped `streams` twice in
+parallel (heads, lanes) so lane *i* was stream *i*.
+
+The grouping is a single **top-level** `ui_tracks` key, carried in
+`data._extra`:
+
+```yaml
+ui_tracks:
+  - id: t1
+    name: bassi
+    streams: [stream1, stream4]
+```
+
+It is top-level and not a per-stream key for one reason: the stem fingerprint
+is computed **per stream** and both ignore-lists are deny-lists
+(`FINGERPRINT_IGNORE_KEYS` = `{solo, mute}` in the engine, `FP_IGNORE` in
+`backend.js`), so a per-stream `track:` would be hashed and reorganizing lanes
+would mark every touched stem stale. Top-level it rides for free:
+`KNOWN_PROJECT_KEYS` doesn't know it → `_extra` → re-emitted verbatim; the
+engine's `load_yaml` reads only `seed` and `streams` and never validates the
+top level. Unlike `laneHeights` (localStorage) it travels with the file.
+
+Two pure functions in `tracks.js` (`window.PGETracks`, node-tested) are the
+whole contract:
+
+- **`deriveTracks(data)`** is total and self-healing — dead ids dropped, a
+  stream laid out exactly once, emptied tracks removed, unmentioned streams
+  appended as singletons in file order. With the key absent it reproduces
+  one-lane-per-stream exactly.
+- **`applyTracks(data, tracks)`** reorders `data.streams` into visual order and
+  writes `ui_tracks` **only when it says something the stream order doesn't** —
+  a lane with two streams, a chosen name, an id that isn't its stream's. A
+  project that never groups never grows the key. It reuses the stream objects
+  untouched, so **no stem goes stale**; if you ever make it rebuild one, the
+  fingerprint moves with it.
+
+A singleton track's **id is its stream id**. That is what keeps pre-#141
+`laneHeights` entries applying, and what lets pulling the last clip out of a
+group land back on the trivial layout instead of leaving a `t1` behind.
+
+`app.jsx` derives `tracks` with `useMemo` and routes every layout change
+through `mutateTracks`. Mute/solo do **not**: they stay per-stream because
+that's what the engine filters on (`Generator._filter_solo_mute`) and what the
+YAML carries. The header's M/S is a three-valued fan-out (all / some / none)
+over the group; per-clip M/S buttons appear only once a lane holds more than
+one clip. The header VU sums the group's analyser **powers** — there is no
+summing node to read, and a visual meter doesn't justify rebuilding the audio
+graph.
+
+Clip drag moves between lanes: plain drop joins the target lane, **Alt**-drop
+extracts into a new lane at that position. The drag threshold reads both axes —
+a purely vertical drag leaves `onset` alone and would otherwise never start.
+
 ### History / undo (`app.jsx`)
 
 `setData(updater)` wraps every mutation. `beginGesture()` / `endGesture()` bracket continuous interactions (drag, knob spin) so they collapse into a single undo step. Cap is 200 entries. Anything mutating `data` must go through `setData`, not `_setDataRaw`, or undo breaks.
@@ -181,7 +244,7 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 
