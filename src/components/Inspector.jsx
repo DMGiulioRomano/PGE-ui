@@ -483,7 +483,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     if (k === "grainDur") {
       const cur = stream.grain || {};
       // Il seme è il default del motore (0.05 s) ESPRESSO NELL'UNITÀ in vigore:
-      // 50 con milliseconds, 2400 campioni a 48000 Hz. Scriverlo nudo, in
+      // 50 con milliseconds, 2400 campioni con output_sr 48000. Scriverlo nudo, in
       // millisecondi, significa 50 microsecondi — e capiterebbe proprio nello
       // stato in cui l'errore invita a mettere una duration esplicita: l'errore
       // sparirebbe e il valore sarebbe peggiore di quando mancava.
@@ -1158,7 +1158,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   samples», un progetto aperto con milliseconds mostrava un
                   controllo senza selezione e il primo click la cancellava. */}
               <div className="pge-prow">
-                <span className="k" title="unità di grain.duration e duration_range · samples: campioni a 48000 Hz (min 1 campione) · milliseconds: fattore fisso 1e-3 · ogni unità non-secondi richiede una duration esplicita">duration_unit</span>
+                <span className="k" title={`unità di grain.duration e duration_range · samples: campioni a ${window.PGE_OUTPUT_SR} Hz (min 1 campione) · milliseconds: fattore fisso 1e-3 · ogni unità non-secondi richiede una duration esplicita`}>duration_unit</span>
                 <span />
                 <span className="v">
                   <Seg size="xs" value={grainUnit}
@@ -1196,7 +1196,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <div className="pge-prow hint" style={{paddingTop:0}}>
                   <span className="k" /><span />
                   <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                    valori in campioni a 48000 Hz · min 1 campione · convertiti in secondi al parse
+                    {`valori in campioni a ${window.PGE_OUTPUT_SR} Hz · min 1 campione · convertiti in secondi al parse`}
                   </span>
                   <span />
                 </div>

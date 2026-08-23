@@ -41,6 +41,15 @@
     console.warn("js-yaml not loaded — yaml round-trip disabled");
   }
 
+  // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
+  // globale, non per-stream, e nemmeno esposta dalla CLI — la strada del render
+  // passa sempre di qui. La definizione sta in questo modulo perché è il primo
+  // caricato: bounds.js (minimo di grain_duration a 1 campione) ed
+  // envelope-utils.js (fattore di grain.duration_unit: samples) la leggono da
+  // window. Una sola copia: se il motore la muove, si muove qui.
+  const OUTPUT_SR = 48000;
+  window.PGE_OUTPUT_SR = OUTPUT_SR;
+
   // Engine bounds — STATIC FALLBACK for the UI clamps. These literals mirror
   // parameter_definitions.py / pitch_unit.py and are what the editor uses when
   // it can't reach the bridge (file:// with no server.py). When the bridge is
@@ -58,7 +67,7 @@
     density:     { min: 0.01, max: 4000 },
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
-    grainDur:    { min: 1 / 48000, max: 10 },   // min 1 campione (PGE #158)
+    grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
     durationRange:{ min: 0, max: 10 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal

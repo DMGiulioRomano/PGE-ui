@@ -11,7 +11,11 @@ const path = require("path");
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
 // window.PGEEnv at IIFE time and reads window.PGEDeviationProb (deviation-probability.js) at call
 // time. js-yaml is provided in case envelope-loops needs it.
+// yaml-bridge.js viene prima di tutti come nell'editor: è lui a pubblicare
+// window.PGE_OUTPUT_SR, il sample rate del motore che envelope-utils legge a
+// chiamata per il fattore di 'samples'.
 global.window = { jsyaml: require("js-yaml") };
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
@@ -672,9 +676,25 @@ console.log("\n── grainUnitFactor ──");
   assert("seconds → 1", F("seconds") === 1);
   assert("unità assente → 1", F(null) === 1 && F("") === 1);
   assert("samples → 1/output_sr (48000 di default)", F("samples") === 1 / 48000);
-  assert("il sample rate è configurabile", F("samples", { sr: 44100 }) === 1 / 44100);
-  assert("milliseconds → 1e-3, indipendente dal sample rate",
-    F("milliseconds") === 1e-3 && F("milliseconds", { sr: 44100 }) === 1e-3);
+  // Il sample rate non è un parametro di questa funzione: è una config globale
+  // del motore, pubblicata da yaml-bridge e letta a chiamata. Una manopola qui
+  // sarebbe un contratto che nessuno può onorare — la CLI del motore fissa
+  // output_sr a DEFAULT_OUTPUT_SR, quindi la strada del render è sempre quella.
+  assert("il sample rate viene dalla costante condivisa", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = F("samples");
+    window.PGE_OUTPUT_SR = prev;
+    return got === 1 / 44100;
+  })());
+  assert("milliseconds → 1e-3, indipendente dal sample rate", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = F("milliseconds");
+    window.PGE_OUTPUT_SR = prev;
+    return F("milliseconds") === 1e-3 && got === 1e-3;
+  })());
+  assert("la costante è quella del motore (48000)", window.PGE_OUTPUT_SR === 48000);
   assert("unità ignota → 1 (non si inventa una scala)", F("ms") === 1);
 }
 
@@ -735,8 +755,13 @@ console.log("\n── convertGrainDurationUnit ──");
   const smp = C({ duration: 0.05 }, "samples");
   assert("0.05 s sono 2400 campioni", smp.duration === 2400);
   assert("anche samples scrive la chiave", smp.durationUnit === "samples");
-  assert("il sample rate governa i campioni",
-    C({ duration: 0.05 }, "samples", { sr: 44100 }).duration === 2205);
+  assert("il sample rate governa i campioni", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = C({ duration: 0.05 }, "samples").duration;
+    window.PGE_OUTPUT_SR = prev;
+    return got === 2205;
+  })());
 
   // envelope: si convertono i valori Y, i tempi restano
   const env = C({ durationEnv: [[0, 0.001], [1, 0.1]] }, "milliseconds");
@@ -858,8 +883,12 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     assert("l'hint dei millisecondi non cita il sample rate",
       !!msHint && !/48000|sample rate di output/.test(msHint[0]) && /millisecond/.test(msHint[0]));
   }
-  assert("l'hint dei campioni resta sul ramo samples",
-    /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a 48000 Hz/.test(inspSrc));
+  // Il sample rate nelle due frasi viene dalla costante condivisa: scritto a
+  // mano sarebbe l'ennesima copia da inseguire se il motore lo muove.
+  assert("l'hint dei campioni resta sul ramo samples, col sample rate interpolato",
+    /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a \$\{window\.PGE_OUTPUT_SR\} Hz/.test(inspSrc));
+  assert("nessun sample rate scritto a mano nelle frasi dell'unità",
+    !/campioni a 48000 Hz/.test(inspSrc));
   // Il seme del passaggio a envelope (e il ritorno a scalare) è il default del
   // motore, 0.05 s: scritto nudo con milliseconds selezionato sono 50
   // microsecondi — e succederebbe proprio nello stato in cui l'errore invita a
@@ -879,7 +908,7 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     && !/grainDur: 0\.05/.test(inspSrc)
     && !/cur\.durationEnv\[0\]\[1\]\) \|\| 0\.05/.test(inspSrc));
   assert("il tooltip della chiave elenca le tre unità",
-    /title="unità di grain\.duration e duration_range[^"]*milliseconds/.test(inspSrc));
+    /title=\{`unità di grain\.duration e duration_range[^`]*milliseconds/.test(inspSrc));
 }
 
 console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");

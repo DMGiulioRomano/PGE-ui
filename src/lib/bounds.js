@@ -20,9 +20,9 @@
  * Exports (window.PGEBounds): ENGINE_PARAM_MAP, mergeEngineBounds(base, raw), apply(raw)
  * ===========================================================================*/
 (function () {
-  // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
-  // globale, non per-stream. Serve per il minimo di grain_duration a 1 campione.
-  const OUTPUT_SR = 48000;
+  // Sample rate di output del motore: una copia sola, in yaml-bridge.js (primo
+  // caricato). Serve per il minimo di grain_duration a 1 campione.
+  const outputSr = () => window.PGE_OUTPUT_SR;
 
   // UI key → { param: <engine GRANULAR_PARAMETERS name>, field: "value" | "range" }.
   // "value" → {min_val, max_val}; "range" → {min_range, max_range}.
@@ -95,7 +95,7 @@
     // è una config globale del motore, costante 48000 Hz lato UI).
     if (out.grainDur) {
       out.grainDur = Object.assign({}, out.grainDur, {
-        min: Math.min(out.grainDur.min, 1 / OUTPUT_SR),
+        min: Math.min(out.grainDur.min, 1 / outputSr()),
       });
     }
 

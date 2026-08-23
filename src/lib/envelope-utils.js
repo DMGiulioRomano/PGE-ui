@@ -441,9 +441,6 @@
     return "";
   }
 
-  // Il sample rate di output del motore: costante di configurazione globale
-  // (48000 Hz), non un dato dello stream. Serve al fattore di 'samples'.
-  const GRAIN_DEFAULT_SR = 48000;
   // Il default di grain.duration nello schema del motore, in secondi. Fuori da
   // 'seconds' va convertito prima di essere scritto da qualunque parte.
   const GRAIN_DEFAULT_DURATION_SEC = 0.05;
@@ -454,9 +451,13 @@
   // riconosce vale 1: la sua scala non si conosce, e inventarne una sarebbe
   // peggio che lasciare il numero dov'è — a dire che è ignota c'è già
   // grainDurationUnitError.
-  function grainUnitFactor(unit, opts) {
-    const sr = (opts && opts.sr) || GRAIN_DEFAULT_SR;
-    if (unit === "samples") return 1 / sr;
+  //
+  // Il sample rate NON è un parametro: è la config globale del motore, letta a
+  // chiamata da window.PGE_OUTPUT_SR (yaml-bridge.js, primo caricato). Un
+  // argomento qui sarebbe un contratto che nessuno può onorare — la CLI del
+  // motore fissa output_sr a DEFAULT_OUTPUT_SR, quindi il render è sempre lì.
+  function grainUnitFactor(unit) {
+    if (unit === "samples") return 1 / window.PGE_OUTPUT_SR;
     if (unit === "milliseconds") return 1e-3;
     return 1;
   }
@@ -478,9 +479,9 @@
   // nell'unità in vigore. In secondi non c'è niente da dividere: passare
   // comunque dal round sposterebbe il valore (1/48000 non ha 12 cifre
   // significative).
-  function grainSecondsToUnit(seconds, unit, opts) {
+  function grainSecondsToUnit(seconds, unit) {
     if (typeof seconds !== "number" || !isFinite(seconds)) return seconds;
-    const f = grainUnitFactor(unit, opts);
+    const f = grainUnitFactor(unit);
     return f === 1 ? seconds : _roundGrain(seconds / f);
   }
 
@@ -489,11 +490,11 @@
   // stessi bound divisi per il fattore: in millisecondi il cap è 10000, non 10.
   // Stessa idea di loopEnvMax, che deriva il cap del loop dall'unità in vigore
   // invece di leggere il numero statico.
-  function grainUnitBounds(secBounds, unit, opts) {
+  function grainUnitBounds(secBounds, unit) {
     const b = secBounds || {};
     const out = {};
-    if (typeof b.min === "number") out.min = grainSecondsToUnit(b.min, unit, opts);
-    if (typeof b.max === "number") out.max = grainSecondsToUnit(b.max, unit, opts);
+    if (typeof b.min === "number") out.min = grainSecondsToUnit(b.min, unit);
+    if (typeof b.max === "number") out.max = grainSecondsToUnit(b.max, unit);
     return out;
   }
 
@@ -501,8 +502,8 @@
   // campioni a 48000 Hz. Chi semina un valore (il passaggio a envelope, il
   // ritorno a scalare) deve seminare questo, non 0.05 nudo — che in
   // millisecondi sono 50 microsecondi.
-  function grainDefaultDuration(unit, opts) {
-    return grainSecondsToUnit(GRAIN_DEFAULT_DURATION_SEC, unit, opts);
+  function grainDefaultDuration(unit) {
+    return grainSecondsToUnit(GRAIN_DEFAULT_DURATION_SEC, unit);
   }
 
   function _clampGrain(v, bounds) {
@@ -585,7 +586,7 @@
     const fromUnit = ng.durationUnit || "seconds";
     const known = (u) => GRAIN_DURATION_UNITS.indexOf(u) !== -1;
     if (known(fromUnit) && known(toUnit) && fromUnit !== toUnit) {
-      const ratio = grainUnitFactor(fromUnit, opts) / grainUnitFactor(toUnit, opts);
+      const ratio = grainUnitFactor(fromUnit) / grainUnitFactor(toUnit);
       const conv = (v) => (typeof v === "number" && isFinite(v) ? _roundGrain(v * ratio) : v);
       const allBounds = (opts && opts.bounds) || null;
       const fields = [
@@ -596,7 +597,7 @@
         if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
           ng[scalarKey] = _clampGrain(
             conv(ng[scalarKey]),
-            secBounds ? grainUnitBounds(secBounds, toUnit, opts) : null);
+            secBounds ? grainUnitBounds(secBounds, toUnit) : null);
         }
         if (ng[envKey] != null) ng[envKey] = _mapGrainEnvY(ng[envKey], conv);
       }
