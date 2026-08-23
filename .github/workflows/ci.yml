@@ -6,14 +6,34 @@ on:
 
 jobs:
   node:
-    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history)
+    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout PGE-ui
+        uses: actions/checkout@v4
+        with:
+          path: PGE-ui
+      # Stesso motivo del job python, altro consumatore: parte della suite node
+      # gira sui config veri del motore (`__dirname/../../..` = root del
+      # workspace), e senza il checkout affiancato quelle fixture si skippano —
+      # il corpus di round-trip e, da #131, il canarino che verifica che il loop
+      # su deviation_probability stia osservando qualcosa. Un test che si skippa
+      # e' verde quanto uno che passa: proprio il difetto che la #131 chiude.
+      # continue-on-error come sotto: se il token non legge il motore (secret
+      # assente/scaduto, PR da un fork) i test si skippano come prima invece di
+      # far fallire il job.
+      - name: checkout PythonGranularEngine
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: DMGiulioRomano/PythonGranularEngine
+          path: PythonGranularEngine
+          token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
       - name: run node test suite
+        working-directory: PGE-ui
         run: make tests-node
 
   python:
