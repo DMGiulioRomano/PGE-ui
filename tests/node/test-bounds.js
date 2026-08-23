@@ -81,6 +81,11 @@ assert("static fallback grainDur.min is 1 sample (1/48000)",
   Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / 48000) < 1e-12,
   String(window.PGE_BOUNDS.grainDur.min));
 assert("durationRange ← grain_duration.RANGE (0..0.8)", out.durationRange.min === 0 && out.durationRange.max === 0.8);
+// Il fallback statico deve dire lo stesso cap del motore (max_range = 1.0), non
+// max_val: su file:// o con il server giù è l'unico clamp che la UI ha, e a 10
+// lascerebbe scrivere una banda che _calculate_range taglia in silenzio.
+assert("fallback statico durationRange = max_range del motore",
+  window.PGE_BOUNDS.durationRange.max === 1, JSON.stringify(window.PGE_BOUNDS.durationRange));
 assert("offsetRange ← pointer_deviation.RANGE (0..1)",  out.offsetRange.min === 0 && out.offsetRange.max === 1);
 assert("loopDur.min ← loop_dur.value",      out.loopDur.min === 0.01);
 assert("loopDur.max null → keeps fallback (sample-driven)", out.loopDur.max === baseLoopDurMax);

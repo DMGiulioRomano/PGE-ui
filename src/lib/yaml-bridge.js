@@ -68,7 +68,9 @@
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
-    durationRange:{ min: 0, max: 10 },
+    // grain_duration.max_range = 1.0 (non max_val): Parameter._calculate_range
+    // taglia in silenzio quel che eccede, quindi il fallback dev'essere 1.
+    durationRange:{ min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
     // motore al parse. Il vincolo "solo i due estremi" non è esprimibile qui e
