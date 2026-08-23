@@ -19,13 +19,28 @@
     return Math.max(0, Math.min(1, (db - DB_MIN) / (DB_MAX - DB_MIN)));
   }
 
-  function rmsDb(analyser) {
-    if (!analyser) return -Infinity;
+  function meanSquare(analyser) {
     const buf = new Float32Array(analyser.frequencyBinCount);
     analyser.getFloatTimeDomainData(buf);
     let sum = 0;
     for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-    const rms = Math.sqrt(sum / buf.length);
+    return sum / buf.length;
+  }
+
+  /* dBFS of one analyser, or of a GROUP of them.
+   *
+   * A track lane can hold several streams (PGE-ui #141) and each keeps its own
+   * post-gain tap (audio-engine trackAnalysers). There is no summing node to
+   * read, so the group level is the sum of the powers — what a bus carrying
+   * mutually uncorrelated sources reads, and the only figure available without
+   * rebuilding the audio graph for a purely visual meter. */
+  function rmsDb(analyser) {
+    if (!analyser) return -Infinity;
+    const list = Array.isArray(analyser) ? analyser.filter(Boolean) : [analyser];
+    if (!list.length) return -Infinity;
+    let power = 0;
+    for (const a of list) power += meanSquare(a);
+    const rms = Math.sqrt(power);
     return rms > 1e-6 ? 20 * Math.log10(rms) : -Infinity;
   }
 
@@ -150,6 +165,12 @@
     const canvasRef = useRef(null);
     const rafRef    = useRef(null);
     const peakRef   = useRef({ db: -Infinity, t: 0 });
+    // A track lane can pass a GROUP of analysers, rebuilt as a fresh array on
+    // every render. Reading it through a ref keeps one rAF loop for the life of
+    // the meter — depending on the array would tear the loop down each frame,
+    // and depending on its length alone would leave `draw` on a stale copy.
+    const analyserRef = useRef(analyser);
+    analyserRef.current = analyser;
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -165,7 +186,7 @@
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, w, h);
 
-        const db = rmsDb(analyser);
+        const db = rmsDb(analyserRef.current);
         const t  = now();
         const pk = peakRef.current;
 
@@ -195,7 +216,7 @@
 
       rafRef.current = requestAnimationFrame(draw);
       return () => cancelAnimationFrame(rafRef.current);
-    }, [analyser]);
+    }, []);
 
     return (
       <canvas

@@ -163,6 +163,13 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .track-head .grip:hover { opacity: 1; }
 .track-head .grip:active { cursor: grabbing; }
 .track-head .grip span { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-3); align-self: center; justify-self: center; }
+/* A lane holds N streams (#141): the M/S buttons on its header stand for the
+ * whole group, so they need a third state — some muted / some soloed, not all. */
+.track-head .pill.part-m { background: #4A2422; color: #E7A9AB; border-color: #80322E; }
+.track-head .pill.part-s { background: #5C4210; color: #E4C486; border-color: #B47B1A; }
+/* the clip count next to a grouped lane's name */
+.track-head .nm-count { display: inline-flex; align-items: center; justify-content: center; min-width: 14px; height: 13px; margin-left: 5px; padding: 0 3px; border-radius: 7px; background: var(--bg-elevated); border: 1px solid var(--border-default); font-size: 9px; color: var(--fg-3); vertical-align: middle; }
+.track-head .nm-edit { flex: 1; min-width: 0; background: var(--bg-base); border: 1px solid var(--accent); border-radius: 2px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-1); outline: none; }
 .track-head.drop-target { box-shadow: inset 0 -2px 0 0 var(--accent); }
 .track-head.drop-target::before { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
 
@@ -221,6 +228,15 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .ruler .loop-region.enabled { opacity: 0.38; box-shadow: 0 0 0 1px var(--accent); }
 .lanes-area { position: relative; }
 .lane { height: var(--lane-h); border-bottom: 1px solid var(--border-subtle); position: relative; background-image: none; }
+/* the lane a dragged clip would land on */
+.lane.drop-target { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+/* per-clip mute/solo, shown only where the header's group buttons are ambiguous
+ * — i.e. once a lane holds more than one clip */
+.clip-ms { position: absolute; top: 3px; right: 4px; display: flex; gap: 3px; z-index: 5; }
+.clip-ms .pill { width: 15px; height: 15px; border-radius: 2px; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.18); font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.75); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.clip-ms .pill:hover { background: rgba(0,0,0,.65); color: #fff; }
+.clip-ms .pill.on-m { background: #80322E; color: #FFD3D5; border-color: transparent; }
+.clip-ms .pill.on-s { background: #B47B1A; color: #2A1A05; border-color: transparent; font-weight: 600; }
 .comp-end-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--border-default); z-index: 1; pointer-events: none; opacity: .6; }
 .clip { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); overflow: hidden; cursor: pointer; }
 .clip .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

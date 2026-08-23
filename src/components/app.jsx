@@ -839,7 +839,9 @@ function App() {
   function copySelectedStreams() {
     const toCopy = data.streams.filter(s => selectedIds.includes(s.id));
     if (!toCopy.length) return;
-    clipboardRef.current = JSON.parse(JSON.stringify(toCopy));
+    // `_srcId` survives the deep copy so paste can find the lane to land in
+    // even after the id has been reallocated (it is stripped on paste).
+    clipboardRef.current = JSON.parse(JSON.stringify(toCopy)).map(s => ({ ...s, _srcId: s.id }));
   }
   function pasteStreams() {
     const copied = clipboardRef.current;
@@ -854,9 +856,18 @@ function App() {
       const ids = window.PGEYaml.allocStreamIds(d.streams, copied.length, ownsStemFor);
       const pasted = copied.map((s, i) => {
         newIds.push(ids[i]);
-        return { ...JSON.parse(JSON.stringify(s)), id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+        // `_srcId` is clipboard bookkeeping, not stream data: it must not reach
+        // the model, or it would sit inside the stem fingerprint.
+        const { _srcId, ...body } = JSON.parse(JSON.stringify(s));
+        return { ...body, id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
-      return { ...d, streams: [...d.streams, ...pasted] };
+      const withPaste = { ...d, streams: [...d.streams, ...pasted] };
+      // The copy joins the lane its original sits in (#141) — no similarity
+      // heuristic, just the track that already exists. `_srcId` is recorded at
+      // copy time because the source may have been deleted since.
+      let tr = TR.deriveTracks(withPaste);
+      copied.forEach((s, i) => { tr = TR.addStreamToTrackOf(tr, s._srcId || s.id, ids[i]); });
+      return TR.applyTracks(withPaste, tr);
     });
     setSelectedIds(newIds);
     setDirty(true);
@@ -927,14 +938,57 @@ function App() {
     });
     setDirty(true);
   }
-  function reorderStreams(srcIdx, dstIdx) {
-    if (srcIdx === dstIdx) return;
+  /* ============ Tracks (issue #141) ============
+   * A lane is a track, and a track can hold several streams. The grouping is a
+   * single TOP-LEVEL `ui_tracks` key riding in `data._extra` — never a
+   * per-stream key, which would enter the stem fingerprint and make
+   * reorganizing lanes force a re-render that changes no sample. All the logic
+   * is in tracks.js; app.jsx only derives, mutates, applies. */
+  const TR = window.PGETracks;
+  const tracks = useMemoApp(() => TR.deriveTracks(data), [data]);
+
+  /* Every track mutation goes through here so the write path is one place:
+   * `applyTracks` reorders `data.streams` into visual order and writes (or
+   * drops) `ui_tracks`. It never rebuilds a stream object, so no stem goes
+   * stale. */
+  function mutateTracks(fn) {
     setData(d => {
-      const arr = [...d.streams];
-      const [m] = arr.splice(srcIdx, 1);
-      arr.splice(dstIdx, 0, m);
-      return { ...d, streams: arr };
+      const cur = TR.deriveTracks(d);
+      const next = fn(cur, d);
+      if (!next || next === cur) return d;
+      return TR.applyTracks(d, next);
     });
+    setDirty(true);
+  }
+  function reorderTracks(srcIdx, dstIdx) {
+    if (srcIdx === dstIdx) return;
+    mutateTracks(t => TR.reorderTracks(t, srcIdx, dstIdx));
+  }
+  function renameTrack(trackId, name) {
+    const cur = tracks.find(x => x.id === trackId);
+    // The rename lands on blur, so it fires even when nothing was typed:
+    // bail before mutateTracks rather than dirtying the project for nothing.
+    if (!cur || !String(name).trim() || String(name).trim() === cur.name) return;
+    mutateTracks(t => TR.renameTrack(t, trackId, name));
+  }
+  /* Vertical drag of a clip: join the lane it was dropped on, or (Alt) pull it
+   * out into a lane of its own at that position. */
+  function moveStreamsToLane(streamIds, dstLaneIdx, opts) {
+    mutateTracks(t => TR.moveStreams(t, streamIds, dstLaneIdx, opts));
+  }
+  /* Fan-out: the header's M/S write the per-stream keys the engine actually
+   * reads. Partially-set groups go fully on, so one click always has an effect.
+   * The mute/solo write is NOT a track mutation — it must not rewrite
+   * `ui_tracks` — so it goes straight to the streams. */
+  function setTrackFlag(trackId, key) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    const ids = new Set(t.streamIds);
+    const on = !t.streamIds.every(id => {
+      const s = data.streams.find(x => x.id === id);
+      return s && s[key];
+    });
+    setData(d => ({ ...d, streams: d.streams.map(s => ids.has(s.id) ? { ...s, [key]: on } : s) }));
     setDirty(true);
   }
   function deleteStream(id) {
@@ -946,7 +1000,13 @@ function App() {
     // that ids are never recycled (allocStreamIds) a leftover entry can never
     // be picked up by a different stream. It is simply what this stream had,
     // waiting for it if the delete is undone.
-    setData(d => ({ ...d, streams: d.streams.filter(s => s.id !== id) }));
+    setData(d => {
+      const next = { ...d, streams: d.streams.filter(s => s.id !== id) };
+      // deriveTracks already drops the id, but going through applyTracks is what
+      // removes a `ui_tracks` that has become trivial — otherwise deleting the
+      // second clip of a lane would leave a one-stream group in the file.
+      return TR.applyTracks(next, TR.deriveTracks(next));
+    });
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
@@ -977,30 +1037,41 @@ function App() {
         pitch: { semitones: 0, range: null },
         voices: { num: 1 },
       };
-      const arr = [...d.streams];
-      if (laneIdx != null && laneIdx <= arr.length) arr.splice(laneIdx, 0, newStream);
-      else arr.push(newStream);
-      return { ...d, streams: arr };
+      const withNew = { ...d, streams: [...d.streams, newStream] };
+      // `laneIdx` counts LANES, not streams: dropped below a three-clip lane the
+      // new stream belongs one lane down, not three streams down.
+      const tr = TR.insertStreamTrack(TR.deriveTracks(withNew).filter(t => !t.streamIds.includes(newId)),
+                                      newId, laneIdx);
+      return TR.applyTracks(withNew, tr);
     });
     setDirty(true);
   }
+  /* `id` may be a single stream id (a clip) or a list (a lane header, which
+   * stands for every stream on the track). */
   function selectClip(id, multi) {
+    const ids = Array.isArray(id) ? id : [id];
+    if (!ids.length) return;
     if (multi) {
-      setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+      setSelectedIds(prev => ids.every(x => prev.includes(x))
+        ? prev.filter(x => !ids.includes(x))
+        : [...new Set([...prev, ...ids])]);
     } else {
-      anchorIdRef.current = id;
-      setSelectedIds([id]);
+      anchorIdRef.current = ids[0];
+      setSelectedIds(ids);
     }
   }
   function rangeSelectClip(id) {
     const anchor = anchorIdRef.current;
-    const ss = data.streams;
-    const anchorIdx = anchor ? ss.findIndex(s => s.id === anchor) : -1;
-    const targetIdx = ss.findIndex(s => s.id === id);
+    // Shift-range runs down what the user SEES. Track order is the visual
+    // order and `data.streams` follows it (applyTracks), but a hand-edited
+    // ui_tracks can put a stream elsewhere — so read the layout, not the file.
+    const ss = TR.visualOrder(tracks);
+    const anchorIdx = anchor ? ss.indexOf(anchor) : -1;
+    const targetIdx = ss.indexOf(id);
     if (anchorIdx === -1 || targetIdx === -1) { setSelectedIds([id]); return; }
     const lo = Math.min(anchorIdx, targetIdx);
     const hi = Math.max(anchorIdx, targetIdx);
-    setSelectedIds(ss.slice(lo, hi + 1).map(s => s.id));
+    setSelectedIds(ss.slice(lo, hi + 1));
   }
   function marqueeSelectClips(ids, additive) {
     if (additive) setSelectedIds(prev => [...new Set([...prev, ...ids])]);
@@ -1426,8 +1497,11 @@ function App() {
   );
   const timelineEl = (
     <ErrorBoundary label="Timeline">
-    <Timeline streams={data.streams} selected={selectedIds}
-              onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
+    <Timeline streams={data.streams} tracks={tracks} selected={selectedIds}
+              onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream}
+              onTrackReorder={reorderTracks} onTrackRename={renameTrack}
+              onTrackMute={(id) => setTrackFlag(id, "mute")} onTrackSolo={(id) => setTrackFlag(id, "solo")}
+              onMoveStreams={moveStreamsToLane}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={compDuration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showGrains={!!tweaks.showGrains} showClipLabels={tweaks.showClipLabels !== false}
@@ -1439,7 +1513,7 @@ function App() {
               spectrogramFor={(id) => spectrograms[id]}
               grainsFor={(id) => grainData[id]}
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
-              analyserFor={(id) => window.PGEAudio?.engine?.trackAnalyser(id)} />
+              analysersFor={(ids) => ids.map(id => window.PGEAudio?.engine?.trackAnalyser(id)).filter(Boolean)} />
     </ErrorBoundary>
   );
   const envelopeEl = (

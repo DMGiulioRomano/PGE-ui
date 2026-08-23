@@ -215,15 +215,28 @@ function gestureMatches(rule, e) {
   !!e.ctrlKey === wantCtrl;
 }
 
-function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
-  onDoubleSelect, onUpdate, onReorder, playhead, duration, onCreateStream,
+function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
+  onDoubleSelect, onUpdate, onTrackReorder, onTrackRename, onTrackMute, onTrackSolo, onMoveStreams,
+  playhead, duration, onCreateStream,
   pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor, spectrogramFor, grainsFor,
   loopEnabled, loopRegion, onLoopRegionChange,
-  analyserFor }) {
+  analysersFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
+  // solo/mute stay PER STREAM: that is what the engine filters on
+  // (Generator._filter_solo_mute) and what the YAML carries. A lane's M/S
+  // button is a fan-out over its group, never a new piece of state.
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
+  // A lane is a track; with no track model supplied it degrades to one lane per
+  // stream, which is what the timeline did before tracks existed.
+  const laneTracks = (tracks && tracks.length)
+    ? tracks
+    : streams.map(s => ({ id: s.id, name: s.id, streamIds: [s.id] }));
+  const streamById = new Map(streams.map(s => [s.id, s]));
+  const laneStreams = laneTracks.map(t => t.streamIds.map(id => streamById.get(id)).filter(Boolean));
+  const laneOfStream = new Map();
+  laneTracks.forEach((t, i) => t.streamIds.forEach(id => laneOfStream.set(id, i)));
   const PX_PER_S = pxPerSec || 36;
   const HEAD_W = 220;
   const ref = useRefTL(null);
@@ -254,7 +267,40 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   const [laneHeights, setLaneHeights] = useStateTL(() => {
     try { return JSON.parse(localStorage.getItem("pge-lane-heights") || "{}"); } catch (e) { return {}; }
   });
+  // Lane heights are keyed by TRACK id. A singleton track's id is its stream id
+  // (see tracks.js), so heights saved before tracks existed keep applying.
   function getH(id) { return laneHeights[id] || laneHeight || 56; }
+
+  // Top edge of each lane inside .lanes-area, in content pixels.
+  const laneTops = [];
+  {
+    let y = 0;
+    for (const t of laneTracks) { laneTops.push(y); y += getH(t.id); }
+  }
+
+  /* Lane index under a content-space y (already scroll-corrected). Clamped, so
+   * dragging past either end lands on the first/last lane rather than nowhere. */
+  function laneIndexAtY(y) {
+    if (!laneTracks.length) return -1;
+    for (let i = 0; i < laneTracks.length; i++) {
+      if (y < laneTops[i] + getH(laneTracks[i].id)) return Math.max(0, i);
+    }
+    return laneTracks.length - 1;
+  }
+  /* Same, from a raw clientY. `.lanes-area` is the scrolled content itself, so
+   * its rect already carries scrollTop — adding it again would double-count. */
+  function laneIndexAtClientY(clientY) {
+    const area = lanesAreaRef.current;
+    if (!area) return -1;
+    return laneIndexAtY(clientY - area.getBoundingClientRect().top);
+  }
+
+  // The drop target during a drag. Mirrored in a ref because a state updater is
+  // not a place to run effects: calling onReorder from inside setDragOver let a
+  // concurrent replay of the updater apply the move twice.
+  const dragOverRef = useRefTL(null);
+  function setDrop(v) { dragOverRef.current = v; setDragOver(v); }
+
   function startReorder(e, srcIdx) {
     e.preventDefault(); e.stopPropagation();
     const headEl = headRef.current;
@@ -270,17 +316,15 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         if (ev.clientY >= r.top && ev.clientY <= r.bottom) { dst = i; break; }
         if (ev.clientY > r.bottom) dst = i + 1;
       }
-      dst = Math.max(0, Math.min(streams.length - 1, dst));
-      setDragOver(dst);
+      setDrop(Math.max(0, Math.min(laneTracks.length - 1, dst)));
     }
     function up(ev) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       document.body.style.cursor = ""; document.body.style.userSelect = "";
-      setDragOver((dst) => {
-        if (dst != null && dst !== srcIdx && onReorder) onReorder(srcIdx, dst);
-        return null;
-      });
+      const dst = dragOverRef.current;
+      setDrop(null);
+      if (dst != null && dst !== srcIdx && onTrackReorder) onTrackReorder(srcIdx, dst);
     }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -359,14 +403,20 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
   function onPointerDown(e, stream, mode) {
     e.preventDefault();e.stopPropagation();
     const startX = e.clientX;
+    const startY = e.clientY;
     const isInSelection = selected.includes(stream.id);
     const targets = isInSelection ? streams.filter(s => selected.includes(s.id)) : [stream];
     const origs = Object.fromEntries(targets.map(s => [s.id, { onset: s.onset, duration: s.duration }]));
+    const srcLane = laneOfStream.has(stream.id) ? laneOfStream.get(stream.id) : -1;
+    const canMoveLane = mode === "drag" && !!onMoveStreams && srcLane !== -1;
     let moved = false;
     const THRESHOLD = 4;
     function move(ev) {
       const dx = ev.clientX - startX;
-      if (!moved && Math.abs(dx) < THRESHOLD) return;
+      const dy = ev.clientY - startY;
+      // The threshold takes BOTH axes: a purely vertical drag leaves onset
+      // alone, and without dy here it would never start at all.
+      if (!moved && Math.abs(dx) < THRESHOLD && Math.abs(dy) < THRESHOLD) return;
       if (!moved) { window.PGEHistory && window.PGEHistory.beginGesture(); }
       moved = true;
       const dt = dx / PX_PER_S;
@@ -374,10 +424,21 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         if (mode === "drag")   onUpdate(s.id, { onset:    Math.max(0,   +(origs[s.id].onset    + dt).toFixed(3)) });
         if (mode === "resize") onUpdate(s.id, { duration: Math.max(0.5, +(origs[s.id].duration + dt).toFixed(3)) });
       }
+      if (canMoveLane) {
+        const lane = laneIndexAtClientY(ev.clientY);
+        setDrop(lane === -1 ? null : lane);
+      }
     }
-    function up() {
+    function up(ev) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      const dstLane = canMoveLane ? dragOverRef.current : null;
+      setDrop(null);
+      // Inside the gesture, so the vertical move and the onset it travelled
+      // with collapse into one undo step.
+      if (moved && dstLane != null && (dstLane !== srcLane || (ev && ev.altKey))) {
+        onMoveStreams(targets.map(s => s.id), dstLane, { extract: !!(ev && ev.altKey) });
+      }
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
       if (!moved) {
         if (e.shiftKey) onRangeSelect && onRangeSelect(stream.id);
@@ -412,18 +473,19 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
       const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
       const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
       if (maxX - minX > 4 || maxY - minY > 4) {
-        let cumY = 0;
         const ids = [];
-        for (const s of streams) {
-          const h = getH(s.id);
-          const laneTop = cumY, laneBot = cumY + h;
-          cumY += h;
-          if (laneBot <= minY || laneTop >= maxY) continue;
-          const clipL = s.onset * PX_PER_S;
-          const clipR = (s.onset + s.duration) * PX_PER_S;
-          if (clipR <= minX || clipL >= maxX) continue;
-          ids.push(s.id);
-        }
+        laneTracks.forEach((t, i) => {
+          const laneTop = laneTops[i], laneBot = laneTop + getH(t.id);
+          if (laneBot <= minY || laneTop >= maxY) return;
+          // Every clip sharing the lane is a candidate, not just "the" stream:
+          // the lane is no longer one stream tall.
+          for (const s of laneStreams[i]) {
+            const clipL = s.onset * PX_PER_S;
+            const clipR = (s.onset + s.duration) * PX_PER_S;
+            if (clipR <= minX || clipL >= maxX) continue;
+            ids.push(s.id);
+          }
+        });
         if (ids.length > 0) onMarqueeSelect && onMarqueeSelect(ids, additive);
         else onDeselect && onDeselect();
       } else {
@@ -443,6 +505,8 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left + bodyRef.current.scrollLeft;
     // Always create a NEW track at this position, inserted after the lane dropped onto.
+    // `laneIdx` indexes tracks, not streams — dropping below a three-clip lane
+    // must land one lane down, not three streams down.
     onCreateStream && onCreateStream({ sample, onset: +(x / PX_PER_S).toFixed(2), laneIdx: idx + 1 });
   }
 
@@ -662,15 +726,19 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
         </div>
         <div className="lanes-head-clip">
           <div className="track-heads" ref={headRef}>
-            {streams.map((s, i) =>
-            <TrackHeader key={s.id} stream={s} selected={selected.includes(s.id)}
-              height={getH(s.id)} index={i} dragOver={dragOver === i}
-              onResizeStart={(e) => startResizeLane(e, s.id)}
+            {laneTracks.map((t, i) =>
+            <TrackHeader key={t.id} track={t} streams={laneStreams[i]}
+              selected={laneStreams[i].length > 0 && laneStreams[i].every(s => selected.includes(s.id))}
+              height={getH(t.id)} index={i} dragOver={dragOver === i}
+              onResizeStart={(e) => startResizeLane(e, t.id)}
               onReorderStart={(e) => startReorder(e, i)}
-              onSelect={(multi) => onSelect(s.id, multi)} onRangeSelect={() => onRangeSelect && onRangeSelect(s.id)} onDoubleSelect={() => onDoubleSelect && onDoubleSelect(s.id)}
-              onMute={() => onUpdate(s.id, { mute: !s.mute })} onSolo={() => onUpdate(s.id, { solo: !s.solo })}
-              effMuted={isEffMuted(s)} anySolo={anySolo}
-              analyser={analyserFor ? analyserFor(s.id) : null} />
+              onSelect={(multi) => onSelect(t.streamIds, multi)}
+              onRangeSelect={() => onRangeSelect && onRangeSelect(t.streamIds[0])}
+              onDoubleSelect={() => onDoubleSelect && onDoubleSelect(t.streamIds[0])}
+              onRename={(name) => onTrackRename && onTrackRename(t.id, name)}
+              onMute={() => onTrackMute && onTrackMute(t.id)} onSolo={() => onTrackSolo && onTrackSolo(t.id)}
+              isEffMuted={isEffMuted} anySolo={anySolo}
+              analysers={analysersFor ? analysersFor(t.streamIds) : null} />
             )}
           </div>
         </div>
@@ -774,32 +842,48 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
               <span key={t.s} className={"gline" + (t.major ? " major" : "")} style={{ left: t.x }} />
             ))}
           </div>
-          {streams.map((s, i) =>
-          <div key={s.id} className="lane" style={{ height: getH(s.id) }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
-          onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
-          onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
-              <div className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
-            style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color }}
+          {laneTracks.map((t, i) => {
+            const laneH = getH(t.id);
+            return (
+            <div key={t.id} className={"lane" + (dragOver === i ? " drop-target" : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
+            onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
+            onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
+              {/* N clips per lane. They are placed by onset alone, so two that
+                * overlap in time overlap on screen; the selected one is raised
+                * rather than resized, to keep its waveform readable. */}
+              {laneStreams[i].map((s) =>
+              <div key={s.id} className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
+            style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color, zIndex: selected.includes(s.id) ? 3 : 1 }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
             onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
+                {laneStreams[i].length > 1 ? (
+                <div className="clip-ms" onPointerDown={(e) => e.stopPropagation()}>
+                  <button className={"pill" + (s.mute ? " on-m" : "")} title="mute this stream"
+                          onClick={(e) => { e.stopPropagation(); onUpdate(s.id, { mute: !s.mute }); }}>M</button>
+                  <button className={"pill" + (s.solo ? " on-s" : "")} title="solo this stream"
+                          onClick={(e) => { e.stopPropagation(); onUpdate(s.id, { solo: !s.solo }); }}>S</button>
+                </div>
+                ) : null}
                 {showClipLabels !== false ? (<>
                 <div className="lbl">{s.id} · {s.sample}</div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?
-              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} /> :
+              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={laneH} /> :
               showWaveforms !== false && waveformFor && waveformFor(s.id) ?
-              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} color={s.color} /> :
+              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={laneH} color={s.color} /> :
               null}
                 {showGrains && grainsFor && grainsFor(s.id) ?
-              <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={getH(s.id)} /> :
+              <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={laneH} /> :
               null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
-                <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, s.id)} title="drag to resize this track" />
+                <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, t.id)} title="drag to resize this track" />
               </div>
+              )}
             </div>
-          )}
+            );
+          })}
           <div className="comp-end-line" style={{ left: duration * PX_PER_S }} />
           <div className="playhead-line" style={{ left: playhead * PX_PER_S }} />
           <div className="playhead-glow" style={{ left: playhead * PX_PER_S - 7 }} />
@@ -818,12 +902,32 @@ function Timeline({ streams, selected, onSelect, onDeselect, onRangeSelect, onMa
 
 }
 
-function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, effMuted, anySolo, analyser }) {
+/* One lane's header. It stands for a TRACK, which may hold several streams.
+ *
+ * M/S are a fan-out, not new state: the engine filters per stream
+ * (Generator._filter_solo_mute) and the YAML carries mute/solo per stream, so
+ * a group button reads three-valued (all / some / none) and writes the whole
+ * group. For a lane with one clip — still the default — this is byte-identical
+ * to the per-stream button it replaces. Per-clip M/S buttons appear on the
+ * clips themselves once a lane holds more than one. */
+function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoubleSelect, onRename, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, isEffMuted, anySolo, analysers }) {
   const VUMeter = window.PGE?.VUMeter;
   const laneH = typeof height === "number" ? height : 56;
+  const [editing, setEditing] = useStateTL(false);
+  const ss = streams || [];
+  const n = ss.length;
+  const allMuted  = n > 0 && ss.every(s => s.mute);
+  const someMuted = ss.some(s => s.mute);
+  const allSolo   = n > 0 && ss.every(s => s.solo);
+  const someSolo  = ss.some(s => s.solo);
+  const allEffMuted = n > 0 && ss.every(s => isEffMuted(s));
+  const lead = ss[0];
+  const sub = n > 1
+    ? n + " streams · " + Array.from(new Set(ss.map(s => s.sample))).join(", ")
+    : (lead ? lead.sample : "");
   return (
-    <div className={"track-head" + (selected ? " selected" : "") + (effMuted ? " muted" : "") + (stream.solo ? " soloed" : "") + (anySolo && !stream.solo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
-    style={{ borderLeftColor: stream.color, height: height || "var(--lane-h)" }}
+    <div className={"track-head" + (selected ? " selected" : "") + (allEffMuted ? " muted" : "") + (allSolo ? " soloed" : "") + (anySolo && !someSolo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
+    style={{ borderLeftColor: lead ? lead.color : "transparent", height: height || "var(--lane-h)" }}
     onClick={(e) => { if (e.shiftKey) onRangeSelect && onRangeSelect(); else onSelect(e.ctrlKey || e.metaKey); }}
     onDoubleClick={onDoubleSelect}>
       <div className="grip" onPointerDown={onReorderStart} onClick={(e) => e.stopPropagation()} title="drag to reorder track">
@@ -831,13 +935,30 @@ function TrackHeader({ stream, selected, onSelect, onRangeSelect, onDoubleSelect
       </div>
       <div className="lh">
         <div className="nm-row">
-          <span className="nm">{stream.id}</span>
-          <button className={"pill" + (stream.mute ? " on-m" : "")} onClick={(e) => {e.stopPropagation();onMute();}} title="mute">M</button>
-          <button className={"pill" + (stream.solo ? " on-s" : "")} onClick={(e) => {e.stopPropagation();onSolo();}} title="solo">S</button>
+          {editing ? (
+            <input className="nm-edit" autoFocus defaultValue={track.name}
+                   onClick={(e) => e.stopPropagation()}
+                   onPointerDown={(e) => e.stopPropagation()}
+                   onBlur={(e) => { setEditing(false); onRename && onRename(e.target.value); }}
+                   onKeyDown={(e) => {
+                     e.stopPropagation();
+                     if (e.key === "Enter") e.target.blur();
+                     if (e.key === "Escape") { setEditing(false); }
+                   }} />
+          ) : (
+            <span className="nm" title={n > 1 ? track.streamIds.join(", ") + " — double-click to rename the track" : "double-click to rename the track"}
+                  onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}>
+              {track.name}{n > 1 ? <span className="nm-count">{n}</span> : null}
+            </span>
+          )}
+          <button className={"pill" + (allMuted ? " on-m" : someMuted ? " part-m" : "")} onClick={(e) => {e.stopPropagation();onMute();}}
+                  title={n > 1 ? "mute every stream on this track" : "mute"}>M</button>
+          <button className={"pill" + (allSolo ? " on-s" : someSolo ? " part-s" : "")} onClick={(e) => {e.stopPropagation();onSolo();}}
+                  title={n > 1 ? "solo every stream on this track" : "solo"}>S</button>
         </div>
-        <span className="sub">{stream.sample}</span>
+        <span className="sub" title={sub}>{sub}</span>
       </div>
-      {VUMeter && <VUMeter mode="track" analyser={analyser} height={laneH} />}
+      {VUMeter && <VUMeter mode="track" analyser={analysers} height={laneH} />}
       <div className="track-head-resize" onPointerDown={onResizeStart} onClick={(e) => e.stopPropagation()} />
     </div>);
 
