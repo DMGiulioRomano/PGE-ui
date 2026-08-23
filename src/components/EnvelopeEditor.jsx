@@ -79,25 +79,13 @@ function listEnvelopes(stream, sampleDur) {
   // sotto il cap, quindi il primo drag riscrive il valore. I bound li converte
   // grainUnitBounds, come loopEnvMax fa col cap del loop.
   const grainUnit = (stream.grain && stream.grain.durationUnit) || "seconds";
-  // L'unità VALE PER CURVA, non per stream: una forma che il motore non scala
-  // (lista di soli breakpoint dict, o di soli 3-tuple) la legge in secondi
-  // qualunque unità sia dichiarata, e infatti convertGrainDurationUnit non la
-  // tocca. Etichettarla con l'unità dichiarata sarebbe la stessa bugia di
-  // prima, un piano più in là: l'asse direbbe "ms" sopra dei secondi, e il
-  // primo drag scriverebbe nel dominio sbagliato — 50 letti sull'asse come
-  // millisecondi, 50 secondi per il motore.
-  const curveUnit = (env) =>
-    (window.PGEEnvUtils.isEngineEnvelopeLike(env) ? grainUnit : "seconds");
-  const grainDurUnit = curveUnit(stream.grain && stream.grain.durationEnv);
-  const grainRangeUnit = curveUnit(stream.grain && stream.grain.durationRangeEnv);
-  const grainDurSuffix = window.PGEEnvUtils.grainUnitSuffix(grainDurUnit);
-  const grainRangeSuffix = window.PGEEnvUtils.grainUnitSuffix(grainRangeUnit);
-  const grainDurBounds = window.PGEEnvUtils.grainUnitBounds(PB.grainDur, grainDurUnit);
-  const grainRangeBounds = window.PGEEnvUtils.grainUnitBounds(PB.durationRange, grainRangeUnit);
+  const grainUnitSuffix = window.PGEEnvUtils.grainUnitSuffix(grainUnit);
+  const grainDurBounds = window.PGEEnvUtils.grainUnitBounds(PB.grainDur, grainUnit);
+  const grainRangeBounds = window.PGEEnvUtils.grainUnitBounds(PB.durationRange, grainUnit);
   // Anche la finestra di partenza era scritta in secondi (1-100 ms di grana,
   // 0-500 ms di range): va detta nell'unità in vigore o si apre già fuori scala.
-  const grainDurVis = window.PGEEnvUtils.grainUnitBounds({ min: 0.001, max: 0.1 }, grainDurUnit);
-  const grainRangeVis = window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.5 }, grainRangeUnit);
+  const grainDurVis = window.PGEEnvUtils.grainUnitBounds({ min: 0.001, max: 0.1 }, grainUnit);
+  const grainRangeVis = window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.5 }, grainUnit);
   const list = [];
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
@@ -144,13 +132,13 @@ function listEnvelopes(stream, sampleDur) {
   }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
-      path: ["grain", "durationEnv"], unit: grainDurSuffix, fine: true,
+      path: ["grain", "durationEnv"], unit: grainUnitSuffix, fine: true,
       visMin: grainDurVis.min, visMax: grainDurVis.max,
       hardMin: grainDurBounds.min, hardMax: grainDurBounds.max });
   }
   if (stream.grain && stream.grain.durationRangeEnv) {
     list.push({ key: "durationRange", label: "duration_range", group: "Grain",
-      path: ["grain", "durationRangeEnv"], unit: grainRangeSuffix, fine: true,
+      path: ["grain", "durationRangeEnv"], unit: grainUnitSuffix, fine: true,
       visMin: grainRangeVis.min, visMax: grainRangeVis.max,
       hardMin: grainRangeBounds.min, hardMax: grainRangeBounds.max });
   }
