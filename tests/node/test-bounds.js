@@ -127,5 +127,10 @@ assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max 
 assert("apply mutates window.PGE_BOUNDS.pitch.edoFactor", window.PGE_BOUNDS.pitch.edoFactor === 4);
 assert("apply keeps unmapped fallback (scatter)", window.PGE_BOUNDS.scatter.max === baseScatterMax);
 
-console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", () => {
+  console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
+  if (fail > 0) process.exitCode = 1;
+});

@@ -82,7 +82,12 @@ console.log("\n── a stem present in one format only ──");
     assert("app.jsx listens for it", /pge-audio-error/.test(appSrc));
   }
 
-  console.log(`\n${"─".repeat(50)}`);
-  console.log(`${pass} passed, ${fail} failed`);
-  if (fail > 0) process.exit(1);
+  // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+  // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+  // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+  process.on("exit", () => {
+    console.log(`\n${"─".repeat(50)}`);
+    console.log(`${pass} passed, ${fail} failed`);
+    if (fail > 0) process.exitCode = 1;
+  });
 })();

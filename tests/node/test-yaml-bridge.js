@@ -51,9 +51,16 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 const ENGINE_ROOT    = path.join(__dirname, "../../..", "PythonGranularEngine");
 const ENGINE_CONFIGS = path.join(ENGINE_ROOT, "configs");
 const ENGINE_PRESENT = fs.existsSync(ENGINE_CONFIGS);
-const REQUIRE_ENGINE = !!process.env.PGE_REQUIRE_ENGINE_FIXTURES;
+// `=== "1"` e non la verita' della stringa: `=0` e `=false` disattivano, come
+// chi li scrive si aspetta. La CI passa `1` oppure la stringa vuota.
+const REQUIRE_ENGINE = process.env.PGE_REQUIRE_ENGINE_FIXTURES === "1";
 
-const fixtureTally = { run: 0, skipped: 0, missing: 0, corpusFiles: 0 };
+// Nomi distinti, non chiamate: PGE_pino2.yml e' usata da due blocchi, e un
+// tally che dicesse 8 su 7 file gonfierebbe proprio il numero che esiste per
+// dire con onestà quanto e' stato verificato. Gli usi restano, a parte.
+const fixturesRun     = new Set();
+const fixturesMissing = new Set();
+const fixtureTally = { uses: 0, skipped: 0, corpusFiles: 0 };
 
 if (!ENGINE_PRESENT && REQUIRE_ENGINE) {
   assert("engine checkout presente (PGE_REQUIRE_ENGINE_FIXTURES=1)", false,
@@ -70,13 +77,24 @@ function engineFixture(name) {
     return null;
   }
   if (!fs.existsSync(p)) {
-    fixtureTally.missing++;
+    fixturesMissing.add(name);
     assert(`fixture ${name} — presente nei config del motore`, false,
       "il motore e' affiancato ma configs/" + name + " non esiste: fixture rinominata o rimossa");
     return null;
   }
-  fixtureTally.run++;
+  fixturesRun.add(name);
+  fixtureTally.uses++;
   return p;
+}
+
+function fixtureSummary() {
+  if (!ENGINE_PRESENT) {
+    return `engine fixtures: 0 eseguite, ${fixtureTally.skipped} blocchi skippati ` +
+      `(nessun checkout del motore in ${ENGINE_ROOT})`;
+  }
+  return `engine fixtures: ${fixturesRun.size} eseguite (${fixtureTally.uses} usi), ` +
+    `${fixturesMissing.size} mancanti, corpus ${fixtureTally.corpusFiles} config ` +
+    `(motore in ${ENGINE_ROOT})`;
 }
 
 /* ---------- helpers ---------- */
@@ -2346,13 +2364,12 @@ function grainYaml(body) {
  * Il conteggio fixture dice quanto ha davvero verificato questo verde.
  * ============================================================ */
 
-console.log(`\n${"─".repeat(50)}`);
-if (ENGINE_PRESENT) {
-  console.log(`engine fixtures: ${fixtureTally.run} eseguite, ${fixtureTally.missing} mancanti, ` +
-    `corpus ${fixtureTally.corpusFiles} config (motore in ${ENGINE_ROOT})`);
-} else {
-  console.log(`engine fixtures: 0 eseguite, ${fixtureTally.skipped} blocchi skippati ` +
-    `(nessun checkout del motore in ${ENGINE_ROOT})`);
-}
-console.log(`${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", () => {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(fixtureSummary());
+  console.log(`${pass} passed, ${fail} failed`);
+  if (fail > 0) process.exitCode = 1;
+});

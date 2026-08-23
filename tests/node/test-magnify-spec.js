@@ -118,6 +118,11 @@ assert("le opzioni sono persistite nei tweaks",
   /renderMagnify\b/.test(appSrc) && /renderMagnifyAt/.test(appSrc));
 assert("lo SPEC rotto ha uno stile d'errore", /\.rs-hint\.err/.test(cssSrc));
 
-console.log("\n──────────────────────────────────────────────────");
-console.log(`${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", () => {
+  console.log("\n──────────────────────────────────────────────────");
+  console.log(`${pass} passed, ${fail} failed`);
+  if (fail > 0) process.exitCode = 1;
+});

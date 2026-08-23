@@ -66,5 +66,10 @@ assert("past anchor + startDelay still clamps to now when behind",
 assert("past anchor with a far-future clip keeps its target",
   near(C.playAt(15.0, 10.0, 8.0), 18.0));
 
-console.log(`\n${fail ? "✗" : "✓"} audio-clock: ${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", () => {
+  console.log(`\n${fail ? "✗" : "✓"} audio-clock: ${pass} passed, ${fail} failed\n`);
+  if (fail > 0) process.exitCode = 1;
+});
