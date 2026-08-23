@@ -19,7 +19,9 @@ let pass = 0, fail = 0;
 
 const files = fs.readdirSync(dir).filter(f => f.endsWith(".jsx")).sort();
 console.log(`\n── ${files.length} components parse as JSX ──`);
-if (!files.length) { console.error("FAIL  no .jsx files found — wrong path?"); process.exit(1); }
+// Zero file e' un fallimento, non un verde: significa che il path e' sbagliato.
+// Registrato come assert normale, cosi' passa dall'handler come tutto il resto.
+if (!files.length) { fail++; console.error("FAIL  no .jsx files found — wrong path?"); }
 
 for (const f of files) {
   try {
@@ -35,5 +37,12 @@ for (const f of files) {
   }
 }
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});
