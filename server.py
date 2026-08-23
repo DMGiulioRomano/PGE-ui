@@ -1152,9 +1152,9 @@ def main():
         # 5° stream restava muto finche' non si liberava un thread, poi partiva a
         # meta' clip (il seek di recupero in _scheduleStreaming). I thread qui
         # sono I/O-bound, costano poco.
-        # ponytail: numero fisso; se un progetto supera i ~30 stream simultanei,
-        # passare a piu' worker o a un worker async.
-        "threads": 32,
+        # ponytail: numero fisso; oltre i ~200 stream simultanei passare a piu'
+        # worker o a un worker async.
+        "threads": 200,
         "accesslog": "-",
         "loglevel": "warning",
     }).run()
