@@ -368,6 +368,12 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
     /--status-warn/.test(warn), warn.slice(0, 200));
 }
 
-console.log("\n" + "─".repeat(50));
-console.log(`${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log("\n" + "─".repeat(50));
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

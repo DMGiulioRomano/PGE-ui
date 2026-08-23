@@ -43,17 +43,21 @@ make tests            # full suite: tests-node + tests-python
   reuses an id that still owns a stem, plus source guards on the two call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
-  guards on the audio-error path), and `test-tracks.js` (the track model:
-  `deriveTracks` totality against hand-edited `ui_tracks`, `applyTracks` never
-  rewriting a stream object, the key appearing only when it says something, plus
-  source guards on the Timeline/app wiring), and `test-jsx-parse.js` (every
-  `.jsx` file parses — there is no build step, so a syntax error would only
-  surface as a blank editor, and the regex source guards stay green on a file
-  that cannot run).
+  guards on the audio-error path), and `test-suite-harness.js` (the suite's own
+  exit contract: the verdict is an `exit` handler, verified by running it, plus
+  a guard that every `tests/node/*.js` uses it and none went back to a
+  positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
+  totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
+  stream object, the key appearing only when it says something, plus source
+  guards on the Timeline/app wiring), and `test-jsx-parse.js` (every `.jsx` file
+  parses — there is no build step, so a syntax error would only surface as a
+  blank editor, and the regex source guards stay green on a file that cannot
+  run).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
-  (path/security helpers), `test_yaml_structure.py`, and `test_engine_render.py`
+  (path/security helpers), `test_yaml_structure.py` (the engine config corpus,
+  gated by `engine_corpus.py`), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 
@@ -63,9 +67,67 @@ the fixture-dependent parts run on a PR — a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary). The
 assertion count is engine-dependent: a config added/removed upstream moves it by
 three (three assertions per file), so a local total that differs from CI's is
-that, not a lost test. There is no linter or typechecker — `test-jsx-parse.js`
-is the whole static net, and it only proves a component parses; UI verification
-is manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
+that, not a lost test.
+
+**Engine fixtures never skip silently** (#132), on both halves of the suite.
+`test-yaml-bridge.js` routes every engine config through `engineFixture(name)`;
+`test_yaml_structure.py` goes through `tests/python/engine_corpus.py`. Same three
+outcomes:
+
+| situation | outcome |
+| --- | --- |
+| sibling engine checkout absent | SKIP — the only legitimate one (local dev, fork PR without the secret) |
+| checkout present, named fixture (node) or non-empty `configs/` (python) missing | **FAIL** — renamed or deleted upstream: update the check, don't ignore it |
+| `PGE_REQUIRE_ENGINE_FIXTURES=1` and the checkout is absent | **FAIL** |
+
+Both CI jobs pass `PGE_REQUIRE_ENGINE_FIXTURES=1` when their engine checkout step
+reports **`outcome`** (not `conclusion` — with `continue-on-error: true` that one
+is `success` even on failure, which would make the gate inert), so even that last
+skip can't go green in CI. The env var is read as `=== "1"` / `== "1"`, so `=0`
+turns it off as expected. The node run ends with a fixture tally
+(`N eseguite (M usi), K mancanti, corpus J config` — distinct names, `PGE_pino2.yml`
+is used by two blocks); pytest prints the corpus line from
+`pytest_terminal_summary` — at the end of the run, and it survives `-q`, where
+the report header does not.
+
+The two halves don't cover the same thing: only the node half expects **names**.
+`engine_corpus.py` runs over whatever `*.yml` it finds, so an upstream deletion
+thins the python corpus without turning it red — the seven named fixtures in
+`test-yaml-bridge.js` are the presidio, over the same directory.
+
+Still legitimately skippable: `test_engine_render.py`, which needs the engine's
+**venv**, not just its checkout.
+
+The engine checkout is not pinned to a ref — it tracks the engine's default
+branch. That's the point (an upstream `configs/` change can turn PGE-ui red on
+purpose, the #131/#132 canary), but the red then hits **every** open PGE-ui PR,
+including unrelated ones. The way out is to update the name in the
+`engineFixture(...)` call (or the config's own name upstream), not to re-silence
+the check.
+
+**That bill has come due before**, so budget for it rather than being surprised:
+engine commit `a666fce` renamed `pino2.yml`→`PGE_pino2.yml`,
+`pino3.yml`→`PGE_pino3.yml` and `PGE_pino.yaml`→`PGE_test.yml` while deleting
+three more configs, all in one commit. Four of the seven names the node suite now
+requires come out of that rename; `PGE_test.yml` and `PGE_detune_implicito_test.yml`
+read like throwaway configs and are the likeliest to move next. Pinning the
+checkout to a ref would stop the noise and kill the canary with it — the trade is
+deliberate.
+
+**The suite's verdict is an `exit` handler, not a line at the bottom.** Every
+`tests/node/*.js` registers `process.on("exit", (code) => …)` that prints the
+summary and sets `process.exitCode`; nothing calls `process.exit(…)` directly.
+That's what makes an appended section count: `test-yaml-bridge.js` used to run 24
+asserts *after* its positional exit gate, printing FAIL and exiting 0. The `code`
+argument covers the other half of the same lie: a file that dies mid-run (an
+exception in an appended section) exits 1 but its counters still read `0 failed`,
+so the handler prints `interrotto prima della fine` instead of a clean summary
+under a stack trace. `test-suite-harness.js` verifies all of it — the idiom, by
+running it, and every suite file, by source guard.
+
+There is no linter or typechecker — `test-jsx-parse.js` is the whole static net,
+and it only proves a component parses. UI verification is manual (open
+`PGE Editor.html`, Settings → local backend, test connection, render).
 
 ## Architecture
 
@@ -125,6 +187,10 @@ A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` 
 Loop-window semantics: with a loop active the engine confines the grain read position to `[loop_start, loop_end)` via modular wrap. A loop straddling the file end is expressible **only** via `loop_dur` (`loop_start + loop_dur > sample_dur`); `loop_end` stays bound to `[0, sample_dur]`. `loopBoundsError` in `envelope-utils.js` mirrors the static degenerate-window check (`loop_end <= loop_start`).
 
 `loopUnitInfo` in `envelope-utils.js` returns the unit **and** its provenance (`loop_unit` / `time_mode` / `default`). Picking the inherited unit deletes the key rather than materializing a redundant one — absence is the "inherit" state. Switching the unit re-clamps scalar endpoints; envelope endpoints are per-grain and exempt.
+
+`grain.duration_unit` (`seconds | samples | milliseconds`, PGE #158 then #171) is the same shape of problem one level down: the engine's `grain_duration` bounds are in **seconds**, the YAML values are in the declared unit. `grainUnitFactor` / `grainUnitBounds` / `grainDefaultDuration` / `grainUnitSuffix` in `envelope-utils.js` are the single source — bounds, the `0.05` s default and the row suffix expressed in the unit in force (in ms the cap is `10000`, not `10`); they drive the EnvelopeEditor `hardMin/hardMax` + vis window and the seed of the scalar↔env toggle. Changing the unit goes through `convertGrainDurationUnit`, which **converts** `duration`/`duration_range` — scalars and envelopes, every form `Envelope._scale_raw_values_y` scales — instead of letting the old number be reinterpreted in the new scale, then re-clamps the scalars (envelope points need no clamp: bounds scale by the same factor). An unknown unit converts nothing and gets no suffix. The key is deleted only for `seconds` — absence *is* seconds. One asymmetry is deliberate: changing the unit **does** mark the stem stale even though the rendered audio is identical, because `fingerprintStream` sees `0.05` become `50` — the safe direction (one render too many, never one too few), and normalizing the hash to seconds would cost more than it's worth.
+
+Every grafia converts, and that used to be false. Before PGE #234 the engine's `is_envelope_like` was **narrower than its own builder**: a list of only dict breakpoints or only 3-tuples was not envelope-like, so `scale_raw_param_values` left it alone and the engine read it in seconds whatever unit was declared. The UI mirrored that quirk with an `isEngineEnvelopeLike` gate, and derived a per-curve axis unit from it. The engine now scales every form its builder accepts (and stopped dropping the per-point interp inside a compact block), so the gate, the per-curve unit and the Inspector's warning row are gone — about 140 lines whose only job was to copy a defect. `deviation-probability.js` lost the matching `dictBPOk` parameter for the same reason. **If a future engine change re-narrows that predicate, this is the code that has to come back.**
 
 Discrete-domain parameters (`grain.read_direction`): engine bounds are `-1`/`+1` but the domain is the **set** `{-1, +1}` — the engine rejects `0` at parse time. Every place the UI *computes* a y must **snap to the sign**, not clamp to the range. `snapDirection`/`snapForDomain` in `envelope-utils.js` are the single source; the envelope entry carries `domain: "direction"`. Interpolation is `step`, imposed and implicit; the editor hides the interp selectors. The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine refuses (not resolves by priority) — both are kept in state and re-emitted so the author's mistake is visible; the Inspector flags the pair. Absence is preserved: with neither key present the engine uses `auto` mode.
 

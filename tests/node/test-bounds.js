@@ -81,6 +81,11 @@ assert("static fallback grainDur.min is 1 sample (1/48000)",
   Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / 48000) < 1e-12,
   String(window.PGE_BOUNDS.grainDur.min));
 assert("durationRange ← grain_duration.RANGE (0..0.8)", out.durationRange.min === 0 && out.durationRange.max === 0.8);
+// Il fallback statico deve dire lo stesso cap del motore (max_range = 1.0), non
+// max_val: su file:// o con il server giù è l'unico clamp che la UI ha, e a 10
+// lascerebbe scrivere una banda che _calculate_range taglia in silenzio.
+assert("fallback statico durationRange = max_range del motore",
+  window.PGE_BOUNDS.durationRange.max === 1, JSON.stringify(window.PGE_BOUNDS.durationRange));
 assert("offsetRange ← pointer_deviation.RANGE (0..1)",  out.offsetRange.min === 0 && out.offsetRange.max === 1);
 assert("loopDur.min ← loop_dur.value",      out.loopDur.min === 0.01);
 assert("loopDur.max null → keeps fallback (sample-driven)", out.loopDur.max === baseLoopDurMax);
@@ -121,11 +126,31 @@ console.log("\n── read_direction (PGE #207) ──");
     JSON.stringify(window.PGE_BOUNDS.readDirection));
 }
 
+console.log("\n── senza window.PGE_OUTPUT_SR il min non diventa NaN ──");
+{
+  // mergeEngineBounds è pura: chiamarla senza yaml-bridge (che pubblica il
+  // sample rate) deve lasciare il bound del motore, non produrre un NaN che
+  // spegne in silenzio ogni clamp a valle.
+  const prev = window.PGE_OUTPUT_SR;
+  delete window.PGE_OUTPUT_SR;
+  const noSr = B.mergeEngineBounds({ grainDur: { min: 0.002, max: 10 } },
+    { params: { grain_duration: { min_val: 0.002, max_val: 10 } } }).grainDur;
+  window.PGE_OUTPUT_SR = prev;
+  assert("grainDur.min resta un numero", !isNaN(noSr.min) && noSr.min === 0.002,
+    JSON.stringify(noSr));
+}
+
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");
 B.apply(raw);
 assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max === 2000);
 assert("apply mutates window.PGE_BOUNDS.pitch.edoFactor", window.PGE_BOUNDS.pitch.edoFactor === 4);
 assert("apply keeps unmapped fallback (scatter)", window.PGE_BOUNDS.scatter.max === baseScatterMax);
 
-console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${fail === 0 ? "PASS" : "FAIL"}: ${pass} passed, ${fail} failed\n`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

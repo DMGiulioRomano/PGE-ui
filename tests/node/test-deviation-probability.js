@@ -169,10 +169,11 @@ for (const k of ["volume", "pan", "duration", "pitch", "pointer",
   assert("ALL_PARAM_KEYS contiene " + k, D.ALL_PARAM_KEYS.includes(k), k);
 
 /* Breakpoint in forma dict {t, v, type?}: il builder del motore li normalizza
-   in [t, v, type?] (envelope_builder.py:132), quindi sotto `points` e sotto una
-   chiave per-parametro il corpo si costruisce. L'asimmetria e' del motore: la
-   lista NUDA di soli dict a livello globale non passa is_envelope_like, e li'
-   il rifiuto e' vero. Tutte e cinque verificate eseguendo il motore. */
+   in [t, v, type?] (envelope_builder.py:132), e da PGE #234 li riconosce anche
+   `is_envelope_like` — prima no, e una lista NUDA di soli dict a livello
+   globale veniva rifiutata mentre sotto `points` o sotto una chiave
+   per-parametro passava. Quell'asimmetria e' sparita col motore, e con lei il
+   parametro `dictBPOk` che la ricalcava qui. Tutte verificate eseguendo. */
 console.log("\n── breakpoint in forma dict {t, v} ──");
 const dictBPs = [{ t: 0, v: 1 }, { t: 1, v: 50 }];
 assert("{points: [{t,v}…]} → nessun avviso",
@@ -183,8 +184,11 @@ assert("per-param [{t,v}…] → nessun avviso",
   D.error({ pitch: dictBPs }) === null);
 assert("per-param con interp per-punto → nessun avviso",
   D.error({ volume: [{ t: 0, v: 1, type: "cubic" }, { t: 1, v: 50 }] }) === null);
-assert("lista NUDA di soli dict → segnalata (il motore la rifiuta)",
-  D.error(dictBPs) !== null, JSON.stringify(D.error(dictBPs)));
+assert("lista NUDA di soli dict → nessun avviso (PGE #234: il motore la costruisce)",
+  D.error(dictBPs) === null, JSON.stringify(D.error(dictBPs)));
+assert("lista NUDA di sole 3-tuple → nessun avviso (PGE #234)",
+  D.error([[0, 1, "cubic"], [1, 50, "linear"]]) === null,
+  JSON.stringify(D.error([[0, 1, "cubic"], [1, 50, "linear"]])));
 assert("lista mista [[t,v], {t,v}] → nessun avviso (il motore la costruisce)",
   D.error([[0, 1], { t: 1, v: 50 }]) === null);
 
@@ -496,5 +500,11 @@ assert("paste di `[]` → rifiutato (e' il corpo che il motore rifiuta)",
 assert("paste di un envelope tipizzato senza punti → rifiutato",
   runPaste({ type: "step", points: [] }) === null);
 
-console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${fail ? "✗" : "✓"} deviation_probability: ${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});
