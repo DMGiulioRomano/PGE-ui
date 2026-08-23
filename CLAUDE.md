@@ -54,7 +54,15 @@ make tests            # full suite: tests-node + tests-python
 CI runs both on push and PR (`.github/workflows/ci.yml`). The python job checks
 out the sibling engine and builds its venv, so the engine-dependent
 `test_engine_render` runs there too — it only skips when the engine checkout is
-absent (e.g. locally). There is no linter or typechecker, and the React UI itself has
+absent (e.g. locally). The **node** job checks it out too, so the parts of the
+suite that read the engine's real `configs/` run on a PR instead of skipping —
+which buys a deliberate cross-repo coupling: a commit in `PythonGranularEngine`
+that touches `configs/` can turn PGE-ui's CI red, and that is the point, since
+the #131 canary exists to notice that those fixtures have stopped exercising
+`deviation_probability`. The same coupling makes the assertion count
+engine-dependent: a config added or removed upstream moves it by three (the
+corpus asserts three per file), so a local total that differs from CI's is that,
+not a lost test. There is no linter or typechecker, and the React UI itself has
 no component-level automated tests — UI verification is still manual: open
 `PGE Editor.html` in a browser, switch the Settings panel backend to `local`,
 hit "test connection", render.
