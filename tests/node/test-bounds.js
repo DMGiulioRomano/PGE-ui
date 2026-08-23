@@ -121,6 +121,20 @@ console.log("\n── read_direction (PGE #207) ──");
     JSON.stringify(window.PGE_BOUNDS.readDirection));
 }
 
+console.log("\n── senza window.PGE_OUTPUT_SR il min non diventa NaN ──");
+{
+  // mergeEngineBounds è pura: chiamarla senza yaml-bridge (che pubblica il
+  // sample rate) deve lasciare il bound del motore, non produrre un NaN che
+  // spegne in silenzio ogni clamp a valle.
+  const prev = window.PGE_OUTPUT_SR;
+  delete window.PGE_OUTPUT_SR;
+  const noSr = B.mergeEngineBounds({ grainDur: { min: 0.002, max: 10 } },
+    { params: { grain_duration: { min_val: 0.002, max_val: 10 } } }).grainDur;
+  window.PGE_OUTPUT_SR = prev;
+  assert("grainDur.min resta un numero", !isNaN(noSr.min) && noSr.min === 0.002,
+    JSON.stringify(noSr));
+}
+
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");
 B.apply(raw);
 assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max === 2000);

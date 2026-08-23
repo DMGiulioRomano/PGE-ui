@@ -20,10 +20,6 @@
  * Exports (window.PGEBounds): ENGINE_PARAM_MAP, mergeEngineBounds(base, raw), apply(raw)
  * ===========================================================================*/
 (function () {
-  // Sample rate di output del motore: una copia sola, in yaml-bridge.js (primo
-  // caricato). Serve per il minimo di grain_duration a 1 campione.
-  const outputSr = () => window.PGE_OUTPUT_SR;
-
   // UI key → { param: <engine GRANULAR_PARAMETERS name>, field: "value" | "range" }.
   // "value" → {min_val, max_val}; "range" → {min_range, max_range}.
   // Pitch bounds are handled separately (engine ships them pre-computed per unit).
@@ -91,11 +87,16 @@
 
     // grain_duration min = 1 campione (PGE #158). L'engine espone via /bounds
     // solo il min statico (1 ms); il minimo reale è 1/output_sr, un override
-    // dinamico che l'AST-parser di /bounds non vede. Lo applichiamo qui (output_sr
-    // è una config globale del motore, costante 48000 Hz lato UI).
-    if (out.grainDur) {
+    // dinamico che l'AST-parser di /bounds non vede. Il sample rate è una
+    // config globale del motore e ne esiste UNA copia, window.PGE_OUTPUT_SR in
+    // yaml-bridge.js — primo script caricato nell'editor, ma questa funzione è
+    // pura e node-testata, cioè fatta per essere chiamata da sola. Senza quel
+    // modulo `1 / undefined` è NaN, e un min a NaN non fa mai scattare un
+    // confronto: spegnerebbe in silenzio ogni clamp a valle. Meglio lasciare
+    // il bound del motore che falsarlo.
+    if (out.grainDur && typeof window.PGE_OUTPUT_SR === "number") {
       out.grainDur = Object.assign({}, out.grainDur, {
-        min: Math.min(out.grainDur.min, 1 / outputSr()),
+        min: Math.min(out.grainDur.min, 1 / window.PGE_OUTPUT_SR),
       });
     }
 
