@@ -251,7 +251,9 @@
         // La distinzione non e' "la richiesta e' arrivata": il catch qui sotto
         // copre anche il loop di lettura NDJSON, quindi un annullamento o una
         // connessione caduta a meta' stream ci finiscono dentro — e li' il file
-        // e' scritto eccome. Percio' il flag si alza qui, non nel catch.
+        // e' scritto eccome. Percio' il flag si alza qui, non nel catch — e
+        // sulla RISPOSTA, non sul body: `!res.ok || !res.body` e' un throw solo,
+        // ma un 200 senza body e' comunque un server che ha gia' scritto.
         let configWritten = false;
         try {
           const res = await fetch(baseUrl + "/render", {
@@ -260,11 +262,11 @@
             body: JSON.stringify(opts),
             signal: cancelAbort.signal,
           });
+          configWritten = res.ok;
           if (!res.ok || !res.body) {
             const txt = await res.text().catch(() => "");
             throw new Error(`HTTP ${res.status} ${txt.slice(0, 120)}`);
           }
-          configWritten = true;
           const reader = res.body.getReader();
           const dec = new TextDecoder();
           let buf = "";

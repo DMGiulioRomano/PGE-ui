@@ -945,9 +945,17 @@ ${body}
   // partire — ma non quando quella scrittura non e' avvenuta. Il flag si alza
   // dopo il controllo sulla risposta, NON nel catch: quello copre anche il loop
   // NDJSON, dove un annullamento arriva a file gia' scritto.
-  assert("wiring — backend segna configWritten dopo il controllo sulla risposta, non nel catch",
-    /configWritten = true;/.test(beSrc) && /return \{ ok: false, error: msg, configWritten \};/.test(beSrc)
-      && beSrc.indexOf("configWritten = true;") < beSrc.indexOf("} catch (e) {\n          const msg"));
+  // Regex e non indexOf su una stringa indentata: quella contava dieci spazi su
+  // due righe, e un reindent innocuo la rompeva.
+  //
+  // E pinza l'alzata prima del THROW, non solo prima del catch: `!res.ok ||
+  // !res.body` e' un throw solo, quindi "prima del catch" e' vero anche
+  // rimettendo l'assegnazione sotto il throw — cioe' proprio il difetto che
+  // questa riga deve impedire. Verificato che la forma debole non distingueva
+  // i due codici.
+  assert("wiring — backend segna configWritten sulla risposta, prima del throw",
+    /configWritten = res\.ok;\s*if \(!res\.ok \|\| !res\.body\)/.test(beSrc)
+      && /return \{ ok: false, error: msg, configWritten \};/.test(beSrc));
   assert("wiring — app.jsx non spegne il flag quando il config non e' stato scritto",
     /if \(result\.configWritten !== false\) \{/.test(appSrc));
 }
