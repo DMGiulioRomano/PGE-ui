@@ -86,6 +86,35 @@ console.log("\n── deriveTracks is total against a hand-edited file ──");
          eq(new Set(T.visualOrder(tr)), new Set(["stream1", "stream2", "stream3"])));
 }
 
+console.log("\n── a non-string stream id must not lose the grouping ──");
+{
+  // `stream_id: 1` unquoted in YAML parses as a NUMBER. `parse` now coerces it,
+  // but this lib is fed hand-built data too, and a number on one side against
+  // its string on the other matches nothing — the group would vanish without a
+  // word, and the next save would erase the key for good.
+  const d = {
+    streams: [{ id: 1 }, { id: 2 }],
+    _extra: { ui_tracks: [{ id: "t1", name: "gruppo", streams: [1, 2] }] },
+  };
+  const tr = T.deriveTracks(d);
+  assert("the grouping survives numeric ids", eq(shape(tr), ["t1:gruppo:1+2"]), JSON.stringify(shape(tr)));
+  const out = T.applyTracks(d, tr);
+  assert("applyTracks still finds the streams to order",
+         out.streams.length === 2 && eq(out.streams.map(s => s.id), [1, 2]),
+         JSON.stringify(out.streams));
+  assert("and writes the ids as strings",
+         eq(out._extra.ui_tracks[0].streams, ["1", "2"]), JSON.stringify(out._extra));
+}
+
+console.log("\n── parse coerces the stream id to a string ──");
+{
+  global.window.jsyaml = require("js-yaml");
+  eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
+  const parsed = window.PGEYaml.parse("streams:\n  - stream_id: 1\n    onset: 0\n    duration: 5\n    sample: t.wav\n");
+  assert("an unquoted numeric stream_id becomes a string",
+         parsed.streams[0].id === "1", JSON.stringify(parsed.streams[0].id));
+}
+
 console.log("\n── colliding ids never merge two lanes ──");
 {
   // A hand-written track id that shadows a stream id: both are laneHeights keys
@@ -185,11 +214,21 @@ console.log("\n── moving a clip between lanes ──");
   const noop = T.moveStreams(tr, ["stream1"], 0);
   assert("dropping a lone clip back on its own lane is a no-op (no history churn)",
          noop === tr);
+  assert("...and so is extracting a clip that is already alone there",
+         T.moveStreams(tr, ["stream1"], 0, { extract: true }) === tr);
 
   const multi = T.moveStreams(tr, ["stream2", "stream3"], 0);
   assert("a multi-selection moves together",
          eq(shape(multi), ["stream1:stream1:stream1+stream2+stream3"]),
          JSON.stringify(shape(multi)));
+
+  // The gesture the old `dstLane !== srcLane` guard in Timeline.jsx swallowed:
+  // a selection spanning lanes, dropped on the grabbed clip's OWN lane. Only
+  // the target's contents can tell "gather them here" from a real no-op.
+  const gather = T.moveStreams(tr, ["stream1", "stream3"], 0);
+  assert("a cross-lane selection dropped on the grabbed clip's lane gathers it",
+         eq(shape(gather), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
+         JSON.stringify(shape(gather)));
 }
 
 console.log("\n── paste lands in the original's lane ──");
@@ -234,12 +273,28 @@ console.log("\n── a new stream gets its own lane at the drop index ──");
 console.log("\n── UI wiring (source guards) ──");
 {
   const tlSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+  // Guards that assert the ABSENCE of a pattern read the code with comments
+  // stripped: a comment explaining why the pattern is gone would otherwise
+  // keep the guard red forever.
+  const tlCode = tlSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
 
   // The defect the track layer removes: onReorder was called from inside a
   // setDragOver updater. React may replay an updater, applying the move twice.
   assert("no side effect survives inside a setDragOver updater",
-         !/setDragOver\(\s*\((\w+)\)\s*=>\s*\{[\s\S]{0,200}?on(Reorder|TrackReorder)/.test(tlSrc));
+         !/setDragOver\(\s*\((\w+)\)\s*=>\s*\{[\s\S]{0,200}?on(Reorder|TrackReorder)/.test(tlCode));
+
+  // The drop must not be skipped on `srcLane`: that is the lane of the GRABBED
+  // clip, and a selection spanning lanes dropped there is a real move.
+  assert("the clip drop does not second-guess moveStreams on the source lane",
+         !/dstLane !== srcLane/.test(tlCode));
+  // Alt is sampled during the drag, so the highlight and the outcome agree.
+  assert("the extract modifier is read while dragging, not at release",
+         /extractRef\.current = !!ev\.altKey/.test(tlCode) &&
+         !/extract: !!\(ev && ev\.altKey\)/.test(tlCode));
+  assert("and a pending extract is drawn differently from a join",
+         /drop-extract/.test(tlSrc) &&
+         /drop-extract/.test(fs.readFileSync(path.join(__dirname, "../../styles/editor.css"), "utf8")));
 
   // The two parallel maps that made lane i == stream i: heads and lanes are
   // now driven by the track list, and neither may be keyed on a stream again.
@@ -247,13 +302,13 @@ console.log("\n── UI wiring (source guards) ──");
          /laneTracks\.map\(\(t, i\) =>\s*\n?\s*<TrackHeader/.test(tlSrc));
   assert("the lane column is rendered per track",
          /laneTracks\.map\(\(t, i\) => \{/.test(tlSrc));
-  assert("no TrackHeader is keyed on a stream any more", !/<TrackHeader key=\{s\.id\}/.test(tlSrc));
+  assert("no TrackHeader is keyed on a stream any more", !/<TrackHeader key=\{s\.id\}/.test(tlCode));
   assert("a lane draws every clip it holds", /laneStreams\[i\]\.map\(/.test(tlSrc));
 
   // laneHeights must key on the track, not the stream.
   assert("lane heights are keyed by track", /getH\(t\.id\)/.test(tlSrc));
   assert("the lane resize handle writes the track's height, not a stream's",
-         !/startResizeLane\(e, s\.id\)/.test(tlSrc));
+         !/startResizeLane\(e, s\.id\)/.test(tlCode));
 
   assert("app.jsx derives tracks from the model, not from streams",
          /window\.PGETracks/.test(appSrc) && /\bTR\.deriveTracks\(/.test(appSrc));

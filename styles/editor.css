@@ -230,6 +230,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .lane { height: var(--lane-h); border-bottom: 1px solid var(--border-subtle); position: relative; background-image: none; }
 /* the lane a dragged clip would land on */
 .lane.drop-target { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+/* Alt held: the clip would be pulled OUT into a new lane here, not joined to
+ * this one. Two different outcomes must not look the same before release. */
+.lane.drop-target.drop-extract { background: color-mix(in srgb, var(--accent) 6%, transparent); box-shadow: none; outline: 1px dashed var(--accent); outline-offset: -2px; }
 /* per-clip mute/solo, shown only where the header's group buttons are ambiguous
  * — i.e. once a lane holds more than one clip */
 .clip-ms { position: absolute; top: 3px; right: 4px; display: flex; gap: 3px; z-index: 5; }

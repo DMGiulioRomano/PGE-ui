@@ -169,8 +169,21 @@
     // every render. Reading it through a ref keeps one rAF loop for the life of
     // the meter — depending on the array would tear the loop down each frame,
     // and depending on its length alone would leave `draw` on a stale copy.
+    // The ref is written in an effect, not during render: an effect with no
+    // deps runs after every commit and keeps the render phase pure.
     const analyserRef = useRef(analyser);
-    analyserRef.current = analyser;
+    useEffect(() => {
+      const prev = analyserRef.current;
+      analyserRef.current = analyser;
+      // The peak hold belongs to whatever was being metered, so it resets when
+      // the SOURCE changes. Compared by contents, not by identity: a group
+      // arrives as a fresh array every render, and identity would reset the
+      // hold on every commit — which is no peak hold at all.
+      const list = (x) => Array.isArray(x) ? x : (x ? [x] : []);
+      const a = list(prev), b = list(analyser);
+      const same = a.length === b.length && a.every((x, i) => x === b[i]);
+      if (!same) peakRef.current = { db: -Infinity, t: 0 };
+    });
 
     useEffect(() => {
       const canvas = canvasRef.current;

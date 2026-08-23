@@ -299,7 +299,14 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
   // not a place to run effects: calling onReorder from inside setDragOver let a
   // concurrent replay of the updater apply the move twice.
   const dragOverRef = useRefTL(null);
-  function setDrop(v) { dragOverRef.current = v; setDragOver(v); }
+  function setDrop(v) {
+    dragOverRef.current = v;
+    setDragOver(v);
+    if (v === null) setDropExtract(false);   // never outlive its own drag
+  }
+  // Whether the pending drop would JOIN the target lane or EXTRACT into a new
+  // one. Drawn differently, so the modifier's effect is visible before release.
+  const [dropExtract, setDropExtract] = useStateTL(false);
 
   function startReorder(e, srcIdx) {
     e.preventDefault(); e.stopPropagation();
@@ -409,6 +416,10 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
     const origs = Object.fromEntries(targets.map(s => [s.id, { onset: s.onset, duration: s.duration }]));
     const srcLane = laneOfStream.has(stream.id) ? laneOfStream.get(stream.id) : -1;
     const canMoveLane = mode === "drag" && !!onMoveStreams && srcLane !== -1;
+    // Alt is sampled while dragging, not at release: releasing the modifier a
+    // frame before the button must not silently invert the outcome, and this is
+    // the same value the lane highlight is drawn from.
+    const extractRef = { current: false };
     let moved = false;
     const THRESHOLD = 4;
     function move(ev) {
@@ -425,6 +436,8 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
         if (mode === "resize") onUpdate(s.id, { duration: Math.max(0.5, +(origs[s.id].duration + dt).toFixed(3)) });
       }
       if (canMoveLane) {
+        extractRef.current = !!ev.altKey;
+        setDropExtract(extractRef.current);
         const lane = laneIndexAtClientY(ev.clientY);
         setDrop(lane === -1 ? null : lane);
       }
@@ -435,9 +448,13 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
       const dstLane = canMoveLane ? dragOverRef.current : null;
       setDrop(null);
       // Inside the gesture, so the vertical move and the onset it travelled
-      // with collapse into one undo step.
-      if (moved && dstLane != null && (dstLane !== srcLane || (ev && ev.altKey))) {
-        onMoveStreams(targets.map(s => s.id), dstLane, { extract: !!(ev && ev.altKey) });
+      // with collapse into one undo step. No `dstLane !== srcLane` guard here:
+      // `srcLane` is the lane of the GRABBED clip, and dropping a selection
+      // that spans lanes back on it is the "gather them here" gesture. Whether
+      // the drop changes anything is `moveStreams`' call — it sees all the
+      // targets, this does not.
+      if (moved && dstLane != null) {
+        onMoveStreams(targets.map(s => s.id), dstLane, { extract: extractRef.current });
       }
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
       if (!moved) {
@@ -845,7 +862,7 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
           {laneTracks.map((t, i) => {
             const laneH = getH(t.id);
             return (
-            <div key={t.id} className={"lane" + (dragOver === i ? " drop-target" : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
+            <div key={t.id} className={"lane" + (dragOver === i ? (dropExtract ? " drop-target drop-extract" : " drop-target") : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
             onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
             onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
               {/* N clips per lane. They are placed by onset alone, so two that
@@ -925,6 +942,10 @@ function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoub
   const sub = n > 1
     ? n + " streams · " + Array.from(new Set(ss.map(s => s.sample))).join(", ")
     : (lead ? lead.sample : "");
+  // `dim-by-solo` below deliberately reads "none of this lane is soloed": with
+  // one stream soloed out of three the lane still sounds, so dimming the whole
+  // header would misreport it. The muting of the other two shows on their own
+  // clips, which is where per-stream state belongs.
   return (
     <div className={"track-head" + (selected ? " selected" : "") + (allEffMuted ? " muted" : "") + (allSolo ? " soloed" : "") + (anySolo && !someSolo ? " dim-by-solo" : "") + (dragOver ? " drop-target" : "")}
     style={{ borderLeftColor: lead ? lead.color : "transparent", height: height || "var(--lane-h)" }}

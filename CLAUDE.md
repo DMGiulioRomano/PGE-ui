@@ -213,9 +213,23 @@ whole contract:
 - **`applyTracks(data, tracks)`** reorders `data.streams` into visual order and
   writes `ui_tracks` **only when it says something the stream order doesn't** —
   a lane with two streams, a chosen name, an id that isn't its stream's. A
-  project that never groups never grows the key. It reuses the stream objects
-  untouched, so **no stem goes stale**; if you ever make it rebuild one, the
-  fingerprint moves with it.
+  project that never groups never grows the key; but the key is all-or-nothing,
+  so **one rename or one group materializes every lane**, singletons included.
+  It reuses the stream objects untouched, so **no stem goes stale**; if you ever
+  make it rebuild one, the fingerprint moves with it.
+
+That reorder of `data.streams` is audio-neutral, and only because the engine
+says so: `_create_streams` iterates the list without an index and every
+stochastic site draws from an RNG derived from `(seed, stream_id, component)`,
+so materialization order doesn't reach the grains (`generator.py`). **If the
+engine ever derives randomness from list position, every grouping gesture in
+the timeline starts rewriting audio.**
+
+Stream ids are **strings**, coerced in `streamFromYaml`: an unquoted
+`stream_id: 1` parses as a number, and the id is an identity key (stem
+filename, cache-manifest key, `allocStreamIds`, the `ui_tracks` lists). A
+number matching nothing against its own string is silent, and here it would
+drop the grouping and let the next save erase it.
 
 A singleton track's **id is its stream id**. That is what keeps pre-#141
 `laneHeights` entries applying, and what lets pulling the last clip out of a

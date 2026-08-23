@@ -952,6 +952,13 @@ function App() {
    * drops) `ui_tracks`. It never rebuilds a stream object, so no stem goes
    * stale. */
   function mutateTracks(fn) {
+    // `setDirty` stays outside and unconditional, matching every other mutation
+    // in this file. It cannot move inside: an updater is not a place to run
+    // effects (that is the very defect this issue removed from Timeline.jsx),
+    // and a flag read back after `setData` would be stale — React runs the
+    // updater lazily. An over-eager dirty flag costs a redundant save; a missed
+    // one loses work, so the unconditional side is the safe one. `fn` returning
+    // null or `cur` still short-circuits the data change itself.
     setData(d => {
       const cur = TR.deriveTracks(d);
       const next = fn(cur, d);
@@ -984,11 +991,15 @@ function App() {
     const t = tracks.find(x => x.id === trackId);
     if (!t) return;
     const ids = new Set(t.streamIds);
-    const on = !t.streamIds.every(id => {
-      const s = data.streams.find(x => x.id === id);
-      return s && s[key];
+    setData(d => {
+      // Both the read (is the group already all-on?) and the write come from
+      // the updater's `d`. Deriving `on` from the render closure instead would
+      // decide against a snapshot that a queued update may already have moved.
+      const group = d.streams.filter(s => ids.has(s.id));
+      if (!group.length) return d;
+      const on = !group.every(s => s[key]);
+      return { ...d, streams: d.streams.map(s => ids.has(s.id) ? { ...s, [key]: on } : s) };
     });
-    setData(d => ({ ...d, streams: d.streams.map(s => ids.has(s.id) ? { ...s, [key]: on } : s) }));
     setDirty(true);
   }
   function deleteStream(id) {

@@ -664,7 +664,12 @@
   }
 
   function streamFromYaml(y, idx, samples) {
-    const id = y.stream_id || ("stream" + (idx + 1));
+    // Coerced to a string on purpose. An unquoted `stream_id: 1` in YAML parses
+    // as a NUMBER, and the id is an identity key everywhere downstream — the
+    // stem filename, the cache-manifest key, `allocStreamIds`, and the
+    // `ui_tracks` stream lists, which are re-read as strings. A number there
+    // matches nothing and the mismatch is silent (PGE-ui #145 review, R1).
+    const id = String(y.stream_id || ("stream" + (idx + 1)));
 
     const dens = unpackValueOrEnv(y.density);
     const ff   = unpackValueOrEnv(y.fill_factor ?? null);

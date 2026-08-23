@@ -53,7 +53,15 @@
  * lanes has always done) and writes `ui_tracks` ONLY when the grouping says
  * something the stream order alone cannot — a lane with two streams, a renamed
  * lane, an id that is not its stream's. A project that never groups anything
- * never grows the key.
+ * never grows the key. Note that a single rename or a single group materializes
+ * the WHOLE list — the price of a form that declares its own order.
+ *
+ * That reorder is only safe because the engine's randomness does not depend on
+ * a stream's position in the list: `_create_streams` iterates without an index
+ * and every stochastic site takes an RNG derived from
+ * (seed, stream_id, component), so "solo/mute, stem caching and materialization
+ * order do not alter the grains of other streams" (generator.py, its own
+ * words). If that ever changes, every grouping gesture starts rewriting audio.
  *
  * A track's id is also the `laneHeights` key (Timeline.jsx, localStorage).
  * A singleton track's id is its stream id, so heights saved before tracks
@@ -73,7 +81,11 @@
    * exactly one track, whatever `ui_tracks` says (or fails to say). */
   function deriveTracks(data) {
     const streams = (data && Array.isArray(data.streams)) ? data.streams : [];
-    const live = new Set(streams.map(s => s.id));
+    // Stream ids are normalized to strings on both sides. `parse` already
+    // coerces them (yaml-bridge), but this lib is fed hand-built data too, and
+    // a number on one side and its string on the other match nothing — which
+    // would drop the grouping silently and let the next save erase the key.
+    const live = new Set(streams.map(s => String(s.id)));
     const raw = (data && data._extra && Array.isArray(data._extra[TRACKS_KEY]))
       ? data._extra[TRACKS_KEY] : [];
 
@@ -91,8 +103,8 @@
     for (const t of raw) {
       if (!t || typeof t !== "object") continue;
       const ids = [];
-      for (const raw of (Array.isArray(t.streams) ? t.streams : [])) {
-        const id = String(raw);
+      for (const entry of (Array.isArray(t.streams) ? t.streams : [])) {
+        const id = String(entry);
         // `placed` is consulted AND updated per id: a list repeating the same
         // stream ("stream1, ghost, stream1") must not lay it out twice, or the
         // clip is drawn on one lane and dragged from the other.
@@ -112,9 +124,10 @@
     // each gets its own lane, appended in file order. The next write
     // materializes them.
     for (const s of streams) {
-      if (placed.has(s.id)) continue;
-      placed.add(s.id);
-      out.push({ id: claim(s.id, s.id), name: s.id, streamIds: [s.id] });
+      const sid = String(s.id);
+      if (placed.has(sid)) continue;
+      placed.add(sid);
+      out.push({ id: claim(sid, sid), name: sid, streamIds: [sid] });
     }
     return out;
   }
@@ -134,7 +147,7 @@
    * removes) `_extra.ui_tracks`. Never mutates its arguments. */
   function applyTracks(data, tracks) {
     const streams = (data && Array.isArray(data.streams)) ? data.streams : [];
-    const byId = new Map(streams.map(s => [s.id, s]));
+    const byId = new Map(streams.map(s => [String(s.id), s]));
     const ordered = [];
     for (const id of visualOrder(tracks)) {
       const s = byId.get(id);
@@ -143,7 +156,7 @@
     // Anything the tracks do not mention keeps its place at the end rather than
     // vanishing: `streams` is the source of truth for existence, tracks only
     // for layout.
-    for (const s of streams) if (byId.has(s.id)) ordered.push(s);
+    for (const s of streams) if (byId.has(String(s.id))) ordered.push(s);
 
     const next = { ...data, streams: ordered };
     const extra = { ...(data && data._extra) };
@@ -229,8 +242,13 @@
     if (!extract && !dstTrack) return tracks;
     const idSet = new Set(ids);
 
-    // A no-op move (already alone on the target lane) must not churn history.
-    if (!extract && dstTrack.streamIds.length === ids.length &&
+    // A no-op must not churn history. The target lane already holding exactly
+    // these streams means the layout is what the drop asks for — under
+    // `extract` too, since extracting them again rebuilds the same lane.
+    // The check lives HERE and not in the caller: a multi-lane selection
+    // dropped back on the grabbed clip's own lane is a real move (it gathers
+    // the others), and only the target's contents can tell the two apart.
+    if (dstTrack && dstTrack.streamIds.length === ids.length &&
         ids.every(id => dstTrack.streamIds.includes(id))) return tracks;
 
     let next = (tracks || []).map(t => ({
