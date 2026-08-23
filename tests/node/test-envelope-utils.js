@@ -746,8 +746,39 @@ console.log("\n── convertGrainDurationUnit ──");
   assert("blocco compatto: scala il pattern, non end_time né n_reps",
     eq(block.durationEnv, [[[[0, 1], [0.5, 100]], 1, 4]]), JSON.stringify(block.durationEnv));
   const dictBp = C({ durationEnv: [{ t: 0, v: 0.001 }, [1, 0.1]] }, "milliseconds");
-  assert("breakpoint in forma dict {t, v}",
+  assert("breakpoint dict {t, v} IN MEZZO a un breakpoint nudo: convertito",
     eq(dictBp.durationEnv, [{ t: 0, v: 1 }, [1, 100]]), JSON.stringify(dictBp.durationEnv));
+  const typedDictPts = C({ durationEnv: { type: "linear", points: [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }] } }, "milliseconds");
+  assert("punti dict dentro la forma tipata: convertiti (il dict con 'points' è envelope-like)",
+    eq(typedDictPts.durationEnv, { type: "linear", points: [{ t: 0, v: 1 }, { t: 1, v: 100 }] }),
+    JSON.stringify(typedDictPts.durationEnv));
+
+  /* Le forme che il MOTORE non scala — e che quindi la UI non deve toccare.
+   * scale_raw_param_values passa da Envelope.is_envelope_like, che per una
+   * lista pretende almeno un item lista di DUE elementi (o compatto, o BP
+   * group). Una lista di soli breakpoint dict, o di soli 3-tuple, non lo
+   * soddisfa e torna indietro invariata — verificato eseguendo
+   * _pre_normalize_grain_params. Non è un rifiuto: Envelope() quelle liste le
+   * costruisce. Le legge sempre in secondi, unità dichiarata o no.
+   * Convertirle qui significherebbe riscrivere numeri che il motore poi
+   * interpreta nella scala vecchia: `[{t:0,v:0.01},{t:1,v:0.1}]` diventerebbe
+   * `[{t:0,v:10},{t:1,v:100}]`, cioè grani mille volte più lunghi, per un
+   * gesto il cui senso è «il numero cambia, la durata reale no». */
+  const dictOnly = [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }];
+  assert("lista di soli breakpoint dict: NON convertita (il motore non la scala)",
+    eq(C({ durationEnv: dictOnly }, "milliseconds").durationEnv, dictOnly),
+    JSON.stringify(C({ durationEnv: dictOnly }, "milliseconds").durationEnv));
+  const tuple3Only = [[0, 0.001, "exp"], [1, 0.1, "lin"]];
+  assert("lista di soli 3-tuple: NON convertita",
+    eq(C({ durationEnv: tuple3Only }, "milliseconds").durationEnv, tuple3Only),
+    JSON.stringify(C({ durationEnv: tuple3Only }, "milliseconds").durationEnv));
+  const singleDict = [{ t: 0, v: 0.001 }];
+  assert("un solo breakpoint dict: NON convertito",
+    eq(C({ durationEnv: singleDict }, "milliseconds").durationEnv, singleDict));
+  assert("lista vuota: NON convertita (per il motore non è envelope-like)",
+    eq(C({ durationEnv: [] }, "milliseconds").durationEnv, []));
+  assert("la porta non tocca le forme che il motore scala davvero",
+    eq(C({ durationEnv: [[0, 0.001], [1, 0.1]] }, "milliseconds").durationEnv, [[0, 1], [1, 100]]));
   const rangeEnv = C({ durationRangeEnv: [[0, 0.01], [1, 0.02]] }, "milliseconds");
   assert("anche l'envelope di duration_range",
     eq(rangeEnv.durationRangeEnv, [[0, 10], [1, 20]]), JSON.stringify(rangeEnv.durationRangeEnv));
