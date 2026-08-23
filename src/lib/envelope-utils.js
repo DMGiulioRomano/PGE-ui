@@ -445,16 +445,19 @@
   //                        scritto a mano — e precede il controllo sulla
   //                        durata, quindi resta anche con duration esplicita.
   //
-  // 'seconds' e la chiave assente usano il default liberamente. `duration_unit:`
-  // vuota (durationUnit null lato bridge) è trattata come assente: il
-  // serializer la lascia cadere, quindi l'editor non la porta al render.
+  // 'seconds' e la chiave assente usano il default liberamente. Anche i valori
+  // falsy sono trattati come assenti — `duration_unit:` nuda (durationUnit null
+  // lato bridge) e la stringa vuota esplicita: `serialize` fa
+  // `grain.durationUnit || undefined`, quindi quel che l'editor scrive non
+  // contiene la chiave e il motore non la vede mai. Segnalarli sarebbe un
+  // errore fantasma, e per la stringa vuota anche una frase senza l'unità.
   // Ritorna null se valido/non applicabile, altrimenti { kind, unit } così il
   // chiamante costruisce il messaggio. Puro — niente DOM, niente chiamate al
   // motore.
   function grainDurationUnitError(grain) {
     if (!grain) return null;
     const unit = grain.durationUnit;
-    if (unit == null || unit === "seconds") return null;
+    if (!unit || unit === "seconds") return null;
     if (GRAIN_DURATION_UNITS.indexOf(unit) === -1) return { kind: "unknown", unit };
     const hasScalar = grain.duration != null;
     const hasEnv = grain.durationEnv != null;

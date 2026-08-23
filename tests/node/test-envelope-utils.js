@@ -451,6 +451,12 @@ console.log("\n── grainDurationUnitError ──");
   // come assente (il serializer la lascia cadere), quindi niente errore qui.
   assert("chiave vuota (durationUnit null) → null",
     GE({ durationUnit: null }) === null);
+  // Stessa cosa per la stringa vuota esplicita: `serialize` fa
+  // `grain.durationUnit || undefined`, quindi quel valore al motore non arriva
+  // mai — segnalarlo sarebbe un errore fantasma, per giunta con l'unità
+  // mancante dalla frase.
+  assert("stringa vuota → null (il serializer la lascia cadere)",
+    GE({ durationUnit: "" }) === null);
 }
 
 // L'insieme delle unità è uno solo, esportato: il Seg dell'Inspector ci
