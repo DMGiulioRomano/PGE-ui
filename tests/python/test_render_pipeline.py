@@ -6,6 +6,7 @@ These don't need the engine repo (no main.py is spawned). The kill/watchdog
 tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 """
 
+import re
 import subprocess
 import sys
 import time
@@ -566,3 +567,14 @@ def test_list_stems_reports_each_format_separately(tmp_path):
         ("stream3", ".aif"),
         ("stream3", ".wav"),
     ]
+
+
+def test_gunicorn_has_enough_threads_for_concurrent_stems():
+    """Ogni <audio> in playback occupa un thread per tutta la durata dello stem.
+    Con pochi thread gli stream oltre il limite restano muti e poi partono a
+    meta' clip. Guard sul sorgente: la costante non deve tornare a un valore
+    dell'ordine del numero di stream di un progetto."""
+    src = (Path(__file__).resolve().parents[2] / "server.py").read_text()
+    m = re.search(r'"threads":\s*(\d+)', src)
+    assert m, '"threads" non trovato nella config gunicorn di server.py'
+    assert int(m.group(1)) >= 32

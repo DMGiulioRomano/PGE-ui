@@ -1146,7 +1146,15 @@ def main():
         "bind": f"{args.host}:{args.port}",
         "workers": 1,
         "worker_class": "gthread",
-        "threads": 4,
+        # Ogni <audio> in riproduzione tiene occupato un thread per tutta la
+        # durata dello stem (il browser scarica a rate reale, non in un colpo).
+        # Con 4 thread bastavano 4 stream sovrapposti per affamare il server: il
+        # 5° stream restava muto finche' non si liberava un thread, poi partiva a
+        # meta' clip (il seek di recupero in _scheduleStreaming). I thread qui
+        # sono I/O-bound, costano poco.
+        # ponytail: numero fisso; se un progetto supera i ~30 stream simultanei,
+        # passare a piu' worker o a un worker async.
+        "threads": 32,
         "accesslog": "-",
         "loglevel": "warning",
     }).run()
