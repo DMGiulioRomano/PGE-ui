@@ -458,7 +458,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
+    // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
+    // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
+    // l'invito a rimetterla in circolo.
+    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, pan: 0, volume: 0 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
       fillFactor:   { sk: "fillFactor",  ek: "fillFactorEnv" },
@@ -479,11 +482,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     }
     if (k === "grainDur") {
       const cur = stream.grain || {};
+      // Il seme è il default del motore (0.05 s) ESPRESSO NELL'UNITÀ in vigore:
+      // 50 con milliseconds, 2400 campioni a 48000 Hz. Scriverlo nudo, in
+      // millisecondi, significa 50 microsecondi — e capiterebbe proprio nello
+      // stato in cui l'errore invita a mettere una duration esplicita: l'errore
+      // sparirebbe e il valore sarebbe peggiore di quando mancava.
+      const grainDurSeed = window.PGEEnvUtils.grainDefaultDuration(cur.durationUnit);
       if (newMode === "env") {
-        const v = cur.duration != null ? cur.duration : 0.05;
+        const v = cur.duration != null ? cur.duration : grainDurSeed;
         onChange({ grain: { ...cur, duration: null, durationEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || 0.05;
+        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || grainDurSeed;
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
       }
       return;

@@ -819,6 +819,17 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   }
   assert("l'hint dei campioni resta sul ramo samples",
     /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a 48000 Hz/.test(inspSrc));
+  // Il seme del passaggio a envelope (e il ritorno a scalare) è il default del
+  // motore, 0.05 s: scritto nudo con milliseconds selezionato sono 50
+  // microsecondi — e succederebbe proprio nello stato in cui l'errore invita a
+  // mettere una duration esplicita, che così sparirebbe peggiorando il valore.
+  assert("il seme di grainDur è il default convertito nell'unità in vigore",
+    /const grainDurSeed = window\.PGEEnvUtils\.grainDefaultDuration\(/.test(inspSrc)
+    && (inspSrc.match(/grainDurSeed/g) || []).length >= 3);
+  assert("nessun 0.05 nudo rimasto nei rami di grain.duration",
+    !/durationEnv: \[\[0, v\], \[1, v\]\][\s\S]{0,80}0\.05/.test(inspSrc)
+    && !/grainDur: 0\.05/.test(inspSrc)
+    && !/cur\.durationEnv\[0\]\[1\]\) \|\| 0\.05/.test(inspSrc));
   assert("il tooltip della chiave elenca le tre unità",
     /title="unità di grain\.duration e duration_range[^"]*milliseconds/.test(inspSrc));
 }
