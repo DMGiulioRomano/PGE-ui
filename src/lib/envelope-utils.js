@@ -472,20 +472,28 @@
     return +v.toFixed(prec);
   }
 
+  // Un valore in secondi espresso nell'unità dichiarata. È l'operazione che
+  // serve a chiunque abbia in mano un numero del motore — un bound, un default,
+  // il seme di una chiave nuova — e debba scriverlo dove i valori sono
+  // nell'unità in vigore. In secondi non c'è niente da dividere: passare
+  // comunque dal round sposterebbe il valore (1/48000 non ha 12 cifre
+  // significative).
+  function grainSecondsToUnit(seconds, unit, opts) {
+    if (typeof seconds !== "number" || !isFinite(seconds)) return seconds;
+    const f = grainUnitFactor(unit, opts);
+    return f === 1 ? seconds : _roundGrain(seconds / f);
+  }
+
   // I bound del motore vivono in secondi (PGE_BOUNDS.grainDur e il /bounds
   // dinamico che ci si sovrappone). Espressi nell'unità dichiarata sono quegli
   // stessi bound divisi per il fattore: in millisecondi il cap è 10000, non 10.
   // Stessa idea di loopEnvMax, che deriva il cap del loop dall'unità in vigore
   // invece di leggere il numero statico.
   function grainUnitBounds(secBounds, unit, opts) {
-    const f = grainUnitFactor(unit, opts);
     const b = secBounds || {};
     const out = {};
-    // In secondi non c'è niente da dividere: passare comunque dal round
-    // sposterebbe il bound (1/48000 non ha 12 cifre significative).
-    const conv = (v) => (f === 1 ? v : _roundGrain(v / f));
-    if (typeof b.min === "number") out.min = conv(b.min);
-    if (typeof b.max === "number") out.max = conv(b.max);
+    if (typeof b.min === "number") out.min = grainSecondsToUnit(b.min, unit, opts);
+    if (typeof b.max === "number") out.max = grainSecondsToUnit(b.max, unit, opts);
     return out;
   }
 
@@ -494,7 +502,7 @@
   // ritorno a scalare) deve seminare questo, non 0.05 nudo — che in
   // millisecondi sono 50 microsecondi.
   function grainDefaultDuration(unit, opts) {
-    return _roundGrain(GRAIN_DEFAULT_DURATION_SEC / grainUnitFactor(unit, opts));
+    return grainSecondsToUnit(GRAIN_DEFAULT_DURATION_SEC, unit, opts);
   }
 
   function _clampGrain(v, bounds) {
@@ -711,6 +719,7 @@
     GRAIN_DURATION_UNITS,
     grainUnitSuffix,
     grainUnitFactor,
+    grainSecondsToUnit,
     grainUnitBounds,
     grainDefaultDuration,
     convertGrainDurationUnit,

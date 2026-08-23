@@ -692,6 +692,16 @@ console.log("\n── grainUnitBounds ──");
   assert("bound assenti → oggetto vuoto", eq(B(null, "milliseconds"), {}));
 }
 
+console.log("\n── grainSecondsToUnit ──");
+{
+  const T = U.grainSecondsToUnit;
+  assert("in secondi il valore non si tocca", T(0.01, "seconds") === 0.01);
+  assert("0.01 s sono 10 ms", T(0.01, "milliseconds") === 10);
+  assert("0.01 s sono 480 campioni a 48000 Hz", T(0.01, "samples") === 480);
+  assert("unità ignota → valore invariato", T(0.01, "ms") === 0.01);
+  assert("non numerico → invariato", T(null, "milliseconds") === null);
+}
+
 console.log("\n── grainDefaultDuration ──");
 {
   const D = U.grainDefaultDuration;
@@ -857,6 +867,13 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   assert("il seme di grainDur è il default convertito nell'unità in vigore",
     /const grainDurSeed = window\.PGEEnvUtils\.grainDefaultDuration\(/.test(inspSrc)
     && (inspSrc.match(/grainDurSeed/g) || []).length >= 3);
+  // Il menu "aggiungi chiave" è l'altro punto che semina un valore: 0.01 è un
+  // numero in secondi, e scritto tale e quale con milliseconds in vigore vale
+  // 1e-5 s — mille volte meno di quel che l'etichetta promette, e in silenzio
+  // (duration esplicita → validazione muta, bound larghi → passa).
+  assert("anche il seme di duration_range è convertito nell'unità in vigore",
+    /def: window\.PGEEnvUtils\.grainSecondsToUnit\(0\.01, grainUnit\)/.test(inspSrc)
+    && !/exists: stream\.grain\.durationRange[^}]*def: 0\.01/.test(inspSrc));
   assert("nessun 0.05 nudo rimasto nei rami di grain.duration",
     !/durationEnv: \[\[0, v\], \[1, v\]\][\s\S]{0,80}0\.05/.test(inspSrc)
     && !/grainDur: 0\.05/.test(inspSrc)

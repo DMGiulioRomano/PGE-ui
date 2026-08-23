@@ -1322,7 +1322,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               })()}
               <AddParamMenu
                 options={[
-                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
+                  // Il seme è 0.01 s CONVERTITO nell'unità in vigore (10 in
+                  // millisecondi, 480 campioni): scritto nudo varrebbe 1e-5 s,
+                  // e in silenzio — la duration è esplicita, quindi la
+                  // validazione tace, e i bound in millisecondi arrivano a
+                  // 10000, quindi passa. Stesso trattamento del seme di
+                  // grain.duration (grainDefaultDuration).
+                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: window.PGEEnvUtils.grainSecondsToUnit(0.01, grainUnit) },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
             </Section>
