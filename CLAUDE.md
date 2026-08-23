@@ -275,7 +275,15 @@ whole contract:
 - **`deriveTracks(data)`** is total and self-healing — dead ids dropped, a
   stream laid out exactly once, emptied tracks removed, unmentioned streams
   appended as singletons in file order. With the key absent it reproduces
-  one-lane-per-stream exactly.
+  one-lane-per-stream exactly. Track ids and stream ids share **one** namespace
+  (a singleton lane's id is its stream's), so the ids of the streams
+  `ui_tracks` doesn't place are reserved *before* group ids are handed out: a
+  hand-written group calling itself `stream2` gets suffixed, and the real
+  stream2's lane keeps the id its `laneHeights` entry is filed under. The one
+  case it can't repair is two streams sharing an id — they collapse onto one
+  lane, and that's fine: a duplicate id is already fatal a layer down (stem
+  filename, manifest key) and no `ui_tracks` could round-trip two lanes
+  pointing at one id.
 - **`applyTracks(data, tracks)`** reorders `data.streams` into visual order and
   writes `ui_tracks` **only when it says something the stream order doesn't** —
   a lane with two streams, a chosen name, an id that isn't its stream's. A
@@ -313,6 +321,24 @@ graph.
 Clip drag moves between lanes: plain drop joins the target lane, **Alt**-drop
 extracts into a new lane at that position. The drag threshold reads both axes —
 a purely vertical drag leaves `onset` alone and would otherwise never start.
+
+The lane move is gated on **vertical intent** (`verticalRef`, latched in `move`
+once `|dy| >= THRESHOLD`), which also gates the lane highlight. Neither
+`dstLane != null` alone nor `dstLane !== srcLane` works: the cursor never
+leaves the grabbed clip's lane during an ordinary horizontal drag, so with no
+gate a selection spanning two lanes silently collapses into one every time it
+is moved along the time axis; and `srcLane` is the *grabbed* clip's lane, so
+comparing against it swallows the real "gather them all here" gesture. Alt is
+sampled the same way, in `move`, so the dashed highlight and the outcome can't
+disagree.
+
+Clips sharing a lane are placed by `onset` alone, so they can cover each other
+exactly — a paste with the playhead still on the source does it every time.
+A fully covered clip is unreachable (raising the *selected* one is no escape:
+selecting means clicking), so each row starts `CLIP_STACK_STEP` px below the
+previous, with the step shrinking to fit the lane rather than pushing the last
+clip out of it. `CLIP_PAD` must stay equal to the `.clip` inset in
+`editor.css`, and the child canvases size to the clip's box, not the lane's.
 
 ### History / undo (`app.jsx`)
 
