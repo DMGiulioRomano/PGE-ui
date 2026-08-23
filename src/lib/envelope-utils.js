@@ -441,6 +441,135 @@
     return "";
   }
 
+  // Il sample rate di output del motore: costante di configurazione globale
+  // (48000 Hz), non un dato dello stream. Serve al fattore di 'samples'.
+  const GRAIN_DEFAULT_SR = 48000;
+  // Il default di grain.duration nello schema del motore, in secondi. Fuori da
+  // 'seconds' va convertito prima di essere scritto da qualunque parte.
+  const GRAIN_DEFAULT_DURATION_SEC = 0.05;
+
+  // Fattore unità→secondi, come Stream._pre_normalize_grain_params: 1/output_sr
+  // per 'samples', 1e-3 per 'milliseconds' (fisso, indipendente dal sample
+  // rate), 1 per 'seconds' e per la chiave assente. Un'unità che il motore non
+  // riconosce vale 1: la sua scala non si conosce, e inventarne una sarebbe
+  // peggio che lasciare il numero dov'è — a dire che è ignota c'è già
+  // grainDurationUnitError.
+  function grainUnitFactor(unit, opts) {
+    const sr = (opts && opts.sr) || GRAIN_DEFAULT_SR;
+    if (unit === "samples") return 1 / sr;
+    if (unit === "milliseconds") return 1e-3;
+    return 1;
+  }
+
+  // Arrotonda a 12 cifre significative. Serve solo a togliere lo strascico
+  // binario delle divisioni (0.05 / 1e-3 = 50.000000000000007): a cifre fisse
+  // non si può fare, perché le stesse grandezze in secondi valgono 2e-5 e in
+  // campioni 480000.
+  function _roundGrain(v) {
+    if (typeof v !== "number" || !isFinite(v) || v === 0) return v;
+    const digits = Math.ceil(Math.log10(Math.abs(v)));
+    const prec = Math.min(20, Math.max(0, 12 - digits));
+    return +v.toFixed(prec);
+  }
+
+  // I bound del motore vivono in secondi (PGE_BOUNDS.grainDur e il /bounds
+  // dinamico che ci si sovrappone). Espressi nell'unità dichiarata sono quegli
+  // stessi bound divisi per il fattore: in millisecondi il cap è 10000, non 10.
+  // Stessa idea di loopEnvMax, che deriva il cap del loop dall'unità in vigore
+  // invece di leggere il numero statico.
+  function grainUnitBounds(secBounds, unit, opts) {
+    const f = grainUnitFactor(unit, opts);
+    const b = secBounds || {};
+    const out = {};
+    // In secondi non c'è niente da dividere: passare comunque dal round
+    // sposterebbe il bound (1/48000 non ha 12 cifre significative).
+    const conv = (v) => (f === 1 ? v : _roundGrain(v / f));
+    if (typeof b.min === "number") out.min = conv(b.min);
+    if (typeof b.max === "number") out.max = conv(b.max);
+    return out;
+  }
+
+  // Il default 0.05 s espresso nell'unità in vigore: 50 in millisecondi, 2400
+  // campioni a 48000 Hz. Chi semina un valore (il passaggio a envelope, il
+  // ritorno a scalare) deve seminare questo, non 0.05 nudo — che in
+  // millisecondi sono 50 microsecondi.
+  function grainDefaultDuration(unit, opts) {
+    return _roundGrain(GRAIN_DEFAULT_DURATION_SEC / grainUnitFactor(unit, opts));
+  }
+
+  function _clampGrain(v, bounds) {
+    if (!bounds || typeof v !== "number") return v;
+    if (typeof bounds.min === "number" && v < bounds.min) return bounds.min;
+    if (typeof bounds.max === "number" && v > bounds.max) return bounds.max;
+    return v;
+  }
+
+  // Applica `conv` a ogni y di un envelope, lasciando stare i tempi. Mirror di
+  // Envelope._scale_raw_values_y: stesse forme, stesso ordine di
+  // riconoscimento (il BP group prima del breakpoint nudo — anche lui è una
+  // lista di due elementi).
+  function _mapGrainEnvY(env, conv) {
+    const mapItem = (item) => {
+      if (PGEEnv.isBPGroup(item)) return [item[0].map(mapItem), item[1]];
+      if (PGEEnv.isCompactBlock(item)) return [item[0].map(mapItem), ...item.slice(1)];
+      if (PGEEnv.isBreakpoint(item)) return [item[0], conv(item[1]), ...item.slice(2)];
+      // breakpoint in forma dict: il motore lo scala, quindi anche noi —
+      // saltarlo lascerebbe due domini dentro lo stesso envelope.
+      if (item && typeof item === "object" && !Array.isArray(item)
+          && "t" in item && "v" in item) {
+        return { ...item, v: conv(item.v) };
+      }
+      return item;
+    };
+    if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
+      return { ...env, points: env.points.map(mapItem) };
+    }
+    if (!Array.isArray(env)) return env;
+    if (PGEEnv.isBPGroup(env) || PGEEnv.isCompactBlock(env)) return mapItem(env);
+    return env.map(mapItem);
+  }
+
+  // Cambia l'unità di grain.duration / grain.duration_range CONVERTENDO i
+  // valori già scritti, invece di lasciarli reinterpretare dalla nuova scala.
+  // Senza conversione, `0.05` (secondi) scelto come millisecondi vale 5e-5 s —
+  // grani da due campioni e mezzo — e non lo segnala nessuno: la duration è
+  // esplicita, quindi grainDurationUnitError tace, e con output_sr il min_val
+  // di grain_duration scende a 1/sr, quindi passa anche i bound. Il precedente
+  // in casa è il controllo di loop_unit, che ri-clampa gli estremi quando
+  // l'unità cambia sotto ai valori; qui la conversione è pure esatta, perché il
+  // fattore è noto e fisso.
+  //
+  // Gli scalari vengono ri-clampati nei bound della nuova unità (`opts.bounds`,
+  // nella forma di PGE_BOUNDS e in secondi); i punti degli envelope no, perché
+  // i bound scalano con lo stesso fattore dei valori — chi era dentro ci resta.
+  // Da o verso un'unità ignota non si converte: si scrive solo la chiave.
+  // Ritorna un grain nuovo; l'originale non viene mutato.
+  function convertGrainDurationUnit(grain, toUnit, opts) {
+    const ng = Object.assign({}, grain || {});
+    const fromUnit = ng.durationUnit || "seconds";
+    const known = (u) => GRAIN_DURATION_UNITS.indexOf(u) !== -1;
+    if (known(fromUnit) && known(toUnit) && fromUnit !== toUnit) {
+      const ratio = grainUnitFactor(fromUnit, opts) / grainUnitFactor(toUnit, opts);
+      const conv = (v) => (typeof v === "number" && isFinite(v) ? _roundGrain(v * ratio) : v);
+      const allBounds = (opts && opts.bounds) || null;
+      const fields = [
+        ["duration", "durationEnv", allBounds && allBounds.grainDur],
+        ["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange],
+      ];
+      for (const [scalarKey, envKey, secBounds] of fields) {
+        if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
+          ng[scalarKey] = _clampGrain(
+            conv(ng[scalarKey]),
+            secBounds ? grainUnitBounds(secBounds, toUnit, opts) : null);
+        }
+        if (ng[envKey] != null) ng[envKey] = _mapGrainEnvY(ng[envKey], conv);
+      }
+    }
+    if (!toUnit || toUnit === "seconds") delete ng.durationUnit;
+    else ng.durationUnit = toUnit;
+    return ng;
+  }
+
   // Mirror dei due rifiuti del motore su grain.duration_unit
   // (Stream._pre_normalize_grain_params).
   //
@@ -553,5 +682,9 @@
     grainDurationUnitError,
     GRAIN_DURATION_UNITS,
     grainUnitSuffix,
+    grainUnitFactor,
+    grainUnitBounds,
+    grainDefaultDuration,
+    convertGrainDurationUnit,
   };
 })();

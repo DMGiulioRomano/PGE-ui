@@ -1154,12 +1154,18 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                 <span className="v">
                   <Seg size="xs" value={grainUnit}
                        onChange={(v) => {
-                         if (v === "seconds") {
-                           const ng = { ...stream.grain }; delete ng.durationUnit;
-                           onChange({ grain: ng });
-                         } else {
-                           onChange({ grain: { ...stream.grain, durationUnit: v } });
-                         }
+                         // Il cambio di unità CONVERTE i valori già scritti: il
+                         // numero cambia, la durata reale no. Lasciarli lì
+                         // dentro voleva dire reinterpretarli nella nuova scala
+                         // — 0.05 s scelti come millisecondi sono 5e-5 s, grani
+                         // da due campioni e mezzo — senza che niente lo
+                         // segnalasse: la duration è esplicita, quindi la
+                         // validazione tace, e con output_sr il min_val di
+                         // grain_duration scende a 1/sr, quindi passa anche i
+                         // bound. Il convertitore scrive o cancella anche la
+                         // chiave: cancellarla è cosa di `seconds` soltanto.
+                         onChange({ grain: window.PGEEnvUtils.convertGrainDurationUnit(
+                           stream.grain, v, { bounds: window.PGE_BOUNDS }) });
                        }}
                        options={window.PGEEnvUtils.GRAIN_DURATION_UNITS.map(
                          (u) => ({ label: u, value: u }))} />

@@ -654,6 +654,129 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
     (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 4);
 }
 
+/* ===========================================================================
+ * Cambio di unità di grain.duration — la conversione dei valori già scritti
+ * ===========================================================================
+ * Cambiare unità senza convertire lascia il numero vecchio reinterpretato nella
+ * nuova scala: 0.05 (secondi) letto come 0.05 ms sono 5e-5 s, cioè grani da due
+ * campioni e mezzo. E non lo segnala nessuno — la duration è esplicita, quindi
+ * grainDurationUnitError tace, e con output_sr il min_val di grain_duration
+ * scende a 1/sr, quindi passa anche i bound. Il precedente è il Seg di
+ * loop_unit, che ri-clampa gli estremi quando l'unità cambia sotto ai valori.
+ */
+console.log("\n── grainUnitFactor ──");
+{
+  const F = U.grainUnitFactor;
+  assert("seconds → 1", F("seconds") === 1);
+  assert("unità assente → 1", F(null) === 1 && F("") === 1);
+  assert("samples → 1/output_sr (48000 di default)", F("samples") === 1 / 48000);
+  assert("il sample rate è configurabile", F("samples", { sr: 44100 }) === 1 / 44100);
+  assert("milliseconds → 1e-3, indipendente dal sample rate",
+    F("milliseconds") === 1e-3 && F("milliseconds", { sr: 44100 }) === 1e-3);
+  assert("unità ignota → 1 (non si inventa una scala)", F("ms") === 1);
+}
+
+console.log("\n── grainUnitBounds ──");
+{
+  const B = U.grainUnitBounds;
+  const sec = { min: 1 / 48000, max: 10 };
+  assert("in secondi restano i bound del motore", eq(B(sec, "seconds"), sec));
+  assert("in campioni: 1 campione .. 480000",
+    eq(B(sec, "samples"), { min: 1, max: 480000 }), JSON.stringify(B(sec, "samples")));
+  assert("in millisecondi: il cap è 10000 ms, non 10",
+    B(sec, "milliseconds").max === 10000
+    && Math.abs(B(sec, "milliseconds").min - 0.0208333333) < 1e-9,
+    JSON.stringify(B(sec, "milliseconds")));
+  assert("bound assenti → oggetto vuoto", eq(B(null, "milliseconds"), {}));
+}
+
+console.log("\n── grainDefaultDuration ──");
+{
+  const D = U.grainDefaultDuration;
+  assert("il default del motore è 0.05 s", D("seconds") === 0.05);
+  assert("in millisecondi sono 50, non 0.05", D("milliseconds") === 50);
+  assert("in campioni sono 2400 a 48000 Hz", D("samples") === 2400);
+  assert("unità ignota → il default in secondi", D("ms") === 0.05);
+}
+
+console.log("\n── convertGrainDurationUnit ──");
+{
+  const C = U.convertGrainDurationUnit;
+  const BOUNDS = { grainDur: { min: 1 / 48000, max: 10 }, durationRange: { min: 0, max: 10 } };
+
+  // seconds → milliseconds: il numero cambia, la durata reale no
+  const ms = C({ duration: 0.05, durationRange: 0.01 }, "milliseconds");
+  assert("0.05 s diventano 50 ms", ms.duration === 50, JSON.stringify(ms));
+  assert("anche duration_range è convertita", ms.durationRange === 10);
+  assert("la chiave viene scritta", ms.durationUnit === "milliseconds");
+  // niente rumore di virgola mobile: 0.05/1e-3 in binario non fa 50 tondo
+  assert("il valore convertito non porta strascichi binari",
+    String(ms.duration) === "50" && String(ms.durationRange) === "10");
+
+  // milliseconds → seconds: giro di ritorno esatto, e la chiave sparisce
+  const back = C(ms, "seconds");
+  assert("il giro di ritorno rende il valore di partenza", back.duration === 0.05);
+  assert("tornando a seconds la chiave viene cancellata",
+    !("durationUnit" in back), JSON.stringify(back));
+
+  // samples
+  const smp = C({ duration: 0.05 }, "samples");
+  assert("0.05 s sono 2400 campioni", smp.duration === 2400);
+  assert("anche samples scrive la chiave", smp.durationUnit === "samples");
+  assert("il sample rate governa i campioni",
+    C({ duration: 0.05 }, "samples", { sr: 44100 }).duration === 2205);
+
+  // envelope: si convertono i valori Y, i tempi restano
+  const env = C({ durationEnv: [[0, 0.001], [1, 0.1]] }, "milliseconds");
+  assert("l'envelope scala i suoi y e non i suoi x",
+    eq(env.durationEnv, [[0, 1], [1, 100]]), JSON.stringify(env.durationEnv));
+  const env3 = C({ durationEnv: [[0, 0.001, "exp"], [1, 0.1]] }, "milliseconds");
+  assert("il tipo per-punto sopravvive",
+    eq(env3.durationEnv, [[0, 1, "exp"], [1, 100]]), JSON.stringify(env3.durationEnv));
+  const typed = C({ durationEnv: { type: "exp", points: [[0, 0.001], [1, 0.1]] } }, "milliseconds");
+  assert("forma tipata {type, points}",
+    eq(typed.durationEnv, { type: "exp", points: [[0, 1], [1, 100]] }),
+    JSON.stringify(typed.durationEnv));
+  const group = C({ durationEnv: [[[[0, 0.001], [0.5, 0.1]], "exp"]] }, "milliseconds");
+  assert("BP group [points, interp]",
+    eq(group.durationEnv, [[[[0, 1], [0.5, 100]], "exp"]]), JSON.stringify(group.durationEnv));
+  const block = C({ durationEnv: [[[[0, 0.001], [0.5, 0.1]], 1, 4]] }, "milliseconds");
+  assert("blocco compatto: scala il pattern, non end_time né n_reps",
+    eq(block.durationEnv, [[[[0, 1], [0.5, 100]], 1, 4]]), JSON.stringify(block.durationEnv));
+  const dictBp = C({ durationEnv: [{ t: 0, v: 0.001 }, [1, 0.1]] }, "milliseconds");
+  assert("breakpoint in forma dict {t, v}",
+    eq(dictBp.durationEnv, [{ t: 0, v: 1 }, [1, 100]]), JSON.stringify(dictBp.durationEnv));
+  const rangeEnv = C({ durationRangeEnv: [[0, 0.01], [1, 0.02]] }, "milliseconds");
+  assert("anche l'envelope di duration_range",
+    eq(rangeEnv.durationRangeEnv, [[0, 10], [1, 20]]), JSON.stringify(rangeEnv.durationRangeEnv));
+
+  // clamp: un valore fuori bound resta fuori bound anche convertito, e va riportato dentro
+  const over = C({ duration: 100 }, "milliseconds", { bounds: BOUNDS });
+  assert("uno scalare oltre il cap viene riportato dentro i bound della nuova unità",
+    over.duration === 10000, JSON.stringify(over));
+  assert("senza bound non si clampa nulla",
+    C({ duration: 100 }, "milliseconds").duration === 100000);
+  // la conversione è esatta: un valore dentro i bound ci resta, il clamp non morde
+  assert("un valore valido non viene toccato dal clamp",
+    C({ duration: 0.05 }, "milliseconds", { bounds: BOUNDS }).duration === 50);
+
+  // stessa unità, unità ignote, immutabilità
+  const same = C({ duration: 50, durationUnit: "milliseconds" }, "milliseconds");
+  assert("unità invariata → valore invariato", same.duration === 50);
+  const fromUnknown = C({ duration: 12, durationUnit: "ms" }, "seconds");
+  assert("da un'unità ignota non si converte (non se ne conosce la scala)",
+    fromUnknown.duration === 12 && !("durationUnit" in fromUnknown),
+    JSON.stringify(fromUnknown));
+  const toUnknown = C({ duration: 0.05 }, "ms");
+  assert("verso un'unità ignota nemmeno, ma la chiave si scrive",
+    toUnknown.duration === 0.05 && toUnknown.durationUnit === "ms");
+  const src = { duration: 0.05, durationEnv: null, durationUnit: null };
+  C(src, "milliseconds");
+  assert("il grain di partenza non viene mutato", src.duration === 0.05);
+  assert("le altre chiavi del grain sopravvivono",
+    C({ duration: 0.05, envelope: "hanning", reverse: null }, "milliseconds").envelope === "hanning");
+}
+
 console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 {
   const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
@@ -661,10 +784,16 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   assert("il Seg elenca le unità del motore, non una coppia cablata a mano",
     /options=\{window\.PGEEnvUtils\.GRAIN_DURATION_UNITS\.map\(/.test(inspSrc)
     && !/options=\{\[\{label:"seconds",value:"seconds"\},\{label:"samples",value:"samples"\}\]\}/.test(inspSrc));
-  // Il ramo di cancellazione vale per `seconds` e basta: con tre unità,
-  // "tutto ciò che non è samples torna al default" cancellava milliseconds.
-  assert("solo seconds cancella la chiave, le altre unità la scrivono",
-    /if \(v === "seconds"\) \{[\s\S]{0,200}delete ng\.durationUnit/.test(inspSrc)
+  // Il ramo di cancellazione vale per `seconds` e basta — con tre unità, "tutto
+  // ciò che non è samples torna al default" cancellava milliseconds. La regola
+  // ora sta in convertGrainDurationUnit (testata sopra: verso seconds cancella,
+  // verso ogni altra unità scrive), e il controllo ci passa attraverso invece
+  // di riscriverla nel JSX.
+  assert("cambiare unità passa dal convertitore, chiave compresa",
+    /onChange\(\{ grain: window\.PGEEnvUtils\.convertGrainDurationUnit\(/.test(inspSrc)
+    && /stream\.grain, v, \{ bounds: window\.PGE_BOUNDS \}\)/.test(inspSrc));
+  assert("nel JSX non è rimasto un ramo che cancella la chiave a mano",
+    !/delete ng\.durationUnit/.test(inspSrc)
     && !/if \(v === "samples"\) \{/.test(inspSrc));
   assert("l'unità in vigore è calcolata una volta sola",
     /const grainUnit = \(stream\.grain && stream\.grain\.durationUnit\) \|\| "seconds"/.test(inspSrc));
