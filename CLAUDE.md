@@ -80,7 +80,14 @@ is `success` even on failure, which would make the gate inert), so even that las
 skip can't go green in CI. The env var is read as `=== "1"` / `== "1"`, so `=0`
 turns it off as expected. The node run ends with a fixture tally
 (`N eseguite (M usi), K mancanti, corpus J config` — distinct names, `PGE_pino2.yml`
-is used by two blocks); pytest prints the corpus line in its report header.
+is used by two blocks); pytest prints the corpus line from
+`pytest_terminal_summary` — at the end of the run, and it survives `-q`, where
+the report header does not.
+
+The two halves don't cover the same thing: only the node half expects **names**.
+`engine_corpus.py` runs over whatever `*.yml` it finds, so an upstream deletion
+thins the python corpus without turning it red — the seven named fixtures in
+`test-yaml-bridge.js` are the presidio, over the same directory.
 
 Still legitimately skippable: `test_engine_render.py`, which needs the engine's
 **venv**, not just its checkout.
@@ -92,13 +99,25 @@ including unrelated ones. The way out is to update the name in the
 `engineFixture(...)` call (or the config's own name upstream), not to re-silence
 the check.
 
+**That bill has come due before**, so budget for it rather than being surprised:
+engine commit `a666fce` renamed `pino2.yml`→`PGE_pino2.yml`,
+`pino3.yml`→`PGE_pino3.yml` and `PGE_pino.yaml`→`PGE_test.yml` while deleting
+three more configs, all in one commit. Four of the seven names the node suite now
+requires come out of that rename; `PGE_test.yml` and `PGE_detune_implicito_test.yml`
+read like throwaway configs and are the likeliest to move next. Pinning the
+checkout to a ref would stop the noise and kill the canary with it — the trade is
+deliberate.
+
 **The suite's verdict is an `exit` handler, not a line at the bottom.** Every
-`tests/node/*.js` registers `process.on("exit", …)` that prints the summary and
-sets `process.exitCode`; nothing calls `process.exit(…)` directly. That's what
-makes an appended section count: `test-yaml-bridge.js` used to run 24 asserts
-*after* its positional exit gate, printing FAIL and exiting 0. `test-suite-harness.js`
-verifies both halves — the idiom, by running it, and every suite file, by source
-guard.
+`tests/node/*.js` registers `process.on("exit", (code) => …)` that prints the
+summary and sets `process.exitCode`; nothing calls `process.exit(…)` directly.
+That's what makes an appended section count: `test-yaml-bridge.js` used to run 24
+asserts *after* its positional exit gate, printing FAIL and exiting 0. The `code`
+argument covers the other half of the same lie: a file that dies mid-run (an
+exception in an appended section) exits 1 but its counters still read `0 failed`,
+so the handler prints `interrotto prima della fine` instead of a clean summary
+under a stack trace. `test-suite-harness.js` verifies all of it — the idiom, by
+running it, and every suite file, by source guard.
 
 There is no linter or typechecker; UI verification is
 manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
