@@ -215,6 +215,13 @@ function gestureMatches(rule, e) {
   !!e.ctrlKey === wantCtrl;
 }
 
+/* Clip box geometry, shared with `.clip` in editor.css (top/bottom: 6px). Only
+ * the vertical stagger of stacked clips is computed here — CSS cannot know how
+ * many clips a lane holds. Keep CLIP_PAD equal to the CSS inset. */
+const CLIP_PAD        = 6;   // inset from the lane's top and bottom edges
+const CLIP_STACK_STEP = 6;   // how far each stacked clip starts below the previous
+const CLIP_MIN_H      = 22;  // the last clip in a stack never goes thinner than this
+
 function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onTrackReorder, onTrackRename, onTrackMute, onTrackSolo, onMoveStreams,
   playhead, duration, onCreateStream,
@@ -420,6 +427,17 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
     // frame before the button must not silently invert the outcome, and this is
     // the same value the lane highlight is drawn from.
     const extractRef = { current: false };
+    // Vertical INTENT, sampled the same way, and the gate for the whole lane
+    // move. Without it an ordinary horizontal drag still reports a drop lane —
+    // the cursor never leaves the grabbed clip's own lane — so a selection
+    // spanning two lanes would silently collapse into one every time it is
+    // moved along the time axis, writing `ui_tracks` into the file.
+    // `dstLane !== srcLane` is NOT the guard: `srcLane` is the lane of the
+    // GRABBED clip, and gathering a multi-lane selection onto it is a real
+    // gesture. It just has to ask vertically to be told apart from a plain
+    // horizontal move. Once latched it stays latched: the drag has declared
+    // itself, and coming back to the starting row is then a choice.
+    const verticalRef = { current: false };
     let moved = false;
     const THRESHOLD = 4;
     function move(ev) {
@@ -436,9 +454,12 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
         if (mode === "resize") onUpdate(s.id, { duration: Math.max(0.5, +(origs[s.id].duration + dt).toFixed(3)) });
       }
       if (canMoveLane) {
+        if (Math.abs(dy) >= THRESHOLD) verticalRef.current = true;
         extractRef.current = !!ev.altKey;
         setDropExtract(extractRef.current);
-        const lane = laneIndexAtClientY(ev.clientY);
+        // No vertical intent, no highlight: the affordance must not promise a
+        // lane change the release will not perform.
+        const lane = verticalRef.current ? laneIndexAtClientY(ev.clientY) : -1;
         setDrop(lane === -1 ? null : lane);
       }
     }
@@ -448,11 +469,10 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
       const dstLane = canMoveLane ? dragOverRef.current : null;
       setDrop(null);
       // Inside the gesture, so the vertical move and the onset it travelled
-      // with collapse into one undo step. No `dstLane !== srcLane` guard here:
-      // `srcLane` is the lane of the GRABBED clip, and dropping a selection
-      // that spans lanes back on it is the "gather them here" gesture. Whether
-      // the drop changes anything is `moveStreams`' call — it sees all the
-      // targets, this does not.
+      // with collapse into one undo step. `dstLane` is non-null only when
+      // `verticalRef` latched (see move), so a horizontal drag never reaches
+      // here. Whether a real drop changes anything is `moveStreams`' call — it
+      // sees all the targets, this does not.
       if (moved && dstLane != null) {
         onMoveStreams(targets.map(s => s.id), dstLane, { extract: extractRef.current });
       }
@@ -861,16 +881,33 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
           </div>
           {laneTracks.map((t, i) => {
             const laneH = getH(t.id);
+            /* N clips share one lane and are placed by onset alone, so two of
+             * them can cover each other exactly — Ctrl+C / Ctrl+V with the
+             * playhead still on the source does it every time, and so does
+             * dropping a clip onto an occupied lane at the same position. Fully
+             * covered means unreachable: raising the SELECTED clip is no way
+             * out, since selecting it means clicking it first.
+             * So each row starts a few px lower than the one before, leaving a
+             * grabbable strip of everything underneath. The step shrinks to fit
+             * the lane instead of pushing the last clip out of it — and with a
+             * single clip it is zero, which is the default layout untouched. */
+            const n = laneStreams[i].length;
+            const step = n > 1
+              ? Math.min(CLIP_STACK_STEP, Math.max(0, laneH - CLIP_PAD * 2 - CLIP_MIN_H) / (n - 1))
+              : 0;
             return (
             <div key={t.id} className={"lane" + (dragOver === i ? (dropExtract ? " drop-target drop-extract" : " drop-target") : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
             onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
             onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
-              {/* N clips per lane. They are placed by onset alone, so two that
-                * overlap in time overlap on screen; the selected one is raised
-                * rather than resized, to keep its waveform readable. */}
-              {laneStreams[i].map((s) =>
+              {laneStreams[i].map((s, k) => {
+              const top = CLIP_PAD + k * step;
+              // The children are canvases sized in px: they must follow the
+              // clip's own box, not the lane's, or a staggered row draws its
+              // waveform past its own bottom edge and gets cropped.
+              const clipH = Math.max(1, laneH - top - CLIP_PAD);
+              return (
               <div key={s.id} className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
-            style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, background: s.color, zIndex: selected.includes(s.id) ? 3 : 1 }}
+            style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, top, background: s.color, zIndex: selected.includes(s.id) ? 3 : 1 }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
             onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
@@ -887,17 +924,18 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?
-              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={laneH} /> :
+              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={clipH} /> :
               showWaveforms !== false && waveformFor && waveformFor(s.id) ?
-              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={laneH} color={s.color} /> :
+              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={clipH} color={s.color} /> :
               null}
                 {showGrains && grainsFor && grainsFor(s.id) ?
-              <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={laneH} /> :
+              <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={clipH} /> :
               null}
                 <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, t.id)} title="drag to resize this track" />
               </div>
-              )}
+              );
+              })}
             </div>
             );
           })}

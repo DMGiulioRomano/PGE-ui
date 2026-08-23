@@ -284,10 +284,29 @@ console.log("\n── UI wiring (source guards) ──");
   assert("no side effect survives inside a setDragOver updater",
          !/setDragOver\(\s*\((\w+)\)\s*=>\s*\{[\s\S]{0,200}?on(Reorder|TrackReorder)/.test(tlCode));
 
-  // The drop must not be skipped on `srcLane`: that is the lane of the GRABBED
-  // clip, and a selection spanning lanes dropped there is a real move.
+  // The lane move is gated on VERTICAL INTENT, not on `dstLane !== srcLane`:
+  // `srcLane` is the lane of the GRABBED clip, so that comparison swallows the
+  // "gather them here" gesture — while no gate at all makes a plain horizontal
+  // drag of a multi-lane selection collapse it into one lane.
   assert("the clip drop does not second-guess moveStreams on the source lane",
          !/dstLane !== srcLane/.test(tlCode));
+  assert("vertical intent is sampled during the drag, per axis",
+         /verticalRef\.current = true/.test(tlCode) &&
+         /Math\.abs\(dy\) >= THRESHOLD/.test(tlCode));
+  assert("with no vertical intent no lane is even highlighted",
+         /verticalRef\.current \? laneIndexAtClientY\(ev\.clientY\) : -1/.test(tlCode));
+  // Two clips at the same onset on one lane must not hide each other: a paste
+  // at the playhead lands exactly on its source, and a fully covered clip can
+  // never be selected (selecting means clicking). The rows are staggered.
+  assert("stacked clips are offset so the one underneath stays grabbable",
+         /const top = CLIP_PAD \+ k \* step/.test(tlCode) &&
+         /CLIP_STACK_STEP/.test(tlCode));
+  assert("the stagger shrinks to fit instead of pushing the last clip out",
+         /Math\.min\(CLIP_STACK_STEP, Math\.max\(0, laneH - CLIP_PAD \* 2 - CLIP_MIN_H\)/.test(tlCode));
+  assert("the clip's canvases follow the clip box, not the lane",
+         /const clipH = Math\.max\(1, laneH - top - CLIP_PAD\)/.test(tlCode) &&
+         !/<Clip(Waveform|Spectrogram|Grains)[^>]*height=\{laneH\}/.test(tlCode));
+
   // Alt is sampled during the drag, so the highlight and the outcome agree.
   assert("the extract modifier is read while dragging, not at release",
          /extractRef\.current = !!ev\.altKey/.test(tlCode) &&

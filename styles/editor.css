@@ -241,6 +241,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip-ms .pill.on-m { background: #80322E; color: #FFD3D5; border-color: transparent; }
 .clip-ms .pill.on-s { background: #B47B1A; color: #2A1A05; border-color: transparent; font-weight: 600; }
 .comp-end-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--border-default); z-index: 1; pointer-events: none; opacity: .6; }
+/* `top` is overridden inline when a lane stacks more than one clip: Timeline.jsx
+ * staggers the rows so the one underneath stays grabbable. CLIP_PAD there must
+ * stay equal to the 6px inset below. */
 .clip { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); overflow: hidden; cursor: pointer; }
 .clip .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clip .metaline { font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.6); padding: 0 6px; }
