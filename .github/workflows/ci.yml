@@ -23,6 +23,7 @@ jobs:
       # assente/scaduto, PR da un fork) i test si skippano come prima invece di
       # far fallire il job.
       - name: checkout PythonGranularEngine
+        id: engine
         continue-on-error: true
         uses: actions/checkout@v4
         with:
@@ -32,8 +33,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # PGE_REQUIRE_ENGINE_FIXTURES trasforma "motore assente" da SKIP a FAIL,
+      # e lo si passa solo quando il checkout sopra ha riportato successo: un
+      # checkout riuscito che non lascia i config dove i test li cercano non
+      # puo' piu' passare verde saltando le fixture (#132). Se invece il
+      # checkout fallisce — secret assente/scaduto, PR da un fork — la
+      # variabile resta vuota e le fixture si skippano come prima.
       - name: run node test suite
         working-directory: PGE-ui
+        env:
+          PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: make tests-node
 
   python:

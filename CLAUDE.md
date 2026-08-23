@@ -57,7 +57,20 @@ the fixture-dependent parts run on a PR — a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary). The
 assertion count is engine-dependent: a config added/removed upstream moves it by
 three (three assertions per file), so a local total that differs from CI's is
-that, not a lost test. There is no linter or typechecker; UI verification is
+that, not a lost test.
+
+**Engine fixtures never skip silently** (#132). `test-yaml-bridge.js` routes every
+engine config through `engineFixture(name)`: with the engine checkout present but
+a named fixture missing (renamed, deleted upstream) the test **fails** — a skip is
+legitimate only when the whole sibling checkout is absent (local dev, fork PR
+without the secret). The node CI job passes
+`PGE_REQUIRE_ENGINE_FIXTURES=1` when its engine checkout step reports success, so
+even that last skip can't go green in CI. Every run ends with a fixture tally
+(`N eseguite, M mancanti, corpus K config`) so the green says how much it verified.
+The suite summary must stay the **last** thing in the file — it exits the process,
+and asserts written after it used to print FAIL and exit 0.
+
+There is no linter or typechecker; UI verification is
 manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
 
 ## Architecture
