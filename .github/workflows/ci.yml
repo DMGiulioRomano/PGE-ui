@@ -63,6 +63,7 @@ jobs:
       # the whole job — test_engine_render already skips when the engine venv/
       # main.py is absent, so the bridge tests still run and gate the PR.
       - name: checkout PythonGranularEngine
+        id: engine
         continue-on-error: true
         uses: actions/checkout@v4
         with:
@@ -85,6 +86,12 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install -r requirements.txt
+      # Stessa cosa del job node: test_yaml_structure.py gira sui config veri del
+      # motore e, senza checkout, la parametrize su lista vuota diventa uno skip
+      # che non dice niente. Con il checkout riuscito il corpus e' obbligatorio
+      # (#132); se il checkout fallisce la variabile resta vuota e si skippa.
       - name: run python test suite
         working-directory: PGE-ui
+        env:
+          PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: python -m pytest tests/python/ -v
