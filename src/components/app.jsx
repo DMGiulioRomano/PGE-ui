@@ -841,7 +841,12 @@ function App() {
     if (!toCopy.length) return;
     // `_srcId` survives the deep copy so paste can find the lane to land in
     // even after the id has been reallocated (it is stripped on paste).
-    clipboardRef.current = JSON.parse(JSON.stringify(toCopy)).map(s => ({ ...s, _srcId: s.id }));
+    // `_srcProject` scopes it: the clipboard outlives a project switch (on
+    // purpose — copying between compositions is the point), and default ids
+    // repeat across files, so pasting into another project would otherwise land
+    // on whatever unrelated stream happens to be called `stream1` there.
+    clipboardRef.current = JSON.parse(JSON.stringify(toCopy))
+      .map(s => ({ ...s, _srcId: s.id, _srcProject: activeProject }));
   }
   function pasteStreams() {
     const copied = clipboardRef.current;
@@ -858,15 +863,22 @@ function App() {
         newIds.push(ids[i]);
         // `_srcId` is clipboard bookkeeping, not stream data: it must not reach
         // the model, or it would sit inside the stem fingerprint.
-        const { _srcId, ...body } = JSON.parse(JSON.stringify(s));
+        const { _srcId, _srcProject, ...body } = JSON.parse(JSON.stringify(s));
         return { ...body, id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
       const withPaste = { ...d, streams: [...d.streams, ...pasted] };
       // The copy joins the lane its original sits in (#141) — no similarity
       // heuristic, just the track that already exists. `_srcId` is recorded at
-      // copy time because the source may have been deleted since.
+      // copy time because the source may have been deleted since; when it no
+      // longer resolves, `addStreamToTrackOf` opens a lane at the end, which is
+      // what paste did before tracks existed. Out of its own project the id
+      // means nothing, so ask for that fallback outright rather than matching a
+      // namesake.
       let tr = TR.deriveTracks(withPaste);
-      copied.forEach((s, i) => { tr = TR.addStreamToTrackOf(tr, s._srcId || s.id, ids[i]); });
+      copied.forEach((s, i) => {
+        const src = s._srcProject === activeProject ? (s._srcId || s.id) : null;
+        tr = TR.addStreamToTrackOf(tr, src, ids[i]);
+      });
       return TR.applyTracks(withPaste, tr);
     });
     setSelectedIds(newIds);
@@ -1045,6 +1057,11 @@ function App() {
     // would show a dead stream's waveform.
     const drop = (m) => { if (!(oldId in m)) return m; const n = { ...m }; delete n[oldId]; return n; };
     setWaveforms(drop); setSpectrograms(drop); setGrainData(drop);
+    // A copy taken before the rename still points at the old id. Left alone it
+    // would stop resolving and the paste would silently open a new lane instead
+    // of joining the source's — `_srcId` has to keep naming the same stream.
+    clipboardRef.current = clipboardRef.current.map(s =>
+      (s._srcId === oldId && s._srcProject === activeProject) ? { ...s, _srcId: newId } : s);
     setDirty(true);
     return null;
   }

@@ -309,6 +309,17 @@ A singleton track's **id is its stream id**. That is what keeps pre-#141
 `laneHeights` entries applying, and what lets pulling the last clip out of a
 group land back on the trivial layout instead of leaving a `t1` behind.
 
+**Paste picks its lane from `_srcId`**, stamped on the clipboard at copy time
+together with `_srcProject`: the copy joins the lane its original sits in, with
+no similarity heuristic. When `_srcId` doesn't resolve, `addStreamToTrackOf`
+opens a lane at the end — which is what paste did before tracks existed. Two
+callers lean on that fallback instead of a special case: the source was deleted
+while it sat in the clipboard, and the clipboard came from another project
+(there `null` is passed outright — the clipboard deliberately outlives a project
+switch, and default ids repeat across files, so a namesake would be the wrong
+lane). `renameStream` rewrites a pending `_srcId` for the same reason: it has to
+keep naming the same stream.
+
 **Renaming a stream** (`renameStream` in `app.jsx`, `renameStreamId` in
 `tracks.js`) is an identity change, not a patch, so it does not go through
 `updateStream`. The lane id *and* a still-default lane name follow the stream —

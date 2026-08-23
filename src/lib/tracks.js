@@ -296,8 +296,12 @@
   }
 
   /* Paste lands next to its original: the copy joins the track the source
-   * stream sits in. An unknown source (its track was deleted meanwhile) falls
-   * back to a lane of its own at the end. */
+   * stream sits in. An unresolvable source falls back to a lane of its own at
+   * the end — which is what paste did before tracks existed. Two callers rely
+   * on that fallback rather than on a special case: the source was deleted
+   * while it sat in the clipboard, and the clipboard came from another project
+   * (`null` is passed outright there, because default ids repeat across files
+   * and a namesake is not the same stream). */
   function addStreamToTrackOf(tracks, srcStreamId, newStreamId) {
     const idx = trackIndexOfStream(tracks, srcStreamId);
     if (idx === -1) {

@@ -287,6 +287,26 @@ console.log("\n── a new stream gets its own lane at the drop index ──");
 
 console.log("\n── UI wiring (source guards) ──");
 {
+console.log("\n── addStreamToTrackOf: la corsia di destinazione del paste ──");
+{
+  const tr = T.deriveTracks(data(["s1", "s2"], [
+    { id: "t1", name: "gruppo", streams: ["s1", "s2"] },
+  ]));
+  assert("la copia entra nella corsia dell'originale",
+         eq(T.addStreamToTrackOf(tr, "s1", "s3")[0].streamIds, ["s1", "s2", "s3"]));
+  // Le due sorgenti irrisolvibili — cancellata, e da un altro progetto — devono
+  // cadere sullo stesso comportamento: una corsia in fondo, come il paste
+  // faceva prima che le tracce esistessero.
+  for (const [label, src] of [["cancellata", "sparito"], ["altro progetto", null]]) {
+    const out = T.addStreamToTrackOf(tr, src, "s3");
+    assert(`sorgente ${label} → corsia propria in fondo`,
+           out.length === 2 && eq(out[1].streamIds, ["s3"]) && out[1].id === "s3",
+           JSON.stringify(shape(out)));
+    assert(`sorgente ${label} → la corsia esistente resta intatta`,
+           eq(out[0].streamIds, ["s1", "s2"]));
+  }
+}
+
 console.log("\n── renameStreamId: la rinomina non deve costare la chiave ──");
 {
   // A plain rename on a project that never grouped must stay trivial: no
@@ -356,6 +376,18 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
   assert("the clip's canvases follow the clip box, not the lane",
          /const clipH = Math\.max\(1, laneH - top - CLIP_PAD\)/.test(tlCode) &&
          !/<Clip(Waveform|Spectrogram|Grains)[^>]*height=\{laneH\}/.test(tlCode));
+
+  // Paste has to know WHICH lane. `_srcId` is the whole answer, so it must stay
+  // truthful: scoped to its project (default ids repeat across files, and a
+  // namesake is not the same stream) and carried through a rename.
+  assert("the clipboard records the project it was copied from",
+         /_srcProject: activeProject/.test(appSrc));
+  assert("out of its own project paste asks for the fallback lane outright",
+         /s\._srcProject === activeProject \? \(s\._srcId \|\| s\.id\) : null/.test(appSrc));
+  assert("_srcId is stripped before the stream reaches the model",
+         /const \{ _srcId, _srcProject, \.\.\.body \}/.test(appSrc));
+  assert("renaming a stream keeps a pending copy pointing at it",
+         /_srcId === oldId && s\._srcProject === activeProject/.test(appSrc));
 
   // Renaming a stream is an identity change, not a patch: it must not travel
   // through updateStream, and it must refuse a name a stem on disk still owns —
