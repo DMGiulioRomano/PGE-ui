@@ -923,6 +923,7 @@ ${body}
 {
   const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
   const yeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
+  const beSrc   = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
   const calls = (appSrc.match(/clearDeviationProbabilityLegacy/g) || []).length;
   assert("wiring — app.jsx spegne il flag a entrambi i punti di scrittura (Save e render)",
     calls === 2, `chiamate trovate: ${calls}`);
@@ -939,6 +940,16 @@ ${body}
   // testato li' sopra. Qui basta che applyEdits lo chiami invece di ricalcolarlo.
   assert("wiring — YamlEditor.applyEdits delega il flag a PGEYaml.mergeDeviationProbabilityLegacy",
     /deviationProbabilityLegacy:\s*window\.PGEYaml\.mergeDeviationProbabilityLegacy\(parsed, stream\)/.test(yeSrc));
+
+  // Il render spegne il flag perche' il server ha scritto il config prima di
+  // partire — ma non quando quella scrittura non e' avvenuta. Il flag si alza
+  // dopo il controllo sulla risposta, NON nel catch: quello copre anche il loop
+  // NDJSON, dove un annullamento arriva a file gia' scritto.
+  assert("wiring — backend segna configWritten dopo il controllo sulla risposta, non nel catch",
+    /configWritten = true;/.test(beSrc) && /return \{ ok: false, error: msg, configWritten \};/.test(beSrc)
+      && beSrc.indexOf("configWritten = true;") < beSrc.indexOf("} catch (e) {\n          const msg"));
+  assert("wiring — app.jsx non spegne il flag quando il config non e' stato scritto",
+    /if \(result\.configWritten !== false\) \{/.test(appSrc));
 }
 
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];

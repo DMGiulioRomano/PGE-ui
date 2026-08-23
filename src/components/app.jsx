@@ -1187,10 +1187,14 @@ function App() {
     // Come dopo un Save, e per la stessa ragione: server.py scrive yamlContent
     // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
     // migrazione di `dephase` e' avvenuta anche se poi il render fallisce —
-    // percio' qui, non dentro `result.ok`. Se invece la richiesta non e' mai
-    // arrivata al server il flag si riaccende alla prossima apertura, che lo
-    // ricalcola dal file vero.
-    _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
+    // percio' qui, non dentro `result.ok`. Ma non quando il file non e' stato
+    // scritto affatto (server down, o uno dei tre abort(400) che precedono la
+    // scrittura): li' la riscrittura e' ancora da fare e l'avviso deve restare.
+    // `!== false` e non truthiness: sul percorso buono il campo non c'e', e
+    // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
+    if (result.configWritten !== false) {
+      _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
+    }
 
     if (result.ok) {
       const ren = (result.generated?.length || 0) - cacheHits;

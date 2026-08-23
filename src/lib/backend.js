@@ -241,6 +241,18 @@
           }
           _persistStemIndex();
         }
+        // Il server scrive lo YAML su configs/<basename>.yml PRIMA di costruire
+        // lo stream di eventi, e i suoi tre abort(400) (basename mancante, con
+        // traversal, formato ignoto) precedono quella scrittura. Quindi una
+        // risposta buona implica il file scritto, e un fallimento prima di qui
+        // implica il contrario: e' quello che il chiamante deve sapere per
+        // decidere se la migrazione di `dephase` e' avvenuta.
+        //
+        // La distinzione non e' "la richiesta e' arrivata": il catch qui sotto
+        // copre anche il loop di lettura NDJSON, quindi un annullamento o una
+        // connessione caduta a meta' stream ci finiscono dentro — e li' il file
+        // e' scritto eccome. Percio' il flag si alza qui, non nel catch.
+        let configWritten = false;
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -252,6 +264,7 @@
             const txt = await res.text().catch(() => "");
             throw new Error(`HTTP ${res.status} ${txt.slice(0, 120)}`);
           }
+          configWritten = true;
           const reader = res.body.getReader();
           const dec = new TextDecoder();
           let buf = "";
@@ -311,7 +324,7 @@
           const msg = e.name === "AbortError" ? "cancelled" : e.message;
           onEvent && onEvent({ type: "log", line: `[ERROR] ${msg}` });
           onEvent && onEvent({ type: "done", ok: false, error: msg });
-          return { ok: false, error: msg };
+          return { ok: false, error: msg, configWritten };
         } finally {
           cancelAbort = null;
         }
