@@ -907,6 +907,12 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a \$\{window\.PGE_OUTPUT_SR\} Hz/.test(inspSrc));
   assert("nessun sample rate scritto a mano nelle frasi dell'unità",
     !/campioni a 48000 Hz/.test(inspSrc));
+  // Il footer è la frase che l'utente legge senza aprire un tooltip: scritta a
+  // mano, sarebbe l'unica sbagliata il giorno in cui il motore muove la costante.
+  assert("nemmeno il footer scrive il sample rate a mano", (() => {
+    const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+    return /sr \$\{window\.PGE_OUTPUT_SR\} · stereo/.test(appSrc) && !/sr 48000/.test(appSrc);
+  })());
   // Il seme del passaggio a envelope (e il ritorno a scalare) è il default del
   // motore, 0.05 s: scritto nudo con milliseconds selezionato sono 50
   // microsecondi — e succederebbe proprio nello stato in cui l'errore invita a
