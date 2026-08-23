@@ -723,23 +723,6 @@ console.log("\n── grainSecondsToUnit ──");
   assert("non numerico → invariato", T(null, "milliseconds") === null);
 }
 
-console.log("\n── isEngineEnvelopeLike (la porta del motore) ──");
-{
-  const P = U.isEngineEnvelopeLike;
-  // Mirror di Envelope.is_envelope_like: per una lista serve almeno un item
-  // lista di ESATTAMENTE due elementi (o un compatto, o un BP group).
-  assert("breakpoint nudi → sì", P([[0, 0.05], [1, 0.1]]) === true);
-  assert("solo 3-tuple → no", P([[0, 0.05, "exp"], [1, 0.1, "lin"]]) === false);
-  assert("solo dict {t, v} → no", P([{ t: 0, v: 0.05 }, { t: 1, v: 0.1 }]) === false);
-  assert("un dict in mezzo a un nudo → sì (basta un item)", P([{ t: 0, v: 0.05 }, [1, 0.1]]) === true);
-  assert("BP group → sì", P([[[0, 0.05], [1, 0.1]], "exp"]) === true);
-  assert("blocco compatto → sì", P([[[0, 0.05], [50, 0.1]], 1, 4]) === true);
-  assert("dict con points → sì (regola verbatim)", P({ type: "linear", points: [] }) === true);
-  assert("dict senza points → no", P({ type: "linear" }) === false);
-  assert("lista vuota → no", P([]) === false);
-  assert("scalare → no", P(0.05) === false && P(null) === false);
-}
-
 console.log("\n── grainDefaultDuration ──");
 {
   const D = U.grainDefaultDuration;
@@ -806,32 +789,32 @@ console.log("\n── convertGrainDurationUnit ──");
     eq(typedDictPts.durationEnv, { type: "linear", points: [{ t: 0, v: 1 }, { t: 1, v: 100 }] }),
     JSON.stringify(typedDictPts.durationEnv));
 
-  /* Le forme che il MOTORE non scala — e che quindi la UI non deve toccare.
-   * scale_raw_param_values passa da Envelope.is_envelope_like, che per una
-   * lista pretende almeno un item lista di DUE elementi (o compatto, o BP
-   * group). Una lista di soli breakpoint dict, o di soli 3-tuple, non lo
-   * soddisfa e torna indietro invariata — verificato eseguendo
-   * _pre_normalize_grain_params. Non è un rifiuto: Envelope() quelle liste le
-   * costruisce. Le legge sempre in secondi, unità dichiarata o no.
-   * Convertirle qui significherebbe riscrivere numeri che il motore poi
-   * interpreta nella scala vecchia: `[{t:0,v:0.01},{t:1,v:0.1}]` diventerebbe
-   * `[{t:0,v:10},{t:1,v:100}]`, cioè grani mille volte più lunghi, per un
-   * gesto il cui senso è «il numero cambia, la durata reale no». */
-  const dictOnly = [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }];
-  assert("lista di soli breakpoint dict: NON convertita (il motore non la scala)",
-    eq(C({ durationEnv: dictOnly }, "milliseconds").durationEnv, dictOnly),
-    JSON.stringify(C({ durationEnv: dictOnly }, "milliseconds").durationEnv));
-  const tuple3Only = [[0, 0.001, "exp"], [1, 0.1, "lin"]];
-  assert("lista di soli 3-tuple: NON convertita",
-    eq(C({ durationEnv: tuple3Only }, "milliseconds").durationEnv, tuple3Only),
-    JSON.stringify(C({ durationEnv: tuple3Only }, "milliseconds").durationEnv));
-  const singleDict = [{ t: 0, v: 0.001 }];
-  assert("un solo breakpoint dict: NON convertito",
-    eq(C({ durationEnv: singleDict }, "milliseconds").durationEnv, singleDict));
-  assert("lista vuota: NON convertita (per il motore non è envelope-like)",
+  /* Le grafie che prima di PGE #234 il motore NON scalava, e ora sì.
+   * `is_envelope_like` era più stretta del costruttore: una lista di soli
+   * breakpoint dict, o di sole 3-tuple, tornava indietro invariata e il motore
+   * la leggeva in secondi qualunque unità fosse dichiarata. La UI aveva una
+   * porta che ricalcava l'asimmetria; ora non serve più e queste grafie si
+   * convertono come tutte le altre. Verificato eseguendo il motore corretto su
+   * venti forme: UI e `scale_raw_param_values` coincidono su tutte. */
+  const dictOnly = C({ durationEnv: [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }] }, "milliseconds");
+  assert("lista di soli breakpoint dict: convertita (PGE #234)",
+    eq(dictOnly.durationEnv, [{ t: 0, v: 1 }, { t: 1, v: 100 }]),
+    JSON.stringify(dictOnly.durationEnv));
+  const tuple3Only = C({ durationEnv: [[0, 0.001, "cubic"], [1, 0.1, "linear"]] }, "milliseconds");
+  assert("lista di sole 3-tuple: convertita, interp conservato",
+    eq(tuple3Only.durationEnv, [[0, 1, "cubic"], [1, 100, "linear"]]),
+    JSON.stringify(tuple3Only.durationEnv));
+  const singleDict = C({ durationEnv: [{ t: 0, v: 0.001 }] }, "milliseconds");
+  assert("un solo breakpoint dict: convertito",
+    eq(singleDict.durationEnv, [{ t: 0, v: 1 }]), JSON.stringify(singleDict.durationEnv));
+  assert("lista vuota: niente da convertire, e niente si rompe",
     eq(C({ durationEnv: [] }, "milliseconds").durationEnv, []));
-  assert("la porta non tocca le forme che il motore scala davvero",
-    eq(C({ durationEnv: [[0, 0.001], [1, 0.1]] }, "milliseconds").durationEnv, [[0, 1], [1, 100]]));
+  // Il pattern del compatto conserva l'interp per-punto — da PGE #234 lo fa
+  // anche il motore, quindi non è più una divergenza voluta ma una parità.
+  const compattoInterp = C({ durationEnv: [[[0, 0.001, "cubic"], [50, 0.1]], 1, 4] }, "milliseconds");
+  assert("il pattern del compatto conserva l'interp per-punto",
+    eq(compattoInterp.durationEnv, [[[0, 1, "cubic"], [50, 100]], 1, 4]),
+    JSON.stringify(compattoInterp.durationEnv));
   const rangeEnv = C({ durationRangeEnv: [[0, 0.01], [1, 0.02]] }, "milliseconds");
   assert("anche l'envelope di duration_range",
     eq(rangeEnv.durationRangeEnv, [[0, 10], [1, 20]]), JSON.stringify(rangeEnv.durationRangeEnv));
@@ -951,8 +934,8 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
   // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
   // il punto al primo drag, che è perdita di dati, non solo una vista storta.
   assert("i bound delle curve di durata seguono l'unità dichiarata",
-    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainDurUnit\)/.test(eeSrc)
-    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainRangeUnit\)/.test(eeSrc)
+    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(eeSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(eeSrc)
     && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(eeSrc)
     && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(eeSrc));
   assert("anche la finestra di partenza è espressa nell'unità",
@@ -960,20 +943,8 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
     && !/visMin: 0, visMax: 0\.5,/.test(eeSrc)
     && /grainDurVis/.test(eeSrc) && /grainRangeVis/.test(eeSrc));
   assert("il suffisso è quello condiviso con l'Inspector",
-    /window\.PGEEnvUtils\.grainUnitSuffix\(grainDurUnit\)/.test(eeSrc)
-    && /window\.PGEEnvUtils\.grainUnitSuffix\(grainRangeUnit\)/.test(eeSrc)
-    && /unit: grainDurSuffix, fine: true,/.test(eeSrc)
-    && /unit: grainRangeSuffix, fine: true,/.test(eeSrc));
-  // L'unità vale PER CURVA: una forma che il motore non scala resta in secondi
-  // qualunque unità sia dichiarata, e l'asse deve dirlo — altrimenti il primo
-  // drag legge "ms" e scrive secondi (50 sull'asse -> 50 s per il motore).
-  assert("l'unità della curva passa dalla porta del motore, non solo dallo stream",
-    /isEngineEnvelopeLike\(env\) \? grainUnit : "seconds"/.test(eeSrc)
-    && /const grainDurUnit = curveUnit\(stream\.grain && stream\.grain\.durationEnv\)/.test(eeSrc)
-    && /const grainRangeUnit = curveUnit\(stream\.grain && stream\.grain\.durationRangeEnv\)/.test(eeSrc));
-  assert("l'Inspector dice perché quella curva resta in secondi",
-    /isEngineEnvelopeLike\(stream\.grain\[k\]\)/.test(inspSrc)
-    && /legge questo envelope in SECONDI/.test(inspSrc));
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
+    && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
 }
 
 console.log(`\n${"─".repeat(50)}`);

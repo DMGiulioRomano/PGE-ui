@@ -151,16 +151,19 @@
   /* Un breakpoint in forma dict `{t, v, type?}`. Il builder del motore lo
      normalizza in `[t, v, type?]` prima di guardarlo
      (envelope_builder.py:132), quindi è un formato di prima classe, non un
-     residuo. `PGEEnv.isBreakpoint` esige `Array.isArray` e non lo vede — e non
-     va allargata: la usa anche l'EnvelopeEditor per decidere cosa è
-     trascinabile, e i breakpoint dict il canvas non li disegna. Il predicato
-     resta quindi locale a questo modulo, dove la domanda è solo se il motore
-     costruirà il corpo. */
+     residuo — e da PGE #234 lo è anche per `is_envelope_like`, che prima non
+     lo riconosceva: una lista di soli dict veniva RIFIUTATA come corpo globale,
+     e questo modulo doveva ricalcare l'asimmetria. Ora non più.
+     `PGEEnv.isBreakpoint` esige `Array.isArray` e non lo vede — e non va
+     allargata: la usa anche l'EnvelopeEditor per decidere cosa è trascinabile,
+     e i breakpoint dict il canvas non li disegna. Il predicato resta quindi
+     locale a questo modulo, dove la domanda è solo se il motore costruirà il
+     corpo. */
   function _isDictBP(it) {
     return !!(it && typeof it === "object" && !Array.isArray(it) && "t" in it && "v" in it);
   }
 
-  function _envBodyError(v, dictBPOk) {
+  function _envBodyError(v) {
     const E = window.PGEEnv;
     if (Array.isArray(v)) {
       if (v.length === 0) return "empty";
@@ -171,16 +174,14 @@
       // finivano segnalate come non costruibili, e il motore le costruisce.
       if (E.isBPGroup(v) || E.isCompactBlock(v)) return null;
       const any = v.some(it => E.isBreakpoint(it) || E.isBPGroup(it) || E.isCompactBlock(it) ||
-                               (dictBPOk && _isDictBP(it)));
+                               _isDictBP(it));
       return any ? null : "shape";
     }
     if (v && typeof v === "object") {
       // Il builder legge `points` senza guardare se c'è: un dict che non ce
       // l'ha alza KeyError, ed è il terzo dei corpi malformati di PGE #209.
       if (!Array.isArray(v.points)) return "shape";
-      // Dentro `points` il dict per-punto è normalizzato: il gate arriva a
-      // _parse_raw_value e il corpo si costruisce.
-      return _envBodyError(v.points, true);
+      return _envBodyError(v.points);
     }
     return null;
   }
@@ -224,11 +225,7 @@
       // chiave a null = range-only per quel parametro, non un envelope vuoto
       if (v === null || typeof v === "number" || typeof v === "boolean") continue;
       if (typeof v !== "object") return { kind: "type", param: k, value: v };
-      // Sotto una chiave per-parametro il corpo arriva a _parse_raw_value, che
-      // normalizza i breakpoint dict — a differenza del valore GLOBALE, dove
-      // prima passa da is_envelope_like e una lista di soli dict non è
-      // envelope-like (il motore la rifiuta). L'asimmetria è del motore.
-      const reason = _envBodyError(v, true);
+      const reason = _envBodyError(v);
       if (reason) return { kind: "env", reason, param: k, value: v };
     }
     return null;

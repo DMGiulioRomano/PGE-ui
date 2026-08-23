@@ -1220,26 +1220,6 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                   <span />
                 </div>
               ) : null}
-              {/* Le curve che il motore non scala restano in secondi anche con
-                  un'altra unità dichiarata (isEngineEnvelopeLike è la sua porta
-                  verbatim): l'EnvelopeEditor le etichetta e le limita in
-                  secondi, e qui va detto perché — altrimenti nel pannello
-                  convivono due domini senza che niente li distingua. */}
-              {(() => {
-                const stuck = ["durationEnv", "durationRangeEnv"].filter((k) =>
-                  stream.grain[k] != null
-                  && !window.PGEEnvUtils.isEngineEnvelopeLike(stream.grain[k]));
-                if (!stuck.length || grainUnit === "seconds") return null;
-                return (
-                  <div className="pge-prow" style={{paddingTop:0}}>
-                    <span className="k" /><span />
-                    <span className="v mono" style={{fontSize:9, color:"var(--status-warn)", lineHeight:1.4}}>
-                      {`${stuck.map((k) => (k === "durationEnv" ? "duration" : "duration_range")).join(" e ")}: il motore legge questo envelope in SECONDI, non in ${grainUnit} — è una forma che non scala (soli breakpoint dict o sole 3-tuple). L'editor lo mostra in secondi.`}
-                    </span>
-                    <span />
-                  </div>
-                );
-              })()}
               <window.PGE.EnvelopeSelectorRow
                 value={stream.grain.envelope}
                 onChange={(env) => onChange({ grain: { ...stream.grain, envelope: env } })}
