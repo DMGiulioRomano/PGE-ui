@@ -71,6 +71,33 @@ function listEnvelopes(stream, sampleDur) {
   // qui contraddirebbe l'asse tappato a 1 e la riga dell'Inspector accanto.
   // La precisione NON viaggia sull'unità — vedi `fine` sotto.
   const loopUnitSuffix = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized" ? "" : "s";
+  // Stessa storia sulla durata del grano (PGE #158, tre unità da #171): i bound
+  // statici sono in secondi, i valori dell'envelope no. Presi come sono, una
+  // curva in millisecondi resta tappata a 10 — dieci millisecondi invece di
+  // dieci secondi — e non è solo una vista storta: computeYFit clampa la
+  // finestra dentro [hardMin, hardMax] e clampY riporta ogni punto trascinato
+  // sotto il cap, quindi il primo drag riscrive il valore. I bound li converte
+  // grainUnitBounds, come loopEnvMax fa col cap del loop.
+  const grainUnit = (stream.grain && stream.grain.durationUnit) || "seconds";
+  // L'unità VALE PER CURVA, non per stream: una forma che il motore non scala
+  // (lista di soli breakpoint dict, o di soli 3-tuple) la legge in secondi
+  // qualunque unità sia dichiarata, e infatti convertGrainDurationUnit non la
+  // tocca. Etichettarla con l'unità dichiarata sarebbe la stessa bugia di
+  // prima, un piano più in là: l'asse direbbe "ms" sopra dei secondi, e il
+  // primo drag scriverebbe nel dominio sbagliato — 50 letti sull'asse come
+  // millisecondi, 50 secondi per il motore.
+  const curveUnit = (env) =>
+    (window.PGEEnvUtils.isEngineEnvelopeLike(env) ? grainUnit : "seconds");
+  const grainDurUnit = curveUnit(stream.grain && stream.grain.durationEnv);
+  const grainRangeUnit = curveUnit(stream.grain && stream.grain.durationRangeEnv);
+  const grainDurSuffix = window.PGEEnvUtils.grainUnitSuffix(grainDurUnit);
+  const grainRangeSuffix = window.PGEEnvUtils.grainUnitSuffix(grainRangeUnit);
+  const grainDurBounds = window.PGEEnvUtils.grainUnitBounds(PB.grainDur, grainDurUnit);
+  const grainRangeBounds = window.PGEEnvUtils.grainUnitBounds(PB.durationRange, grainRangeUnit);
+  // Anche la finestra di partenza era scritta in secondi (1-100 ms di grana,
+  // 0-500 ms di range): va detta nell'unità in vigore o si apre già fuori scala.
+  const grainDurVis = window.PGEEnvUtils.grainUnitBounds({ min: 0.001, max: 0.1 }, grainDurUnit);
+  const grainRangeVis = window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.5 }, grainRangeUnit);
   const list = [];
   if (stream.densityEnv) {
     list.push({ key: "density", label: "density", group: "Overall density",
@@ -117,13 +144,15 @@ function listEnvelopes(stream, sampleDur) {
   }
   if (stream.grain && stream.grain.durationEnv) {
     list.push({ key: "grainDur", label: "duration", group: "Grain",
-      path: ["grain", "durationEnv"], unit: "s", fine: true,
-      visMin: 0.001, visMax: 0.1, hardMin: PB.grainDur.min, hardMax: PB.grainDur.max });
+      path: ["grain", "durationEnv"], unit: grainDurSuffix, fine: true,
+      visMin: grainDurVis.min, visMax: grainDurVis.max,
+      hardMin: grainDurBounds.min, hardMax: grainDurBounds.max });
   }
   if (stream.grain && stream.grain.durationRangeEnv) {
     list.push({ key: "durationRange", label: "duration_range", group: "Grain",
-      path: ["grain", "durationRangeEnv"], unit: "s", fine: true,
-      visMin: 0, visMax: 0.5, hardMin: PB.durationRange.min, hardMax: PB.durationRange.max });
+      path: ["grain", "durationRangeEnv"], unit: grainRangeSuffix, fine: true,
+      visMin: grainRangeVis.min, visMax: grainRangeVis.max,
+      hardMin: grainRangeBounds.min, hardMax: grainRangeBounds.max });
   }
   if (stream.grain && stream.grain.readDirectionEnv) {
     // `domain: "direction"` (PGE #207) è ciò che distingue questo envelope da

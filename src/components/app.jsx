@@ -1560,7 +1560,7 @@ function App() {
           <span className="dot" />
           <span className="mono">{data.streams.length} streams</span>
           <span className="sep" />
-          <span className="mono">sr 48000 · stereo</span>
+          <span className="mono">{`sr ${window.PGE_OUTPUT_SR} · stereo`}</span>
           <span className="sep" />
           <span className="mono">{activeProject.replace(/\.yml$/, ".aif")}</span>
           <span className="sep" />
