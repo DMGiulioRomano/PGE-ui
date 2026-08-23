@@ -665,9 +665,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   const grainUnit = (stream.grain && stream.grain.durationUnit) || "seconds";
   // Il suffisso segue l'unità dichiarata: "s" su valori scritti in campioni o
   // in millisecondi direbbe il falso — la conversione la fa il motore al parse,
-  // la riga mostra il numero com'è nello YAML.
-  const grainUnitSuffix = grainUnit === "samples" ? "smp"
-    : grainUnit === "milliseconds" ? "ms" : "s";
+  // la riga mostra il numero com'è nello YAML. Su un'unità ignota il suffisso
+  // è vuoto: etichettare «s» mentre la riga d'errore qui sotto dice che
+  // l'unità non è riconosciuta sarebbero due affermazioni opposte.
+  const grainUnitSuffix = window.PGEEnvUtils.grainUnitSuffix(grainUnit);
   const grainUnitError = window.PGEEnvUtils.grainDurationUnitError(stream.grain);
   // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
   // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo

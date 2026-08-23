@@ -429,6 +429,18 @@
   // la terza unità non era selezionabile, e sceglierla cancellava la chiave.
   const GRAIN_DURATION_UNITS = ["seconds", "samples", "milliseconds"];
 
+  // Il suffisso con cui si etichettano le righe di grain.duration e
+  // grain.duration_range. Vive qui e non nel JSX perché lo condividono
+  // Inspector ed EnvelopeEditor. Per un'unità che il motore non riconosce la
+  // risposta è "nessun suffisso": cadere su "s" metterebbe un'etichetta in
+  // secondi accanto alla riga d'errore che dichiara l'unità non riconosciuta.
+  function grainUnitSuffix(unit) {
+    if (!unit || unit === "seconds") return "s";
+    if (unit === "samples") return "smp";
+    if (unit === "milliseconds") return "ms";
+    return "";
+  }
+
   // Mirror dei due rifiuti del motore su grain.duration_unit
   // (Stream._pre_normalize_grain_params).
   //
@@ -540,5 +552,6 @@
     loopBoundsError,
     grainDurationUnitError,
     GRAIN_DURATION_UNITS,
+    grainUnitSuffix,
   };
 })();

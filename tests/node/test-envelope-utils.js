@@ -459,6 +459,23 @@ console.log("\n── grainDurationUnitError ──");
     GE({ durationUnit: "" }) === null);
 }
 
+// Il suffisso delle righe duration / duration_range. Sta qui e non nel JSX
+// perché lo condividono Inspector ed EnvelopeEditor, e perché l'unica risposta
+// giusta per un'unità che il motore non riconosce è "nessun suffisso": scrivere
+// «s» accanto a una riga d'errore che dice «unità non riconosciuta» sono due
+// affermazioni opposte nello stesso pannello.
+console.log("\n── grainUnitSuffix ──");
+{
+  const S = U.grainUnitSuffix;
+  assert("seconds → s", S("seconds") === "s");
+  assert("unità assente → s (la chiave assente È seconds)",
+    S(null) === "s" && S(undefined) === "s" && S("") === "s");
+  assert("samples → smp", S("samples") === "smp");
+  assert("milliseconds → ms", S("milliseconds") === "ms");
+  assert("unità ignota → nessun suffisso",
+    S("ms") === "" && S("secondi") === "");
+}
+
 // L'insieme delle unità è uno solo, esportato: il Seg dell'Inspector ci
 // costruisce sopra le opzioni invece di ricablarle a mano ad ogni unità nuova.
 console.log("\n── GRAIN_DURATION_UNITS ──");
@@ -653,8 +670,7 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
     /const grainUnit = \(stream\.grain && stream\.grain\.durationUnit\) \|\| "seconds"/.test(inspSrc));
   // "s" su valori scritti in campioni o millisecondi direbbe il falso.
   assert("duration e duration_range portano il suffisso dell'unità dichiarata",
-    /const grainUnitSuffix = grainUnit === "samples" \? "smp"/.test(inspSrc)
-    && /grainUnit === "milliseconds" \? "ms" : "s"/.test(inspSrc)
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(inspSrc)
     && (inspSrc.match(/Env \? "" : grainUnitSuffix\}/g) || []).length === 2
     && !/unit=\{stream\.grain\.durationEnv \? "" : "s"\}/.test(inspSrc));
   assert("il messaggio d'errore nomina l'unità scelta invece di dire 'samples'",
