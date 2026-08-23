@@ -2,8 +2,11 @@
  * envelope-utils.js — pure envelope rescale/truncate math (freeze-on-resize).
  *
  * Extracted from app.jsx (#44) so it can be unit-tested in node like
- * yaml-bridge.js. No React, no DOM — depends only on window.PGEEnv
- * (envelope-loops.js, loaded before this file). Attaches to window.PGEEnvUtils.
+ * yaml-bridge.js. No React, no DOM. Reads window.PGEEnv (envelope-loops.js) at
+ * IIFE time, window.PGEDeviationProb (deviation-probability.js) and
+ * window.PGE_OUTPUT_SR (yaml-bridge.js, the engine sample rate behind the
+ * 'samples' factor) at call time — load all three first, or the grain-unit
+ * helpers return NaN. Attaches to window.PGEEnvUtils.
  *
  * Field shapes handled: standard breakpoints [t, v], compact loop blocks, and
  * the object form {type, points}. The stream-level helpers walk every
@@ -421,18 +424,205 @@
     return le <= ls ? { loopStart: ls, loopEnd: le } : null;
   }
 
-  // Mirror della validazione PGE #158: con grain.duration_unit: samples la
-  // grain.duration deve essere esplicita. Il default 0.05 è in secondi e non
-  // viene convertito, quindi base (secondi) e duration_range (campioni)
-  // vivrebbero in domini diversi; il motore solleva MissingFieldError. Solo
-  // 'samples' è vincolato — 'seconds' e l'assenza usano il default liberamente.
-  // Ritorna null se valido/non applicabile, altrimenti { unit } così il chiamante
-  // costruisce il messaggio. Puro — niente DOM, niente chiamate al motore.
+  // Le unità ammesse per grain.duration / grain.duration_range, nell'ordine in
+  // cui il motore le dichiara (Stream.GRAIN_DURATION_UNITS). 'milliseconds' è
+  // arrivato con PGE v5.2.0 (#171): a differenza di 'samples' il suo fattore è
+  // fisso (1e-3) e non dipende da output_sr. Esportate perché il controllo
+  // dell'Inspector ci costruisca sopra le opzioni: con la coppia cablata a mano
+  // la terza unità non era selezionabile, e sceglierla cancellava la chiave.
+  const GRAIN_DURATION_UNITS = ["seconds", "samples", "milliseconds"];
+
+  // Il suffisso con cui si etichettano le righe di grain.duration e
+  // grain.duration_range. Vive qui e non nel JSX perché lo condividono
+  // Inspector ed EnvelopeEditor. Per un'unità che il motore non riconosce la
+  // risposta è "nessun suffisso": cadere su "s" metterebbe un'etichetta in
+  // secondi accanto alla riga d'errore che dichiara l'unità non riconosciuta.
+  function grainUnitSuffix(unit) {
+    if (!unit || unit === "seconds") return "s";
+    if (unit === "samples") return "smp";
+    if (unit === "milliseconds") return "ms";
+    return "";
+  }
+
+  // Il default di grain.duration nello schema del motore, in secondi. Fuori da
+  // 'seconds' va convertito prima di essere scritto da qualunque parte.
+  const GRAIN_DEFAULT_DURATION_SEC = 0.05;
+
+  // Fattore unità→secondi, come Stream._pre_normalize_grain_params: 1/output_sr
+  // per 'samples', 1e-3 per 'milliseconds' (fisso, indipendente dal sample
+  // rate), 1 per 'seconds' e per la chiave assente. Un'unità che il motore non
+  // riconosce vale 1: la sua scala non si conosce, e inventarne una sarebbe
+  // peggio che lasciare il numero dov'è — a dire che è ignota c'è già
+  // grainDurationUnitError.
+  //
+  // Il sample rate NON è un parametro: è la config globale del motore, letta a
+  // chiamata da window.PGE_OUTPUT_SR (yaml-bridge.js, primo caricato). Un
+  // argomento qui sarebbe un contratto che nessuno può onorare — la CLI del
+  // motore fissa output_sr a DEFAULT_OUTPUT_SR, quindi il render è sempre lì.
+  function grainUnitFactor(unit) {
+    if (unit === "samples") return 1 / window.PGE_OUTPUT_SR;
+    if (unit === "milliseconds") return 1e-3;
+    return 1;
+  }
+
+  // Arrotonda a 12 cifre significative. Serve solo a togliere lo strascico
+  // binario delle divisioni (0.05 / 1e-3 = 50.000000000000007): a cifre fisse
+  // non si può fare, perché le stesse grandezze in secondi valgono 2e-5 e in
+  // campioni 480000.
+  function _roundGrain(v) {
+    if (typeof v !== "number" || !isFinite(v) || v === 0) return v;
+    const digits = Math.ceil(Math.log10(Math.abs(v)));
+    const prec = Math.min(20, Math.max(0, 12 - digits));
+    return +v.toFixed(prec);
+  }
+
+  // Un valore in secondi espresso nell'unità dichiarata. È l'operazione che
+  // serve a chiunque abbia in mano un numero del motore — un bound, un default,
+  // il seme di una chiave nuova — e debba scriverlo dove i valori sono
+  // nell'unità in vigore. In secondi non c'è niente da dividere: passare
+  // comunque dal round sposterebbe il valore (1/48000 non ha 12 cifre
+  // significative).
+  function grainSecondsToUnit(seconds, unit) {
+    if (typeof seconds !== "number" || !isFinite(seconds)) return seconds;
+    const f = grainUnitFactor(unit);
+    return f === 1 ? seconds : _roundGrain(seconds / f);
+  }
+
+  // I bound del motore vivono in secondi (PGE_BOUNDS.grainDur e il /bounds
+  // dinamico che ci si sovrappone). Espressi nell'unità dichiarata sono quegli
+  // stessi bound divisi per il fattore: in millisecondi il cap è 10000, non 10.
+  // Stessa idea di loopEnvMax, che deriva il cap del loop dall'unità in vigore
+  // invece di leggere il numero statico.
+  function grainUnitBounds(secBounds, unit) {
+    const b = secBounds || {};
+    const out = {};
+    if (typeof b.min === "number") out.min = grainSecondsToUnit(b.min, unit);
+    if (typeof b.max === "number") out.max = grainSecondsToUnit(b.max, unit);
+    return out;
+  }
+
+  // Il default 0.05 s espresso nell'unità in vigore: 50 in millisecondi, 2400
+  // campioni a 48000 Hz. Chi semina un valore (il passaggio a envelope, il
+  // ritorno a scalare) deve seminare questo, non 0.05 nudo — che in
+  // millisecondi sono 50 microsecondi.
+  function grainDefaultDuration(unit) {
+    return grainSecondsToUnit(GRAIN_DEFAULT_DURATION_SEC, unit);
+  }
+
+  function _clampGrain(v, bounds) {
+    if (!bounds || typeof v !== "number") return v;
+    if (typeof bounds.min === "number" && v < bounds.min) return bounds.min;
+    if (typeof bounds.max === "number" && v > bounds.max) return bounds.max;
+    return v;
+  }
+
+  // Applica `conv` a ogni y di un envelope, lasciando stare i tempi. Mirror di
+  // Envelope._scale_raw_values_y: stesse forme, stesso ordine di
+  // riconoscimento (il BP group prima del breakpoint nudo — anche lui è una
+  // lista di due elementi).
+  //
+  // Fino a PGE #234 qui c'era una porta, `isEngineEnvelopeLike`, che ricalcava
+  // un'asimmetria del motore: `is_envelope_like` era più stretta del
+  // costruttore, e tre grafie (soli breakpoint dict, sole 3-tuple, dict
+  // singolo) venivano lette in secondi qualunque unità fosse dichiarata. Il
+  // motore ora le scala come tutte le altre, e nello stesso giro ha smesso di
+  // buttare l'interp per-punto dentro il compatto — quindi anche quella
+  // divergenza, che qui era voluta, non c'è più.
+  function _mapGrainEnvY(env, conv) {
+    const mapItem = (item) => {
+      if (PGEEnv.isBPGroup(item)) return [item[0].map(mapItem), item[1]];
+      if (PGEEnv.isCompactBlock(item)) return [item[0].map(mapItem), ...item.slice(1)];
+      if (PGEEnv.isBreakpoint(item)) return [item[0], conv(item[1]), ...item.slice(2)];
+      // Breakpoint in forma dict: il motore lo scala (PGE #234), quindi anche
+      // noi — saltarlo lascerebbe due domini dentro lo stesso envelope.
+      if (item && typeof item === "object" && !Array.isArray(item)
+          && "t" in item && "v" in item) {
+        return { ...item, v: conv(item.v) };
+      }
+      return item;
+    };
+    if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
+      return { ...env, points: env.points.map(mapItem) };
+    }
+    if (!Array.isArray(env)) return env;
+    if (PGEEnv.isBPGroup(env) || PGEEnv.isCompactBlock(env)) return mapItem(env);
+    return env.map(mapItem);
+  }
+
+  // Cambia l'unità di grain.duration / grain.duration_range CONVERTENDO i
+  // valori già scritti, invece di lasciarli reinterpretare dalla nuova scala.
+  // Senza conversione, `0.05` (secondi) scelto come millisecondi vale 5e-5 s —
+  // grani da due campioni e mezzo — e non lo segnala nessuno: la duration è
+  // esplicita, quindi grainDurationUnitError tace, e con output_sr il min_val
+  // di grain_duration scende a 1/sr, quindi passa anche i bound. Il precedente
+  // in casa è il controllo di loop_unit, che ri-clampa gli estremi quando
+  // l'unità cambia sotto ai valori; qui la conversione è pure esatta, perché il
+  // fattore è noto e fisso.
+  //
+  // Gli scalari vengono ri-clampati nei bound della nuova unità (`opts.bounds`,
+  // nella forma di PGE_BOUNDS e in secondi); i punti degli envelope no, perché
+  // i bound scalano con lo stesso fattore dei valori — chi era dentro ci resta.
+  // Da o verso un'unità ignota non si converte: si scrive solo la chiave.
+  // Ritorna un grain nuovo; l'originale non viene mutato.
+  function convertGrainDurationUnit(grain, toUnit, opts) {
+    const ng = Object.assign({}, grain || {});
+    const fromUnit = ng.durationUnit || "seconds";
+    const known = (u) => GRAIN_DURATION_UNITS.indexOf(u) !== -1;
+    if (known(fromUnit) && known(toUnit) && fromUnit !== toUnit) {
+      const ratio = grainUnitFactor(fromUnit) / grainUnitFactor(toUnit);
+      const conv = (v) => (typeof v === "number" && isFinite(v) ? _roundGrain(v * ratio) : v);
+      const allBounds = (opts && opts.bounds) || null;
+      const fields = [
+        ["duration", "durationEnv", allBounds && allBounds.grainDur],
+        ["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange],
+      ];
+      for (const [scalarKey, envKey, secBounds] of fields) {
+        if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
+          ng[scalarKey] = _clampGrain(
+            conv(ng[scalarKey]),
+            secBounds ? grainUnitBounds(secBounds, toUnit) : null);
+        }
+        if (ng[envKey] != null) ng[envKey] = _mapGrainEnvY(ng[envKey], conv);
+      }
+    }
+    if (!toUnit || toUnit === "seconds") delete ng.durationUnit;
+    else ng.durationUnit = toUnit;
+    return ng;
+  }
+
+  // Mirror dei due rifiuti del motore su grain.duration_unit
+  // (Stream._pre_normalize_grain_params).
+  //
+  //   "missing-duration" → unità non-secondi senza una grain.duration
+  //                        esplicita. Il default 0.05 è in secondi e non viene
+  //                        convertito: base (secondi) e duration_range
+  //                        (nell'unità dichiarata) vivrebbero in domini
+  //                        diversi, e il motore solleva MissingFieldError. Il
+  //                        vincolo era di 'samples' finché le unità erano due;
+  //                        da PGE #171 vale per ogni unità che non sia
+  //                        'seconds'.
+  //   "unknown"          → un'unità fuori dall'insieme (InvalidFieldValueError).
+  //                        Non producibile dal controllo — arriva da uno YAML
+  //                        scritto a mano — e precede il controllo sulla
+  //                        durata, quindi resta anche con duration esplicita.
+  //
+  // 'seconds' e la chiave assente usano il default liberamente. Anche i valori
+  // falsy sono trattati come assenti — `duration_unit:` nuda (durationUnit null
+  // lato bridge) e la stringa vuota esplicita: `serialize` fa
+  // `grain.durationUnit || undefined`, quindi quel che l'editor scrive non
+  // contiene la chiave e il motore non la vede mai. Segnalarli sarebbe un
+  // errore fantasma, e per la stringa vuota anche una frase senza l'unità.
+  // Ritorna null se valido/non applicabile, altrimenti { kind, unit } così il
+  // chiamante costruisce il messaggio. Puro — niente DOM, niente chiamate al
+  // motore.
   function grainDurationUnitError(grain) {
-    if (!grain || grain.durationUnit !== "samples") return null;
+    if (!grain) return null;
+    const unit = grain.durationUnit;
+    if (!unit || unit === "seconds") return null;
+    if (GRAIN_DURATION_UNITS.indexOf(unit) === -1) return { kind: "unknown", unit };
     const hasScalar = grain.duration != null;
     const hasEnv = grain.durationEnv != null;
-    return (hasScalar || hasEnv) ? null : { unit: "samples" };
+    return (hasScalar || hasEnv) ? null : { kind: "missing-duration", unit };
   }
 
   // Mirror dei due rifiuti del motore su grain.read_direction (PGE #207) che
@@ -510,5 +700,12 @@
     loopUnitInfo,
     loopBoundsError,
     grainDurationUnitError,
+    GRAIN_DURATION_UNITS,
+    grainUnitSuffix,
+    grainUnitFactor,
+    grainSecondsToUnit,
+    grainUnitBounds,
+    grainDefaultDuration,
+    convertGrainDurationUnit,
   };
 })();

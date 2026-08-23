@@ -11,7 +11,11 @@ const path = require("path");
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
 // window.PGEEnv at IIFE time and reads window.PGEDeviationProb (deviation-probability.js) at call
 // time. js-yaml is provided in case envelope-loops needs it.
+// yaml-bridge.js viene prima di tutti come nell'editor: è lui a pubblicare
+// window.PGE_OUTPUT_SR, il sample rate del motore che envelope-utils legge a
+// chiamata per il fattore di 'samples'.
 global.window = { jsyaml: require("js-yaml") };
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
@@ -401,9 +405,10 @@ console.log("\n── loopBoundsError ──");
     LB({ loopStart: 0, loopEnd: "—" }) === null);
 }
 
-// grainDurationUnitError — mirror della validazione PGE #158: con
-// grain.duration_unit: samples, grain.duration deve essere esplicita (il
-// default 0.05 è in secondi e non verrebbe convertito).
+// grainDurationUnitError — mirror della validazione PGE #158, estesa alle tre
+// unità di PGE v5.2.0 (#171): con grain.duration_unit diverso da 'seconds',
+// grain.duration deve essere esplicita (il default 0.05 è in secondi e non
+// verrebbe convertito). Il vincolo non è più solo di 'samples'.
 console.log("\n── grainDurationUnitError ──");
 {
   const GE = U.grainDurationUnitError;
@@ -419,10 +424,69 @@ console.log("\n── grainDurationUnitError ──");
     GE({ durationUnit: "samples", duration: 480 }) === null);
   assert("samples con durationEnv → null",
     GE({ durationUnit: "samples", durationEnv: [[0, 48], [1, 4800]] }) === null);
+  // milliseconds: stesso vincolo di samples — il motore lo applica a ogni
+  // unità non-secondi (Stream._pre_normalize_grain_params), non solo ai campioni
+  assert("milliseconds senza duration → errore",
+    GE({ durationUnit: "milliseconds" }) != null);
+  assert("milliseconds con solo durationRange → errore",
+    GE({ durationUnit: "milliseconds", durationRange: 5 }) != null);
+  assert("milliseconds con duration scalare → null",
+    GE({ durationUnit: "milliseconds", duration: 12 }) === null);
+  assert("milliseconds con durationEnv → null",
+    GE({ durationUnit: "milliseconds", durationEnv: [[0, 1], [1, 200]] }) === null);
+  // l'unità torna al chiamante: il messaggio nomina quella scelta, non 'samples'
+  assert("l'errore nomina l'unità selezionata",
+    GE({ durationUnit: "milliseconds" }).unit === "milliseconds"
+    && GE({ durationUnit: "samples" }).unit === "samples");
+  assert("la duration mancante si distingue dall'unità ignota",
+    GE({ durationUnit: "milliseconds" }).kind === "missing-duration");
+  // unità fuori dall'insieme: il motore alza InvalidFieldValueError prima di
+  // guardare la duration, quindi l'errore resta anche con duration esplicita
+  assert("unità ignota → errore anche con duration",
+    GE({ durationUnit: "ms", duration: 12 }) != null);
+  assert("unità ignota → kind 'unknown' e unità riportata",
+    GE({ durationUnit: "ms", duration: 12 }).kind === "unknown"
+    && GE({ durationUnit: "ms", duration: 12 }).unit === "ms");
   // robustezza
   assert("null grain → null", GE(null) === null);
   assert("duration 0 conta come presente (grano da 0? gestito dai bound) ",
     GE({ durationUnit: "samples", duration: 0 }) === null);
+  // `duration_unit:` vuota → durationUnit null lato bridge. La UI la tratta
+  // come assente (il serializer la lascia cadere), quindi niente errore qui.
+  assert("chiave vuota (durationUnit null) → null",
+    GE({ durationUnit: null }) === null);
+  // Stessa cosa per la stringa vuota esplicita: `serialize` fa
+  // `grain.durationUnit || undefined`, quindi quel valore al motore non arriva
+  // mai — segnalarlo sarebbe un errore fantasma, per giunta con l'unità
+  // mancante dalla frase.
+  assert("stringa vuota → null (il serializer la lascia cadere)",
+    GE({ durationUnit: "" }) === null);
+}
+
+// Il suffisso delle righe duration / duration_range. Sta qui e non nel JSX
+// perché lo condividono Inspector ed EnvelopeEditor, e perché l'unica risposta
+// giusta per un'unità che il motore non riconosce è "nessun suffisso": scrivere
+// «s» accanto a una riga d'errore che dice «unità non riconosciuta» sono due
+// affermazioni opposte nello stesso pannello.
+console.log("\n── grainUnitSuffix ──");
+{
+  const S = U.grainUnitSuffix;
+  assert("seconds → s", S("seconds") === "s");
+  assert("unità assente → s (la chiave assente È seconds)",
+    S(null) === "s" && S(undefined) === "s" && S("") === "s");
+  assert("samples → smp", S("samples") === "smp");
+  assert("milliseconds → ms", S("milliseconds") === "ms");
+  assert("unità ignota → nessun suffisso",
+    S("ms") === "" && S("secondi") === "");
+}
+
+// L'insieme delle unità è uno solo, esportato: il Seg dell'Inspector ci
+// costruisce sopra le opzioni invece di ricablarle a mano ad ogni unità nuova.
+console.log("\n── GRAIN_DURATION_UNITS ──");
+{
+  assert("le tre unità del motore, in ordine",
+    eq(U.GRAIN_DURATION_UNITS, ["seconds", "samples", "milliseconds"]),
+    JSON.stringify(U.GRAIN_DURATION_UNITS));
 }
 
 
@@ -579,6 +643,7 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
 {
   const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
     /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
@@ -590,8 +655,296 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
     && (eeSrc.match(/integer \? 0 : \(\w+\.fine \? 4 : 2\)/g) || []).length === 2);
   assert("computeYFit riceve `fine`, non l'unità",
     /hardMax: env\.hardMax, fine: env\.fine,/.test(eeSrc));
+  // Due delle quattro voci "in secondi" sono passate all'unità dichiarata di
+  // grain.duration (issue #114): restano le due di voices.onset_offset.
   assert("le altre grandezze a grana fine dichiarano `fine`",
-    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 4);
+    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 2);
+}
+
+/* ===========================================================================
+ * Cambio di unità di grain.duration — la conversione dei valori già scritti
+ * ===========================================================================
+ * Cambiare unità senza convertire lascia il numero vecchio reinterpretato nella
+ * nuova scala: 0.05 (secondi) letto come 0.05 ms sono 5e-5 s, cioè grani da due
+ * campioni e mezzo. E non lo segnala nessuno — la duration è esplicita, quindi
+ * grainDurationUnitError tace, e con output_sr il min_val di grain_duration
+ * scende a 1/sr, quindi passa anche i bound. Il precedente è il Seg di
+ * loop_unit, che ri-clampa gli estremi quando l'unità cambia sotto ai valori.
+ */
+console.log("\n── grainUnitFactor ──");
+{
+  const F = U.grainUnitFactor;
+  assert("seconds → 1", F("seconds") === 1);
+  assert("unità assente → 1", F(null) === 1 && F("") === 1);
+  assert("samples → 1/output_sr (48000 di default)", F("samples") === 1 / 48000);
+  // Il sample rate non è un parametro di questa funzione: è una config globale
+  // del motore, pubblicata da yaml-bridge e letta a chiamata. Una manopola qui
+  // sarebbe un contratto che nessuno può onorare — la CLI del motore fissa
+  // output_sr a DEFAULT_OUTPUT_SR, quindi la strada del render è sempre quella.
+  assert("il sample rate viene dalla costante condivisa", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = F("samples");
+    window.PGE_OUTPUT_SR = prev;
+    return got === 1 / 44100;
+  })());
+  assert("milliseconds → 1e-3, indipendente dal sample rate", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = F("milliseconds");
+    window.PGE_OUTPUT_SR = prev;
+    return F("milliseconds") === 1e-3 && got === 1e-3;
+  })());
+  assert("la costante è quella del motore (48000)", window.PGE_OUTPUT_SR === 48000);
+  assert("unità ignota → 1 (non si inventa una scala)", F("ms") === 1);
+}
+
+console.log("\n── grainUnitBounds ──");
+{
+  const B = U.grainUnitBounds;
+  const sec = { min: 1 / 48000, max: 10 };
+  assert("in secondi restano i bound del motore", eq(B(sec, "seconds"), sec));
+  assert("in campioni: 1 campione .. 480000",
+    eq(B(sec, "samples"), { min: 1, max: 480000 }), JSON.stringify(B(sec, "samples")));
+  assert("in millisecondi: il cap è 10000 ms, non 10",
+    B(sec, "milliseconds").max === 10000
+    && Math.abs(B(sec, "milliseconds").min - 0.0208333333) < 1e-9,
+    JSON.stringify(B(sec, "milliseconds")));
+  assert("bound assenti → oggetto vuoto", eq(B(null, "milliseconds"), {}));
+}
+
+console.log("\n── grainSecondsToUnit ──");
+{
+  const T = U.grainSecondsToUnit;
+  assert("in secondi il valore non si tocca", T(0.01, "seconds") === 0.01);
+  assert("0.01 s sono 10 ms", T(0.01, "milliseconds") === 10);
+  assert("0.01 s sono 480 campioni a 48000 Hz", T(0.01, "samples") === 480);
+  assert("unità ignota → valore invariato", T(0.01, "ms") === 0.01);
+  assert("non numerico → invariato", T(null, "milliseconds") === null);
+}
+
+console.log("\n── grainDefaultDuration ──");
+{
+  const D = U.grainDefaultDuration;
+  assert("il default del motore è 0.05 s", D("seconds") === 0.05);
+  assert("in millisecondi sono 50, non 0.05", D("milliseconds") === 50);
+  assert("in campioni sono 2400 a 48000 Hz", D("samples") === 2400);
+  assert("unità ignota → il default in secondi", D("ms") === 0.05);
+}
+
+console.log("\n── convertGrainDurationUnit ──");
+{
+  const C = U.convertGrainDurationUnit;
+  const BOUNDS = { grainDur: { min: 1 / 48000, max: 10 }, durationRange: { min: 0, max: 10 } };
+
+  // seconds → milliseconds: il numero cambia, la durata reale no
+  const ms = C({ duration: 0.05, durationRange: 0.01 }, "milliseconds");
+  assert("0.05 s diventano 50 ms", ms.duration === 50, JSON.stringify(ms));
+  assert("anche duration_range è convertita", ms.durationRange === 10);
+  assert("la chiave viene scritta", ms.durationUnit === "milliseconds");
+  // niente rumore di virgola mobile: 0.05/1e-3 in binario non fa 50 tondo
+  assert("il valore convertito non porta strascichi binari",
+    String(ms.duration) === "50" && String(ms.durationRange) === "10");
+
+  // milliseconds → seconds: giro di ritorno esatto, e la chiave sparisce
+  const back = C(ms, "seconds");
+  assert("il giro di ritorno rende il valore di partenza", back.duration === 0.05);
+  assert("tornando a seconds la chiave viene cancellata",
+    !("durationUnit" in back), JSON.stringify(back));
+
+  // samples
+  const smp = C({ duration: 0.05 }, "samples");
+  assert("0.05 s sono 2400 campioni", smp.duration === 2400);
+  assert("anche samples scrive la chiave", smp.durationUnit === "samples");
+  assert("il sample rate governa i campioni", (() => {
+    const prev = window.PGE_OUTPUT_SR;
+    window.PGE_OUTPUT_SR = 44100;
+    const got = C({ duration: 0.05 }, "samples").duration;
+    window.PGE_OUTPUT_SR = prev;
+    return got === 2205;
+  })());
+
+  // envelope: si convertono i valori Y, i tempi restano
+  const env = C({ durationEnv: [[0, 0.001], [1, 0.1]] }, "milliseconds");
+  assert("l'envelope scala i suoi y e non i suoi x",
+    eq(env.durationEnv, [[0, 1], [1, 100]]), JSON.stringify(env.durationEnv));
+  const env3 = C({ durationEnv: [[0, 0.001, "exp"], [1, 0.1]] }, "milliseconds");
+  assert("il tipo per-punto sopravvive",
+    eq(env3.durationEnv, [[0, 1, "exp"], [1, 100]]), JSON.stringify(env3.durationEnv));
+  const typed = C({ durationEnv: { type: "exp", points: [[0, 0.001], [1, 0.1]] } }, "milliseconds");
+  assert("forma tipata {type, points}",
+    eq(typed.durationEnv, { type: "exp", points: [[0, 1], [1, 100]] }),
+    JSON.stringify(typed.durationEnv));
+  const group = C({ durationEnv: [[[[0, 0.001], [0.5, 0.1]], "exp"]] }, "milliseconds");
+  assert("BP group [points, interp]",
+    eq(group.durationEnv, [[[[0, 1], [0.5, 100]], "exp"]]), JSON.stringify(group.durationEnv));
+  const block = C({ durationEnv: [[[[0, 0.001], [0.5, 0.1]], 1, 4]] }, "milliseconds");
+  assert("blocco compatto: scala il pattern, non end_time né n_reps",
+    eq(block.durationEnv, [[[[0, 1], [0.5, 100]], 1, 4]]), JSON.stringify(block.durationEnv));
+  const dictBp = C({ durationEnv: [{ t: 0, v: 0.001 }, [1, 0.1]] }, "milliseconds");
+  assert("breakpoint dict {t, v} IN MEZZO a un breakpoint nudo: convertito",
+    eq(dictBp.durationEnv, [{ t: 0, v: 1 }, [1, 100]]), JSON.stringify(dictBp.durationEnv));
+  const typedDictPts = C({ durationEnv: { type: "linear", points: [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }] } }, "milliseconds");
+  assert("punti dict dentro la forma tipata: convertiti (il dict con 'points' è envelope-like)",
+    eq(typedDictPts.durationEnv, { type: "linear", points: [{ t: 0, v: 1 }, { t: 1, v: 100 }] }),
+    JSON.stringify(typedDictPts.durationEnv));
+
+  /* Le grafie che prima di PGE #234 il motore NON scalava, e ora sì.
+   * `is_envelope_like` era più stretta del costruttore: una lista di soli
+   * breakpoint dict, o di sole 3-tuple, tornava indietro invariata e il motore
+   * la leggeva in secondi qualunque unità fosse dichiarata. La UI aveva una
+   * porta che ricalcava l'asimmetria; ora non serve più e queste grafie si
+   * convertono come tutte le altre. Verificato eseguendo il motore corretto su
+   * venti forme: UI e `scale_raw_param_values` coincidono su tutte. */
+  const dictOnly = C({ durationEnv: [{ t: 0, v: 0.001 }, { t: 1, v: 0.1 }] }, "milliseconds");
+  assert("lista di soli breakpoint dict: convertita (PGE #234)",
+    eq(dictOnly.durationEnv, [{ t: 0, v: 1 }, { t: 1, v: 100 }]),
+    JSON.stringify(dictOnly.durationEnv));
+  const tuple3Only = C({ durationEnv: [[0, 0.001, "cubic"], [1, 0.1, "linear"]] }, "milliseconds");
+  assert("lista di sole 3-tuple: convertita, interp conservato",
+    eq(tuple3Only.durationEnv, [[0, 1, "cubic"], [1, 100, "linear"]]),
+    JSON.stringify(tuple3Only.durationEnv));
+  const singleDict = C({ durationEnv: [{ t: 0, v: 0.001 }] }, "milliseconds");
+  assert("un solo breakpoint dict: convertito",
+    eq(singleDict.durationEnv, [{ t: 0, v: 1 }]), JSON.stringify(singleDict.durationEnv));
+  assert("lista vuota: niente da convertire, e niente si rompe",
+    eq(C({ durationEnv: [] }, "milliseconds").durationEnv, []));
+  // Il pattern del compatto conserva l'interp per-punto — da PGE #234 lo fa
+  // anche il motore, quindi non è più una divergenza voluta ma una parità.
+  const compattoInterp = C({ durationEnv: [[[0, 0.001, "cubic"], [50, 0.1]], 1, 4] }, "milliseconds");
+  assert("il pattern del compatto conserva l'interp per-punto",
+    eq(compattoInterp.durationEnv, [[[0, 1, "cubic"], [50, 100]], 1, 4]),
+    JSON.stringify(compattoInterp.durationEnv));
+  const rangeEnv = C({ durationRangeEnv: [[0, 0.01], [1, 0.02]] }, "milliseconds");
+  assert("anche l'envelope di duration_range",
+    eq(rangeEnv.durationRangeEnv, [[0, 10], [1, 20]]), JSON.stringify(rangeEnv.durationRangeEnv));
+
+  // clamp: un valore fuori bound resta fuori bound anche convertito, e va riportato dentro
+  const over = C({ duration: 100 }, "milliseconds", { bounds: BOUNDS });
+  assert("uno scalare oltre il cap viene riportato dentro i bound della nuova unità",
+    over.duration === 10000, JSON.stringify(over));
+  assert("senza bound non si clampa nulla",
+    C({ duration: 100 }, "milliseconds").duration === 100000);
+  // la conversione è esatta: un valore dentro i bound ci resta, il clamp non morde
+  assert("un valore valido non viene toccato dal clamp",
+    C({ duration: 0.05 }, "milliseconds", { bounds: BOUNDS }).duration === 50);
+
+  // stessa unità, unità ignote, immutabilità
+  const same = C({ duration: 50, durationUnit: "milliseconds" }, "milliseconds");
+  assert("unità invariata → valore invariato", same.duration === 50);
+  const fromUnknown = C({ duration: 12, durationUnit: "ms" }, "seconds");
+  assert("da un'unità ignota non si converte (non se ne conosce la scala)",
+    fromUnknown.duration === 12 && !("durationUnit" in fromUnknown),
+    JSON.stringify(fromUnknown));
+  const toUnknown = C({ duration: 0.05 }, "ms");
+  assert("verso un'unità ignota nemmeno, ma la chiave si scrive",
+    toUnknown.duration === 0.05 && toUnknown.durationUnit === "ms");
+  const src = { duration: 0.05, durationEnv: null, durationUnit: null };
+  C(src, "milliseconds");
+  assert("il grain di partenza non viene mutato", src.duration === 0.05);
+  assert("le altre chiavi del grain sopravvivono",
+    C({ duration: 0.05, envelope: "hanning", reverse: null }, "milliseconds").envelope === "hanning");
+}
+
+console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
+{
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+
+  assert("il Seg elenca le unità del motore, non una coppia cablata a mano",
+    /options=\{window\.PGEEnvUtils\.GRAIN_DURATION_UNITS\.map\(/.test(inspSrc)
+    && !/options=\{\[\{label:"seconds",value:"seconds"\},\{label:"samples",value:"samples"\}\]\}/.test(inspSrc));
+  // Il ramo di cancellazione vale per `seconds` e basta — con tre unità, "tutto
+  // ciò che non è samples torna al default" cancellava milliseconds. La regola
+  // ora sta in convertGrainDurationUnit (testata sopra: verso seconds cancella,
+  // verso ogni altra unità scrive), e il controllo ci passa attraverso invece
+  // di riscriverla nel JSX.
+  assert("cambiare unità passa dal convertitore, chiave compresa",
+    /onChange\(\{ grain: window\.PGEEnvUtils\.convertGrainDurationUnit\(/.test(inspSrc)
+    && /stream\.grain, v, \{ bounds: window\.PGE_BOUNDS \}\)/.test(inspSrc));
+  assert("nel JSX non è rimasto un ramo che cancella la chiave a mano",
+    !/delete ng\.durationUnit/.test(inspSrc)
+    && !/if \(v === "samples"\) \{/.test(inspSrc));
+  assert("l'unità in vigore è calcolata una volta sola",
+    /const grainUnit = \(stream\.grain && stream\.grain\.durationUnit\) \|\| "seconds"/.test(inspSrc));
+  // "s" su valori scritti in campioni o millisecondi direbbe il falso.
+  assert("duration e duration_range portano il suffisso dell'unità dichiarata",
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(inspSrc)
+    && (inspSrc.match(/Env \? "" : grainUnitSuffix\}/g) || []).length === 2
+    && !/unit=\{stream\.grain\.durationEnv \? "" : "s"\}/.test(inspSrc));
+  assert("il messaggio d'errore nomina l'unità scelta invece di dire 'samples'",
+    /grainUnitError\.unit\} richiede una grain\.duration esplicita/.test(inspSrc)
+    && !/duration_unit: samples richiede una grain\.duration esplicita/.test(inspSrc));
+  assert("un'unità ignota ha un messaggio suo",
+    /grainUnitError\.kind === "unknown"/.test(inspSrc));
+  // Il fattore di milliseconds è fisso (1e-3): citare il sample rate nel suo
+  // hint sarebbe la riga sbagliata copiata da quella dei campioni.
+  {
+    const msHint = /grainUnit === "milliseconds" \? \([\s\S]{0,600}?\) : null\}/.exec(inspSrc);
+    assert("milliseconds ha un hint proprio", !!msHint);
+    assert("l'hint dei millisecondi non cita il sample rate",
+      !!msHint && !/48000|sample rate di output/.test(msHint[0]) && /millisecond/.test(msHint[0]));
+  }
+  // Il sample rate nelle due frasi viene dalla costante condivisa: scritto a
+  // mano sarebbe l'ennesima copia da inseguire se il motore lo muove.
+  assert("l'hint dei campioni resta sul ramo samples, col sample rate interpolato",
+    /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a \$\{window\.PGE_OUTPUT_SR\} Hz/.test(inspSrc));
+  assert("nessun sample rate scritto a mano nelle frasi dell'unità",
+    !/campioni a 48000 Hz/.test(inspSrc));
+  // Il footer è la frase che l'utente legge senza aprire un tooltip: scritta a
+  // mano, sarebbe l'unica sbagliata il giorno in cui il motore muove la costante.
+  assert("nemmeno il footer scrive il sample rate a mano", (() => {
+    const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+    return /sr \$\{window\.PGE_OUTPUT_SR\} · stereo/.test(appSrc) && !/sr 48000/.test(appSrc);
+  })());
+  // Il seme del passaggio a envelope (e il ritorno a scalare) è il default del
+  // motore, 0.05 s: scritto nudo con milliseconds selezionato sono 50
+  // microsecondi — e succederebbe proprio nello stato in cui l'errore invita a
+  // mettere una duration esplicita, che così sparirebbe peggiorando il valore.
+  assert("il seme di grainDur è il default convertito nell'unità in vigore",
+    /const grainDurSeed = window\.PGEEnvUtils\.grainDefaultDuration\(/.test(inspSrc)
+    && (inspSrc.match(/grainDurSeed/g) || []).length >= 3);
+  // Il menu "aggiungi chiave" è l'altro punto che semina un valore: 0.01 è un
+  // numero in secondi, e scritto tale e quale con milliseconds in vigore vale
+  // 1e-5 s — mille volte meno di quel che l'etichetta promette, e in silenzio
+  // (duration esplicita → validazione muta, bound larghi → passa).
+  assert("anche il seme di duration_range è convertito nell'unità in vigore",
+    /def: window\.PGEEnvUtils\.grainSecondsToUnit\(0\.01, grainUnit\)/.test(inspSrc)
+    && !/exists: stream\.grain\.durationRange[^}]*def: 0\.01/.test(inspSrc));
+  assert("nessun 0.05 nudo rimasto nei rami di grain.duration",
+    !/durationEnv: \[\[0, v\], \[1, v\]\][\s\S]{0,80}0\.05/.test(inspSrc)
+    && !/grainDur: 0\.05/.test(inspSrc)
+    && !/cur\.durationEnv\[0\]\[1\]\) \|\| 0\.05/.test(inspSrc));
+  // La scala di step è in unità del parametro: quella di default è scritta per
+  // i secondi e in campioni (valore tipico 2400) il gradino più grosso vale 10.
+  assert("le manopole di durata hanno step nell'unità in vigore",
+    /const grainSteps = GRAIN_STEPS\[grainUnit\] \|\| GRAIN_STEPS\.seconds/.test(inspSrc)
+    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 2
+    && /samples: \[1, 100, 1000, 10000\]/.test(inspSrc));
+  assert("il tooltip della chiave elenca le tre unità",
+    /title=\{`unità di grain\.duration e duration_range[^`]*milliseconds/.test(inspSrc));
+}
+
+console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
+{
+  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+
+  // I bound statici di grain_duration sono in secondi (max 10); i valori di un
+  // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
+  // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
+  // il punto al primo drag, che è perdita di dati, non solo una vista storta.
+  assert("i bound delle curve di durata seguono l'unità dichiarata",
+    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(eeSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(eeSrc)
+    && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(eeSrc)
+    && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(eeSrc));
+  assert("anche la finestra di partenza è espressa nell'unità",
+    !/visMin: 0\.001, visMax: 0\.1/.test(eeSrc)
+    && !/visMin: 0, visMax: 0\.5,/.test(eeSrc)
+    && /grainDurVis/.test(eeSrc) && /grainRangeVis/.test(eeSrc));
+  assert("il suffisso è quello condiviso con l'Inspector",
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
+    && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

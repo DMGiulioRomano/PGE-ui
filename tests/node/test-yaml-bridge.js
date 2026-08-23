@@ -1929,6 +1929,24 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 {
+  // La terza unità (PGE v5.2.0 / #171). Il bridge è già agnostico — cattura e
+  // riemette qualunque valore — ma è proprio quel giro a portare in Inspector
+  // il `milliseconds` che il controllo deve saper mostrare: se qui si
+  // restringesse, il selettore mostrerebbe di nuovo una selezione fantasma.
+  const yamlMs =
+    "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n" +
+    "    grain:\n      duration: 12\n      duration_range: 4\n      duration_unit: milliseconds\n";
+  const d = parse(yamlMs);
+  assert("parse duration_unit: milliseconds", d.streams[0].grain.durationUnit === "milliseconds",
+    JSON.stringify(d.streams[0].grain));
+  const y = serialize(d);
+  assert("serialize duration_unit: milliseconds", /duration_unit:\s*milliseconds/.test(y),
+    y.slice(0, 400));
+  assert("milliseconds survives full round-trip",
+    parse(y).streams[0].grain.durationUnit === "milliseconds");
+}
+
+{
   // Assente di default: nessuna chiave duration_unit iniettata.
   const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
     "    sample: test.wav\n    grain:\n      duration: 0.05\n");
