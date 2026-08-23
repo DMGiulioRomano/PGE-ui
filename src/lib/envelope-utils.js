@@ -544,6 +544,14 @@
   // Envelope._scale_raw_values_y: stesse forme, stesso ordine di
   // riconoscimento (il BP group prima del breakpoint nudo — anche lui è una
   // lista di due elementi), e stessa porta d'ingresso.
+  //
+  // Con UNA eccezione, che è un bug del motore e non si ricalca: dentro un
+  // blocco compatto, `_scale_raw_values_y` scala il pattern con
+  // `[[p[0], p[1] * f] for p in pattern]` (envelope.py) e BUTTA il terzo
+  // elemento, cioè l'interp per-punto. Qui lo conserviamo: allinearsi vorrebbe
+  // dire cancellare dal file un dato che l'autore ha scritto, e la perdita
+  // accade comunque a ogni render sotto un'unità non-seconds, che la UI tocchi
+  // la curva o no.
   function _mapGrainEnvY(env, conv) {
     if (!isEngineEnvelopeLike(env)) return env;
     const mapItem = (item) => {
