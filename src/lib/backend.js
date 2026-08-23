@@ -60,8 +60,14 @@
   // or inherited from the sample. The renderer only ever sees the resolved
   // number, which IS hashed — so typing the value the sample already implied
   // must leave the stem green instead of going stale on a flag flip.
+  // deviationProbabilityLegacy (PGE #204) is the same kind of bookkeeping: it
+  // records WHICH spelling the deviation came from, `dephase` or the current
+  // key, not what it says. Reopening a pre-v7 project must not mark every stem
+  // stale over a key name — the healed value is hashed, so the migration still
+  // marks stale exactly what it changes.
   const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
-                             "durationImplicit", "durationUnresolved"]);
+                             "durationImplicit", "durationUnresolved",
+                             "deviationProbabilityLegacy"]);
 
   function canonicalJSON(v, ignore) {
     if (v === null || v === undefined) return "null";
@@ -235,6 +241,20 @@
           }
           _persistStemIndex();
         }
+        // Il server scrive lo YAML su configs/<basename>.yml PRIMA di costruire
+        // lo stream di eventi, e i suoi tre abort(400) (basename mancante, con
+        // traversal, formato ignoto) precedono quella scrittura. Quindi una
+        // risposta buona implica il file scritto, e un fallimento prima di qui
+        // implica il contrario: e' quello che il chiamante deve sapere per
+        // decidere se la migrazione di `dephase` e' avvenuta.
+        //
+        // La distinzione non e' "la richiesta e' arrivata": il catch qui sotto
+        // copre anche il loop di lettura NDJSON, quindi un annullamento o una
+        // connessione caduta a meta' stream ci finiscono dentro — e li' il file
+        // e' scritto eccome. Percio' il flag si alza qui, non nel catch — e
+        // sulla RISPOSTA, non sul body: `!res.ok || !res.body` e' un throw solo,
+        // ma un 200 senza body e' comunque un server che ha gia' scritto.
+        let configWritten = false;
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -242,6 +262,7 @@
             body: JSON.stringify(opts),
             signal: cancelAbort.signal,
           });
+          configWritten = res.ok;
           if (!res.ok || !res.body) {
             const txt = await res.text().catch(() => "");
             throw new Error(`HTTP ${res.status} ${txt.slice(0, 120)}`);
@@ -305,7 +326,7 @@
           const msg = e.name === "AbortError" ? "cancelled" : e.message;
           onEvent && onEvent({ type: "log", line: `[ERROR] ${msg}` });
           onEvent && onEvent({ type: "done", ok: false, error: msg });
-          return { ok: false, error: msg };
+          return { ok: false, error: msg, configWritten };
         } finally {
           cancelAbort = null;
         }

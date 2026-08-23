@@ -113,6 +113,9 @@ function YamlEditor({ stream, onChange, samples }) {
         ...parsed,
         color: stream.color,   // synthesized by streamFromYaml, never in YAML
         id:    stream.id,       // keep identity stable even if stream_id blanked
+        // Provenienza sintetizzata dal parse, come color/id: la regola sta nel
+        // bridge (una sola copia, testata direttamente li').
+        deviationProbabilityLegacy: window.PGEYaml.mergeDeviationProbabilityLegacy(parsed, stream),
       });
       setParseErr(null);
       setMode("view");

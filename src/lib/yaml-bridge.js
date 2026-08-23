@@ -29,7 +29,9 @@
  *     undefined) | scalar | envelope-array | per-param object.
  *     The legacy `dephase` spelling (PGE < #204) is read on parse and written
  *     back under the new key — a one-way migration, since the engine dropped
- *     the old key without an alias and would silently ignore it.
+ *     the old key without an alias and would silently ignore it. The stream
+ *     carries `deviationProbabilityLegacy` to say the rewrite is pending, so
+ *     the Inspector can announce it instead of letting it happen in silence.
  *   - time_mode: absence is preserved (engine default is "absolute");
  *     new streams created by the UI write `time_mode: normalized` explicitly.
  * ===========================================================================*/
@@ -100,13 +102,21 @@
    * back, so opening and saving an old project migrates it. */
   const LEGACY_DEVIATION_PROB_KEY = "dephase";
 
+  /* Which of the two spellings the value comes from — null when neither is
+   * written. The current key wins when both are: the engine reads only that
+   * one, so the dead one is dropped rather than migrated, which is what the
+   * render already does. */
+  function deviationProbabilityKey(y) {
+    if ("deviation_probability" in y) return "deviation_probability";
+    if (LEGACY_DEVIATION_PROB_KEY in y) return LEGACY_DEVIATION_PROB_KEY;
+    return null;
+  }
+
   /* The stream's deviation_probability as editor state, from either spelling.
    * Key present with a null value = implicit 1% — distinct from key absent
-   * (= off), which is why the sentinel exists. The current key wins when both
-   * are written (the engine reads only that one). */
+   * (= off), which is why the sentinel exists. */
   function readDeviationProbability(y) {
-    const key = ("deviation_probability" in y) ? "deviation_probability"
-              : ((LEGACY_DEVIATION_PROB_KEY in y) ? LEGACY_DEVIATION_PROB_KEY : null);
+    const key = deviationProbabilityKey(y);
     if (key === null) return undefined;
     return y[key] === null ? DEVIATION_PROB_IMPLICIT : y[key];
   }
@@ -830,6 +840,28 @@
       // (= off). Per-param objects pass verbatim: a null INSIDE the object
       // means "default prob for that key" and stays null.
       deviationProbability: readDeviationProbability(y),
+      // Provenance, not content: true when the value was read from the dead
+      // `dephase` spelling, i.e. when saving will rewrite the key under the
+      // name the engine reads. The migration is otherwise mute — a render
+      // persists the editor state to configs/<basename>.yml even without a
+      // Save, so the rewrite would only ever surface in a `git diff`.
+      //
+      // Emitted ALWAYS, false included, so a parsed stream always carries the
+      // boolean, same shape rule as durationImplicit. It is NOT what keeps the
+      // Raw tab honest: there the draft is re-serialized under the live key, so
+      // `dephase` is never SHOWN — but the textarea is free, so it can still be
+      // typed. Both directions are handled by mergeDeviationProbabilityLegacy
+      // below, which YamlEditor.applyEdits calls.
+      //
+      // Nor does the flag go out on its own once the file IS migrated: it is
+      // parse-time provenance, and a Save or a render never re-parses, so
+      // app.jsx clears it through clearDeviationProbabilityLegacy at both
+      // write sites.
+      //
+      // Out of the stem fingerprint (backend.js FP_IGNORE) and out of the
+      // round-trip diff (IGNORE_FIELDS): how the key is spelled is not what it
+      // says, and the healed value itself is hashed and diffed as usual.
+      deviationProbabilityLegacy: deviationProbabilityKey(y) === LEGACY_DEVIATION_PROB_KEY,
     };
     if (Object.keys(extras).length) out._extra = extras;
     return out;
@@ -936,7 +968,15 @@
   // through the YAML (#63). This diverges from backend FP_IGNORE, which still
   // excludes them: serializing solo/mute changes WHICH streams render, not a
   // single stem's audio, so it must not mark a rendered stem stale.
-  const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw"]);
+  // deviationProbabilityLegacy is provenance too, and the one field here that
+  // legitimately CHANGES across the round trip: parse reads `dephase` and sets
+  // it, serialize writes the current key, the re-parse clears it. That flip is
+  // the migration, not a loss — diffing it would raise "YAML lossy round-trip"
+  // on every pre-v7 project opened, about the one rewrite the editor performs
+  // on purpose. (It also reads undefined on a stream the UI created rather than
+  // parsed, which the re-parse would turn into false.)
+  const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw",
+                                 "deviationProbabilityLegacy"]);
 
   function deepDiff(a, b, path, out) {
     if (a === b) return;
@@ -1082,6 +1122,25 @@
     return { ...data, streams, samples: samples || [] };
   }
 
+  /* La migrazione e' compiuta nel momento in cui lo YAML serializzato tocca il
+   * disco: il flag dice "il file porta ancora `dephase`", quindi un Save — e un
+   * render, che persiste configs/<basename>.yml prima ancora di lanciare il
+   * motore — devono spegnerlo, o l'Inspector continua ad annunciare una
+   * riscrittura gia' avvenuta per tutta la sessione. Restituisce lo stesso
+   * oggetto quando non c'e' niente da spegnere, cosi' il chiamante puo'
+   * chiamarla senza guardie.
+   *
+   * E' ottimistica di proposito: se la scrittura non fosse mai atterrata, il
+   * flag si riaccende da solo alla prossima apertura del progetto, perche' lo
+   * calcola il parse dal file vero. Meglio un avviso perso e recuperato al
+   * reload che un avviso permanente che non vuol piu' dire niente. */
+  function clearDeviationProbabilityLegacy(data) {
+    if (!data || !Array.isArray(data.streams)) return data;
+    if (!data.streams.some(s => s && s.deviationProbabilityLegacy)) return data;
+    return { ...data, streams: data.streams.map(s =>
+      (s && s.deviationProbabilityLegacy) ? { ...s, deviationProbabilityLegacy: false } : s) };
+  }
+
   /* Allocate `count` fresh stream ids.
    *
    * The id is the stem filename on disk (<basename>__<id>.<ext>), the key of
@@ -1108,12 +1167,37 @@
     return out;
   }
 
+  /* Il flag per uno stream ri-parsato dal tab Raw: l'OR fra la provenienza del
+   * draft e quella dello stream vivo, perche' la grafia morta puo' entrare da
+   * tutte e due le parti.
+   *
+   * Da `live`: il draft e' `serializeStream(stream)`, quindi mostra sempre la
+   * chiave viva e `dephase` non e' MOSTRATO — un ri-parse nudo leggerebbe false
+   * mentre il file su disco porta ancora la grafia morta e la riscrittura e' da
+   * fare. Quel ramo si spegne solo se la deviazione sparisce del tutto: senza
+   * valore non c'e' nessuna chiave da riscrivere.
+   *
+   * Da `parsed`: non mostrato non e' non scrivibile. La textarea e' libera, e
+   * chi ha in mano un progetto pre-v7 la grafia morta la conosce — digitare
+   * `dephase: 99` introduce la chiave che il motore non legge, e senza questo
+   * ramo il salvataggio la riscriverebbe in silenzio.
+   *
+   * I due rami non possono contraddirsi: con la chiave presente
+   * `readDeviationProbability` restituisce il valore o la sentinella, mai
+   * `undefined`, quindi il primo implica sempre la condizione del secondo. */
+  function mergeDeviationProbabilityLegacy(parsed, live) {
+    return !!parsed.deviationProbabilityLegacy
+      || (!!live.deviationProbabilityLegacy && parsed.deviationProbability !== undefined);
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
     serializeStream,
     applyStreamPatch,
     resolveImplicitDurations,
+    clearDeviationProbabilityLegacy,
+    mergeDeviationProbabilityLegacy,
     parseStream,
     emptyProject,
     computeDuration,

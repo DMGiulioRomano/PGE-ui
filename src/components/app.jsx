@@ -1027,6 +1027,13 @@ function App() {
     try {
       await backend.fs.writeFile("projects", basename + ".yml", yaml);
       setDirty(false);
+      // Il file appena scritto porta `deviation_probability`: la migrazione da
+      // `dephase` e' compiuta, e l'avviso in Inspector deve tacere. _setDataRaw
+      // e non setData — spegnere un flag di provenienza dopo un salvataggio non
+      // e' una modifica dell'autore: non sporca il progetto e non e' un passo
+      // di undo, come l'arrivo tardivo dei media. Solo qui e non in onSaveAs:
+      // quello scrive un altro file, l'originale porta ancora la chiave morta.
+      _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
       pushToast({ kind: "ok", title: "Saved", message: `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb`, duration: 2200 });
       refreshProjects();
     } catch (e) {
@@ -1176,6 +1183,18 @@ function App() {
       ...s, running: false, currentStreamId: null, streamProgress: 0,
       lastOk: !!result.ok, lastGenerated: (result.generated || []).length,
     }));
+
+    // Come dopo un Save, e per la stessa ragione: server.py scrive yamlContent
+    // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
+    // migrazione di `dephase` e' avvenuta anche se poi il render fallisce —
+    // percio' qui, non dentro `result.ok`. Ma non quando il file non e' stato
+    // scritto affatto (server down, o uno dei tre abort(400) che precedono la
+    // scrittura): li' la riscrittura e' ancora da fare e l'avviso deve restare.
+    // `!== false` e non truthiness: sul percorso buono il campo non c'e', e
+    // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
+    if (result.configWritten !== false) {
+      _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
+    }
 
     if (result.ok) {
       const ren = (result.generated?.length || 0) - cacheHits;
