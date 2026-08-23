@@ -48,8 +48,9 @@ const HARD_EXIT = "process." + "exit(";
 
 const HANDLER = [
   "let fail = 0;",
-  'process.on("exit", () => {',
+  'process.on("exit", (code) => {',
   "  console.log(`${fail} failed`);",
+  '  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e\' parziale");',
   "  if (fail > 0) process.exitCode = 1;",
   "});",
 ].join("\n");
@@ -79,8 +80,12 @@ function runScript(body) {
 
 {
   // Un crash non viene mascherato: l'handler alza a 1, non abbassa a 0.
+  // E il riepilogo lo dice: senza la riga "interrotto" leggerebbe "0 failed"
+  // sotto uno stack trace, cioe' un verde stampato su una run morta a meta'.
   const r = runScript(HANDLER + "\nthrow new Error('boom');\n");
   assert("un'eccezione resta un fallimento", r.status === 1, `status ${r.status}`);
+  assert("il riepilogo dichiara di essere parziale", /interrotto prima della fine/.test(r.stdout),
+    r.stdout);
 }
 
 {
@@ -115,14 +120,18 @@ for (const f of suiteFiles) {
   assert(`${f} — nessun gate di uscita posizionale`, !src.includes(HARD_EXIT),
     "usa l'handler `exit` invece di uscire in una riga in fondo al file");
   assert(`${f} — registra il verdetto in un handler exit`,
-    /process\.on\("exit"/.test(src) && /process\.exitCode\s*=\s*1/.test(src));
+    /process\.on\("exit", \(code\)/.test(src) && /process\.exitCode\s*=\s*1/.test(src));
+  assert(`${f} — un crash a meta' non passa per un riepilogo pulito`,
+    /code && !fail/.test(src),
+    "l'handler deve dire che il riepilogo e' parziale quando il processo muore prima della fine");
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
-process.on("exit", () => {
+process.on("exit", (code) => {
   console.log(`\n${"─".repeat(50)}`);
   console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
   if (fail > 0) process.exitCode = 1;
 });
