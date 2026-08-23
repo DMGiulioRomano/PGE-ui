@@ -123,7 +123,7 @@ parity({
     },
     {
       label: "la derivata coincide: stesse modifiche, stesso movimento",
-      run: async (ask, assert) => {
+      run: async (ask, assert, ctx) => {
         const streams = MUTATIONS.map(m => {
           const s = base();
           (m.mut || NEITHER_MUT[m.label])(s);
@@ -156,10 +156,14 @@ parity({
         assert(`${MUTATIONS.length} modifiche, stesso verdetto su entrambi i lati`,
           bad.length === 0, bad.join("\n      "));
 
+        // Quali siano le divergenze dichiarate lo decide la tabella qui sopra,
+        // quindi contarle non discrimina niente: a verificarle e' il ciclo,
+        // che pretende il movimento esatto di ciascuna. Qui si stampano, perche'
+        // leggerle nell'output vale — ma da elenco, non da assert che non
+        // puo' fallire.
         const declared = MUTATIONS.filter(m => m.side === "engineOnly" || m.side === "uiOnly");
-        assert(`${declared.length} divergenza/e dichiarata/e, tutte ancora vere`,
-          declared.length > 0,
-          declared.map(m => m.label).join(", "));
+        ctx.note(`${declared.length} divergenza/e dichiarata/e, verificate una a una qui sopra`,
+          declared.map(m => `${m.label} → ${m.side}`));
       },
     },
     {

@@ -151,7 +151,7 @@ parity({
     },
     {
       label: "error() globale: dove la UI parla il motore rifiuta",
-      run: async (ask, assert) => {
+      run: async (ask, assert, ctx) => {
         const answers = await ask(CORPUS.map(e => ({
           op: "classify_deviation_probability",
           args: { value: e.engine, param_key: "volume", duration: 10.0 } })));
@@ -171,13 +171,13 @@ parity({
         });
         assert(`nessun avviso su uno YAML che rende (${flagged.length} corpi segnalati)`,
           falsePositives.length === 0, falsePositives.join("\n      "));
-        assert(`la meta' conservativa: ${silentRejections.length} rifiuti che la UI lascia al motore`,
-          true, silentRejections.join("\n      "));
+        ctx.note(`la meta' conservativa: ${silentRejections.length} rifiuti che la UI lascia al motore`,
+          silentRejections);
       },
     },
     {
       label: "error() per-parametro: stesso verso, su ogni chiave viva",
-      run: async (ask, assert) => {
+      run: async (ask, assert, ctx) => {
         const reqs = [], meta = [];
         for (const key of D.PARAM_KEYS) {
           for (const b of PER_PARAM_BODIES) {
@@ -202,8 +202,7 @@ parity({
         });
         assert(`${reqs.length} coppie (chiave, corpo): nessun falso positivo (${flagged} segnalate)`,
           falsePositives.length === 0, falsePositives.join("\n      "));
-        assert(`${silent} corpi che il motore rifiuta e la UI lascia passare (meta' conservativa, per costruzione)`,
-          true);
+        ctx.note(`${silent} corpi che il motore rifiuta e la UI lascia passare (meta' conservativa, per costruzione)`);
       },
     },
     {

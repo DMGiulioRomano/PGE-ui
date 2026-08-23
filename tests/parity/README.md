@@ -38,6 +38,23 @@ harness.js         runner: dichiara i casi PRIMA di girarli, così quando il
 test-*-parity.js   le suite.
 ```
 
+Due dettagli del protocollo che non si indovinano leggendo il codice:
+
+- **I float non finiti viaggiano etichettati.** `Infinity` e `NaN` non sono
+  JSON, quindi `_json_safe` li manda come `{"__float__": "Infinity"}` e
+  `oracle.js` li ridecodifica in numeri veri. La prima versione li mandava a
+  `null` "come farebbe `JSON.stringify`": era vero e inutile, perché
+  `JSON.stringify` fa lo stesso di qua e il confronto diventava `null === null`
+  — indistinguibili, non confrontabili. Chi confronta valori dell'oracolo deve
+  quindi **non** passare per `JSON.stringify` (vedi `sameValue` in
+  `test-magnify-parity.js`).
+- **`ctx.note(label, righe)` non è un assert.** Serve agli elenchi che
+  documentano senza discriminare (quali coppie cadono nella banda int/float,
+  quali corpi il motore rifiuta e la UI lascia passare). Un `assert(label,
+  true, elenco)` avrebbe due difetti: l'`extra` si stampa solo sul ramo FAIL,
+  quindi l'elenco non comparirebbe mai, e un assert che non può fallire gonfia
+  il conteggio con qualcosa che non parla.
+
 Le operazioni dell'oracolo:
 
 | op | risponde con | mirror che verifica |

@@ -33,6 +33,28 @@ const path = require("path");
 
 const ORACLE_PY = path.join(__dirname, "engine_oracle.py");
 
+/* Il gemello di NON_FINITE_TAG in engine_oracle.py. `Infinity` e `NaN` non
+ * sono JSON, quindi sul filo viaggiano come `{"__float__": "Infinity"}` — un
+ * dict etichettato e non una stringa nuda, perche' "Infinity" puo' essere un
+ * valore di stringa legittimo. Qui tornano numeri veri, cosi' le suite
+ * confrontano `-Infinity` con `-Infinity` invece di `null` con `null`. */
+const NON_FINITE_TAG = "__float__";
+const NON_FINITE = { Infinity: Infinity, "-Infinity": -Infinity, NaN: NaN };
+
+function decodeFloats(v) {
+  if (Array.isArray(v)) return v.map(decodeFloats);
+  if (v && typeof v === "object") {
+    const keys = Object.keys(v);
+    if (keys.length === 1 && keys[0] === NON_FINITE_TAG && v[NON_FINITE_TAG] in NON_FINITE) {
+      return NON_FINITE[v[NON_FINITE_TAG]];
+    }
+    const out = {};
+    for (const k of keys) out[k] = decodeFloats(v[k]);
+    return out;
+  }
+  return v;
+}
+
 /* L'interprete con cui girare l'oracolo, in ordine di fedelta':
  *   1. PGE_PARITY_PYTHON, se qualcuno ha da dire l'ultima parola;
  *   2. il venv del motore, se c'e' — li' `pge.cli` si importa davvero e la
@@ -90,7 +112,7 @@ class Oracle {
       if (!line) continue;
       let msg;
       try {
-        msg = JSON.parse(line);
+        msg = decodeFloats(JSON.parse(line));
       } catch (e) {
         this._die(`riga non JSON dall'oracolo: ${line.slice(0, 200)}`);
         return;
@@ -180,4 +202,4 @@ async function openOracle({ root, timeoutMs = 30000 } = {}) {
   return o;
 }
 
-module.exports = { openOracle, Oracle, pickPython, ORACLE_PY };
+module.exports = { openOracle, Oracle, pickPython, decodeFloats, ORACLE_PY };

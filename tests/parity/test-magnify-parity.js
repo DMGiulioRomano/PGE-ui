@@ -26,6 +26,41 @@ const M = window.PGEMagnifySpec;
 
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/* Confronto profondo che NON passa per JSON.stringify.
+ *
+ * `JSON.stringify` manda `Infinity` e `NaN` a `null`, e la sentinella che
+ * l'oracolo usa sul filo viene gia' ridecodificata in numeri veri da
+ * oracle.js. Confrontare le stringhe JSON renderebbe quindi indistinguibili
+ * proprio i quattro valori su cui la grammatica e' cambiata (`t=inf`,
+ * `t=-inf`, `t=nan`, `t=1e400`): un `-Infinity` scambiato per `+Infinity`
+ * resterebbe verde. Qui i numeri si confrontano da numeri, con NaN uguale a
+ * se stesso perche' la domanda e' "il motore e la UI leggono lo stesso
+ * valore", e `float('nan')` e `NaN` sono lo stesso valore letto. */
+function sameValue(a, b) {
+  if (typeof a === "number" && typeof b === "number") {
+    return a === b || (Number.isNaN(a) && Number.isNaN(b));
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => sameValue(x, b[i]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a).sort(), kb = Object.keys(b).sort();
+    return eq(ka, kb) && ka.every(k => sameValue(a[k], b[k]));
+  }
+  return a === b;
+}
+
+/* Per i messaggi d'errore: JSON.stringify mentirebbe anche li'. */
+function show(v) {
+  if (typeof v === "number" && !Number.isFinite(v)) return String(v);
+  if (Array.isArray(v)) return "[" + v.map(show).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).map(k => `${k}:${show(v[k])}`).join(",") + "}";
+  }
+  return JSON.stringify(v);
+}
+
 /* Il corpus. Ogni voce e' uno SPEC che qualcuno potrebbe scrivere nel campo
  * della lente, piu' le forme di numero su cui `Number()` e `float()` non erano
  * d'accordo. Nessuna aspettativa scritta qui: l'aspettativa e' il motore. */
@@ -130,17 +165,25 @@ parity({
         const answers = await ask(
           specs.map(spec => ({ op: "parse_magnify_spec", args: { spec } })));
         const mismatches = [];
+        let nonFinite = 0;
         specs.forEach((spec, i) => {
           if (!answers[i].ok) return;
           const mine = M.targets(spec);
           const theirs = answers[i].value.targets;
-          // JSON.stringify manda Infinity/NaN a null da entrambe le parti solo
-          // se ci arrivano allo stesso modo: e' proprio cio' che si verifica.
-          if (!eq(mine, theirs)) mismatches.push({ spec, mine, theirs });
+          if (theirs.some(t => Object.values(t).some(
+                v => typeof v === "number" && !Number.isFinite(v)))) nonFinite++;
+          if (!sameValue(mine, theirs)) mismatches.push({ spec, mine, theirs });
         });
         assert(`${specs.length} SPEC validi → stessi target`,
           mismatches.length === 0,
-          mismatches.map(m => `${JSON.stringify(m.spec)}: ui=${JSON.stringify(m.mine)} motore=${JSON.stringify(m.theirs)}`).join("\n      "));
+          mismatches.map(m => `${JSON.stringify(m.spec)}: ui=${show(m.mine)} motore=${show(m.theirs)}`).join("\n      "));
+        // I valori non finiti sono quelli su cui la grammatica e' cambiata
+        // (`t=inf`, `t=-inf`, `t=nan`, `t=1e400`), ed erano anche gli unici che
+        // un confronto via JSON.stringify non poteva vedere. Se l'oracolo
+        // smettesse di consegnarli come numeri, questa riga se ne accorge — e
+        // senza di lei il caso sopra tornerebbe a passare a vuoto.
+        assert(`${nonFinite} SPEC arrivano con un valore non finito, confrontato da numero`,
+          nonFinite >= 4, `trovati ${nonFinite}: la sentinella del protocollo non arriva piu' decodificata?`);
       },
     },
     {

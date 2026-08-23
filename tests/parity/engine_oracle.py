@@ -91,16 +91,37 @@ _PROTOCOL = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
 sys.stdout = sys.stderr
 
 
+# Etichetta dei float non finiti sul filo (vedi _json_safe). Il gemello sta in
+# oracle.js: cambiarla qui senza cambiarla li' fa arrivare il tag alle suite.
+NON_FINITE_TAG = "__float__"
+
+
 def _json_safe(o):
-    """JSON stretto: i float non finiti diventano null.
+    """JSON stretto: i float non finiti viaggiano come sentinella etichettata.
 
     `json.dumps` di Python emette `Infinity` e `NaN`, che JSON non prevede e
     che `JSON.parse` di node rifiuta — una riga sola cosi' e il client muore
-    con "riga non JSON" invece di rispondere alla domanda. `null` e' anche
-    quello che `JSON.stringify` produce dallo stesso valore, quindi i due lati
-    di un confronto restano confrontabili."""
+    con "riga non JSON" invece di rispondere alla domanda.
+
+    La prima versione li mandava a `null`, "come farebbe JSON.stringify".
+    Era vero e inutile: `JSON.stringify` fa lo stesso di la', quindi un
+    confronto fra target diventava `null === null` e passava anche se i due
+    lati dicessero uno `+inf` e l'altro `NaN`. Rendeva i due lati
+    indistinguibili, non confrontabili — l'opposto di cio' che serve a una
+    suite di parita', e proprio sui valori (`t=inf`, `t=nan`, `t=1e400`) su
+    cui la grammatica di magnify-spec e' cambiata.
+
+    La sentinella e' un dict etichettato e non una stringa nuda perche' un
+    valore di stringa legittimo puo' benissimo essere "Infinity" (`stream=`
+    prende testo libero): `{"__float__": "Infinity"}` non collide con niente.
+    `oracle.js` la ridecodifica in un numero vero prima di consegnare la
+    risposta, quindi le suite vedono `Infinity`, non un tag."""
     if isinstance(o, float):
-        return o if math.isfinite(o) else None
+        if math.isfinite(o):
+            return o
+        if o != o:
+            return {NON_FINITE_TAG: "NaN"}
+        return {NON_FINITE_TAG: "Infinity" if o > 0 else "-Infinity"}
     if isinstance(o, dict):
         return {k: _json_safe(v) for k, v in o.items()}
     if isinstance(o, (list, tuple)):

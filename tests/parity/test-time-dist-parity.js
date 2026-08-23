@@ -140,7 +140,7 @@ parity({
     },
     {
       label: "overflow: dove la UI avvisa il motore rifiuta davvero",
-      run: async (ask, assert) => {
+      run: async (ask, assert, ctx) => {
         const answers = await ask(OVERFLOW_PAIRS.map(([spec, n]) => ({
           op: "build_time_distribution", args: { spec, n_reps: n, total_time: T } })));
 
@@ -161,10 +161,11 @@ parity({
         assert(`nessun falso positivo (${agree.length} coppie segnalate, tutte rifiutate dal motore)`,
           falsePositives.length === 0, falsePositives.join("\n      "));
         // Il verso opposto e' ammesso, ed e' la banda int/float: la UI modella
-        // il quoziente intero, piu' permissivo. Va misurato, non presunto —
-        // il caso dopo lo fa. Qui basta che sia un fatto visibile.
-        assert(`la UI tace su ${uiSilentEngineFails.length} coppie che il motore rifiuta (banda int/float, misurata sotto)`,
-          true, uiSilentEngineFails.join("\n      "));
+        // il quoziente intero, piu' permissivo. Non e' un'asserzione — misurarlo
+        // e' compito del caso dopo, che cerca le due soglie; qui l'elenco serve
+        // a chi legge l'output, quindi si stampa invece di fingersi un assert.
+        ctx.note(`la UI tace su ${uiSilentEngineFails.length} coppie che il motore rifiuta (banda int/float, misurata sotto)`,
+          uiSilentEngineFails);
       },
     },
     {

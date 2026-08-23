@@ -39,7 +39,15 @@
  * `run` riceve:
  *   ask     — `oracle.ask`, in forma singola o a blocco (vedi oracle.js)
  *   assert  — `(label, cond, extra)`, come nelle suite node esistenti
- *   ctx     — { oracle, engineRoot, commit, jsyaml }
+ *   ctx     — { oracle, engineRoot, commit, jsyaml, note }
+ *
+ * `ctx.note(label, righe)` è per l'informativo: un elenco che documenta cosa è
+ * successo senza discriminare niente (quali coppie cadono nella banda
+ * int/float, quali corpi il motore rifiuta e la UI lascia passare). Prima
+ * quella roba viaggiava come `assert(label, true, elenco)`, che ha due difetti
+ * in una PR il cui punto è che un caso saltato non è un caso passato: l'`extra`
+ * si stampa solo sul ramo FAIL, quindi l'elenco non compariva mai, e un assert
+ * che non può fallire gonfia il conteggio con qualcosa che non parla.
  * ===========================================================================*/
 
 const fs = require("fs");
@@ -140,12 +148,20 @@ async function parity({ suite, why, cases }) {
   /* --- esecuzione -------------------------------------------------------- */
   let pass = 0, fail = 0;
   const notRun = [];
+  /* Informativo, non un'asserzione: si vede sempre e non entra nel conteggio.
+     `righe` può essere una stringa, un array, o mancare del tutto. */
+  function note(label, righe) {
+    console.log("  ·   " + label);
+    const list = Array.isArray(righe) ? righe : (righe ? [righe] : []);
+    for (const r of list) console.log("        " + r);
+  }
   const ctx = {
     oracle,
     engineRoot: root,
     commit: oracle.hello.engine_commit,
     jsyaml: loadJsYaml(),
     unavailable,
+    note,
   };
   const ask = (a, b, c) => oracle.ask(a, b, c);
 

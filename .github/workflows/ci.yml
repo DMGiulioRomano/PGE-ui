@@ -32,6 +32,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # L'oracolo di parita' gira su python, quindi la versione va fissata qui
+      # come il job python fissa la sua: senza, si userebbe il python3 che
+      # l'immagine del runner ha quel giorno. Non sarebbe rotto — con il motore
+      # presente la modalita' stretta fa uscire 1 e la CI diventa rossa con
+      # "l'oracolo non parte" — ma sarebbe un rosso per un motivo che non
+      # c'entra con la parita', deciso da un'immagine che cambia sotto di noi.
+      # Nessun venv del motore, che resta la proprieta' che conta.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: run node test suite
         working-directory: PGE-ui
         run: make tests-node
