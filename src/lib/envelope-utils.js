@@ -421,18 +421,44 @@
     return le <= ls ? { loopStart: ls, loopEnd: le } : null;
   }
 
-  // Mirror della validazione PGE #158: con grain.duration_unit: samples la
-  // grain.duration deve essere esplicita. Il default 0.05 è in secondi e non
-  // viene convertito, quindi base (secondi) e duration_range (campioni)
-  // vivrebbero in domini diversi; il motore solleva MissingFieldError. Solo
-  // 'samples' è vincolato — 'seconds' e l'assenza usano il default liberamente.
-  // Ritorna null se valido/non applicabile, altrimenti { unit } così il chiamante
-  // costruisce il messaggio. Puro — niente DOM, niente chiamate al motore.
+  // Le unità ammesse per grain.duration / grain.duration_range, nell'ordine in
+  // cui il motore le dichiara (Stream.GRAIN_DURATION_UNITS). 'milliseconds' è
+  // arrivato con PGE v5.2.0 (#171): a differenza di 'samples' il suo fattore è
+  // fisso (1e-3) e non dipende da output_sr. Esportate perché il controllo
+  // dell'Inspector ci costruisca sopra le opzioni: con la coppia cablata a mano
+  // la terza unità non era selezionabile, e sceglierla cancellava la chiave.
+  const GRAIN_DURATION_UNITS = ["seconds", "samples", "milliseconds"];
+
+  // Mirror dei due rifiuti del motore su grain.duration_unit
+  // (Stream._pre_normalize_grain_params).
+  //
+  //   "missing-duration" → unità non-secondi senza una grain.duration
+  //                        esplicita. Il default 0.05 è in secondi e non viene
+  //                        convertito: base (secondi) e duration_range
+  //                        (nell'unità dichiarata) vivrebbero in domini
+  //                        diversi, e il motore solleva MissingFieldError. Il
+  //                        vincolo era di 'samples' finché le unità erano due;
+  //                        da PGE #171 vale per ogni unità che non sia
+  //                        'seconds'.
+  //   "unknown"          → un'unità fuori dall'insieme (InvalidFieldValueError).
+  //                        Non producibile dal controllo — arriva da uno YAML
+  //                        scritto a mano — e precede il controllo sulla
+  //                        durata, quindi resta anche con duration esplicita.
+  //
+  // 'seconds' e la chiave assente usano il default liberamente. `duration_unit:`
+  // vuota (durationUnit null lato bridge) è trattata come assente: il
+  // serializer la lascia cadere, quindi l'editor non la porta al render.
+  // Ritorna null se valido/non applicabile, altrimenti { kind, unit } così il
+  // chiamante costruisce il messaggio. Puro — niente DOM, niente chiamate al
+  // motore.
   function grainDurationUnitError(grain) {
-    if (!grain || grain.durationUnit !== "samples") return null;
+    if (!grain) return null;
+    const unit = grain.durationUnit;
+    if (unit == null || unit === "seconds") return null;
+    if (GRAIN_DURATION_UNITS.indexOf(unit) === -1) return { kind: "unknown", unit };
     const hasScalar = grain.duration != null;
     const hasEnv = grain.durationEnv != null;
-    return (hasScalar || hasEnv) ? null : { unit: "samples" };
+    return (hasScalar || hasEnv) ? null : { kind: "missing-duration", unit };
   }
 
   // Mirror dei due rifiuti del motore su grain.read_direction (PGE #207) che
@@ -510,5 +536,6 @@
     loopUnitInfo,
     loopBoundsError,
     grainDurationUnitError,
+    GRAIN_DURATION_UNITS,
   };
 })();

@@ -401,9 +401,10 @@ console.log("\n── loopBoundsError ──");
     LB({ loopStart: 0, loopEnd: "—" }) === null);
 }
 
-// grainDurationUnitError — mirror della validazione PGE #158: con
-// grain.duration_unit: samples, grain.duration deve essere esplicita (il
-// default 0.05 è in secondi e non verrebbe convertito).
+// grainDurationUnitError — mirror della validazione PGE #158, estesa alle tre
+// unità di PGE v5.2.0 (#171): con grain.duration_unit diverso da 'seconds',
+// grain.duration deve essere esplicita (il default 0.05 è in secondi e non
+// verrebbe convertito). Il vincolo non è più solo di 'samples'.
 console.log("\n── grainDurationUnitError ──");
 {
   const GE = U.grainDurationUnitError;
@@ -419,10 +420,46 @@ console.log("\n── grainDurationUnitError ──");
     GE({ durationUnit: "samples", duration: 480 }) === null);
   assert("samples con durationEnv → null",
     GE({ durationUnit: "samples", durationEnv: [[0, 48], [1, 4800]] }) === null);
+  // milliseconds: stesso vincolo di samples — il motore lo applica a ogni
+  // unità non-secondi (Stream._pre_normalize_grain_params), non solo ai campioni
+  assert("milliseconds senza duration → errore",
+    GE({ durationUnit: "milliseconds" }) != null);
+  assert("milliseconds con solo durationRange → errore",
+    GE({ durationUnit: "milliseconds", durationRange: 5 }) != null);
+  assert("milliseconds con duration scalare → null",
+    GE({ durationUnit: "milliseconds", duration: 12 }) === null);
+  assert("milliseconds con durationEnv → null",
+    GE({ durationUnit: "milliseconds", durationEnv: [[0, 1], [1, 200]] }) === null);
+  // l'unità torna al chiamante: il messaggio nomina quella scelta, non 'samples'
+  assert("l'errore nomina l'unità selezionata",
+    GE({ durationUnit: "milliseconds" }).unit === "milliseconds"
+    && GE({ durationUnit: "samples" }).unit === "samples");
+  assert("la duration mancante si distingue dall'unità ignota",
+    GE({ durationUnit: "milliseconds" }).kind === "missing-duration");
+  // unità fuori dall'insieme: il motore alza InvalidFieldValueError prima di
+  // guardare la duration, quindi l'errore resta anche con duration esplicita
+  assert("unità ignota → errore anche con duration",
+    GE({ durationUnit: "ms", duration: 12 }) != null);
+  assert("unità ignota → kind 'unknown' e unità riportata",
+    GE({ durationUnit: "ms", duration: 12 }).kind === "unknown"
+    && GE({ durationUnit: "ms", duration: 12 }).unit === "ms");
   // robustezza
   assert("null grain → null", GE(null) === null);
   assert("duration 0 conta come presente (grano da 0? gestito dai bound) ",
     GE({ durationUnit: "samples", duration: 0 }) === null);
+  // `duration_unit:` vuota → durationUnit null lato bridge. La UI la tratta
+  // come assente (il serializer la lascia cadere), quindi niente errore qui.
+  assert("chiave vuota (durationUnit null) → null",
+    GE({ durationUnit: null }) === null);
+}
+
+// L'insieme delle unità è uno solo, esportato: il Seg dell'Inspector ci
+// costruisce sopra le opzioni invece di ricablarle a mano ad ogni unità nuova.
+console.log("\n── GRAIN_DURATION_UNITS ──");
+{
+  assert("le tre unità del motore, in ordine",
+    eq(U.GRAIN_DURATION_UNITS, ["seconds", "samples", "milliseconds"]),
+    JSON.stringify(U.GRAIN_DURATION_UNITS));
 }
 
 
@@ -592,6 +629,45 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
     /hardMax: env\.hardMax, fine: env\.fine,/.test(eeSrc));
   assert("le altre grandezze a grana fine dichiarano `fine`",
     (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 4);
+}
+
+console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
+{
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+
+  assert("il Seg elenca le unità del motore, non una coppia cablata a mano",
+    /options=\{window\.PGEEnvUtils\.GRAIN_DURATION_UNITS\.map\(/.test(inspSrc)
+    && !/options=\{\[\{label:"seconds",value:"seconds"\},\{label:"samples",value:"samples"\}\]\}/.test(inspSrc));
+  // Il ramo di cancellazione vale per `seconds` e basta: con tre unità,
+  // "tutto ciò che non è samples torna al default" cancellava milliseconds.
+  assert("solo seconds cancella la chiave, le altre unità la scrivono",
+    /if \(v === "seconds"\) \{[\s\S]{0,200}delete ng\.durationUnit/.test(inspSrc)
+    && !/if \(v === "samples"\) \{/.test(inspSrc));
+  assert("l'unità in vigore è calcolata una volta sola",
+    /const grainUnit = \(stream\.grain && stream\.grain\.durationUnit\) \|\| "seconds"/.test(inspSrc));
+  // "s" su valori scritti in campioni o millisecondi direbbe il falso.
+  assert("duration e duration_range portano il suffisso dell'unità dichiarata",
+    /const grainUnitSuffix = grainUnit === "samples" \? "smp"/.test(inspSrc)
+    && /grainUnit === "milliseconds" \? "ms" : "s"/.test(inspSrc)
+    && (inspSrc.match(/Env \? "" : grainUnitSuffix\}/g) || []).length === 2
+    && !/unit=\{stream\.grain\.durationEnv \? "" : "s"\}/.test(inspSrc));
+  assert("il messaggio d'errore nomina l'unità scelta invece di dire 'samples'",
+    /grainUnitError\.unit\} richiede una grain\.duration esplicita/.test(inspSrc)
+    && !/duration_unit: samples richiede una grain\.duration esplicita/.test(inspSrc));
+  assert("un'unità ignota ha un messaggio suo",
+    /grainUnitError\.kind === "unknown"/.test(inspSrc));
+  // Il fattore di milliseconds è fisso (1e-3): citare il sample rate nel suo
+  // hint sarebbe la riga sbagliata copiata da quella dei campioni.
+  {
+    const msHint = /grainUnit === "milliseconds" \? \([\s\S]{0,600}?\) : null\}/.exec(inspSrc);
+    assert("milliseconds ha un hint proprio", !!msHint);
+    assert("l'hint dei millisecondi non cita il sample rate",
+      !!msHint && !/48000|sample rate di output/.test(msHint[0]) && /millisecond/.test(msHint[0]));
+  }
+  assert("l'hint dei campioni resta sul ramo samples",
+    /grainUnit === "samples" \? \([\s\S]{0,400}?campioni a 48000 Hz/.test(inspSrc));
+  assert("il tooltip della chiave elenca le tre unità",
+    /title="unità di grain\.duration e duration_range[^"]*milliseconds/.test(inspSrc));
 }
 
 console.log(`\n${"─".repeat(50)}`);
