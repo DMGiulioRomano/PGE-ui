@@ -27,9 +27,43 @@
   const STR_KEYS = ["stream"];
   const KEYS = [...NUMERIC_KEYS, ...STR_KEYS];
 
+  /* Il motore converte con `float()`, non con `Number()`, e le due grammatiche
+     non coincidono. La differenza non è accademica: `Number("0x10")` fa 16,
+     `float("0x10")` alza ValueError — quindi la vecchia guardia lasciava
+     passare uno SPEC che ammazza il render, cioè il caso esatto che questo
+     modulo esiste per intercettare. Nell'altro verso rifiutava `t=1_000` e
+     `t=inf`, che il motore accetta, bloccando in UI uno SPEC che rende.
+
+     Qui la grammatica è quella di `float()`: segno opzionale, poi `inf` /
+     `infinity` / `nan` (senza distinzione di maiuscole) oppure una mantissa
+     decimale con separatori `_` fra cifre ed esponente opzionale. Niente
+     prefissi 0x/0b/0o, niente stringa vuota.
+
+     Divergenza dichiarata e verificata in tests/parity/test-magnify-parity.js:
+     `float()` accetta anche le cifre decimali Unicode (`t=１４`), che qui non
+     passano. Replicarle richiederebbe la tabella `unicodedata.decimal`, e la
+     divergenza è nel verso sicuro — la UI è più stretta del motore, mai il
+     contrario. */
+  const PY_DIGITS = "\\d(?:_?\\d)*";
+  const PY_FLOAT_RE = new RegExp(
+    "^[+-]?(?:inf(?:inity)?|nan|" +
+      "(?:" + PY_DIGITS + "(?:\\.(?:" + PY_DIGITS + ")?)?|\\.(?:" + PY_DIGITS + "))" +
+      "(?:[eE][+-]?" + PY_DIGITS + ")?" +
+    ")$", "i");
+
   function isNumeric(value) {
-    // Number("") è 0: il valore vuoto va escluso a mano, o `t=` passerebbe.
-    return value !== "" && Number.isFinite(Number(value));
+    return PY_FLOAT_RE.test(value);
+  }
+
+  /* Il numero che il motore otterrebbe. Chiamata solo dopo isNumeric. */
+  function toNumber(value) {
+    const bare = value.replace(/_/g, "");
+    const n = Number(bare);
+    if (!Number.isNaN(n)) return n;                 // include "Infinity"
+    // Restano le forme che `Number` non conosce: inf/infinity/nan.
+    return /inf(inity)?$/i.test(bare)
+      ? (bare[0] === "-" ? -Infinity : Infinity)
+      : NaN;
   }
 
   /* Parsa un singolo target. Ritorna { target } oppure { error }. */
@@ -51,7 +85,7 @@
         if (!isNumeric(value)) {
           return { error: `valore non numerico per '${key}': '${value}'` };
         }
-        target[key] = Number(value);
+        target[key] = toNumber(value);
       } else {
         if (!value) return { error: `'${key}' non può essere vuoto` };
         target[key] = value;
