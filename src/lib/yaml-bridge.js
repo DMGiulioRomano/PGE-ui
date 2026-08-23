@@ -59,7 +59,12 @@
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / 48000, max: 10 },   // min 1 campione (PGE #158)
-    durationRange:{ min: 0, max: 10 },
+    // grain_duration.max_range nel motore vale 1, non 10: il 10 qui era quello
+    // di grainDur (il VALORE, non la banda) e allargava il fallback oltre cio'
+    // che il motore accetta. Con il bridge acceso /bounds lo correggeva gia';
+    // su file:// o server spento no, e la manopola arrivava a un valore che il
+    // render rifiuta. Trovato dalla parita' statica in tests/parity.
+    durationRange:{ min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
     // motore al parse. Il vincolo "solo i due estremi" non è esprimibile qui e

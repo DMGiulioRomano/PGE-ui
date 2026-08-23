@@ -1,0 +1,201 @@
+/* =============================================================================
+ * test-bounds-parity.js — i clamp della UI contro i bound veri (issue #133).
+ *
+ * Qui il buco era il piu' netto dei cinque. La catena e':
+ *
+ *     parameter_definitions.py  →  engine_introspect (AST)  →  GET /bounds
+ *                               →  mergeEngineBounds  →  window.PGE_BOUNDS
+ *
+ * e ogni anello aveva il suo test. `test-bounds.js` costruisce un payload
+ * sintetico e verifica la mappatura; `test_render_pipeline.py` scrive un finto
+ * `parameter_definitions.py` in `tmp_path` e verifica il parser AST. Nessuno
+ * dei due ha mai letto il file vero, quindi un rename nel motore — o un campo
+ * che l'AST non sa leggere — passava senza far fallire niente e la UI si
+ * teneva il fallback statico credendo di avere i bound del motore.
+ *
+ * Le quattro domande di questa suite:
+ *
+ *   1. il parser AST legge gli STESSI valori che il motore usa importato;
+ *   2. ogni parametro nominato in ENGINE_PARAM_MAP esiste nel registro;
+ *   3. i clamp che la UI finisce per usare sono quelli del motore, salvo le
+ *      eccezioni dichiarate;
+ *   4. il fallback statico — quello di `file://` e del server spento — non
+ *      ammette valori che il motore rifiuta.
+ *
+ * Run: node tests/parity/test-bounds-parity.js
+ * =========================================================================== */
+
+const { parity, loadUiLibs } = require("./harness.js");
+
+const window = loadUiLibs(["yaml-bridge.js", "bounds.js"]);
+const B = window.PGEBounds;
+const STATIC = JSON.parse(JSON.stringify(window.PGE_BOUNDS));
+
+/* Eccezioni dichiarate, ognuna con la ragione. Non sono sviste: sono i punti
+ * in cui i bound statici del motore NON sono il vincolo vero. */
+const MIN_EXCEPTIONS = {
+  grainDur: "il minimo vero e' 1 campione (1/output_sr, PGE #158), un override " +
+            "dinamico che il registro statico non porta: bounds.js lo applica a mano",
+};
+const MAX_EXCEPTIONS = {
+  loopStart: "max_val e' null: il tetto vero e' la durata del sample scelto",
+  loopDur:   "max_val e' null: il tetto vero e' la durata del sample scelto",
+  loopEnd:   "max_val e' null: il tetto vero e' la durata del sample scelto",
+};
+
+function sortDeep(v) {
+  if (Array.isArray(v)) return v.map(sortDeep);
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const k of Object.keys(v).sort()) o[k] = sortDeep(v[k]);
+    return o;
+  }
+  return v;
+}
+const same = (a, b) => JSON.stringify(sortDeep(a)) === JSON.stringify(sortDeep(b));
+
+function engineBound(raw, uiKey) {
+  const { param, field } = B.ENGINE_PARAM_MAP[uiKey];
+  const ep = (raw.params || {})[param];
+  if (!ep) return null;
+  return field === "range"
+    ? { min: ep.min_range, max: ep.max_range, param }
+    : { min: ep.min_val,   max: ep.max_val,   param };
+}
+
+parity({
+  suite: "bounds",
+  why: "GET /bounds (AST) + mergeEngineBounds + PGE_BOUNDS  ↔  GRANULAR_PARAMETERS / PitchUnit.value_bounds",
+  cases: [
+    {
+      label: "il parser AST legge quello che il motore usa",
+      run: async (ask, assert) => {
+        const [impR, astR] = await ask([
+          { op: "parameter_bounds", args: { source: "import" } },
+          { op: "parameter_bounds", args: { source: "ast" } },
+        ]);
+        if (!impR.ok) throw new Error(`import: ${impR.error}`);
+        if (!astR.ok) throw new Error(`ast: ${astR.error}`);
+        const imp = impR.value, ast = astR.value;
+
+        assert("l'AST trova tutti i parametri del registro",
+          same(Object.keys(imp.params).sort(), Object.keys(ast.params || {}).sort()),
+          `import=${Object.keys(imp.params).length} ast=${Object.keys(ast.params || {}).length}`);
+
+        const diffs = [];
+        for (const name of Object.keys(imp.params)) {
+          if (!same(imp.params[name], (ast.params || {})[name])) {
+            diffs.push(`${name}: import=${JSON.stringify(imp.params[name])} ast=${JSON.stringify((ast.params || {})[name])}`);
+          }
+        }
+        assert(`${Object.keys(imp.params).length} parametri, stessi sei campi`,
+          diffs.length === 0, diffs.join("\n      "));
+
+        assert("stessi bound di pitch (unita' EDO + ratio + edoFactor)",
+          same(imp.pitch, ast.pitch),
+          `import=${JSON.stringify(imp.pitch)}\n      ast=${JSON.stringify(ast.pitch)}`);
+      },
+    },
+    {
+      label: "ENGINE_PARAM_MAP nomina parametri che esistono",
+      run: async (ask, assert) => {
+        const raw = await ask("parameter_bounds", { source: "import" });
+        if (!raw.ok) throw new Error(raw.error);
+        const params = raw.value.params;
+        const missing = [];
+        for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
+          const { param, field } = B.ENGINE_PARAM_MAP[uiKey];
+          if (!params[param]) { missing.push(`${uiKey} → ${param} (inesistente)`); continue; }
+          const need = field === "range" ? ["min_range", "max_range"] : ["min_val", "max_val"];
+          for (const f of need) {
+            if (!(f in params[param])) missing.push(`${uiKey} → ${param}.${f} assente`);
+          }
+        }
+        assert(`${Object.keys(B.ENGINE_PARAM_MAP).length} chiavi mappate, tutte su un parametro reale`,
+          missing.length === 0, missing.join("\n      "));
+      },
+    },
+    {
+      label: "i clamp che la UI usa sono quelli del motore",
+      run: async (ask, assert) => {
+        const raw = await ask("parameter_bounds", { source: "import" });
+        if (!raw.ok) throw new Error(raw.error);
+        const merged = B.mergeEngineBounds(STATIC, raw.value);
+
+        const diffs = [];
+        for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
+          const e = engineBound(raw.value, uiKey);
+          if (!e) continue;
+          const m = merged[uiKey];
+          if (typeof e.min === "number" && m.min !== e.min && !(uiKey in MIN_EXCEPTIONS)) {
+            diffs.push(`${uiKey}.min: ui=${m.min} motore=${e.min} (${e.param})`);
+          }
+          if (typeof e.max === "number" && m.max !== e.max && !(uiKey in MAX_EXCEPTIONS)) {
+            diffs.push(`${uiKey}.max: ui=${m.max} motore=${e.max} (${e.param})`);
+          }
+        }
+        assert("nessuna differenza fuori dalle eccezioni dichiarate",
+          diffs.length === 0, diffs.join("\n      "));
+
+        // Le eccezioni si pretendono: se un giorno il motore desse un max_val
+        // ai loop_*, questa riga direbbe che l'eccezione non serve piu'.
+        for (const uiKey of Object.keys(MAX_EXCEPTIONS)) {
+          const e = engineBound(raw.value, uiKey);
+          assert(`${uiKey}: il motore continua a non avere un tetto statico (${MAX_EXCEPTIONS[uiKey].slice(0, 40)}…)`,
+            e && e.max === null, JSON.stringify(e));
+        }
+        assert("grainDur: il minimo della UI e' piu' basso di quello statico, non piu' alto",
+          merged.grainDur.min < engineBound(raw.value, "grainDur").min,
+          `${merged.grainDur.min} vs ${engineBound(raw.value, "grainDur").min}`);
+
+        assert("i bound di pitch della UI sono quelli del motore",
+          same(merged.pitch, Object.assign({}, STATIC.pitch, raw.value.pitch)),
+          JSON.stringify(merged.pitch));
+        for (const unit of ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"]) {
+          assert(`pitch.${unit} === PitchUnit.value_bounds()`,
+            same(merged.pitch[unit], raw.value.pitch[unit]),
+            `ui=${JSON.stringify(merged.pitch[unit])} motore=${JSON.stringify(raw.value.pitch[unit])}`);
+        }
+      },
+    },
+    {
+      label: "il fallback statico non ammette cio' che il motore rifiuta",
+      run: async (ask, assert) => {
+        // Questo e' il caso che nessuno guardava: su `file://` o con il server
+        // spento la UI usa SOLO window.PGE_BOUNDS, e li' un tetto piu' alto di
+        // quello del motore non e' prudenza, e' una manopola che arriva a un
+        // valore che il render rifiuta.
+        const raw = await ask("parameter_bounds", { source: "import" });
+        if (!raw.ok) throw new Error(raw.error);
+
+        const wider = [];
+        for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
+          const e = engineBound(raw.value, uiKey);
+          const s = STATIC[uiKey];
+          if (!e || !s) continue;
+          if (typeof e.min === "number" && s.min < e.min && !(uiKey in MIN_EXCEPTIONS)) {
+            wider.push(`${uiKey}.min: statico=${s.min} < motore=${e.min}`);
+          }
+          if (typeof e.max === "number" && s.max > e.max && !(uiKey in MAX_EXCEPTIONS)) {
+            wider.push(`${uiKey}.max: statico=${s.max} > motore=${e.max}`);
+          }
+        }
+        assert("nessun clamp statico piu' largo del motore",
+          wider.length === 0, wider.join("\n      "));
+
+        const pitchDiffs = [];
+        for (const unit of ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"]) {
+          const s = STATIC.pitch[unit], e = raw.value.pitch[unit];
+          if (!s || !e) continue;
+          if (s.min < e.min) pitchDiffs.push(`${unit}.min: ${s.min} < ${e.min}`);
+          if (s.max > e.max) pitchDiffs.push(`${unit}.max: ${s.max} > ${e.max}`);
+          if (s.rangeMax > e.rangeMax) pitchDiffs.push(`${unit}.rangeMax: ${s.rangeMax} > ${e.rangeMax}`);
+        }
+        assert("nemmeno per il pitch", pitchDiffs.length === 0, pitchDiffs.join("\n      "));
+        assert("edoFactor statico === quello del motore",
+          STATIC.pitch.edoFactor === raw.value.pitch.edoFactor,
+          `statico=${STATIC.pitch.edoFactor} motore=${raw.value.pitch.edoFactor}`);
+      },
+    },
+  ],
+});
