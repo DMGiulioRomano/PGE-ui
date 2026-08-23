@@ -643,6 +643,7 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
 {
   const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
     /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
@@ -720,6 +721,23 @@ console.log("\n── grainSecondsToUnit ──");
   assert("0.01 s sono 480 campioni a 48000 Hz", T(0.01, "samples") === 480);
   assert("unità ignota → valore invariato", T(0.01, "ms") === 0.01);
   assert("non numerico → invariato", T(null, "milliseconds") === null);
+}
+
+console.log("\n── isEngineEnvelopeLike (la porta del motore) ──");
+{
+  const P = U.isEngineEnvelopeLike;
+  // Mirror di Envelope.is_envelope_like: per una lista serve almeno un item
+  // lista di ESATTAMENTE due elementi (o un compatto, o un BP group).
+  assert("breakpoint nudi → sì", P([[0, 0.05], [1, 0.1]]) === true);
+  assert("solo 3-tuple → no", P([[0, 0.05, "exp"], [1, 0.1, "lin"]]) === false);
+  assert("solo dict {t, v} → no", P([{ t: 0, v: 0.05 }, { t: 1, v: 0.1 }]) === false);
+  assert("un dict in mezzo a un nudo → sì (basta un item)", P([{ t: 0, v: 0.05 }, [1, 0.1]]) === true);
+  assert("BP group → sì", P([[[0, 0.05], [1, 0.1]], "exp"]) === true);
+  assert("blocco compatto → sì", P([[[0, 0.05], [50, 0.1]], 1, 4]) === true);
+  assert("dict con points → sì (regola verbatim)", P({ type: "linear", points: [] }) === true);
+  assert("dict senza points → no", P({ type: "linear" }) === false);
+  assert("lista vuota → no", P([]) === false);
+  assert("scalare → no", P(0.05) === false && P(null) === false);
 }
 
 console.log("\n── grainDefaultDuration ──");
@@ -914,14 +932,15 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
 {
   const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
 
   // I bound statici di grain_duration sono in secondi (max 10); i valori di un
   // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
   // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
   // il punto al primo drag, che è perdita di dati, non solo una vista storta.
   assert("i bound delle curve di durata seguono l'unità dichiarata",
-    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(eeSrc)
-    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(eeSrc)
+    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainDurUnit\)/.test(eeSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainRangeUnit\)/.test(eeSrc)
     && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(eeSrc)
     && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(eeSrc));
   assert("anche la finestra di partenza è espressa nell'unità",
@@ -929,8 +948,20 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
     && !/visMin: 0, visMax: 0\.5,/.test(eeSrc)
     && /grainDurVis/.test(eeSrc) && /grainRangeVis/.test(eeSrc));
   assert("il suffisso è quello condiviso con l'Inspector",
-    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
-    && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
+    /window\.PGEEnvUtils\.grainUnitSuffix\(grainDurUnit\)/.test(eeSrc)
+    && /window\.PGEEnvUtils\.grainUnitSuffix\(grainRangeUnit\)/.test(eeSrc)
+    && /unit: grainDurSuffix, fine: true,/.test(eeSrc)
+    && /unit: grainRangeSuffix, fine: true,/.test(eeSrc));
+  // L'unità vale PER CURVA: una forma che il motore non scala resta in secondi
+  // qualunque unità sia dichiarata, e l'asse deve dirlo — altrimenti il primo
+  // drag legge "ms" e scrive secondi (50 sull'asse -> 50 s per il motore).
+  assert("l'unità della curva passa dalla porta del motore, non solo dallo stream",
+    /isEngineEnvelopeLike\(env\) \? grainUnit : "seconds"/.test(eeSrc)
+    && /const grainDurUnit = curveUnit\(stream\.grain && stream\.grain\.durationEnv\)/.test(eeSrc)
+    && /const grainRangeUnit = curveUnit\(stream\.grain && stream\.grain\.durationRangeEnv\)/.test(eeSrc));
+  assert("l'Inspector dice perché quella curva resta in secondi",
+    /isEngineEnvelopeLike\(stream\.grain\[k\]\)/.test(inspSrc)
+    && /legge questo envelope in SECONDI/.test(inspSrc));
 }
 
 console.log(`\n${"─".repeat(50)}`);

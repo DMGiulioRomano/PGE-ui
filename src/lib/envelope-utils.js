@@ -527,7 +527,7 @@
   // Nota sul conteggio: la lunghezza deve essere ESATTAMENTE 2, come
   // `isinstance(item, list) and len(item) == 2` lato motore. `isBreakpoint`
   // qui non serve e anzi ingannerebbe, perché accetta anche i 3-tuple.
-  function _isEngineEnvelopeLike(value) {
+  function isEngineEnvelopeLike(value) {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       return "points" in value;
     }
@@ -542,7 +542,7 @@
   // riconoscimento (il BP group prima del breakpoint nudo — anche lui è una
   // lista di due elementi), e stessa porta d'ingresso.
   function _mapGrainEnvY(env, conv) {
-    if (!_isEngineEnvelopeLike(env)) return env;
+    if (!isEngineEnvelopeLike(env)) return env;
     const mapItem = (item) => {
       if (PGEEnv.isBPGroup(item)) return [item[0].map(mapItem), item[1]];
       if (PGEEnv.isCompactBlock(item)) return [item[0].map(mapItem), ...item.slice(1)];
@@ -721,6 +721,7 @@
     grainUnitSuffix,
     grainUnitFactor,
     grainSecondsToUnit,
+    isEngineEnvelopeLike,
     grainUnitBounds,
     grainDefaultDuration,
     convertGrainDurationUnit,
