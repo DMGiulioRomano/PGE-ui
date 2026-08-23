@@ -13,7 +13,7 @@ const path = require("path");
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 
-const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations, clearDeviationProbabilityLegacy } = window.PGEYaml;
+const { parse, serialize, serializeStream, parseStream, roundTripDiff, computeDuration, applyStreamPatch, resolveImplicitDurations, clearDeviationProbabilityLegacy, mergeDeviationProbabilityLegacy } = window.PGEYaml;
 
 /* ---------- micro test runner ---------- */
 
@@ -800,6 +800,37 @@ const { DEVIATION_PROB_IMPLICIT } = window.PGEYaml;
 }
 
 {
+  // La regola del flag per il tab Raw, testata dove vive: un OR fra la
+  // provenienza del draft e quella dello stream vivo. Prima stava in tre copie
+  // (JSX, replica nei test, regex sul sorgente), che potevano solo confermare
+  // il predicato che c'era — mai accorgersi che fosse quello sbagliato.
+  const P = (legacy, value) => ({ deviationProbabilityLegacy: legacy, deviationProbability: value });
+  const m = mergeDeviationProbabilityLegacy;
+
+  assert("merge — il draft porta la grafia morta: acceso comunque",
+    m(P(true, 99), P(false, 50)) === true);
+  assert("merge — il draft e' pulito ma il file su disco no: resta acceso",
+    m(P(false, 50), P(true, 50)) === true);
+  assert("merge — deviazione rimossa dal draft: si spegne (niente da riscrivere)",
+    m(P(false, undefined), P(true, 50)) === false);
+  assert("merge — niente da nessuna delle due parti: spento",
+    m(P(false, 50), P(false, 50)) === false);
+  assert("merge — restituisce sempre un booleano, mai undefined",
+    typeof m(P(undefined, undefined), {}) === "boolean");
+
+  // I due rami non possono contraddirsi: con la chiave presente il parse
+  // restituisce il valore o la sentinella, mai undefined — quindi il primo ramo
+  // implica sempre la condizione del secondo. Verificato sui corpi che
+  // potrebbero romperlo, cioe' i falsy.
+  for (const body of ["dephase: 99", "dephase:", "dephase: false", "dephase: 0", "dephase: true"]) {
+    const p = parseStream(`stream_id: s1\nsample: t.wav\nonset: 0\nduration: 5\n${body}\n`, 0, { samples: [] });
+    assert(`merge — '${body}': legacy implica un valore definito`,
+      !p.deviationProbabilityLegacy || p.deviationProbability !== undefined,
+      JSON.stringify({ legacy: p.deviationProbabilityLegacy, value: p.deviationProbability }));
+  }
+}
+
+{
   // Raw tab: applyEdits re-parses the draft and spreads the whole stream over
   // the live one (applyStreamPatch). The draft is `serializeStream(stream)`, so
   // it already shows the LIVE key — `dephase` is never on screen there — and a
@@ -822,15 +853,12 @@ ${body}
   assert("Raw tab — the draft already shows the live key, so `dephase` is never on screen",
     !/dephase/.test(draft) && /deviation_probability/.test(draft), draft.slice(0, 300));
 
-  // applyEdits, alla lettera (YamlEditor.jsx). Se cambi il predicato qui devi
-  // cambiarlo anche nel JSX e nella guardia sul sorgente piu' sotto: le tre
-  // copie dicono la stessa cosa, quindi possono confermare il predicato che
-  // c'e', mai accorgersi che sia quello sbagliato.
+  // applyEdits (YamlEditor.jsx): la regola del flag e' quella del bridge, qui e
+  // nel JSX, quindi non c'e' un predicato da tenere in sincrono.
   const applyEdits = (l, d) => {
     const parsed = parseStream(d, 0, { samples: [] });
     return applyStreamPatch(l, { ...parsed, color: l.color, id: l.id,
-      deviationProbabilityLegacy: parsed.deviationProbabilityLegacy
-        || (!!l.deviationProbabilityLegacy && parsed.deviationProbability !== undefined) });
+      deviationProbabilityLegacy: mergeDeviationProbabilityLegacy(parsed, l) });
   };
   assert("Raw tab — an Apply that writes nothing to disk keeps the flag lit",
     applyEdits(live, draft).deviationProbabilityLegacy === true);
@@ -907,8 +935,10 @@ ${body}
   assert("wiring — onSaveAs NON lo spegne: scrive un altro file, l'originale porta ancora dephase",
     saveAsBody.length > 100 && !/clearDeviationProbabilityLegacy/.test(saveAsBody),
     `len=${saveAsBody.length}`);
-  assert("wiring — YamlEditor.applyEdits fa l'OR fra la provenienza del draft e quella dello stream vivo",
-    /deviationProbabilityLegacy:\s*\n?\s*parsed\.deviationProbabilityLegacy\s*\|\|\s*\n?\s*\(!!stream\.deviationProbabilityLegacy && parsed\.deviationProbability !== undefined\)/.test(yeSrc));
+  // Non piu' una regex sulla forma del predicato — quello vive nel bridge ed e'
+  // testato li' sopra. Qui basta che applyEdits lo chiami invece di ricalcolarlo.
+  assert("wiring — YamlEditor.applyEdits delega il flag a PGEYaml.mergeDeviationProbabilityLegacy",
+    /deviationProbabilityLegacy:\s*window\.PGEYaml\.mergeDeviationProbabilityLegacy\(parsed, stream\)/.test(yeSrc));
 }
 
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];

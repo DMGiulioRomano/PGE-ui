@@ -848,10 +848,10 @@
       //
       // Emitted ALWAYS, false included, so a parsed stream always carries the
       // boolean, same shape rule as durationImplicit. It is NOT what keeps the
-      // Raw tab honest: there the stream is re-serialized under the live key,
-      // so `dephase` is never on screen and every re-parse would read false —
-      // YamlEditor.applyEdits therefore carries the flag over explicitly,
-      // alongside color/id, because the file on disk has not moved.
+      // Raw tab honest: there the draft is re-serialized under the live key, so
+      // `dephase` is never SHOWN — but the textarea is free, so it can still be
+      // typed. Both directions are handled by mergeDeviationProbabilityLegacy
+      // below, which YamlEditor.applyEdits calls.
       //
       // Nor does the flag go out on its own once the file IS migrated: it is
       // parse-time provenance, and a Save or a render never re-parses, so
@@ -1167,6 +1167,29 @@
     return out;
   }
 
+  /* Il flag per uno stream ri-parsato dal tab Raw: l'OR fra la provenienza del
+   * draft e quella dello stream vivo, perche' la grafia morta puo' entrare da
+   * tutte e due le parti.
+   *
+   * Da `live`: il draft e' `serializeStream(stream)`, quindi mostra sempre la
+   * chiave viva e `dephase` non e' MOSTRATO — un ri-parse nudo leggerebbe false
+   * mentre il file su disco porta ancora la grafia morta e la riscrittura e' da
+   * fare. Quel ramo si spegne solo se la deviazione sparisce del tutto: senza
+   * valore non c'e' nessuna chiave da riscrivere.
+   *
+   * Da `parsed`: non mostrato non e' non scrivibile. La textarea e' libera, e
+   * chi ha in mano un progetto pre-v7 la grafia morta la conosce — digitare
+   * `dephase: 99` introduce la chiave che il motore non legge, e senza questo
+   * ramo il salvataggio la riscriverebbe in silenzio.
+   *
+   * I due rami non possono contraddirsi: con la chiave presente
+   * `readDeviationProbability` restituisce il valore o la sentinella, mai
+   * `undefined`, quindi il primo implica sempre la condizione del secondo. */
+  function mergeDeviationProbabilityLegacy(parsed, live) {
+    return !!parsed.deviationProbabilityLegacy
+      || (!!live.deviationProbabilityLegacy && parsed.deviationProbability !== undefined);
+  }
+
   window.PGEYaml = {
     parse,
     serialize:       dataToYaml,
@@ -1174,6 +1197,7 @@
     applyStreamPatch,
     resolveImplicitDurations,
     clearDeviationProbabilityLegacy,
+    mergeDeviationProbabilityLegacy,
     parseStream,
     emptyProject,
     computeDuration,
