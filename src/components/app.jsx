@@ -1081,11 +1081,14 @@ function App() {
     // be picked up by a different stream. It is simply what this stream had,
     // waiting for it if the delete is undone.
     setData(d => {
+      // The layout is read BEFORE the stream goes, and `removeStreams` empties
+      // its lane without removing it. Deriving from the post-delete data
+      // instead would lose the lane outright: with no `ui_tracks` in the file
+      // the lanes ARE the streams, so the only record of the lane is the one
+      // this call has to write.
+      const tracks = TR.removeStreams(TR.deriveTracks(d), [id]);
       const next = { ...d, streams: d.streams.filter(s => s.id !== id) };
-      // deriveTracks already drops the id, but going through applyTracks is what
-      // removes a `ui_tracks` that has become trivial — otherwise deleting the
-      // second clip of a lane would leave a one-stream group in the file.
-      return TR.applyTracks(next, TR.deriveTracks(next));
+      return TR.applyTracks(next, tracks);
     });
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));

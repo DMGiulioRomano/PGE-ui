@@ -466,6 +466,14 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          /\bTR\.applyTracks\(/.test(appSrc));
   assert("paste routes through addStreamToTrackOf",
          /addStreamToTrackOf/.test(appSrc));
+  // deleteStream must read the layout BEFORE the stream goes and empty its lane
+  // through removeStreams. Deriving from the post-delete data loses the lane:
+  // with no `ui_tracks` in the file the lanes ARE the streams.
+  assert("deleting a stream empties its lane instead of deriving it away",
+         /TR\.removeStreams\(TR\.deriveTracks\(d\), \[id\]\)/.test(appSrc));
+  assert("the empty-lane buttons are wired",
+         /TR\.addTrack\(/.test(appSrc) && /TR\.removeTrack\(/.test(appSrc) &&
+         /onAddTrack/.test(tlSrc) && /onTrackRemove/.test(tlSrc));
   assert("the header VU is fed the whole group",
          /analysersFor/.test(appSrc) && /analysersFor/.test(tlSrc));
   assert("the group VU never re-reads a single trackAnalyser per lane",
