@@ -386,10 +386,13 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
+function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
+  // Why the rejection lives here and not in a toast: it belongs next to the
+  // field that caused it, and it has to survive until the user fixes the value.
+  const [idError, setIdError] = useStateIN(null);
   const samplePickerTrigger = React.useRef(null);
   const ibodyRef = React.useRef(null);
   const ibodyScrollTop = React.useRef(0);
@@ -458,7 +461,10 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
     setMode(k, newMode);
-    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, grainDur: 0.05, pan: 0, volume: 0 };
+    // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
+    // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
+    // l'invito a rimetterla in circolo.
+    const defaultsByKey = { density: 8, fillFactor: 2, distribution: 0, speedRatio: 1, pan: 0, volume: 0 };
     const fields = {
       density:      { sk: "density",     ek: "densityEnv" },
       fillFactor:   { sk: "fillFactor",  ek: "fillFactorEnv" },
@@ -479,11 +485,17 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
     }
     if (k === "grainDur") {
       const cur = stream.grain || {};
+      // Il seme è il default del motore (0.05 s) ESPRESSO NELL'UNITÀ in vigore:
+      // 50 con milliseconds, 2400 campioni con output_sr 48000. Scriverlo nudo, in
+      // millisecondi, significa 50 microsecondi — e capiterebbe proprio nello
+      // stato in cui l'errore invita a mettere una duration esplicita: l'errore
+      // sparirebbe e il valore sarebbe peggiore di quando mancava.
+      const grainDurSeed = window.PGEEnvUtils.grainDefaultDuration(cur.durationUnit);
       if (newMode === "env") {
-        const v = cur.duration != null ? cur.duration : 0.05;
+        const v = cur.duration != null ? cur.duration : grainDurSeed;
         onChange({ grain: { ...cur, duration: null, durationEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || 0.05;
+        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || grainDurSeed;
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
       }
       return;
@@ -657,6 +669,30 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
   // contraddirebbe la riga di hint due righe più sotto.
   const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
+  // grain.duration_unit (PGE #158, tre unità da PGE v5.2.0 / #171). È un
+  // meta-parametro: governa insieme grain.duration e grain.duration_range, e
+  // con qualunque unità che non sia 'seconds' il motore pretende una duration
+  // esplicita. La chiave assente È 'seconds', quindi l'unità in vigore si
+  // calcola una volta sola e la usano suffissi, hint ed errore.
+  const grainUnit = (stream.grain && stream.grain.durationUnit) || "seconds";
+  // Il suffisso segue l'unità dichiarata: "s" su valori scritti in campioni o
+  // in millisecondi direbbe il falso — la conversione la fa il motore al parse,
+  // la riga mostra il numero com'è nello YAML. Su un'unità ignota il suffisso
+  // è vuoto: etichettare «s» mentre la riga d'errore qui sotto dice che
+  // l'unità non è riconosciuta sarebbero due affermazioni opposte.
+  const grainUnitSuffix = window.PGEEnvUtils.grainUnitSuffix(grainUnit);
+  const grainUnitError = window.PGEEnvUtils.grainDurationUnitError(stream.grain);
+  // La scala di step di NumberField è in unità del parametro, e il default
+  // [0.01 … 10] è scritto per i secondi: in campioni il valore tipico è 2400 e
+  // il gradino più grosso vale 10 campioni, cioè 0.2 ms — la manopola non
+  // arriva da nessuna parte. Un ordine di grandezza per gradino, a partire dal
+  // minimo sensato dell'unità; unità ignota ricade sui secondi, come il fattore.
+  const GRAIN_STEPS = {
+    seconds: [0.001, 0.01, 0.1, 1],
+    milliseconds: [1, 10, 100, 1000],
+    samples: [1, 100, 1000, 10000],
+  };
+  const grainSteps = GRAIN_STEPS[grainUnit] || GRAIN_STEPS.seconds;
   // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
   // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo
   // stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere dal
@@ -719,10 +755,37 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                      badge={sampleDur ? <span className="mono">{sampleDur.toFixed(3)} s</span> :
                                        <span className="mono" style={{color:"var(--status-error)"}}>sample not found</span>}>
               <div className="pge-prow">
-                <span className="k">stream_id</span><span />
-                <span className="v" style={{color:"var(--accent)"}}>"{stream.id}"</span>
+                <span className="k" title="the stream's identity: stem filename, cache-manifest key, and the RNG seed (rng_group or stream_id). Renaming reseeds the stream — the stem goes stale and the next render sounds different">stream_id</span><span />
+                <span className="v">
+                  {onRename ? (
+                  <input type="text" className="pge-mini-input" style={{width: 130, color:"var(--accent)"}}
+                         key={stream.id}
+                         defaultValue={stream.id}
+                         onFocus={() => setIdError(null)}
+                         onBlur={e => {
+                           const err = onRename(e.target.value);
+                           setIdError(err);
+                           // Rejected: put the old id back rather than leaving a
+                           // value in the box that is not the stream's name.
+                           if (err) e.target.value = stream.id;
+                         }}
+                         onKeyDown={e => {
+                           e.stopPropagation();
+                           if (e.key === "Enter") e.target.blur();
+                           if (e.key === "Escape") { setIdError(null); e.target.value = stream.id; e.target.blur(); }
+                         }} />
+                  ) : <span style={{color:"var(--accent)"}}>"{stream.id}"</span>}
+                </span>
                 <span />
               </div>
+              {idError ? (
+              <div className="pge-prow">
+                <span className="k" />
+                <span />
+                <span className="v" style={{color:"var(--status-error)", fontSize:10}}>{idError}</span>
+                <span />
+              </div>
+              ) : null}
               <ParamRow name="onset" mode="scalar" value={stream.onset} unit="s"
                 onSelect={() => setSelRow("onset")} selected={selRow==="onset"}
                 onValue={(v) => onChange({onset: v})} />
@@ -1109,7 +1172,7 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               <ParamRow name="duration"
                         mode={getMode("grainDur")} onMode={(m) => toggleMode("grainDur", m)}
                         value={stream.grain.duration != null ? stream.grain.duration : "—"}
-                        unit={stream.grain.durationEnv ? "" : "s"}
+                        unit={stream.grain.durationEnv ? "" : grainUnitSuffix} steps={grainSteps}
                         range={stream.grain.durationRange != null && !stream.grain.durationRangeEnv ? stream.grain.durationRange : undefined}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
@@ -1119,44 +1182,70 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               {(stream.grain.durationRange != null || stream.grain.durationRangeEnv != null) ? (
                 <ParamRow name="duration_range"
                           mode={getMode("durationRange")} onMode={(m) => toggleMode("durationRange", m)}
-                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : "s"}
+                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : grainUnitSuffix} steps={grainSteps}
                           accent={stream.grain.durationRangeEnv != null}
                           envValue={stream.grain.durationRangeEnv}
                           onEditEnv={focusEnv("durationRange")}
                           onValue={(v) => onChange({grain: {...stream.grain, durationRange: v}})} />
               ) : null}
-              {/* duration_unit meta-key (PGE #158): seconds (default/absent) | samples */}
+              {/* duration_unit meta-key (PGE #158): seconds (default, chiave
+                  assente) | samples | milliseconds — la terza da PGE v5.2.0
+                  (#171), la scala comoda della grana udibile (1-1000 ms), con
+                  fattore fisso 1e-3 e quindi indipendente dal sample rate.
+
+                  Le opzioni vengono dall'elenco del motore, non da una coppia
+                  scritta a mano, e SOLO 'seconds' cancella la chiave: finché il
+                  ramo di cancellazione valeva per «tutto ciò che non è
+                  samples», un progetto aperto con milliseconds mostrava un
+                  controllo senza selezione e il primo click la cancellava. */}
               <div className="pge-prow">
-                <span className="k" title="unità di grain.duration e duration_range · samples: campioni a 48000 Hz (min 1 campione), richiede una duration esplicita">duration_unit</span>
+                <span className="k" title={`unità di grain.duration e duration_range · samples: campioni a ${window.PGE_OUTPUT_SR} Hz (min 1 campione) · milliseconds: fattore fisso 1e-3 · ogni unità non-secondi richiede una duration esplicita`}>duration_unit</span>
                 <span />
                 <span className="v">
-                  <Seg size="xs" value={stream.grain.durationUnit || "seconds"}
+                  <Seg size="xs" value={grainUnit}
                        onChange={(v) => {
-                         if (v === "samples") {
-                           onChange({ grain: { ...stream.grain, durationUnit: "samples" } });
-                         } else {
-                           const ng = { ...stream.grain }; delete ng.durationUnit;
-                           onChange({ grain: ng });
-                         }
+                         // Il cambio di unità CONVERTE i valori già scritti: il
+                         // numero cambia, la durata reale no. Lasciarli lì
+                         // dentro voleva dire reinterpretarli nella nuova scala
+                         // — 0.05 s scelti come millisecondi sono 5e-5 s, grani
+                         // da due campioni e mezzo — senza che niente lo
+                         // segnalasse: la duration è esplicita, quindi la
+                         // validazione tace, e con output_sr il min_val di
+                         // grain_duration scende a 1/sr, quindi passa anche i
+                         // bound. Il convertitore scrive o cancella anche la
+                         // chiave: cancellarla è cosa di `seconds` soltanto.
+                         onChange({ grain: window.PGEEnvUtils.convertGrainDurationUnit(
+                           stream.grain, v, { bounds: window.PGE_BOUNDS }) });
                        }}
-                       options={[{label:"seconds",value:"seconds"},{label:"samples",value:"samples"}]} />
+                       options={window.PGEEnvUtils.GRAIN_DURATION_UNITS.map(
+                         (u) => ({ label: u, value: u }))} />
                   {stream.grain.durationUnit ? null : <span className="hint" style={{fontSize:9, marginLeft:4}}>default</span>}
                 </span>
                 <span />
               </div>
-              {window.PGEEnvUtils.grainDurationUnitError(stream.grain) ? (
+              {grainUnitError ? (
                 <div className="pge-prow" style={{paddingTop:0}}>
                   <span className="k" /><span />
                   <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
-                    duration_unit: samples richiede una grain.duration esplicita (il default 0.05 è in secondi e non viene convertito).
+                    {grainUnitError.kind === "unknown"
+                      ? `duration_unit: ${grainUnitError.unit} non è un'unità del motore (${window.PGEEnvUtils.GRAIN_DURATION_UNITS.join(" · ")}).`
+                      : `duration_unit: ${grainUnitError.unit} richiede una grain.duration esplicita (il default 0.05 è in secondi e non viene convertito).`}
                   </span>
                   <span />
                 </div>
-              ) : stream.grain.durationUnit === "samples" ? (
+              ) : grainUnit === "samples" ? (
                 <div className="pge-prow hint" style={{paddingTop:0}}>
                   <span className="k" /><span />
                   <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                    valori in campioni a 48000 Hz · min 1 campione · convertiti in secondi al parse
+                    {`valori in campioni a ${window.PGE_OUTPUT_SR} Hz · min 1 campione · convertiti in secondi al parse`}
+                  </span>
+                  <span />
+                </div>
+              ) : grainUnit === "milliseconds" ? (
+                <div className="pge-prow hint" style={{paddingTop:0}}>
+                  <span className="k" /><span />
+                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                    valori in millisecondi · fattore fisso 1e-3, non dipende dal sample rate · convertiti in secondi al parse
                   </span>
                   <span />
                 </div>
@@ -1274,7 +1363,13 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
               })()}
               <AddParamMenu
                 options={[
-                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: 0.01 },
+                  // Il seme è 0.01 s CONVERTITO nell'unità in vigore (10 in
+                  // millisecondi, 480 campioni): scritto nudo varrebbe 1e-5 s,
+                  // e in silenzio — la duration è esplicita, quindi la
+                  // validazione tace, e i bound in millisecondi arrivano a
+                  // 10000, quindi passa. Stesso trattamento del seme di
+                  // grain.duration (grainDefaultDuration).
+                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: window.PGEEnvUtils.grainSecondsToUnit(0.01, grainUnit) },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
             </Section>

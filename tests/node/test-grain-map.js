@@ -353,6 +353,89 @@ function maxChanDiff(c0, c1) {
 /* ============================================================
  * Summary
  * ============================================================ */
-console.log(`\n${"─".repeat(50)}`);
-console.log(`${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+console.log("\n── readPositionAt: la posizione di lettura sotto il cursore ──");
+{
+  // Sidecar minimo: due voci interlacciate, ptr che avanza con t.
+  const g = (t, ptr, v) => ({ t, dur: 0.05, vol: -6, ptr, pr: 1, v });
+  const data = { grains: [
+    g(0.0, 1.00, 0), g(0.0, 5.00, 1),
+    g(0.1, 1.10, 0), g(0.1, 5.10, 1),
+    g(0.2, 1.20, 0), g(0.2, 5.20, 1),
+    g(0.3, 1.30, 0), g(0.3, 5.30, 1),
+  ]};
+
+  const r = GM.readPositionAt(data, 0.21, {});
+  assert("senza offset_range il ptr della voce 0 e' la base, esatta",
+         r && r.pos === 1.20 && r.exact === true, JSON.stringify(r));
+  assert("la voce != 0 non viene mai letta (porta l'offset di voce)",
+         GM.readPositionAt(data, 0.29, {}).pos === 1.20);
+  assert("prima del primo grano si ricade sul primo",
+         GM.readPositionAt(data, -5, {}).pos === 1.00);
+  assert("oltre l'ultimo grano si resta sull'ultimo",
+         GM.readPositionAt(data, 99, {}).pos === 1.30);
+  assert("sidecar vuoto → nessun readout, non uno zero inventato",
+         GM.readPositionAt({ grains: [] }, 1, {}) === null &&
+         GM.readPositionAt(null, 1, {}) === null);
+
+  // Con offset_range la deviazione e' a media nulla: la mediana sui vicini
+  // della voce 0 la annulla, e il valore va marcato come stima.
+  const noisy = { grains: [] };
+  const dev = [0.03, -0.05, 0.01, 0.04, -0.02, 0.00, -0.03, 0.02, -0.01];
+  dev.forEach((d, i) => {
+    noisy.grains.push(g(i * 0.1, 2.0 + d, 0));
+    noisy.grains.push(g(i * 0.1, 9.9, 1));
+  });
+  const n = GM.readPositionAt(noisy, 0.41, { jitter: true });
+  assert("con offset_range la mediana ricentra sulla base",
+         Math.abs(n.pos - 2.0) < 0.011, JSON.stringify(n));
+  assert("...e il valore si dichiara stima, non misura",
+         n.exact === false);
+
+  // Il ptr e' modulato su sample_dur: al wrap i valori si spezzano sui due
+  // bordi del file, e la mediana grezza si appoggia al bordo del gruppo piu'
+  // numeroso invece che al centro circolare.
+  const wrap = { grains: [] };
+  [9.98, 0.01, 9.99, 0.02, 0.00, 9.97, 0.03, 9.96, 0.04].forEach((ptr, i) => {
+    wrap.grains.push(g(i * 0.1, ptr, 0));
+  });
+  // Il centro vero della nuvola e' 0.00 (deviazioni +-0.04 attorno al wrap).
+  const w = GM.readPositionAt(wrap, 0.41, { jitter: true, sampleDur: 10 });
+  assert("srotolando attorno al pivot la mediana torna sul centro circolare",
+         Math.abs(w.pos) < 1e-9, JSON.stringify(w));
+  const noDur = GM.readPositionAt(wrap, 0.41, { jitter: true });
+  assert("senza sample_dur non si puo' srotolare, e infatti sbaglia: il dato serve",
+         Math.abs(noDur.pos) > 1e-9, JSON.stringify(noDur));
+
+  // Guardia: il readout non deve mai passare per setState (un re-render per
+  // pixel di mouse), e non deve inventare un valore senza sidecar.
+  const tlSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+  assert("il readout scrive nel DOM per ref, non via state",
+         /readoutRef\.current/.test(tlSrc) && !/setHoverX|setReadout/.test(tlSrc));
+  // Il riquadro compare comunque: Position/End sono dati che abbiamo sempre.
+  // A mancare e' la sola riga `read`, e lo dice invece di sparire — una
+  // scatola che non compare non si distingue da una funzione rotta.
+  assert("senza sidecar il riquadro resta e dichiara cosa manca",
+         /stream mai renderizzato/.test(tlSrc) && /sidecar in caricamento/.test(tlSrc) &&
+         !/if \(!data\) \{ el\.style\.display = "none"/.test(tlSrc));
+  // Il readout non deve dipendere dal toggle del layer grani: il sidecar sta
+  // su disco appena lo stream e' renderizzato, e il toggle riguarda il disegno.
+  const appSrc2 = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  assert("il sidecar mancante viene chiesto, non preteso dall'utente",
+         /onNeedGrains\(s\.id\)/.test(tlSrc) && /function ensureGrainData/.test(appSrc2));
+  assert("il caricamento mirato passa per la stessa mappa e gli stessi ref del blocco",
+         /setGrainData\(m => \(\{ \.\.\.m, \[id\]: j \}\)\)/.test(appSrc2) &&
+         /grainLoadedRef\.current\.add\(id\)/.test(appSrc2) &&
+         /grainRegenRef\.current\.has\(id\)/.test(appSrc2));
+  assert("il jitter e' dedotto da offset_range, l'unica cosa che sporca la base",
+         /offsetRange != null \|\| s\.pointer\.offsetRangeEnv/.test(tlSrc));
+}
+
+process.on("exit", (code) => {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

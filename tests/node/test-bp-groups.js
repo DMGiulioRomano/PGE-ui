@@ -16,6 +16,10 @@ const fs   = require("fs");
 const path = require("path");
 
 global.window = { jsyaml: require("js-yaml") };
+// yaml-bridge per primo come nell'editor: pubblica window.PGE_OUTPUT_SR, che
+// envelope-utils legge a chiamata per il fattore di 'samples'. Senza, quel
+// ramo restituisce NaN invece di fallire — una trappola armata, non un errore.
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
@@ -165,5 +169,11 @@ assert("envArrayWouldTruncate vede i punti del gruppo",
   U.envArrayWouldTruncate([ZONE_A], 3) === true &&
   U.envArrayWouldTruncate([ZONE_A], 1) === false);
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

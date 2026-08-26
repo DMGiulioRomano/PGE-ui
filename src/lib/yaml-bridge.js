@@ -41,6 +41,15 @@
     console.warn("js-yaml not loaded — yaml round-trip disabled");
   }
 
+  // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
+  // globale, non per-stream, e nemmeno esposta dalla CLI — la strada del render
+  // passa sempre di qui. La definizione sta in questo modulo perché è il primo
+  // caricato: bounds.js (minimo di grain_duration a 1 campione) ed
+  // envelope-utils.js (fattore di grain.duration_unit: samples) la leggono da
+  // window. Una sola copia: se il motore la muove, si muove qui.
+  const OUTPUT_SR = 48000;
+  window.PGE_OUTPUT_SR = OUTPUT_SR;
+
   // Engine bounds — STATIC FALLBACK for the UI clamps. These literals mirror
   // parameter_definitions.py / pitch_unit.py and are what the editor uses when
   // it can't reach the bridge (file:// with no server.py). When the bridge is
@@ -58,12 +67,14 @@
     density:     { min: 0.01, max: 4000 },
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
-    grainDur:    { min: 1 / 48000, max: 10 },   // min 1 campione (PGE #158)
-    // grain_duration.max_range nel motore vale 1, non 10: il 10 qui era quello
-    // di grainDur (il VALORE, non la banda) e allargava il fallback oltre cio'
-    // che il motore accetta. Con il bridge acceso /bounds lo correggeva gia';
-    // su file:// o server spento no, e la manopola arrivava a un valore che il
-    // render rifiuta. Trovato dalla parita' statica in tests/parity.
+    grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
+    // grain_duration.max_range = 1.0 (non max_val): Parameter._calculate_range
+    // taglia in silenzio quel che eccede, quindi il fallback dev'essere 1. Il
+    // 10 che c'era qui era il max_val di grainDur — il VALORE, non la banda —
+    // finito sulla riga sbagliata: con il bridge acceso /bounds lo correggeva,
+    // su file:// o server spento no. Adesso non puo' tornare senza farsi
+    // notare: tests/parity/test-bounds-parity.js pretende che nessun clamp
+    // statico sia piu' largo di quello del motore.
     durationRange:{ min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
@@ -669,7 +680,12 @@
   }
 
   function streamFromYaml(y, idx, samples) {
-    const id = y.stream_id || ("stream" + (idx + 1));
+    // Coerced to a string on purpose. An unquoted `stream_id: 1` in YAML parses
+    // as a NUMBER, and the id is an identity key everywhere downstream — the
+    // stem filename, the cache-manifest key, `allocStreamIds`, and the
+    // `ui_tracks` stream lists, which are re-read as strings. A number there
+    // matches nothing and the mismatch is silent (PGE-ui #145 review, R1).
+    const id = String(y.stream_id || ("stream" + (idx + 1)));
 
     const dens = unpackValueOrEnv(y.density);
     const ff   = unpackValueOrEnv(y.fill_factor ?? null);
@@ -1124,7 +1140,13 @@
       return { ...s, duration: dur.value, durationUnresolved: dur.unresolved };
     });
     if (!changed && data.samples === samples) return data;
-    return { ...data, streams, samples: samples || [] };
+    // `streams` e' comunque il risultato di una map, cioe' un array NUOVO anche
+    // quando ogni elemento e' lo stesso oggetto di prima. Chi osserva
+    // `data.streams` per identita' (gli effetti che caricano peaks,
+    // spettrogrammi e grani in app.jsx) lo leggerebbe come "la lista e'
+    // cambiata" e ricaricherebbe tutto. Quando non si e' risolto niente si
+    // riusa l'array di partenza: qui si sta aggiornando solo `samples`.
+    return { ...data, streams: changed ? streams : data.streams, samples: samples || [] };
   }
 
   /* La migrazione e' compiuta nel momento in cui lo YAML serializzato tocca il

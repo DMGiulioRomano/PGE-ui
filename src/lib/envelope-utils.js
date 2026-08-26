@@ -2,8 +2,11 @@
  * envelope-utils.js — pure envelope rescale/truncate math (freeze-on-resize).
  *
  * Extracted from app.jsx (#44) so it can be unit-tested in node like
- * yaml-bridge.js. No React, no DOM — depends only on window.PGEEnv
- * (envelope-loops.js, loaded before this file). Attaches to window.PGEEnvUtils.
+ * yaml-bridge.js. No React, no DOM. Reads window.PGEEnv (envelope-loops.js) at
+ * IIFE time, window.PGEDeviationProb (deviation-probability.js) and
+ * window.PGE_OUTPUT_SR (yaml-bridge.js, the engine sample rate behind the
+ * 'samples' factor) at call time — load all three first, or the grain-unit
+ * helpers return NaN. Attaches to window.PGEEnvUtils.
  *
  * Field shapes handled: standard breakpoints [t, v], compact loop blocks, and
  * the object form {type, points}. The stream-level helpers walk every
@@ -38,25 +41,52 @@
     return domain === "direction" ? snapDirection : null;
   }
 
+  /* Il rescale NON tappa la x a 1: chi sfora resta fuori, ed e' `truncateEnvArray`
+   * a decidere cosa farne. Il tappo c'era, e mangiava esattamente il dato che
+   * serve al taglio: accorciando uno stream con il freeze, ogni breakpoint oltre
+   * la nuova fine finiva impilato a x=1 (`[[0,0],[0.5,1],[1,0]]` con ratio 2 →
+   * `[[0,0],[1,1],[1,0]]`), e il truncate che segue non aveva piu' modo di
+   * distinguerlo da un envelope legittimo che finisce a 1. Risultato: due punti
+   * sovrapposti alla fine invece di uno interpolato al bordo.
+   * Una x > 1 e' quindi uno stato TRANSITORIO e legittimo — vive fra il rescale
+   * e il truncate, cioe' dentro un gesto di resize — non un valore da salvare.
+   * Il commit passa sempre per truncateEnvArray (che interpola il punto di
+   * chiusura) o per sliceEnvArray (che sposta l'origine). */
   function rescaleEnvArray(arr, ratio) {
     // object-form {type, points} envelope
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return { ...arr, points: arr.points.map(p => [Math.min(1, +(p[0] * ratio).toFixed(5)), p[1]]) };
+      return { ...arr, points: arr.points.map(p => [+(p[0] * ratio).toFixed(5), p[1]]) };
     }
     if (!Array.isArray(arr)) return arr;
     return arr.map(item => {
       if (PGEEnv.isBreakpoint(item)) {
-        const c = [...item]; c[0] = Math.min(1, +(c[0] * ratio).toFixed(5)); return c;
+        const c = [...item]; c[0] = +(c[0] * ratio).toFixed(5); return c;
       }
       if (PGEEnv.isBPGroup(item)) {
         // BP group [points, interp]: i punti hanno tempi assoluti come i BP
         return [rescaleEnvArray(item[0], ratio), item[1]];
       }
       if (PGEEnv.isCompactBlock(item)) {
-        const c = [...item]; c[1] = Math.min(1, +(c[1] * ratio).toFixed(5)); return c;
+        const c = [...item]; c[1] = +(c[1] * ratio).toFixed(5); return c;
       }
       return item;
     });
+  }
+
+  /* Il valore di un envelope in un punto INTERNO a un segmento, l'unico y che
+   * il taglio calcola invece di sceglierlo (il punto di chiusura del truncate,
+   * quello di apertura dello slice). Il tag interp sta sul punto di PARTENZA e
+   * governa il segmento in USCITA (envelope-loops.js:expandMixed), quindi e'
+   * `prev` a dire come si arriva a `at`:
+   *   step  → il valore si tiene, e interpolarlo linearmente sarebbe un salto
+   *           che nell'envelope non c'e';
+   *   cubic → qui resta lineare. La PCHIP vera vuole i due punti oltre il
+   *           segmento (EnvelopeEditor.valueAtTime) e sbaglierebbe comunque la
+   *           forma della meta' che resta: l'errore e' su un punto solo. */
+  function boundaryY(prevX, prevY, prevInterp, x, y, at) {
+    if (prevInterp === "step") return prevY;
+    if (!(x > prevX)) return y;
+    return prevY + (y - prevY) * ((at - prevX) / (x - prevX));
   }
 
   // `snap`, quando presente, riscrive ogni y CALCOLATO da questa funzione (il
@@ -71,7 +101,7 @@
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     const result = [];
-    let prevX = 0, prevY = null;
+    let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
 
     for (const item of arr) {
@@ -79,12 +109,14 @@
         const [x, y] = item;
         if (x <= 1.0) {
           result.push(item);
-          prevX = x; prevY = y;
+          prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
         } else {
-          // first BP past boundary — interpolate closing BP at x=1.0
+          // first BP past boundary — interpolate closing BP at x=1.0.
+          // Se il punto precedente sta gia' esattamente sul bordo l'envelope
+          // e' gia' chiuso: un punto interpolato li' sarebbe un doppione.
+          if (prevY !== null && prevX >= 1.0) break;
           if (prevY !== null && prevX < x) {
-            const t = (1.0 - prevX) / (x - prevX);
-            result.push([1.0, close(prevY + (y - prevY) * t)]);
+            result.push([1.0, close(boundaryY(prevX, prevY, prevInterp, x, y, 1.0))]);
           } else {
             result.push([1.0, close(y)]);
           }
@@ -98,7 +130,10 @@
         if (inner.length >= 2) result.push([inner, item[1]]);
         else if (inner.length === 1) result.push(inner[0]);
         const lastP = inner[inner.length - 1];
-        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; }
+        // Il segmento in uscita dall'ultimo punto di un gruppo segue l'interp
+        // globale, non quello di zona (expandMixed): solo un tag esplicito
+        // sul punto conta.
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = typeof lastP[2] === "string" ? lastP[2] : null; }
         if (item[0].some(p => p[0] > 1.0)) break; // il gruppo è stato tagliato
       } else if (PGEEnv.isCompactBlock(item)) {
         if (prevX >= 1.0) break; // block starts beyond boundary — drop
@@ -111,6 +146,7 @@
         result.push(item);
         prevX = item[1];
         prevY = item[0][item[0].length - 1][1]; // last pattern point y
+        prevInterp = null;
       } else {
         result.push(item);
       }
@@ -310,6 +346,89 @@
     return fields.some(f => f && envArrayWouldTruncate(f, ratio));
   }
 
+  /* ---------- slice: la META' DOPO il taglio (split al cursore) ----------
+   * Il gemello di rescale+truncate. Quello tiene la testa dello stream e
+   * scarta la coda; questo tiene la coda: i breakpoint restano dove sono in
+   * tempo ASSOLUTO, ma l'origine si sposta sul taglio.
+   *
+   *   x' = (x - cut) / (1 - cut)      con cut = tempo di taglio normalizzato
+   *
+   * cioe' la stessa traslazione+riscalatura che il freeze fa sull'altra meta',
+   * scritta una volta sola. Il primo breakpoint dopo il taglio si porta dietro
+   * un punto interpolato a x'=0, altrimenti il valore al taglio salterebbe.
+   * Se dopo il taglio non resta nulla, l'inviluppo diventa il valore tenuto
+   * (un solo punto a 0): un array vuoto il motore non lo accetta.
+   *
+   * I blocchi compatti restano fuori: il taglio a meta' di un blocco non e'
+   * definito (n_reps e ratio descrivono un ciclo, non una lista di punti).
+   * `sliceEnvArray` risponde null su un array che ne contiene uno, e
+   * `sliceStreamEnvelopes` lascia quel campo intatto contandolo in `skipped` —
+   * chi chiama lo dice all'utente invece di riscrivere il blocco a caso. */
+  function sliceEnvArray(arr, cut, snap, inGroup) {
+    if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+      const pts = sliceEnvArray(arr.points, cut, snap);
+      return pts === null ? null : { ...arr, points: pts };
+    }
+    if (!Array.isArray(arr) || !arr.length) return arr;
+    if (arr.some(PGEEnv.isCompactBlock)) return null;
+    const k = 1 / (1 - cut);
+    const close = (y) => (snap ? snap(y) : +y.toFixed(4));
+    const shift = (x) => Math.max(0, +((x - cut) * k).toFixed(5));
+    const out = [];
+    let prevX = null, prevY = null, prevInterp = null;  // ultimo punto PRIMA del taglio
+    for (const item of arr) {
+      if (PGEEnv.isBPGroup(item)) {
+        // Il gruppo si taglia con le stesse regole, ma da dentro: `inGroup`
+        // gli toglie il punto tenuto di ripiego, altrimenti un gruppo che sta
+        // tutto prima del taglio riaprirebbe l'envelope con un [0, y] che non
+        // e' il valore al taglio (fra il gruppo e il taglio ci puo' essere un
+        // altro breakpoint).
+        const inner = sliceEnvArray(item[0], cut, snap, true);
+        if (inner === null) return null;
+        if (inner.length >= 2) out.push([inner, item[1]]);
+        else if (inner.length === 1) out.push(inner[0]);
+        const lastP = item[0][item[0].length - 1];
+        prevX = lastP[0]; prevY = lastP[1];
+        prevInterp = typeof lastP[2] === "string" ? lastP[2] : null;
+        continue;
+      }
+      if (!PGEEnv.isBreakpoint(item)) { out.push(item); continue; }
+      const [x, y] = item;
+      if (x < cut) {
+        prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
+        continue;
+      }
+      // Primo punto oltre il taglio: davanti gli va il valore AL taglio, o la
+      // coda partirebbe dal punto sbagliato. Si porta dietro l'interp del
+      // segmento che stiamo tagliando a meta', che e' quello del punto prima.
+      if (!out.length && prevX !== null && x > cut) {
+        const opening = [0, close(boundaryY(prevX, prevY, prevInterp, x, y, cut))];
+        if (prevInterp) opening.push(prevInterp);
+        out.push(opening);
+      }
+      const moved = [...item];
+      moved[0] = shift(x);
+      out.push(moved);
+    }
+    // Dopo il taglio non e' rimasto niente: l'envelope tiene l'ultimo valore.
+    // Un array vuoto il motore non lo accetta.
+    if (!out.length && prevY !== null && !inGroup) out.push([0, prevY]);
+    return out;
+  }
+
+  // cut e' normalizzato sulla durata VECCHIA dello stream (0 < cut < 1).
+  // Ritorna {stream, skipped}: `skipped` conta i campi lasciati intatti
+  // perche' contengono un blocco compatto.
+  function sliceStreamEnvelopes(stream, cut) {
+    let skipped = 0;
+    const out = _applyEnvFields(stream, (arr, domain) => {
+      const sliced = sliceEnvArray(arr, cut, snapForDomain(domain));
+      if (sliced === null) { skipped++; return arr; }
+      return sliced;
+    });
+    return { stream: out, skipped };
+  }
+
   // Auto-fit the envelope Y window to the actual point values, for readability.
   // Fits the POINTS (min..max of the y-values) plus a `padFrac` margin (10% by
   // default), then clamps into [hardMin, hardMax]. This is the key change from
@@ -421,18 +540,205 @@
     return le <= ls ? { loopStart: ls, loopEnd: le } : null;
   }
 
-  // Mirror della validazione PGE #158: con grain.duration_unit: samples la
-  // grain.duration deve essere esplicita. Il default 0.05 è in secondi e non
-  // viene convertito, quindi base (secondi) e duration_range (campioni)
-  // vivrebbero in domini diversi; il motore solleva MissingFieldError. Solo
-  // 'samples' è vincolato — 'seconds' e l'assenza usano il default liberamente.
-  // Ritorna null se valido/non applicabile, altrimenti { unit } così il chiamante
-  // costruisce il messaggio. Puro — niente DOM, niente chiamate al motore.
+  // Le unità ammesse per grain.duration / grain.duration_range, nell'ordine in
+  // cui il motore le dichiara (Stream.GRAIN_DURATION_UNITS). 'milliseconds' è
+  // arrivato con PGE v5.2.0 (#171): a differenza di 'samples' il suo fattore è
+  // fisso (1e-3) e non dipende da output_sr. Esportate perché il controllo
+  // dell'Inspector ci costruisca sopra le opzioni: con la coppia cablata a mano
+  // la terza unità non era selezionabile, e sceglierla cancellava la chiave.
+  const GRAIN_DURATION_UNITS = ["seconds", "samples", "milliseconds"];
+
+  // Il suffisso con cui si etichettano le righe di grain.duration e
+  // grain.duration_range. Vive qui e non nel JSX perché lo condividono
+  // Inspector ed EnvelopeEditor. Per un'unità che il motore non riconosce la
+  // risposta è "nessun suffisso": cadere su "s" metterebbe un'etichetta in
+  // secondi accanto alla riga d'errore che dichiara l'unità non riconosciuta.
+  function grainUnitSuffix(unit) {
+    if (!unit || unit === "seconds") return "s";
+    if (unit === "samples") return "smp";
+    if (unit === "milliseconds") return "ms";
+    return "";
+  }
+
+  // Il default di grain.duration nello schema del motore, in secondi. Fuori da
+  // 'seconds' va convertito prima di essere scritto da qualunque parte.
+  const GRAIN_DEFAULT_DURATION_SEC = 0.05;
+
+  // Fattore unità→secondi, come Stream._pre_normalize_grain_params: 1/output_sr
+  // per 'samples', 1e-3 per 'milliseconds' (fisso, indipendente dal sample
+  // rate), 1 per 'seconds' e per la chiave assente. Un'unità che il motore non
+  // riconosce vale 1: la sua scala non si conosce, e inventarne una sarebbe
+  // peggio che lasciare il numero dov'è — a dire che è ignota c'è già
+  // grainDurationUnitError.
+  //
+  // Il sample rate NON è un parametro: è la config globale del motore, letta a
+  // chiamata da window.PGE_OUTPUT_SR (yaml-bridge.js, primo caricato). Un
+  // argomento qui sarebbe un contratto che nessuno può onorare — la CLI del
+  // motore fissa output_sr a DEFAULT_OUTPUT_SR, quindi il render è sempre lì.
+  function grainUnitFactor(unit) {
+    if (unit === "samples") return 1 / window.PGE_OUTPUT_SR;
+    if (unit === "milliseconds") return 1e-3;
+    return 1;
+  }
+
+  // Arrotonda a 12 cifre significative. Serve solo a togliere lo strascico
+  // binario delle divisioni (0.05 / 1e-3 = 50.000000000000007): a cifre fisse
+  // non si può fare, perché le stesse grandezze in secondi valgono 2e-5 e in
+  // campioni 480000.
+  function _roundGrain(v) {
+    if (typeof v !== "number" || !isFinite(v) || v === 0) return v;
+    const digits = Math.ceil(Math.log10(Math.abs(v)));
+    const prec = Math.min(20, Math.max(0, 12 - digits));
+    return +v.toFixed(prec);
+  }
+
+  // Un valore in secondi espresso nell'unità dichiarata. È l'operazione che
+  // serve a chiunque abbia in mano un numero del motore — un bound, un default,
+  // il seme di una chiave nuova — e debba scriverlo dove i valori sono
+  // nell'unità in vigore. In secondi non c'è niente da dividere: passare
+  // comunque dal round sposterebbe il valore (1/48000 non ha 12 cifre
+  // significative).
+  function grainSecondsToUnit(seconds, unit) {
+    if (typeof seconds !== "number" || !isFinite(seconds)) return seconds;
+    const f = grainUnitFactor(unit);
+    return f === 1 ? seconds : _roundGrain(seconds / f);
+  }
+
+  // I bound del motore vivono in secondi (PGE_BOUNDS.grainDur e il /bounds
+  // dinamico che ci si sovrappone). Espressi nell'unità dichiarata sono quegli
+  // stessi bound divisi per il fattore: in millisecondi il cap è 10000, non 10.
+  // Stessa idea di loopEnvMax, che deriva il cap del loop dall'unità in vigore
+  // invece di leggere il numero statico.
+  function grainUnitBounds(secBounds, unit) {
+    const b = secBounds || {};
+    const out = {};
+    if (typeof b.min === "number") out.min = grainSecondsToUnit(b.min, unit);
+    if (typeof b.max === "number") out.max = grainSecondsToUnit(b.max, unit);
+    return out;
+  }
+
+  // Il default 0.05 s espresso nell'unità in vigore: 50 in millisecondi, 2400
+  // campioni a 48000 Hz. Chi semina un valore (il passaggio a envelope, il
+  // ritorno a scalare) deve seminare questo, non 0.05 nudo — che in
+  // millisecondi sono 50 microsecondi.
+  function grainDefaultDuration(unit) {
+    return grainSecondsToUnit(GRAIN_DEFAULT_DURATION_SEC, unit);
+  }
+
+  function _clampGrain(v, bounds) {
+    if (!bounds || typeof v !== "number") return v;
+    if (typeof bounds.min === "number" && v < bounds.min) return bounds.min;
+    if (typeof bounds.max === "number" && v > bounds.max) return bounds.max;
+    return v;
+  }
+
+  // Applica `conv` a ogni y di un envelope, lasciando stare i tempi. Mirror di
+  // Envelope._scale_raw_values_y: stesse forme, stesso ordine di
+  // riconoscimento (il BP group prima del breakpoint nudo — anche lui è una
+  // lista di due elementi).
+  //
+  // Fino a PGE #234 qui c'era una porta, `isEngineEnvelopeLike`, che ricalcava
+  // un'asimmetria del motore: `is_envelope_like` era più stretta del
+  // costruttore, e tre grafie (soli breakpoint dict, sole 3-tuple, dict
+  // singolo) venivano lette in secondi qualunque unità fosse dichiarata. Il
+  // motore ora le scala come tutte le altre, e nello stesso giro ha smesso di
+  // buttare l'interp per-punto dentro il compatto — quindi anche quella
+  // divergenza, che qui era voluta, non c'è più.
+  function _mapGrainEnvY(env, conv) {
+    const mapItem = (item) => {
+      if (PGEEnv.isBPGroup(item)) return [item[0].map(mapItem), item[1]];
+      if (PGEEnv.isCompactBlock(item)) return [item[0].map(mapItem), ...item.slice(1)];
+      if (PGEEnv.isBreakpoint(item)) return [item[0], conv(item[1]), ...item.slice(2)];
+      // Breakpoint in forma dict: il motore lo scala (PGE #234), quindi anche
+      // noi — saltarlo lascerebbe due domini dentro lo stesso envelope.
+      if (item && typeof item === "object" && !Array.isArray(item)
+          && "t" in item && "v" in item) {
+        return { ...item, v: conv(item.v) };
+      }
+      return item;
+    };
+    if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
+      return { ...env, points: env.points.map(mapItem) };
+    }
+    if (!Array.isArray(env)) return env;
+    if (PGEEnv.isBPGroup(env) || PGEEnv.isCompactBlock(env)) return mapItem(env);
+    return env.map(mapItem);
+  }
+
+  // Cambia l'unità di grain.duration / grain.duration_range CONVERTENDO i
+  // valori già scritti, invece di lasciarli reinterpretare dalla nuova scala.
+  // Senza conversione, `0.05` (secondi) scelto come millisecondi vale 5e-5 s —
+  // grani da due campioni e mezzo — e non lo segnala nessuno: la duration è
+  // esplicita, quindi grainDurationUnitError tace, e con output_sr il min_val
+  // di grain_duration scende a 1/sr, quindi passa anche i bound. Il precedente
+  // in casa è il controllo di loop_unit, che ri-clampa gli estremi quando
+  // l'unità cambia sotto ai valori; qui la conversione è pure esatta, perché il
+  // fattore è noto e fisso.
+  //
+  // Gli scalari vengono ri-clampati nei bound della nuova unità (`opts.bounds`,
+  // nella forma di PGE_BOUNDS e in secondi); i punti degli envelope no, perché
+  // i bound scalano con lo stesso fattore dei valori — chi era dentro ci resta.
+  // Da o verso un'unità ignota non si converte: si scrive solo la chiave.
+  // Ritorna un grain nuovo; l'originale non viene mutato.
+  function convertGrainDurationUnit(grain, toUnit, opts) {
+    const ng = Object.assign({}, grain || {});
+    const fromUnit = ng.durationUnit || "seconds";
+    const known = (u) => GRAIN_DURATION_UNITS.indexOf(u) !== -1;
+    if (known(fromUnit) && known(toUnit) && fromUnit !== toUnit) {
+      const ratio = grainUnitFactor(fromUnit) / grainUnitFactor(toUnit);
+      const conv = (v) => (typeof v === "number" && isFinite(v) ? _roundGrain(v * ratio) : v);
+      const allBounds = (opts && opts.bounds) || null;
+      const fields = [
+        ["duration", "durationEnv", allBounds && allBounds.grainDur],
+        ["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange],
+      ];
+      for (const [scalarKey, envKey, secBounds] of fields) {
+        if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
+          ng[scalarKey] = _clampGrain(
+            conv(ng[scalarKey]),
+            secBounds ? grainUnitBounds(secBounds, toUnit) : null);
+        }
+        if (ng[envKey] != null) ng[envKey] = _mapGrainEnvY(ng[envKey], conv);
+      }
+    }
+    if (!toUnit || toUnit === "seconds") delete ng.durationUnit;
+    else ng.durationUnit = toUnit;
+    return ng;
+  }
+
+  // Mirror dei due rifiuti del motore su grain.duration_unit
+  // (Stream._pre_normalize_grain_params).
+  //
+  //   "missing-duration" → unità non-secondi senza una grain.duration
+  //                        esplicita. Il default 0.05 è in secondi e non viene
+  //                        convertito: base (secondi) e duration_range
+  //                        (nell'unità dichiarata) vivrebbero in domini
+  //                        diversi, e il motore solleva MissingFieldError. Il
+  //                        vincolo era di 'samples' finché le unità erano due;
+  //                        da PGE #171 vale per ogni unità che non sia
+  //                        'seconds'.
+  //   "unknown"          → un'unità fuori dall'insieme (InvalidFieldValueError).
+  //                        Non producibile dal controllo — arriva da uno YAML
+  //                        scritto a mano — e precede il controllo sulla
+  //                        durata, quindi resta anche con duration esplicita.
+  //
+  // 'seconds' e la chiave assente usano il default liberamente. Anche i valori
+  // falsy sono trattati come assenti — `duration_unit:` nuda (durationUnit null
+  // lato bridge) e la stringa vuota esplicita: `serialize` fa
+  // `grain.durationUnit || undefined`, quindi quel che l'editor scrive non
+  // contiene la chiave e il motore non la vede mai. Segnalarli sarebbe un
+  // errore fantasma, e per la stringa vuota anche una frase senza l'unità.
+  // Ritorna null se valido/non applicabile, altrimenti { kind, unit } così il
+  // chiamante costruisce il messaggio. Puro — niente DOM, niente chiamate al
+  // motore.
   function grainDurationUnitError(grain) {
-    if (!grain || grain.durationUnit !== "samples") return null;
+    if (!grain) return null;
+    const unit = grain.durationUnit;
+    if (!unit || unit === "seconds") return null;
+    if (GRAIN_DURATION_UNITS.indexOf(unit) === -1) return { kind: "unknown", unit };
     const hasScalar = grain.duration != null;
     const hasEnv = grain.durationEnv != null;
-    return (hasScalar || hasEnv) ? null : { unit: "samples" };
+    return (hasScalar || hasEnv) ? null : { kind: "missing-duration", unit };
   }
 
   // Mirror dei due rifiuti del motore su grain.read_direction (PGE #207) che
@@ -504,11 +810,20 @@
     rescaleStreamEnvelopes,
     truncateStreamEnvelopes,
     streamWouldTruncate,
+    sliceEnvArray,
+    sliceStreamEnvelopes,
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,
     loopUnitInfo,
     loopBoundsError,
     grainDurationUnitError,
+    GRAIN_DURATION_UNITS,
+    grainUnitSuffix,
+    grainUnitFactor,
+    grainSecondsToUnit,
+    grainUnitBounds,
+    grainDefaultDuration,
+    convertGrainDurationUnit,
   };
 })();

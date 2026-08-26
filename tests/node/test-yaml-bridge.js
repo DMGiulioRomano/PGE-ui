@@ -31,6 +31,72 @@ function assert(label, cond, extra) {
 
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
+/* ---------- engine fixtures (#132) ----------
+ * Parte della suite gira sui config veri del motore, cercato come repository
+ * fratello (`__dirname/../../..`). Prima della #132 ogni blocco faceva il
+ * proprio `existsSync` e, se mancava, stampava SKIP: un file rinominato lato
+ * motore e il test diventava verde senza verificare nulla.
+ *
+ * Ora lo skip e' legittimo in un caso solo — il checkout del motore non c'e'
+ * affatto (sviluppo locale senza repo fratello, PR da un fork senza secret).
+ * Se la directory del motore c'e' ma una fixture nominata manca, e' un FAIL:
+ * la fixture e' stata rinominata o cancellata e la verifica va aggiornata,
+ * non ignorata.
+ *
+ * PGE_REQUIRE_ENGINE_FIXTURES=1 toglie anche quel caso: la CI lo passa quando
+ * lo step di checkout del motore ha riportato successo, cosi' un checkout
+ * riuscito che non lascia i file dove il test li cerca non puo' passare verde.
+ */
+
+const ENGINE_ROOT    = path.join(__dirname, "../../..", "PythonGranularEngine");
+const ENGINE_CONFIGS = path.join(ENGINE_ROOT, "configs");
+const ENGINE_PRESENT = fs.existsSync(ENGINE_CONFIGS);
+// `=== "1"` e non la verita' della stringa: `=0` e `=false` disattivano, come
+// chi li scrive si aspetta. La CI passa `1` oppure la stringa vuota.
+const REQUIRE_ENGINE = process.env.PGE_REQUIRE_ENGINE_FIXTURES === "1";
+
+// Nomi distinti, non chiamate: PGE_pino2.yml e' usata da due blocchi, e un
+// tally che dicesse 8 su 7 file gonfierebbe proprio il numero che esiste per
+// dire con onestà quanto e' stato verificato. Gli usi restano, a parte.
+const fixturesRun     = new Set();
+const fixturesMissing = new Set();
+const fixtureTally = { uses: 0, skipped: 0, corpusFiles: 0 };
+
+if (!ENGINE_PRESENT && REQUIRE_ENGINE) {
+  assert("engine checkout presente (PGE_REQUIRE_ENGINE_FIXTURES=1)", false,
+    "atteso " + ENGINE_CONFIGS + " — il checkout del motore ha riportato successo ma i config non sono li'");
+}
+
+// Ritorna il path della fixture, oppure null quando il blocco va saltato.
+// Contabilizza ogni uso per il riepilogo di fine run.
+function engineFixture(name) {
+  const p = path.join(ENGINE_CONFIGS, name);
+  if (!ENGINE_PRESENT) {
+    fixtureTally.skipped++;
+    console.log(`  SKIP ${name} (nessun checkout del motore in ${ENGINE_ROOT})`);
+    return null;
+  }
+  if (!fs.existsSync(p)) {
+    fixturesMissing.add(name);
+    assert(`fixture ${name} — presente nei config del motore`, false,
+      "il motore e' affiancato ma configs/" + name + " non esiste: fixture rinominata o rimossa");
+    return null;
+  }
+  fixturesRun.add(name);
+  fixtureTally.uses++;
+  return p;
+}
+
+function fixtureSummary() {
+  if (!ENGINE_PRESENT) {
+    return `engine fixtures: 0 eseguite, ${fixtureTally.skipped} blocchi skippati ` +
+      `(nessun checkout del motore in ${ENGINE_ROOT})`;
+  }
+  return `engine fixtures: ${fixturesRun.size} eseguite (${fixtureTally.uses} usi), ` +
+    `${fixturesMissing.size} mancanti, corpus ${fixtureTally.corpusFiles} config ` +
+    `(motore in ${ENGINE_ROOT})`;
+}
+
 /* ---------- helpers ---------- */
 
 function minimalYaml(pitchBlock) {
@@ -244,8 +310,8 @@ assert("chord_progression — roundtrip no pitch diffs", cpDiffs.length === 0, J
 
 console.log("\n── showcase YAML ──");
 
-const showcasePath = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pitch_units_showcase.yml");
-if (fs.existsSync(showcasePath)) {
+const showcasePath = engineFixture("PGE_pitch_units_showcase.yml");
+if (showcasePath) {
   const showcaseText = fs.readFileSync(showcasePath, "utf8");
   let showcaseData;
   try {
@@ -264,8 +330,6 @@ if (fs.existsSync(showcasePath)) {
   } catch(e) {
     assert("showcase parse — no crash", false, e.message);
   }
-} else {
-  console.log("  SKIP showcase (file not found at " + showcasePath + ")");
 }
 
 /* ============================================================
@@ -322,8 +386,8 @@ ${ptrLines.map(l => "      " + l).join("\n")}
     JSON.stringify(data.streams[0].pointer));
 }
 
-const pino3Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino3.yml");
-if (fs.existsSync(pino3Path)) {
+const pino3Path = engineFixture("PGE_pino3.yml");
+if (pino3Path) {
   const data = parse(fs.readFileSync(pino3Path, "utf8"));
   const withLoop = data.streams.find(s => s.pointer && s.pointer.loopDurEnv);
   assert("pino3 fixture — compact loop env lands in loopDurEnv", !!withLoop,
@@ -331,8 +395,6 @@ if (fs.existsSync(pino3Path)) {
   const y = serialize(data);
   assert("pino3 fixture — serialize emits loop_dur", y.includes("loop_dur:"), y.slice(0, 800));
   assert("pino3 fixture — serialize never loop_duration", !y.includes("loop_duration"), y.slice(0, 800));
-} else {
-  console.log("  SKIP pino3 fixture (file not found)");
 }
 
 /* ============================================================
@@ -405,8 +467,8 @@ ${extraLines.map(l => "    " + l).join("\n")}
   assert("neither key — neither emitted", !y.includes("density:") && !y.includes("fill_factor:"), y.slice(0, 400));
 }
 
-const ffPath = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_ff2_rassegna.yml");
-if (fs.existsSync(ffPath)) {
+const ffPath = engineFixture("PGE_ff2_rassegna.yml");
+if (ffPath) {
   const data = parse(fs.readFileSync(ffPath, "utf8"));
   const ffStreams = data.streams.filter(s => s.fillFactor === 2);
   assert("ff2 fixture — fillFactor read on all streams", ffStreams.length === data.streams.length,
@@ -415,8 +477,6 @@ if (fs.existsSync(ffPath)) {
   assert("ff2 fixture — fillFactor survives reparse",
     back.streams.every(s => s.fillFactor === 2 && s.density == null),
     JSON.stringify(back.streams.map(s => [s.fillFactor, s.density])));
-} else {
-  console.log("  SKIP ff2 fixture (file not found)");
 }
 
 /* ============================================================
@@ -533,27 +593,23 @@ console.log("\n── loop_end · loop_unit · reverse · block extras (#34) ─
   assert("roundtrip block extras — no diffs", diffs.length === 0, JSON.stringify(diffs));
 }
 
-const pino2Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino2.yml");
-if (fs.existsSync(pino2Path)) {
+const pino2Path = engineFixture("PGE_pino2.yml");
+if (pino2Path) {
   const text = fs.readFileSync(pino2Path, "utf8");
   const data = parse(text);
   const y = serialize(data);
   const count = (y.match(/loop_unit: normalized/g) || []).length;
   assert("pino2 fixture — loop_unit preserved on both streams", count === 2, `found ${count}, expected 2`);
-} else {
-  console.log("  SKIP pino2 fixture (file not found)");
 }
 
-const pino4Path = path.join(__dirname, "../../..", "PythonGranularEngine/configs/PGE_pino4.yml");
-if (fs.existsSync(pino4Path)) {
+const pino4Path = engineFixture("PGE_pino4.yml");
+if (pino4Path) {
   const data = parse(fs.readFileSync(pino4Path, "utf8"));
   const revCount = data.streams.filter(s => s.grain && s.grain.reverse === null).length;
   assert("pino4 fixture — bare reverse parsed on 2 streams", revCount === 2, `found ${revCount}`);
   const y = serialize(data);
   const emitted = (y.match(/reverse: null/g) || []).length;
   assert("pino4 fixture — reverse re-emitted on 2 streams", emitted === 2, `found ${emitted}`);
-} else {
-  console.log("  SKIP pino4 fixture (file not found)");
 }
 
 {
@@ -962,8 +1018,8 @@ ${body}
 
 const deviationProbFixtures = ["PGE_detune_implicito_test.yml", "PGE_test.yml", "PGE_pino2.yml"];
 for (const f of deviationProbFixtures) {
-  const p = path.join(__dirname, "../../..", "PythonGranularEngine/configs", f);
-  if (!fs.existsSync(p)) { console.log(`  SKIP deviationProbability fixture ${f} (not found)`); continue; }
+  const p = engineFixture(f);
+  if (!p) continue;
   const data = parse(fs.readFileSync(p, "utf8"));
   const flags = data.streams.map(s => s.deviationProbability !== undefined);
   // The two asserts below compare lists computed the same way, so they pass on
@@ -1296,9 +1352,13 @@ console.log("\n── solo/mute presence-keyed (#63) ──");
 
 console.log("\n── corpus: engine configs ──");
 
-const configsDir = path.join(__dirname, "../../..", "PythonGranularEngine/configs");
-if (fs.existsSync(configsDir)) {
+const configsDir = ENGINE_CONFIGS;
+if (ENGINE_PRESENT) {
   const files = fs.readdirSync(configsDir).filter(f => /\.ya?ml$/.test(f)).sort();
+  fixtureTally.corpusFiles = files.length;
+  // Un corpus vuoto e' una directory che non e' piu' quella dei config: il
+  // blocco girerebbe a vuoto restando verde, come i SKIP che la #132 chiude.
+  assert("corpus — la directory config del motore non e' vuota", files.length > 0, configsDir);
   for (const f of files) {
     const text = fs.readFileSync(path.join(configsDir, f), "utf8");
     let data;
@@ -1325,7 +1385,8 @@ if (fs.existsSync(configsDir)) {
       (stext.match(/^[ \t]*- -.*/m) || [""])[0]);
   }
 } else {
-  console.log("  SKIP corpus (engine configs dir not found)");
+  fixtureTally.skipped++;
+  console.log("  SKIP corpus (nessun checkout del motore in " + ENGINE_ROOT + ")");
 }
 
 /* ============================================================
@@ -1868,6 +1929,24 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 {
+  // La terza unità (PGE v5.2.0 / #171). Il bridge è già agnostico — cattura e
+  // riemette qualunque valore — ma è proprio quel giro a portare in Inspector
+  // il `milliseconds` che il controllo deve saper mostrare: se qui si
+  // restringesse, il selettore mostrerebbe di nuovo una selezione fantasma.
+  const yamlMs =
+    "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n" +
+    "    grain:\n      duration: 12\n      duration_range: 4\n      duration_unit: milliseconds\n";
+  const d = parse(yamlMs);
+  assert("parse duration_unit: milliseconds", d.streams[0].grain.durationUnit === "milliseconds",
+    JSON.stringify(d.streams[0].grain));
+  const y = serialize(d);
+  assert("serialize duration_unit: milliseconds", /duration_unit:\s*milliseconds/.test(y),
+    y.slice(0, 400));
+  assert("milliseconds survives full round-trip",
+    parse(y).streams[0].grain.durationUnit === "milliseconds");
+}
+
+{
   // Assente di default: nessuna chiave duration_unit iniettata.
   const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
     "    sample: test.wav\n    grain:\n      duration: 0.05\n");
@@ -2153,6 +2232,13 @@ console.log("\n\u2500\u2500 duration implicita: risoluzione tardiva (engine #205
   const data = parse(durationYaml(null), { samples: SAMPLES });
   assert("niente da risolvere \u2192 stesso oggetto",
     resolveImplicitDurations(data, data.samples) === data);
+  // Con un array `samples` di identita' diversa ma contenuto uguale l'oggetto
+  // data si rifa' (porta `samples`), ma `streams` NO: chi lo osserva per
+  // identita' — gli effetti che caricano peaks/spettrogrammi/grani — altrimenti
+  // ricaricherebbe ogni stem per una lista che non e' cambiata.
+  const again = resolveImplicitDurations(data, [...data.samples]);
+  assert("samples nuovo, niente risolto \u2192 streams e' lo stesso array",
+    again.streams === data.streams);
 }
 
 console.log("\n\u2500\u2500 cambio sample: la durata implicita segue (engine #205) \u2500\u2500");
@@ -2184,14 +2270,6 @@ const OTHER_SAMPLES = [{ name: "test.wav", duration: 2.5 }, { name: "lungo.wav",
   assert("cambio verso un sample ignoto \u2192 marcato irrisolto",
     moved.durationUnresolved === true, JSON.stringify(moved.durationUnresolved));
 }
-
-/* ============================================================
- * Summary
- * ============================================================ */
-
-console.log(`\n${"─".repeat(50)}`);
-console.log(`${pass} passed, ${fail} failed`);
-if (fail > 0) process.exit(1);
 
 /* ============================================================
  * SECTION — grain.read_direction (PGE #207)
@@ -2302,3 +2380,22 @@ function grainYaml(body) {
     window.PGE_BOUNDS.readDirection.min === -1 && window.PGE_BOUNDS.readDirection.max === 1,
     JSON.stringify(window.PGE_BOUNDS.readDirection));
 }
+
+/* ============================================================
+ * Summary
+ *
+ * In fondo al file, non a meta': fino alla #132 stava prima dell'ultima
+ * sezione, quindi un assert fallito li' sotto stampava FAIL e usciva 0.
+ * Il conteggio fixture dice quanto ha davvero verificato questo verde.
+ * ============================================================ */
+
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
+// cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
+// e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(fixtureSummary());
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});
