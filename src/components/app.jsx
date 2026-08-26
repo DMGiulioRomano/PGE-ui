@@ -63,7 +63,7 @@ const TWEAK_DEFAULTS = {
    this file. Only the stream-level helpers are used here; the per-array helpers
    (rescaleEnvArray / truncateEnvArray / envArrayWouldTruncate / _applyEnvFields)
    live in that module and are exercised by tests/node/test-envelope-utils.js. #44 */
-const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate } = window.PGEEnvUtils;
+const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate, sliceStreamEnvelopes } = window.PGEEnvUtils;
 
 // Blank in-memory project used as the editor's initial state before the real
 // project is loaded from the server (server.py lists configs/*.yml on boot).
@@ -826,6 +826,11 @@ function App() {
         targets.forEach(s => updateStream(s.id, { solo: !allSoloed }));
         return;
       }
+      if (matchShortcut(e, tweaks.shortcutSplit || "d") && selectedIds.length > 0) {
+        e.preventDefault();
+        splitAtPlayhead();
+        return;
+      }
       // Alt+↑/↓ (rebindable): move the selected clips one lane. Placed before
       // the ←/→ nudge and gated on a full shortcut match, so a rebind moves the
       // whole behaviour — including the Timeline's decision to stay out of it.
@@ -953,6 +958,105 @@ function App() {
     });
     setSelectedIds(newIds);
     setDirty(true);
+  }
+  /* ---- split al cursore (tasto rimappabile, default "d") ----
+   * Il taglio di Reaper: la clip selezionata diventa due stream, la testa e la
+   * coda, e il suono non cambia. Cambiano solo i due modi in cui una meta' puo'
+   * mentire:
+   *   - la testa tiene gli inviluppi in posizione ASSOLUTA (il freeze del
+   *     lucchetto, imposto qui a prescindere dal toggle: uno stretch
+   *     riproporzionerebbe le curve e il taglio non sarebbe piu' un taglio);
+   *   - la coda deve ripartire a leggere il sample dove la testa aveva
+   *     lasciato, e quel punto lo sa solo il motore — e' il `ptr` del sidecar
+   *     dei grani, lo stesso numero che il riquadro sotto il cursore mostra
+   *     come "Read". Senza sidecar non lo si inventa: lo split si rifiuta.
+   * `pointer.start` va scritto nell'unita' in vigore (loop_unit o time_mode):
+   * ogni stream nato nell'editor e' `time_mode: normalized`, dove start vive in
+   * [0,1] del sample — scriverci dentro dei secondi lo manderebbe fuori file. */
+  function splitAtPlayhead() {
+    const t = time;
+    const R = (x) => +x.toFixed(4);
+    const targets = data.streams.filter(s =>
+      selectedIds.includes(s.id) && t > s.onset + 1e-4 && t < s.onset + s.duration - 1e-4);
+    if (!targets.length) {
+      pushToast({ kind: "warn", title: "Niente da tagliare",
+                  message: "il cursore non attraversa nessuna clip selezionata", duration: 3000 });
+      return;
+    }
+    const cuts = [];
+    for (const s of targets) {
+      ensureGrainData(s.id);   // se il sidecar non e' ancora in memoria, chiedilo
+      const gd = grainData[s.id];
+      const sampleDur = (mediaList.files || []).find(f => f.name === s.sample)?.duration || 0;
+      const ptr = gd && window.PGEGrainMap.readPositionAt(gd, t - s.onset, {
+        jitter: !!(s.pointer && (s.pointer.offsetRange != null || s.pointer.offsetRangeEnv)),
+        sampleDur,
+      });
+      if (!ptr) {
+        pushToast({ kind: "warn", title: `Split rifiutato: ${s.id}`,
+                    message: "posizione di lettura sconosciuta — renderizza lo stream e riprova",
+                    duration: 5000 });
+        return;
+      }
+      const unit = window.PGEEnvUtils.loopUnitInfo(s).unit;
+      if (unit === "normalized" && !(sampleDur > 0)) {
+        pushToast({ kind: "warn", title: `Split rifiutato: ${s.id}`,
+                    message: "durata del sample sconosciuta: pointer.start e' normalizzato e non e' convertibile",
+                    duration: 5000 });
+        return;
+      }
+      cuts.push({ s, start: R(unit === "normalized" ? ptr.pos / sampleDur : ptr.pos), exact: ptr.exact });
+    }
+    const halves = new Map();   // srcId → {head, tail}
+    let skipped = 0;
+    for (const { s, start } of cuts) {
+      const cutRel = t - s.onset;
+      const cutNorm = cutRel / s.duration;
+      const head = {
+        ...truncateStreamEnvelopes(rescaleStreamEnvelopes(s, s.duration, cutRel)),
+        duration: R(cutRel), durationImplicit: false, durationUnresolved: false,
+      };
+      const sliced = sliceStreamEnvelopes(s, cutNorm);
+      skipped += sliced.skipped;
+      const tail = {
+        ...sliced.stream,
+        onset: R(t), duration: R(s.duration - cutRel),
+        durationImplicit: false, durationUnresolved: false,
+        pointer: { ...(s.pointer || {}), start },
+      };
+      halves.set(s.id, { head, tail });
+    }
+    const newIds = [];
+    setData(d => {
+      const ids = window.PGEYaml.allocStreamIds(d.streams, halves.size, ownsStemFor);
+      const tails = [];
+      let i = 0;
+      const streams = d.streams.map(s => {
+        const h = halves.get(s.id);
+        if (!h) return s;
+        const id = ids[i++];
+        newIds.push(id);
+        tails.push({ src: s.id, stream: { ...h.tail, id } });
+        return h.head;
+      });
+      const withTails = { ...d, streams: [...streams, ...tails.map(x => x.stream)] };
+      // La coda nasce nella corsia della testa: e' la stessa clip, tagliata.
+      let tr = TR.deriveTracks(withTails);
+      tails.forEach(x => { tr = TR.addStreamToTrackOf(tr, x.src, x.stream.id); });
+      return TR.applyTracks(withTails, tr);
+    });
+    setSelectedIds([...targets.map(s => s.id), ...newIds]);
+    setDirty(true);
+    if (cuts.some(c => !c.exact)) {
+      pushToast({ kind: "warn", title: "pointer.start e' una stima",
+                  message: "pointer.offset_range devia ogni grano: la posizione di lettura e' la mediana dei grani vicini",
+                  duration: 5000 });
+    }
+    if (skipped) {
+      pushToast({ kind: "warn", title: "Blocchi compatti non tagliati",
+                  message: `${skipped} inviluppi contengono un blocco compatto e sono rimasti invariati nella coda`,
+                  duration: 5000 });
+    }
   }
   function updateStream(id, patch) {
     if (freezeEnvOnResize && patch.duration != null) {

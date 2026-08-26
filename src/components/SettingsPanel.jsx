@@ -264,6 +264,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
                            onChange={(v) => setTweak("shortcutSolo", v)} />
           </div>
           <div className="sp-row">
+            <span className="sp-k" title="taglia in due gli stream selezionati nel punto del cursore">split at playhead</span>
+            <ShortcutInput value={tweaks.shortcutSplit || "d"}
+                           onChange={(v) => setTweak("shortcutSplit", v)} />
+          </div>
+          <div className="sp-row">
             <span className="sp-k" title="sposta gli stream selezionati sulla traccia sopra">move to track above</span>
             <ShortcutInput value={tweaks.shortcutMoveLaneUp || window.PGE_MOVE_LANE_DEFAULTS.up}
                            onChange={(v) => setTweak("shortcutMoveLaneUp", v)} />

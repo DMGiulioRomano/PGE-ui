@@ -313,6 +313,71 @@
     return fields.some(f => f && envArrayWouldTruncate(f, ratio));
   }
 
+  /* ---------- slice: la META' DOPO il taglio (split al cursore) ----------
+   * Il gemello di rescale+truncate. Quello tiene la testa dello stream e
+   * scarta la coda; questo tiene la coda: i breakpoint restano dove sono in
+   * tempo ASSOLUTO, ma l'origine si sposta sul taglio.
+   *
+   *   x' = (x - cut) / (1 - cut)      con cut = tempo di taglio normalizzato
+   *
+   * cioe' la stessa traslazione+riscalatura che il freeze fa sull'altra meta',
+   * scritta una volta sola. Il primo breakpoint dopo il taglio si porta dietro
+   * un punto interpolato a x'=0, altrimenti il valore al taglio salterebbe.
+   * Se dopo il taglio non resta nulla, l'inviluppo diventa il valore tenuto
+   * (un solo punto a 0): un array vuoto il motore non lo accetta.
+   *
+   * I blocchi compatti restano fuori: il taglio a meta' di un blocco non e'
+   * definito (n_reps e ratio descrivono un ciclo, non una lista di punti).
+   * `sliceEnvArray` risponde null su un array che ne contiene uno, e
+   * `sliceStreamEnvelopes` lascia quel campo intatto contandolo in `skipped` —
+   * chi chiama lo dice all'utente invece di riscrivere il blocco a caso. */
+  function sliceEnvArray(arr, cut, snap) {
+    if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+      const pts = sliceEnvArray(arr.points, cut, snap);
+      return pts === null ? null : { ...arr, points: pts };
+    }
+    if (!Array.isArray(arr) || !arr.length) return arr;
+    if (arr.some(PGEEnv.isCompactBlock)) return null;
+    const k = 1 / (1 - cut);
+    const close = (y) => (snap ? snap(y) : +y.toFixed(4));
+    const out = [];
+    let prev = null;   // ultimo breakpoint prima del taglio
+    for (const item of arr) {
+      if (PGEEnv.isBPGroup(item)) {
+        const inner = sliceEnvArray(item[0], cut, snap);
+        if (inner === null) return null;
+        if (inner.length >= 2) out.push([inner, item[1]]);
+        else if (inner.length === 1) out.push(inner[0]);
+        prev = item[0][item[0].length - 1];
+        continue;
+      }
+      if (!PGEEnv.isBreakpoint(item)) { out.push(item); continue; }
+      if (item[0] < cut) { prev = item; continue; }
+      if (!out.length && prev && item[0] > cut) {
+        const t = (cut - prev[0]) / (item[0] - prev[0]);
+        out.push([0, close(prev[1] + (item[1] - prev[1]) * t)]);
+      }
+      const moved = [...item];
+      moved[0] = Math.max(0, +((item[0] - cut) * k).toFixed(5));
+      out.push(moved);
+    }
+    if (!out.length && prev) out.push([0, prev[1]]);
+    return out;
+  }
+
+  // cut e' normalizzato sulla durata VECCHIA dello stream (0 < cut < 1).
+  // Ritorna {stream, skipped}: `skipped` conta i campi lasciati intatti
+  // perche' contengono un blocco compatto.
+  function sliceStreamEnvelopes(stream, cut) {
+    let skipped = 0;
+    const out = _applyEnvFields(stream, (arr, domain) => {
+      const sliced = sliceEnvArray(arr, cut, snapForDomain(domain));
+      if (sliced === null) { skipped++; return arr; }
+      return sliced;
+    });
+    return { stream: out, skipped };
+  }
+
   // Auto-fit the envelope Y window to the actual point values, for readability.
   // Fits the POINTS (min..max of the y-values) plus a `padFrac` margin (10% by
   // default), then clamps into [hardMin, hardMax]. This is the key change from
@@ -694,6 +759,8 @@
     rescaleStreamEnvelopes,
     truncateStreamEnvelopes,
     streamWouldTruncate,
+    sliceEnvArray,
+    sliceStreamEnvelopes,
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,

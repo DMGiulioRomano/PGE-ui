@@ -22,7 +22,7 @@ make tests            # full suite: tests-node + tests-python
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
-  (rescale/truncate math), `test-fingerprint.js` (fingerprint parity: which
+  (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary), `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
@@ -40,7 +40,7 @@ make tests            # full suite: tests-node + tests-python
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
   guards on the UI wiring), and `test-stream-id.js` (`allocStreamIds` never
-  reuses an id that still owns a stem, plus source guards on the two call sites
+  reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
   guards on the audio-error path), and `test-suite-harness.js` (the suite's own
@@ -195,6 +195,44 @@ Every grafia converts, and that used to be false. Before PGE #234 the engine's `
 Discrete-domain parameters (`grain.read_direction`): engine bounds are `-1`/`+1` but the domain is the **set** `{-1, +1}` — the engine rejects `0` at parse time. Every place the UI *computes* a y must **snap to the sign**, not clamp to the range. `snapDirection`/`snapForDomain` in `envelope-utils.js` are the single source; the envelope entry carries `domain: "direction"`. Interpolation is `step`, imposed and implicit; the editor hides the interp selectors. The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine refuses (not resolves by priority) — both are kept in state and re-emitted so the author's mistake is visible; the Inspector flags the pair. Absence is preserved: with neither key present the engine uses `auto` mode.
 
 **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
+
+### Split at the playhead (`splitAtPlayhead` in `app.jsx`)
+
+Reaper's S key, rebindable (`tweaks.shortcutSplit`, default `d`). Every selected
+clip the playhead crosses becomes two streams, in one undo step. The head keeps
+the original id (its stem goes stale by itself — the duration moved); the tail
+gets a fresh id from `allocStreamIds` and lands in the head's lane via
+`addStreamToTrackOf`.
+
+The two halves fail in two different ways, and each has its own guard:
+
+- **The head is always frozen**, whatever the Inspector's padlock says:
+  `truncateStreamEnvelopes(rescaleStreamEnvelopes(...))`, so breakpoints keep
+  their absolute time. A stretch would re-proportion the curves and the cut
+  would stop being a cut.
+- **The tail must resume reading the sample where the head stopped**, and that
+  position is the engine's, not ours: it is the `ptr` of the grain sidecar, the
+  same number the hover readout shows as `Read` (`readPositionAt` in
+  `grain-map.js`). With no sidecar there is nothing to inherit, so **the split
+  refuses** rather than inventing a `pointer.start`. With `pointer.offset_range`
+  declared the position is a median estimate (`exact:false`) — split proceeds,
+  with a toast saying so.
+
+`pointer.start` is written in the unit in force (`loopUnitInfo`:
+`pointer.loop_unit || time_mode`). Every stream the editor creates is born
+`time_mode: normalized`, where `start` lives in `[0,1]` of the sample — writing
+seconds there would send it off the end of the file. Normalized with an unknown
+sample duration is the third refusal.
+
+`sliceStreamEnvelopes` / `sliceEnvArray` in `envelope-utils.js` (node-tested)
+are the tail's half of the freeze math: `x' = (x - cut) / (1 - cut)`, with an
+interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
+held last value when nothing survives the cut (the engine rejects an empty
+envelope). `snapForDomain` applies there too — that interpolated point is a
+*computed* y, and on `read_direction` an unsnapped one is a parse error.
+**Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
+half isn't defined, so `sliceEnvArray` returns `null` on an array holding one,
+the field is left verbatim, and the count comes back as `skipped` for the toast.
 
 ### Fingerprint parity
 

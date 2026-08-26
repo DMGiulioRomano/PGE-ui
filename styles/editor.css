@@ -262,8 +262,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip.error .lbl { color: var(--status-error); }
 .resize-handle { position: absolute; top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; }
 .resize-handle:hover { background: rgba(255,255,255,.10); }
-.playhead-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; z-index: 2; }
-.playhead-glow { position: absolute; top: 0; bottom: 0; width: 14px; background: linear-gradient(90deg, rgba(255,140,66,0), rgba(255,140,66,.18), rgba(255,140,66,0)); pointer-events: none; z-index: 1; }
+.playhead-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; z-index: 8; }
+.playhead-glow { position: absolute; top: 0; bottom: 0; width: 14px; background: linear-gradient(90deg, rgba(255,140,66,0), rgba(255,140,66,.18), rgba(255,140,66,0)); pointer-events: none; z-index: 7; }
 
 /* ---------- Inspector (RIGHT-DOCKED, 380px) ---------- */
 .pge-inspector { background: var(--bg-panel); border-left: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; min-width: 0; width: 100%; height: 100%; flex: 1; overflow: hidden; container-type: inline-size; container-name: insp; }

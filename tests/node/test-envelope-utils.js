@@ -30,8 +30,8 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 16 helpers",
-  ["rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
+assert("PGEEnvUtils exposes the 18 helpers",
+  ["sliceEnvArray", "sliceStreamEnvelopes", "rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
    "computeYFit", "loopEnvMax", "loopUnitInfo", "loopBoundsError", "grainDurationUnitError",
    "snapDirection", "snapForDomain", "readDirectionError"]
@@ -945,6 +945,87 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
   assert("il suffisso è quello condiviso con l'Inspector",
     /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
     && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
+}
+
+
+/* ── slice: la meta' dopo il taglio (split al cursore) ──
+ * Il gemello di rescale+truncate: quello tiene la testa, questo la coda. La
+ * regola e' una sola, x' = (x - cut)/(1 - cut), ed e' quella che tiene i
+ * breakpoint fermi in tempo assoluto mentre l'origine si sposta sul taglio. */
+console.log("\n── sliceEnvArray ──");
+assert("l'origine si sposta sul taglio, il punto al taglio e' interpolato",
+  eq(U.sliceEnvArray([[0, 0], [1, 1]], 0.5), [[0, 0.5], [1, 1]]),
+  JSON.stringify(U.sliceEnvArray([[0, 0], [1, 1]], 0.5)));
+assert("i breakpoint prima del taglio spariscono, quelli dopo si riscalano",
+  eq(U.sliceEnvArray([[0, 0], [0.25, 1], [0.75, 1], [1, 0]], 0.5),
+     [[0, 1], [0.5, 1], [1, 0]]),
+  JSON.stringify(U.sliceEnvArray([[0, 0], [0.25, 1], [0.75, 1], [1, 0]], 0.5)));
+assert("un breakpoint esattamente sul taglio non viene duplicato",
+  eq(U.sliceEnvArray([[0, 0], [0.5, 0.3], [1, 1]], 0.5), [[0, 0.3], [1, 1]]));
+assert("l'interp per-punto sopravvive allo spostamento",
+  eq(U.sliceEnvArray([[0, 0], [1, 1, "exp"]], 0.5), [[0, 0.5], [1, 1, "exp"]]));
+// Un envelope vuoto il motore non lo accetta: se dopo il taglio non resta
+// nessun punto, la coda tiene l'ultimo valore invece di sparire.
+assert("senza punti dopo il taglio resta il valore tenuto",
+  eq(U.sliceEnvArray([[0, 0], [0.2, 0.7]], 0.5), [[0, 0.7]]));
+assert("forma tipata {type,points} tagliata ricorsivamente",
+  eq(U.sliceEnvArray({ type: "exp", points: [[0, 0], [1, 1]] }, 0.5),
+     { type: "exp", points: [[0, 0.5], [1, 1]] }));
+// read_direction vive in {-1,+1}: il punto interpolato al taglio e' un y
+// CALCOLATO, e senza snap uscirebbe uno 0.3 che il motore rifiuta al parse.
+assert("sul dominio direction il punto interpolato e' snappato al segno",
+  eq(U.sliceEnvArray([[0, -1], [1, 1]], 0.5, U.snapDirection), [[0, 1], [1, 1]]));
+// Il taglio a meta' di un blocco compatto non e' definito (n_reps e ratio
+// descrivono un ciclo, non una lista di punti): l'array si dichiara intoccato.
+assert("un array con un blocco compatto risponde null",
+  U.sliceEnvArray([[[[0, 0], [1, 1]], 0.8, 2]], 0.5) === null);
+assert("un BP group viene tagliato come i breakpoint",
+  eq(U.sliceEnvArray([[[[0, 0], [1, 1]], "exp"]], 0.5), [[[[0, 0.5], [1, 1]], "exp"]]),
+  JSON.stringify(U.sliceEnvArray([[[[0, 0], [1, 1]], "exp"]], 0.5)));
+
+console.log("\n── sliceStreamEnvelopes ──");
+{
+  const s = {
+    id: "s1", onset: 0, duration: 4,
+    volumeEnv: [[0, 0], [1, 1]],
+    grain: { readDirectionEnv: [[0, -1], [1, 1]] },
+    pointer: { speedRatioEnv: [[[[0, 0], [1, 1]], 0.8, 2]] },
+  };
+  const out = U.sliceStreamEnvelopes(s, 0.5);
+  assert("taglia ogni campo envelope dello stream",
+    eq(out.stream.volumeEnv, [[0, 0.5], [1, 1]]));
+  assert("il dominio e' della chiave, non dello stream (direction snappato)",
+    eq(out.stream.grain.readDirectionEnv, [[0, 1], [1, 1]]));
+  assert("il campo col blocco compatto resta intatto ed e' contato in skipped",
+    out.skipped === 1 && eq(out.stream.pointer.speedRatioEnv, s.pointer.speedRatioEnv));
+  assert("lo stream di partenza non viene mutato",
+    eq(s.volumeEnv, [[0, 0], [1, 1]]));
+}
+
+/* ── il cablaggio in app.jsx ──
+ * Le tre cose che rendono il taglio un taglio, e che una riscrittura
+ * distratta toglierebbe senza che nessun test le veda. */
+{
+  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  // La testa va congelata SEMPRE, non solo col lucchetto chiuso: uno stretch
+  // riproporzionerebbe le curve e il taglio non sarebbe piu' un taglio.
+  assert("la testa passa per rescale+truncate, indipendentemente dal toggle freeze",
+    /truncateStreamEnvelopes\(rescaleStreamEnvelopes\(s, s\.duration, cutRel\)\)/.test(appSrc));
+  assert("la coda passa per sliceStreamEnvelopes",
+    /sliceStreamEnvelopes\(s, cutNorm\)/.test(appSrc));
+  // La posizione di lettura la calcola il motore: senza sidecar non c'e'
+  // niente da ereditare e lo split si rifiuta invece di inventare uno start.
+  assert("senza posizione di lettura lo split si rifiuta",
+    /if \(!ptr\) \{[\s\S]{0,400}?Split rifiutato[\s\S]{0,200}?return;/.test(appSrc));
+  // pointer.start segue l'unita' in vigore: ogni stream nato nell'editor e'
+  // time_mode: normalized, dove start vive in [0,1] del sample.
+  assert("pointer.start e' convertito nell'unita' in vigore",
+    /loopUnitInfo\(s\)\.unit/.test(appSrc)
+    && /unit === "normalized" \? ptr\.pos \/ sampleDur : ptr\.pos/.test(appSrc));
+  assert("la coda nasce nella corsia della testa",
+    /addStreamToTrackOf\(tr, x\.src, x\.stream\.id\)/.test(appSrc));
+  assert("il tasto e' rimappabile, default d",
+    /matchShortcut\(e, tweaks\.shortcutSplit \|\| "d"\)/.test(appSrc));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
