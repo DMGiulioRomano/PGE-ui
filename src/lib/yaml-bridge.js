@@ -675,7 +675,12 @@
   }
 
   function streamFromYaml(y, idx, samples) {
-    const id = y.stream_id || ("stream" + (idx + 1));
+    // Coerced to a string on purpose. An unquoted `stream_id: 1` in YAML parses
+    // as a NUMBER, and the id is an identity key everywhere downstream — the
+    // stem filename, the cache-manifest key, `allocStreamIds`, and the
+    // `ui_tracks` stream lists, which are re-read as strings. A number there
+    // matches nothing and the mismatch is silent (PGE-ui #145 review, R1).
+    const id = String(y.stream_id || ("stream" + (idx + 1)));
 
     const dens = unpackValueOrEnv(y.density);
     const ff   = unpackValueOrEnv(y.fill_factor ?? null);
@@ -1130,7 +1135,13 @@
       return { ...s, duration: dur.value, durationUnresolved: dur.unresolved };
     });
     if (!changed && data.samples === samples) return data;
-    return { ...data, streams, samples: samples || [] };
+    // `streams` e' comunque il risultato di una map, cioe' un array NUOVO anche
+    // quando ogni elemento e' lo stesso oggetto di prima. Chi osserva
+    // `data.streams` per identita' (gli effetti che caricano peaks,
+    // spettrogrammi e grani in app.jsx) lo leggerebbe come "la lista e'
+    // cambiata" e ricaricherebbe tutto. Quando non si e' risolto niente si
+    // riusa l'array di partenza: qui si sta aggiornando solo `samples`.
+    return { ...data, streams: changed ? streams : data.streams, samples: samples || [] };
   }
 
   /* La migrazione e' compiuta nel momento in cui lo YAML serializzato tocca il

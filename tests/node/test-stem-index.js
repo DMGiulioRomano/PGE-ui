@@ -24,6 +24,7 @@ const path = require("path");
 
 // Fake disk + the /stems shape server.py serves from it.
 let DISK = [];                                   // ["proj__stream1.wav", …]
+let DUR = {};                                    // {"proj__stream1.wav": 4.0}
 const store = {};
 global.localStorage = {
   getItem: (k) => (k in store ? store[k] : null),
@@ -37,6 +38,7 @@ global.fetch = (url) => {
     streamId: f.slice(bn.length + 2).replace(/\.[^.]+$/, ""),
     ext: f.slice(f.lastIndexOf(".")),
     mtime: 1700000000,
+    dur: DUR[f] ?? null,
   }));
   return Promise.resolve({ ok: true, json: () => Promise.resolve({ basename: bn, stems }) });
 };
@@ -68,6 +70,34 @@ console.log("\n── a stem present in one format only ──");
   assert("ownsStem sees the .wav stem", backend.render.ownsStem("proj", "stream1") === true);
   assert("ownsStem sees the .aif stem", backend.render.ownsStem("proj", "stream2") === true);
   assert("ownsStem false for a free id", backend.render.ownsStem("proj", "stream3") === false);
+
+  /* La durata dello stem su disco: e' quella che permette di disegnare il
+   * waveform nel tempo invece di stirarlo sulla larghezza della clip. Dopo un
+   * taglio la clip e' meta' dello stem, e senza questo numero il disegno
+   * mostrava tutto lo stem compresso — che si legge come un aggiornamento
+   * sbagliato, non come uno stem da rigenerare. */
+  console.log("\n── durata dello stem su disco ──");
+  {
+    DISK = ["p2__stream1.wav", "p2__stream2.aif"];
+    DUR = { "p2__stream1.wav": 4.25 };
+    await backend.render.loadCache("p2");
+    assert("la durata arriva da /stems", backend.render.stemDur("p2", "stream1") === 4.25);
+    assert("format-agnostica come ownsStem",
+           backend.render.stemDur("p2", "stream2") === null);
+    assert("id sconosciuto → null", backend.render.stemDur("p2", "stream9") === null);
+    // Un render riscrive lo stem: la durata vecchia sarebbe peggio che nessuna,
+    // perche' taglierebbe il disegno sulla misura di prima. Dimenticarla
+    // riporta all'ipotesi "stem lungo quanto la clip", vera appena dopo.
+    const tlSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+    assert("uno stem appena scritto dimentica la durata vecchia",
+           /function _markStemFresh\(key\) \{[\s\S]*?delete stemDurIndex\[key\];/.test(
+             fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8")));
+    assert("il waveform e' mappato sul tempo, non stirato sulla clip",
+           /const kOf = \(x\) => \(x \/ W\) \* sp \* n;/.test(tlSrc)
+           && !/Math\.floor\(\(x \/ W\) \* n\)/.test(tlSrc));
+    assert("stessa regola per lo spettrogramma",
+           /drawImage\(off, 0, 0, cols, bins, 0, 0, W \/ sp, H\)/.test(tlSrc));
+  }
 
   console.log("\n── a clip that cannot sound says so (source guard) ──");
   {

@@ -22,7 +22,7 @@ make tests            # full suite: tests-node + tests-python
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
-  (rescale/truncate math), `test-fingerprint.js` (fingerprint parity: which
+  (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary), `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
@@ -40,13 +40,19 @@ make tests            # full suite: tests-node + tests-python
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
   guards on the UI wiring), and `test-stream-id.js` (`allocStreamIds` never
-  reuses an id that still owns a stem, plus source guards on the two call sites
+  reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
   guards on the audio-error path), and `test-suite-harness.js` (the suite's own
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
-  positional exit gate).
+  positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
+  totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
+  stream object, the key appearing only when it says something, plus source
+  guards on the Timeline/app wiring), and `test-jsx-parse.js` (every `.jsx` file
+  parses — there is no build step, so a syntax error would only surface as a
+  blank editor, and the regex source guards stay green on a file that cannot
+  run).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -119,8 +125,9 @@ so the handler prints `interrotto prima della fine` instead of a clean summary
 under a stack trace. `test-suite-harness.js` verifies all of it — the idiom, by
 running it, and every suite file, by source guard.
 
-There is no linter or typechecker; UI verification is
-manual (open `PGE Editor.html`, Settings → local backend, test connection, render).
+There is no linter or typechecker — `test-jsx-parse.js` is the whole static net,
+and it only proves a component parses. UI verification is manual (open
+`PGE Editor.html`, Settings → local backend, test connection, render).
 
 ## Architecture
 
@@ -189,6 +196,63 @@ Discrete-domain parameters (`grain.read_direction`): engine bounds are `-1`/`+1`
 
 **If you add a UI clamp, add its fallback in `yaml-bridge.js` and a mapping in `bounds.js`.**
 
+### Split at the playhead (`splitAtPlayhead` in `app.jsx`)
+
+Reaper's S key, rebindable (`tweaks.shortcutSplit`, default `d`). Every selected
+clip the playhead crosses becomes two streams, in one undo step. The head keeps
+the original id (its stem goes stale by itself — the duration moved); the tail
+gets a fresh id from `allocStreamIds` and lands in the head's lane via
+`addStreamToTrackOf`.
+
+The two halves fail in two different ways, and each has its own guard:
+
+- **The head is always frozen**, whatever the Inspector's padlock says:
+  `truncateStreamEnvelopes(rescaleStreamEnvelopes(...))`, so breakpoints keep
+  their absolute time. A stretch would re-proportion the curves and the cut
+  would stop being a cut.
+- **The tail must resume reading the sample where the head stopped**, and that
+  position is the engine's, not ours: it is the `ptr` of the grain sidecar, the
+  same number the hover readout shows as `Read` (`readPositionAt` in
+  `grain-map.js`). With no sidecar there is nothing to inherit, so **the split
+  refuses** rather than inventing a `pointer.start`. With `pointer.offset_range`
+  declared the position is a median estimate (`exact:false`) — split proceeds,
+  with a toast saying so.
+
+`pointer.start` is written in the unit in force (`loopUnitInfo`:
+`pointer.loop_unit || time_mode`). Every stream the editor creates is born
+`time_mode: normalized`, where `start` lives in `[0,1]` of the sample — writing
+seconds there would send it off the end of the file. Normalized with an unknown
+sample duration is the third refusal.
+
+**`rescaleEnvArray` deliberately does not clamp x to 1** (and that clamp was a
+bug, not a safety net): it ate exactly the information `truncateEnvArray` needs.
+Shortening a stream with freeze on, every breakpoint past the new end used to
+land on x=1 — `[[0,0],[0.5,1],[1,0]]` at ratio 2 became `[[0,0],[1,1],[1,0]]` —
+indistinguishable from an envelope that genuinely ends there, so truncate kept
+the pile instead of dropping the tail and interpolating one closing point. An
+x > 1 is a **transient** state that lives between rescale and truncate (i.e.
+inside a resize gesture); every commit path goes through `truncateEnvArray` or
+`sliceEnvArray`. This fixed the split's head and the freeze-on-resize drag at
+once — they are the same code.
+
+The one y these functions *compute* rather than copy (the closing point of a
+truncate, the opening point of a slice) goes through `boundaryY`, which reads
+the interp tag of the **previous** point — the tag governs the *outgoing*
+segment (`expandMixed` in `envelope-loops.js`), so on a `step` the value is held
+instead of interpolated into a jump the envelope never had. `cubic` stays linear
+there: real PCHIP needs the points beyond the segment and would misdraw the
+surviving half anyway; the error is one point wide.
+
+`sliceStreamEnvelopes` / `sliceEnvArray` in `envelope-utils.js` (node-tested)
+are the tail's half of the freeze math: `x' = (x - cut) / (1 - cut)`, with an
+interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
+held last value when nothing survives the cut (the engine rejects an empty
+envelope). `snapForDomain` applies there too — that interpolated point is a
+*computed* y, and on `read_direction` an unsnapped one is a parse error.
+**Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
+half isn't defined, so `sliceEnvArray` returns `null` on an array holding one,
+the field is left verbatim, and the count comes back as `skipped` for the toast.
+
 ### Fingerprint parity
 
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) ignores `color/mute/solo/onset` plus `durationImplicit/durationUnresolved/deviationProbabilityLegacy`. Key non-obvious exclusions:
@@ -225,6 +289,21 @@ Streams without a rendered stem stay silent but **never silently**: a missing/un
 
 The pure clock math (`audiblePosition`, `playAt`) is exposed as `window.PGEAudioClock`, node-tested in `test-audio-clock.js`.
 
+**A clip's waveform is drawn in time, not stretched to the clip.** Peaks (and
+the spectrogram grid) cover the whole stem *on disk*, whose length stops
+matching the clip's the moment an edit shortens the stream without a re-render —
+a split, a resize. Mapped onto the clip's width, half a clip showed the entire
+waveform squeezed into it, which reads as a broken redraw rather than as a stem
+to regenerate. `GET /stems/<basename>` therefore carries `dur` per file
+(`audio_duration`, a header-only read), `backend.render.stemDur(basename, id)`
+serves it format-agnostically like `ownsStem`, and `ClipWaveform` /
+`ClipSpectrogram` take a `span` = stem duration / clip duration: the excess
+falls outside the clip, the missing tail stays flat, and the 🟡 dot says the
+rest. `span` defaults to 1 when the duration is unknown — which is also the
+truth right after a render, so `_markStemFresh` **drops** the cached duration
+when a stem is rewritten (keeping the old one would be worse than having none:
+it would crop the drawing to the previous length).
+
 ### Stream identity (`allocStreamIds`, the stem index)
 
 A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again.
@@ -237,6 +316,188 @@ The stem index is keyed by **filename, extension included**:
 
 `GET /stems/<basename>` returns one entry per **file** (with its `ext`), not one per stream id.
 
+### Tracks: a lane holds N streams (`tracks.js`)
+
+A timeline lane is a **track**, and a track holds one or more streams. Before
+#141 there was no track entity: `Timeline.jsx` mapped `streams` twice in
+parallel (heads, lanes) so lane *i* was stream *i*.
+
+The grouping is a single **top-level** `ui_tracks` key, carried in
+`data._extra`:
+
+```yaml
+ui_tracks:
+  - id: t1
+    name: bassi
+    streams: [stream1, stream4]
+```
+
+It is top-level and not a per-stream key for one reason: the stem fingerprint
+is computed **per stream** and both ignore-lists are deny-lists
+(`FINGERPRINT_IGNORE_KEYS` = `{solo, mute}` in the engine, `FP_IGNORE` in
+`backend.js`), so a per-stream `track:` would be hashed and reorganizing lanes
+would mark every touched stem stale. Top-level it rides for free:
+`KNOWN_PROJECT_KEYS` doesn't know it → `_extra` → re-emitted verbatim; the
+engine's `load_yaml` reads only `seed` and `streams` and never validates the
+top level. Unlike `laneHeights` (localStorage) it travels with the file.
+
+Two pure functions in `tracks.js` (`window.PGETracks`, node-tested) are the
+whole contract:
+
+- **`deriveTracks(data)`** is total and self-healing — dead ids dropped, a
+  stream laid out exactly once, unmentioned streams appended as singletons in
+  file order. With the key absent it reproduces one-lane-per-stream exactly.
+  Track ids and stream ids share **one** namespace
+  (a singleton lane's id is its stream's), so the ids of the streams
+  `ui_tracks` doesn't place are reserved *before* group ids are handed out: a
+  hand-written group calling itself `stream2` gets suffixed, and the real
+  stream2's lane keeps the id its `laneHeights` entry is filed under. The one
+  case it can't repair is two streams sharing an id — they collapse onto one
+  lane, and that's fine: a duplicate id is already fatal a layer down (stem
+  filename, manifest key) and no `ui_tracks` could round-trip two lanes
+  pointing at one id.
+  An **empty lane is kept**: a track is an entity of its own, like a DAW track —
+  `addTrack` creates one with no stream behind it, a move or a delete that
+  empties a lane leaves it standing, and only `removeTrack` (the × on an empty
+  header, refused on a lane that still holds clips) takes one away. Cost of that
+  rule: group-then-ungroup no longer returns to the trivial layout, because the
+  extracted lane can't reclaim its stream id while the empty source lane still
+  holds it.
+- **`applyTracks(data, tracks)`** reorders `data.streams` into visual order and
+  writes `ui_tracks` **only when it says something the stream order doesn't** —
+  a lane with two streams, an empty lane, a chosen name, an id that isn't its
+  stream's. A project that never groups never grows the key; but the key is
+  all-or-nothing,
+  so **one rename or one group materializes every lane**, singletons included.
+  It reuses the stream objects untouched, so **no stem goes stale**; if you ever
+  make it rebuild one, the fingerprint moves with it.
+
+That reorder has a cost on the React side, and it bit: **no effect may depend
+on the identity of `data.streams`**. State is immutable, so every gesture that
+recomposes the list produces a new array even when not one value changed, and
+`applyTracks` recomposes it on every move between lanes. The three effects that
+load per-stream media (peaks, spectrograms, grain sidecars) used to list
+`data.streams` among their deps and so reloaded *every* stem on every lane
+gesture, each reload calling `setState` — the engine of a render loop that
+locked the page up (Firefox's "stop script", the stack pinned inside
+`createElement`). They now key on `streamMediaKey`, a string of
+`id:duration:sample` — `onset` deliberately left out, moving a clip in time does
+not touch its audio — and their `setState`s bail out when the value is already
+there. `resolveImplicitDurations` follows the same rule: it reuses
+`data.streams` when it resolved nothing. The idiom was already in the file (the
+mute/solo and onset/duration effects key on a string); the media effects were
+the ones that had not been converted.
+
+That reorder of `data.streams` is audio-neutral, and only because the engine
+says so: `_create_streams` iterates the list without an index and every
+stochastic site draws from an RNG derived from `(seed, stream_id, component)`,
+so materialization order doesn't reach the grains (`generator.py`). **If the
+engine ever derives randomness from list position, every grouping gesture in
+the timeline starts rewriting audio.**
+
+Stream ids are **strings**, coerced in `streamFromYaml`: an unquoted
+`stream_id: 1` parses as a number, and the id is an identity key (stem
+filename, cache-manifest key, `allocStreamIds`, the `ui_tracks` lists). A
+number matching nothing against its own string is silent, and here it would
+drop the grouping and let the next save erase it.
+
+A singleton track's **id is its stream id**. That is what keeps pre-#141
+`laneHeights` entries applying, and what lets pulling the last clip out of a
+group land back on the trivial layout instead of leaving a `t1` behind.
+
+**Paste picks its lane from `_srcId`**, stamped on the clipboard at copy time
+together with `_srcProject`: the copy joins the lane its original sits in, with
+no similarity heuristic. When `_srcId` doesn't resolve, `addStreamToTrackOf`
+opens a lane at the end — which is what paste did before tracks existed. Two
+callers lean on that fallback instead of a special case: the source was deleted
+while it sat in the clipboard, and the clipboard came from another project
+(there `null` is passed outright — the clipboard deliberately outlives a project
+switch, and default ids repeat across files, so a namesake would be the wrong
+lane). `renameStream` rewrites a pending `_srcId` for the same reason: it has to
+keep naming the same stream.
+
+**Renaming a stream** (`renameStream` in `app.jsx`, `renameStreamId` in
+`tracks.js`) is an identity change, not a patch, so it does not go through
+`updateStream`. The lane id *and* a still-default lane name follow the stream —
+that is what keeps `isTrivial` true, so a plain rename on an ungrouped project
+writes no `ui_tracks` at all; a lane the user actually named keeps its name.
+Three refusals, all at the trust boundary: a charset (the id becomes a filename
+and a path segment), a live stream already holding the name, and `ownsStemFor`
+— a stem still on disk under that name would be picked up as the renamed
+stream's audio, the same hazard `allocStreamIds` guards against.
+
+**The sound is deliberately not preserved.** `rng_id = rng_group or stream_id`
+(engine `shared/seeding.py`, and every seeding site goes through it), so a
+renamed stream reseeds and draws different grains. Writing
+`rng_group: <old id>` would pin it bit-for-bit — the option was weighed and
+declined: it makes the YAML carry the old name forever and makes `rng_group`
+mean "renamed" instead of "shares an RNG". The id is hashed on both sides, so
+the stem goes stale by itself and the 🟡 dot is the whole warning. (With no
+top-level `seed` the point is moot anyway: `voice_rng` falls back to
+`hash(stream_id + …)`, which Python randomizes per process.)
+
+`app.jsx` derives `tracks` with `useMemo` and routes every layout change
+through `mutateTracks`. Mute/solo do **not**: they stay per-stream because
+that's what the engine filters on (`Generator._filter_solo_mute`) and what the
+YAML carries. The header's M/S is a three-valued fan-out (all / some / none)
+over the group; per-clip M/S buttons appear only once a lane holds more than
+one clip. The header VU sums the group's analyser **powers** — there is no
+summing node to read, and a visual meter doesn't justify rebuilding the audio
+graph.
+
+Clicking a **track header selects the lane** (`selectedTrackId` in `app.jsx`),
+not only its clips: it is the only handle on an empty lane, and it is what tells
+Delete "remove this track, with everything on it" (`deleteTrack`, one `setData`
+= one undo step) from "remove this clip" (`deleteStream`). Clicking a clip, a
+marquee or a range drops it; Ctrl-click on a header stays a plain multi-clip
+toggle. The Delete branch is gated on `defaultPrevented` alone — the
+EnvelopeEditor calls `preventDefault` only when a breakpoint or a loop really is
+selected, so its own Delete still wins there.
+
+Clip drag moves between lanes, and a vertical drag is a **lane delta, not a
+destination** — the DAW rule. `dstIdx` is where the *anchor* (the grabbed clip,
+`opts.anchor`) lands; every other selected clip keeps its offset from it, so a
+selection spanning two lanes never collapses onto one. The clamp is one-sided:
+upward the drag stops when the **highest** selected clip reaches lane 0 (hence
+`topLane` in `Timeline.jsx`, over the whole selection, and the same clamp again
+inside `moveStreams` — the pure function does not trust its caller); downward
+the layout **grows**, `moveStreams` appending empty lanes until the lowest clip
+has one, the way a DAW creates tracks under a drag. Undo takes them away with
+the rest of the gesture for free: the lanes live in `ui_tracks` inside
+`data._extra`, the whole `data` is the history snapshot, and the drag is
+bracketed by `beginGesture`/`endGesture`, so onset and layout come back
+together in one step.
+
+**Alt**-drop is the exception, and stays a destination: everything extracts into
+one new lane at that position. The drag threshold reads both axes — a purely
+vertical drag leaves `onset` alone and would otherwise never start.
+
+Because the drop creates lanes, the preview has to be able to point at lanes
+that do not exist yet: `laneIndexAtY(y, overflow)` keeps counting past the
+bottom, and `laneTracks` appends **phantom** lanes (`__new<i>`, `phantom: true`)
+for the duration of the drag so the ghost, the highlight and the preview clip
+all land somewhere visible. Per-clip destinations come from `dstLaneOf(id)`;
+under Alt it collapses to the single target lane.
+
+The lane move is gated on **vertical intent** (`verticalRef`, latched in `move`
+once `|dy| >= THRESHOLD`), which also gates the lane highlight. Neither
+`dstLane != null` alone nor `dstLane !== srcLane` works: the cursor never
+leaves the grabbed clip's lane during an ordinary horizontal drag, so with no
+gate a selection spanning two lanes would move vertically every time it is
+dragged along the time axis; and `srcLane` is the *grabbed* clip's lane, so
+comparing against it swallows a real move whose anchor happens to come back to
+its own row (the rest of the selection having been clamped at the ceiling). Alt
+is sampled the same way, in `move`, so the dashed highlight and the outcome
+can't disagree.
+
+Clips sharing a lane are placed by `onset` alone, so they can cover each other
+exactly — a paste with the playhead still on the source does it every time.
+A fully covered clip is unreachable (raising the *selected* one is no escape:
+selecting means clicking), so each row starts `CLIP_STACK_STEP` px below the
+previous, with the step shrinking to fit the lane rather than pushing the last
+clip out of it. `CLIP_PAD` must stay equal to the `.clip` inset in
+`editor.css`, and the child canvases size to the clip's box, not the lane's.
+
 ### History / undo (`app.jsx`)
 
 `setData(updater)` wraps every mutation. `beginGesture()` / `endGesture()` bracket continuous interactions (drag, knob spin) so they collapse into a single undo step. Cap is 200 entries. Anything mutating `data` must go through `setData`, not `_setDataRaw`, or undo breaks.
@@ -247,7 +508,7 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 ## Security stance of `server.py`
 

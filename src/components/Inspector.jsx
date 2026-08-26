@@ -386,10 +386,13 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
+function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   const [selRow, setSelRow] = useStateIN(null);
+  // Why the rejection lives here and not in a toast: it belongs next to the
+  // field that caused it, and it has to survive until the user fixes the value.
+  const [idError, setIdError] = useStateIN(null);
   const samplePickerTrigger = React.useRef(null);
   const ibodyRef = React.useRef(null);
   const ibodyScrollTop = React.useRef(0);
@@ -752,10 +755,37 @@ function Inspector({ stream, onChange, onClose, tab, onTab, samples, freezeEnvOn
                      badge={sampleDur ? <span className="mono">{sampleDur.toFixed(3)} s</span> :
                                        <span className="mono" style={{color:"var(--status-error)"}}>sample not found</span>}>
               <div className="pge-prow">
-                <span className="k">stream_id</span><span />
-                <span className="v" style={{color:"var(--accent)"}}>"{stream.id}"</span>
+                <span className="k" title="the stream's identity: stem filename, cache-manifest key, and the RNG seed (rng_group or stream_id). Renaming reseeds the stream — the stem goes stale and the next render sounds different">stream_id</span><span />
+                <span className="v">
+                  {onRename ? (
+                  <input type="text" className="pge-mini-input" style={{width: 130, color:"var(--accent)"}}
+                         key={stream.id}
+                         defaultValue={stream.id}
+                         onFocus={() => setIdError(null)}
+                         onBlur={e => {
+                           const err = onRename(e.target.value);
+                           setIdError(err);
+                           // Rejected: put the old id back rather than leaving a
+                           // value in the box that is not the stream's name.
+                           if (err) e.target.value = stream.id;
+                         }}
+                         onKeyDown={e => {
+                           e.stopPropagation();
+                           if (e.key === "Enter") e.target.blur();
+                           if (e.key === "Escape") { setIdError(null); e.target.value = stream.id; e.target.blur(); }
+                         }} />
+                  ) : <span style={{color:"var(--accent)"}}>"{stream.id}"</span>}
+                </span>
                 <span />
               </div>
+              {idError ? (
+              <div className="pge-prow">
+                <span className="k" />
+                <span />
+                <span className="v" style={{color:"var(--status-error)", fontSize:10}}>{idError}</span>
+                <span />
+              </div>
+              ) : null}
               <ParamRow name="onset" mode="scalar" value={stream.onset} unit="s"
                 onSelect={() => setSelRow("onset")} selected={selRow==="onset"}
                 onValue={(v) => onChange({onset: v})} />

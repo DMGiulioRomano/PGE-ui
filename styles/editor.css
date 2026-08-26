@@ -140,6 +140,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .add-btn { width: 100%; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: transparent; color: var(--fg-3); border: 1px dashed var(--border-default); border-radius: 3px; font: 11px/1 var(--font-mono); cursor: pointer; }
 .add-btn .add-btn-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .add-btn:hover { color: var(--fg-1); border-color: var(--fg-3); }
+.lanes-head-add { display: flex; flex-direction: column; gap: 4px; }
 
 .track-head { display: flex; align-items: center; gap: 8px; height: var(--lane-h); padding: 0 10px; border-bottom: 1px solid var(--border-subtle); border-left: 3px solid var(--clip-1); cursor: default; position: relative;; }
 .track-head:hover { background: var(--bg-hover); }
@@ -163,6 +164,13 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .track-head .grip:hover { opacity: 1; }
 .track-head .grip:active { cursor: grabbing; }
 .track-head .grip span { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-3); align-self: center; justify-self: center; }
+/* A lane holds N streams (#141): the M/S buttons on its header stand for the
+ * whole group, so they need a third state — some muted / some soloed, not all. */
+.track-head .pill.part-m { background: #4A2422; color: #E7A9AB; border-color: #80322E; }
+.track-head .pill.part-s { background: #5C4210; color: #E4C486; border-color: #B47B1A; }
+/* the clip count next to a grouped lane's name */
+.track-head .nm-count { display: inline-flex; align-items: center; justify-content: center; min-width: 14px; height: 13px; margin-left: 5px; padding: 0 3px; border-radius: 7px; background: var(--bg-elevated); border: 1px solid var(--border-default); font-size: 9px; color: var(--fg-3); vertical-align: middle; }
+.track-head .nm-edit { flex: 1; min-width: 0; background: var(--bg-base); border: 1px solid var(--accent); border-radius: 2px; padding: 1px 4px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-1); outline: none; }
 .track-head.drop-target { box-shadow: inset 0 -2px 0 0 var(--accent); }
 .track-head.drop-target::before { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
 
@@ -221,7 +229,22 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .ruler .loop-region.enabled { opacity: 0.38; box-shadow: 0 0 0 1px var(--accent); }
 .lanes-area { position: relative; }
 .lane { height: var(--lane-h); border-bottom: 1px solid var(--border-subtle); position: relative; background-image: none; }
+/* the lane a dragged clip would land on */
+.lane.drop-target { background: rgba(255,255,255,.05); }
+/* Alt held: the clip would be pulled OUT into a new lane here, not joined to
+ * this one. Two different outcomes must not look the same before release. */
+.lane.drop-target.drop-extract { background: rgba(255,255,255,.05); outline: 1px dashed var(--accent); outline-offset: -2px; }
+/* per-clip mute/solo, shown only where the header's group buttons are ambiguous
+ * — i.e. once a lane holds more than one clip */
+.clip-ms { position: absolute; top: 3px; right: 4px; display: flex; gap: 3px; z-index: 5; }
+.clip-ms .pill { width: 15px; height: 15px; border-radius: 2px; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.18); font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.75); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.clip-ms .pill:hover { background: rgba(0,0,0,.65); color: #fff; }
+.clip-ms .pill.on-m { background: #80322E; color: #FFD3D5; border-color: transparent; }
+.clip-ms .pill.on-s { background: #B47B1A; color: #2A1A05; border-color: transparent; font-weight: 600; }
 .comp-end-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--border-default); z-index: 1; pointer-events: none; opacity: .6; }
+/* `top` is overridden inline when a lane stacks more than one clip: Timeline.jsx
+ * staggers the rows so the one underneath stays grabbable. CLIP_PAD there must
+ * stay equal to the 6px inset below. */
 .clip { position: absolute; top: 6px; bottom: 6px; border-radius: 4px; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); overflow: hidden; cursor: pointer; }
 .clip .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clip .metaline { font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.6); padding: 0 6px; }
@@ -239,8 +262,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip.error .lbl { color: var(--status-error); }
 .resize-handle { position: absolute; top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; }
 .resize-handle:hover { background: rgba(255,255,255,.10); }
-.playhead-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; z-index: 2; }
-.playhead-glow { position: absolute; top: 0; bottom: 0; width: 14px; background: linear-gradient(90deg, rgba(255,140,66,0), rgba(255,140,66,.18), rgba(255,140,66,0)); pointer-events: none; z-index: 1; }
+.playhead-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; z-index: 8; }
+.playhead-glow { position: absolute; top: 0; bottom: 0; width: 14px; background: linear-gradient(90deg, rgba(255,140,66,0), rgba(255,140,66,.18), rgba(255,140,66,0)); pointer-events: none; z-index: 7; }
 
 /* ---------- Inspector (RIGHT-DOCKED, 380px) ---------- */
 .pge-inspector { background: var(--bg-panel); border-left: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; min-width: 0; width: 100%; height: 100%; flex: 1; overflow: hidden; container-type: inline-size; container-name: insp; }
@@ -463,4 +486,29 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
   align-self: stretch;
   display: block;
   pointer-events: none;
+}
+
+/* Lane-move drag: the clip stays in its lane but faded, and a preview shows
+   where it would land in the lane under the cursor. */
+.clip.ghosting { opacity: .25; }
+.clip-preview { position: absolute; border-radius: 4px; pointer-events: none; opacity: .5; outline: 1px solid var(--accent); outline-offset: 0; z-index: 4; overflow: hidden; }
+.clip-preview.extract { outline-style: dashed; }
+.clip-preview .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drag-guide-v { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: .55; pointer-events: none; z-index: 6; }
+.drag-guide-h { position: absolute; left: 0; right: 0; height: 1px; background: var(--accent); opacity: .55; pointer-events: none; z-index: 6; }
+
+/* Riquadro informativo della clip, sul modello del tooltip di Reaper: fondo
+   chiaro, testo scuro, monospazio, multi-riga. Deliberatamente FUORI dalla
+   palette scura dell'editor — e' un overlay temporaneo del puntatore, e in
+   Reaper e' proprio la sua estraneita' a renderlo leggibile sopra qualsiasi
+   clip. position:fixed sulle coordinate del puntatore (nessun calcolo di
+   scroll) e pointer-events:none, perche' non deve mai rubare il drag. */
+.ptr-readout {
+  position: fixed; z-index: 60; pointer-events: none;
+  white-space: pre;
+  padding: 3px 7px; border-radius: 2px;
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 14px;
+  background: #FBF2CE; color: #1A1A1A;
+  border: 1px solid #8A8060;
+  box-shadow: 0 2px 6px rgba(0,0,0,.45);
 }

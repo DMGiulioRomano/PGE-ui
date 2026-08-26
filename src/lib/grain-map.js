@@ -281,7 +281,79 @@
     });
   }
 
+  /* ---------- posizione di lettura sotto il cursore ----------
+   * `ptr` nel sidecar e' l'output di PointerController.calculate(): posizione
+   * in secondi nel sample. Il motore la costruisce a tre strati
+   *   pointer_final = base(t) + voice_offset + deviazione_per_grano
+   * e i due addendi che sporcano la base si annullano da soli:
+   *   - voice_offset e' 0.0 per definizione sulla voce 0
+   *     (voice_pointer_strategy.py: "Voce 0 restituisce sempre 0.0");
+   *   - la deviazione ha centro inchiodato a zero (`pointer_deviation` ha
+   *     yaml_path '_dummy_fixed_zero_', default 0.0) e ampiezza presa da
+   *     `pointer.offset_range`: senza quella chiave e' esattamente 0.
+   * Quindi con offset_range assente il ptr della voce 0 E' la base, esatta, e
+   * non c'e' nulla da ricostruire: niente integrale di speed_ratio, nessuna
+   * copia in JS della matematica del motore.
+   *
+   * Con offset_range attivo la deviazione resta a media nulla e simmetrica, e
+   * la mediana su una finestrella di grani della voce 0 la annulla in media
+   * (errore limitato da offset_range * lunghezza finestra). E' una stima, e
+   * viene marcata come tale: `exact:false`.
+   *
+   * Costo: ricerca binaria su un array gia' in memoria (il sidecar che il
+   * layer grani carica comunque), piu' al massimo WALK confronti. Nessuna
+   * struttura nuova, nessuna allocazione per-mossa-del-mouse.  */
+  const WALK = 64;   // quanti vicini scorrere per trovare la voce 0
+  const MEDIAN_N = 9; // grani di voce 0 nella mediana, con jitter attivo
+
+  function readPositionAt(data, tRel, opts) {
+    const grains = data && data.grains;
+    if (!grains || !grains.length) return null;
+    const o = opts || {};
+    // Ultimo grano con t <= tRel (i grani sono ordinati per t crescente).
+    let lo = 0, hi = grains.length - 1, pivot = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (grains[mid].t <= tRel) { pivot = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    if (pivot < 0) pivot = 0;
+    // Le voci sono interlacciate nell'ordine per t, quindi la voce 0 e'
+    // tipicamente a pochi indici di distanza. Oltre WALK si rinuncia invece di
+    // scandire l'intero array a ogni mossa del mouse.
+    const need = o.jitter ? MEDIAN_N : 1;
+    const v0 = [];
+    for (let d = 0; d < WALK && v0.length < need; d++) {
+      if (d === 0) { if (isV0(grains[pivot])) v0.push(grains[pivot]); continue; }
+      const a = pivot - d, b = pivot + d;
+      if (a >= 0 && isV0(grains[a])) v0.push(grains[a]);
+      if (v0.length >= need) break;
+      if (b < grains.length && isV0(grains[b])) v0.push(grains[b]);
+    }
+    if (!v0.length) return null;
+    if (!o.jitter) return { pos: v0[0].ptr, exact: true };
+    // Il ptr e' modulato su sample_dur: vicino al wrap i valori si spezzano sui
+    // due bordi del file, e una mediana grezza si appoggia al bordo del gruppo
+    // piu' numeroso invece che al centro circolare. Si srotola intorno al pivot
+    // prima di ordinare.
+    const dur = o.sampleDur || 0;
+    const ref = v0[0].ptr;
+    const vals = v0.map(g => {
+      let x = g.ptr;
+      if (dur > 0) {
+        if (x - ref > dur / 2) x -= dur;
+        else if (ref - x > dur / 2) x += dur;
+      }
+      return x;
+    }).sort((a, b) => a - b);
+    let m = vals[(vals.length - 1) >> 1];
+    if (dur > 0) m = ((m % dur) + dur) % dur;
+    return { pos: m, exact: false };
+  }
+
+  function isV0(g) { return g && (g.v === 0 || g.v == null); }
+
   window.PGEGrainMap = {
+    readPositionAt,
     turbo,
     ratioToCents,
     pitchExtentCents,

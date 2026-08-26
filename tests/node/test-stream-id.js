@@ -50,12 +50,12 @@ console.log("\n── app.jsx wiring (source guard) ──");
   assert("no inline \"stream\" + counter allocator survives",
          !/"stream"\s*\+\s*counter/.test(appSrc));
   const calls = appSrc.match(/allocStreamIds\([^)]*\)/g) || [];
-  assert("both call sites (paste + create) go through allocStreamIds",
-         calls.length === 2, JSON.stringify(calls));
+  assert("ogni call site (paste + split + create) passa per allocStreamIds",
+         calls.length === 3, JSON.stringify(calls));
   // ownsStem, not hasStem: allocation must reject an id that owns a stem in
   // *any* format, or it recycles one whose .aif is on disk while the editor is
   // rendering .wav — and the ghost audio surfaces the moment the format flips.
-  assert("both pass the format-agnostic ownership oracle",
+  assert("tutti passano l'oracolo di possesso format-agnostic",
          calls.every(c => /ownsStem/.test(c)), JSON.stringify(calls));
 }
 

@@ -41,25 +41,52 @@
     return domain === "direction" ? snapDirection : null;
   }
 
+  /* Il rescale NON tappa la x a 1: chi sfora resta fuori, ed e' `truncateEnvArray`
+   * a decidere cosa farne. Il tappo c'era, e mangiava esattamente il dato che
+   * serve al taglio: accorciando uno stream con il freeze, ogni breakpoint oltre
+   * la nuova fine finiva impilato a x=1 (`[[0,0],[0.5,1],[1,0]]` con ratio 2 →
+   * `[[0,0],[1,1],[1,0]]`), e il truncate che segue non aveva piu' modo di
+   * distinguerlo da un envelope legittimo che finisce a 1. Risultato: due punti
+   * sovrapposti alla fine invece di uno interpolato al bordo.
+   * Una x > 1 e' quindi uno stato TRANSITORIO e legittimo — vive fra il rescale
+   * e il truncate, cioe' dentro un gesto di resize — non un valore da salvare.
+   * Il commit passa sempre per truncateEnvArray (che interpola il punto di
+   * chiusura) o per sliceEnvArray (che sposta l'origine). */
   function rescaleEnvArray(arr, ratio) {
     // object-form {type, points} envelope
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return { ...arr, points: arr.points.map(p => [Math.min(1, +(p[0] * ratio).toFixed(5)), p[1]]) };
+      return { ...arr, points: arr.points.map(p => [+(p[0] * ratio).toFixed(5), p[1]]) };
     }
     if (!Array.isArray(arr)) return arr;
     return arr.map(item => {
       if (PGEEnv.isBreakpoint(item)) {
-        const c = [...item]; c[0] = Math.min(1, +(c[0] * ratio).toFixed(5)); return c;
+        const c = [...item]; c[0] = +(c[0] * ratio).toFixed(5); return c;
       }
       if (PGEEnv.isBPGroup(item)) {
         // BP group [points, interp]: i punti hanno tempi assoluti come i BP
         return [rescaleEnvArray(item[0], ratio), item[1]];
       }
       if (PGEEnv.isCompactBlock(item)) {
-        const c = [...item]; c[1] = Math.min(1, +(c[1] * ratio).toFixed(5)); return c;
+        const c = [...item]; c[1] = +(c[1] * ratio).toFixed(5); return c;
       }
       return item;
     });
+  }
+
+  /* Il valore di un envelope in un punto INTERNO a un segmento, l'unico y che
+   * il taglio calcola invece di sceglierlo (il punto di chiusura del truncate,
+   * quello di apertura dello slice). Il tag interp sta sul punto di PARTENZA e
+   * governa il segmento in USCITA (envelope-loops.js:expandMixed), quindi e'
+   * `prev` a dire come si arriva a `at`:
+   *   step  → il valore si tiene, e interpolarlo linearmente sarebbe un salto
+   *           che nell'envelope non c'e';
+   *   cubic → qui resta lineare. La PCHIP vera vuole i due punti oltre il
+   *           segmento (EnvelopeEditor.valueAtTime) e sbaglierebbe comunque la
+   *           forma della meta' che resta: l'errore e' su un punto solo. */
+  function boundaryY(prevX, prevY, prevInterp, x, y, at) {
+    if (prevInterp === "step") return prevY;
+    if (!(x > prevX)) return y;
+    return prevY + (y - prevY) * ((at - prevX) / (x - prevX));
   }
 
   // `snap`, quando presente, riscrive ogni y CALCOLATO da questa funzione (il
@@ -74,7 +101,7 @@
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     const result = [];
-    let prevX = 0, prevY = null;
+    let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
 
     for (const item of arr) {
@@ -82,12 +109,14 @@
         const [x, y] = item;
         if (x <= 1.0) {
           result.push(item);
-          prevX = x; prevY = y;
+          prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
         } else {
-          // first BP past boundary — interpolate closing BP at x=1.0
+          // first BP past boundary — interpolate closing BP at x=1.0.
+          // Se il punto precedente sta gia' esattamente sul bordo l'envelope
+          // e' gia' chiuso: un punto interpolato li' sarebbe un doppione.
+          if (prevY !== null && prevX >= 1.0) break;
           if (prevY !== null && prevX < x) {
-            const t = (1.0 - prevX) / (x - prevX);
-            result.push([1.0, close(prevY + (y - prevY) * t)]);
+            result.push([1.0, close(boundaryY(prevX, prevY, prevInterp, x, y, 1.0))]);
           } else {
             result.push([1.0, close(y)]);
           }
@@ -101,7 +130,10 @@
         if (inner.length >= 2) result.push([inner, item[1]]);
         else if (inner.length === 1) result.push(inner[0]);
         const lastP = inner[inner.length - 1];
-        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; }
+        // Il segmento in uscita dall'ultimo punto di un gruppo segue l'interp
+        // globale, non quello di zona (expandMixed): solo un tag esplicito
+        // sul punto conta.
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = typeof lastP[2] === "string" ? lastP[2] : null; }
         if (item[0].some(p => p[0] > 1.0)) break; // il gruppo è stato tagliato
       } else if (PGEEnv.isCompactBlock(item)) {
         if (prevX >= 1.0) break; // block starts beyond boundary — drop
@@ -114,6 +146,7 @@
         result.push(item);
         prevX = item[1];
         prevY = item[0][item[0].length - 1][1]; // last pattern point y
+        prevInterp = null;
       } else {
         result.push(item);
       }
@@ -311,6 +344,89 @@
       stream.voices && stream.voices.pan          && stream.voices.pan.spreadEnv,
     ];
     return fields.some(f => f && envArrayWouldTruncate(f, ratio));
+  }
+
+  /* ---------- slice: la META' DOPO il taglio (split al cursore) ----------
+   * Il gemello di rescale+truncate. Quello tiene la testa dello stream e
+   * scarta la coda; questo tiene la coda: i breakpoint restano dove sono in
+   * tempo ASSOLUTO, ma l'origine si sposta sul taglio.
+   *
+   *   x' = (x - cut) / (1 - cut)      con cut = tempo di taglio normalizzato
+   *
+   * cioe' la stessa traslazione+riscalatura che il freeze fa sull'altra meta',
+   * scritta una volta sola. Il primo breakpoint dopo il taglio si porta dietro
+   * un punto interpolato a x'=0, altrimenti il valore al taglio salterebbe.
+   * Se dopo il taglio non resta nulla, l'inviluppo diventa il valore tenuto
+   * (un solo punto a 0): un array vuoto il motore non lo accetta.
+   *
+   * I blocchi compatti restano fuori: il taglio a meta' di un blocco non e'
+   * definito (n_reps e ratio descrivono un ciclo, non una lista di punti).
+   * `sliceEnvArray` risponde null su un array che ne contiene uno, e
+   * `sliceStreamEnvelopes` lascia quel campo intatto contandolo in `skipped` —
+   * chi chiama lo dice all'utente invece di riscrivere il blocco a caso. */
+  function sliceEnvArray(arr, cut, snap, inGroup) {
+    if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+      const pts = sliceEnvArray(arr.points, cut, snap);
+      return pts === null ? null : { ...arr, points: pts };
+    }
+    if (!Array.isArray(arr) || !arr.length) return arr;
+    if (arr.some(PGEEnv.isCompactBlock)) return null;
+    const k = 1 / (1 - cut);
+    const close = (y) => (snap ? snap(y) : +y.toFixed(4));
+    const shift = (x) => Math.max(0, +((x - cut) * k).toFixed(5));
+    const out = [];
+    let prevX = null, prevY = null, prevInterp = null;  // ultimo punto PRIMA del taglio
+    for (const item of arr) {
+      if (PGEEnv.isBPGroup(item)) {
+        // Il gruppo si taglia con le stesse regole, ma da dentro: `inGroup`
+        // gli toglie il punto tenuto di ripiego, altrimenti un gruppo che sta
+        // tutto prima del taglio riaprirebbe l'envelope con un [0, y] che non
+        // e' il valore al taglio (fra il gruppo e il taglio ci puo' essere un
+        // altro breakpoint).
+        const inner = sliceEnvArray(item[0], cut, snap, true);
+        if (inner === null) return null;
+        if (inner.length >= 2) out.push([inner, item[1]]);
+        else if (inner.length === 1) out.push(inner[0]);
+        const lastP = item[0][item[0].length - 1];
+        prevX = lastP[0]; prevY = lastP[1];
+        prevInterp = typeof lastP[2] === "string" ? lastP[2] : null;
+        continue;
+      }
+      if (!PGEEnv.isBreakpoint(item)) { out.push(item); continue; }
+      const [x, y] = item;
+      if (x < cut) {
+        prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
+        continue;
+      }
+      // Primo punto oltre il taglio: davanti gli va il valore AL taglio, o la
+      // coda partirebbe dal punto sbagliato. Si porta dietro l'interp del
+      // segmento che stiamo tagliando a meta', che e' quello del punto prima.
+      if (!out.length && prevX !== null && x > cut) {
+        const opening = [0, close(boundaryY(prevX, prevY, prevInterp, x, y, cut))];
+        if (prevInterp) opening.push(prevInterp);
+        out.push(opening);
+      }
+      const moved = [...item];
+      moved[0] = shift(x);
+      out.push(moved);
+    }
+    // Dopo il taglio non e' rimasto niente: l'envelope tiene l'ultimo valore.
+    // Un array vuoto il motore non lo accetta.
+    if (!out.length && prevY !== null && !inGroup) out.push([0, prevY]);
+    return out;
+  }
+
+  // cut e' normalizzato sulla durata VECCHIA dello stream (0 < cut < 1).
+  // Ritorna {stream, skipped}: `skipped` conta i campi lasciati intatti
+  // perche' contengono un blocco compatto.
+  function sliceStreamEnvelopes(stream, cut) {
+    let skipped = 0;
+    const out = _applyEnvFields(stream, (arr, domain) => {
+      const sliced = sliceEnvArray(arr, cut, snapForDomain(domain));
+      if (sliced === null) { skipped++; return arr; }
+      return sliced;
+    });
+    return { stream: out, skipped };
   }
 
   // Auto-fit the envelope Y window to the actual point values, for readability.
@@ -694,6 +810,8 @@
     rescaleStreamEnvelopes,
     truncateStreamEnvelopes,
     streamWouldTruncate,
+    sliceEnvArray,
+    sliceStreamEnvelopes,
     nudgeBreakpoint,
     computeYFit,
     loopEnvMax,

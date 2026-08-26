@@ -63,7 +63,7 @@ const TWEAK_DEFAULTS = {
    this file. Only the stream-level helpers are used here; the per-array helpers
    (rescaleEnvArray / truncateEnvArray / envArrayWouldTruncate / _applyEnvFields)
    live in that module and are exercised by tests/node/test-envelope-utils.js. #44 */
-const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate } = window.PGEEnvUtils;
+const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate, sliceStreamEnvelopes } = window.PGEEnvUtils;
 
 // Blank in-memory project used as the editor's initial state before the real
 // project is loaded from the server (server.py lists configs/*.yml on boot).
@@ -194,6 +194,11 @@ function App() {
   });
 
   const [selectedIds, setSelectedIds] = useStateApp([]);
+  // The selected LANE, when the selection was made on a track header. Distinct
+  // from `selectedIds` on purpose: it is the only handle on an empty lane (it
+  // has no clip to select), and it is what Delete needs to tell "remove these
+  // clips" from "remove this track".
+  const [selectedTrackId, setSelectedTrackId] = useStateApp(null);
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const anchorIdRef = React.useRef(null);
   const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
@@ -592,6 +597,20 @@ function App() {
     }
   }, [lastRenderedFps]);
 
+  /* Chiave stabile per i tre effetti che caricano media per stream (peaks,
+   * spettrogrammi, grani). Prima dipendevano da `data.streams`, cioe'
+   * dall'IDENTITA' dell'array: e lo stato e' immutabile, quindi ogni gesto che
+   * ricompone la lista ne fabbrica una nuova anche quando non cambia un dato.
+   * `applyTracks` la ricompone a ogni spostamento fra corsie — stessi oggetti,
+   * stesso contenuto, array nuovo — e faceva ripartire il caricamento di TUTTI
+   * gli stem, ognuno con la sua setState. A questi effetti interessa quali
+   * stream esistono e quanto sono lunghi, non in che ordine stanno: `onset` sta
+   * deliberatamente fuori, muovere una clip nel tempo non tocca il suo audio.
+   * Stesso idioma degli effetti mute/solo e onset/duration qui sopra. */
+  const streamMediaKey = useMemoApp(
+    () => data.streams.map(s => `${s.id}:${s.duration}:${s.sample}`).join("|"),
+    [data.streams]);
+
   // Load waveform peaks for clips. Lazy-ish: decode each rendered stem once
   // (cached in the engine by url#fingerprint) and stash its peak array in
   // `waveforms` for the Timeline to draw. Only streams with a rendered stem
@@ -623,12 +642,15 @@ function App() {
         const peaksFp = (last || currentFps[s.id]) + "#r" + rev;
         try {
           const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: peaksFp, url, peaksUrl });
-          if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
+          // Stesso oggetto peaks -> stesso state: senza questa guardia ogni giro
+          // dell'effetto produceva una mappa nuova, quindi un render, per un
+          // dato identico. E' la meta' del ciclo che bloccava la pagina.
+          if (!cancelled && peaks) setWaveforms(w => w[s.id] === peaks ? w : ({ ...w, [s.id]: peaks }));
         } catch (e) { /* stem missing or undecodable — leave clip flat */ }
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -653,14 +675,40 @@ function App() {
           const res = await fetch(backend.render.spectrogramUrl(basename, s.id, tweaks.spectrogramScale || "linear"));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = await res.arrayBuffer();
-          if (!cancelled && buf) setSpectrograms(m => ({ ...m, [s.id]: buf }));
+          if (!cancelled && buf) setSpectrograms(m => m[s.id] === buf ? m : ({ ...m, [s.id]: buf }));
         } catch (e) { /* stem missing / numpy absent — leave clip without spectrogram */ }
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
+  /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
+   * timeline. L'effetto qui sotto carica i grani di tutti gli stream, ma solo
+   * col layer grani acceso: il readout non ha motivo di dipendere da quel
+   * toggle — il file e' su disco appena il motore ha renderizzato lo stream.
+   * Scrive nella stessa mappa e negli stessi ref del caricamento in blocco,
+   * cosi' i due non si rifanno il lavoro a vicenda; `grainRegenRef` resta la
+   * fonte di verita' sullo stale, quindi un nuovo render lo fa rifetchare. */
+  const grainReqRef = useRefApp(new Set());
+  function ensureGrainData(id) {
+    const stale = grainRegenRef.current.has(id);
+    if ((grainData[id] && !stale) || grainReqRef.current.has(id)) return;
+    const backend = window.PGEBackend.current;
+    if (!backend.render.loadGrainData || !hasStemFor(id)) return;
+    grainReqRef.current.add(id);
+    const basename = activeProject.replace(/\.yml$/, "");
+    backend.render.loadGrainData(basename, id).then(j => {
+      grainReqRef.current.delete(id);
+      if (!j) return;
+      const GM = window.PGEGrainMap;
+      if (GM) j._ext = GM.computeExtents(j.grains || []);
+      setGrainData(m => ({ ...m, [id]: j }));
+      grainLoadedRef.current.add(id);
+      grainRegenRef.current.delete(id);
+    }).catch(() => { grainReqRef.current.delete(id); });
+  }
+
   // canvas inside clips and the score panel. Same lazy trigger as peaks/spectro:
   // refetches on fingerprint change (each stream-done). Gated by either the
   // in-clip toggle or the score panel being open.
@@ -726,7 +774,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
 
   useEffectApp(() => {
     function onSeek(e) {
@@ -778,6 +826,25 @@ function App() {
         targets.forEach(s => updateStream(s.id, { solo: !allSoloed }));
         return;
       }
+      if (matchShortcut(e, tweaks.shortcutSplit || "d") && selectedIds.length > 0) {
+        e.preventDefault();
+        splitAtPlayhead();
+        return;
+      }
+      // Alt+↑/↓ (rebindable): move the selected clips one lane. Placed before
+      // the ←/→ nudge and gated on a full shortcut match, so a rebind moves the
+      // whole behaviour — including the Timeline's decision to stay out of it.
+      if (selectedIds.length > 0 &&
+          (matchShortcut(e, tweaks.shortcutMoveLaneUp || MOVE_LANE_UP) ||
+           matchShortcut(e, tweaks.shortcutMoveLaneDown || MOVE_LANE_DOWN))) {
+        e.preventDefault();
+        if (!arrowGestureRef.current) {
+          arrowGestureRef.current = true;
+          window.PGEHistory && window.PGEHistory.beginGesture();
+        }
+        moveSelectionByLane(matchShortcut(e, tweaks.shortcutMoveLaneUp || MOVE_LANE_UP) ? -1 : 1);
+        return;
+      }
       if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selectedIds.length > 0) {
         // Defer to the envelope editor when it owns the arrows (a breakpoint is
         // selected and the pointer last landed inside it) — ←/→ nudges the BP.
@@ -804,6 +871,14 @@ function App() {
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && selectedTrackId && !e.defaultPrevented) {
+        // A lane was selected from its header: Delete takes the lane and every
+        // clip on it. No envelope-editor guard here — `defaultPrevented` is
+        // already the one that matters (the editor preventDefaults only when a
+        // breakpoint or a loop is actually selected).
+        e.preventDefault();
+        deleteTrack(selectedTrackId);
+      }
       else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && !e.defaultPrevented) {
         // Envelope editor is visible and showing this stream — let it handle Delete (BP deletion)
         if (tweaks.showEnvelopeEditor !== false && selected()) return;
@@ -812,7 +887,7 @@ function App() {
       }
     }
     function onKeyUp(e) {
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && arrowGestureRef.current) {
+      if (e.key.startsWith("Arrow") && arrowGestureRef.current) {
         arrowGestureRef.current = false;
         window.PGEHistory && window.PGEHistory.endGesture();
       }
@@ -839,7 +914,14 @@ function App() {
   function copySelectedStreams() {
     const toCopy = data.streams.filter(s => selectedIds.includes(s.id));
     if (!toCopy.length) return;
-    clipboardRef.current = JSON.parse(JSON.stringify(toCopy));
+    // `_srcId` survives the deep copy so paste can find the lane to land in
+    // even after the id has been reallocated (it is stripped on paste).
+    // `_srcProject` scopes it: the clipboard outlives a project switch (on
+    // purpose — copying between compositions is the point), and default ids
+    // repeat across files, so pasting into another project would otherwise land
+    // on whatever unrelated stream happens to be called `stream1` there.
+    clipboardRef.current = JSON.parse(JSON.stringify(toCopy))
+      .map(s => ({ ...s, _srcId: s.id, _srcProject: activeProject }));
   }
   function pasteStreams() {
     const copied = clipboardRef.current;
@@ -854,12 +936,127 @@ function App() {
       const ids = window.PGEYaml.allocStreamIds(d.streams, copied.length, ownsStemFor);
       const pasted = copied.map((s, i) => {
         newIds.push(ids[i]);
-        return { ...JSON.parse(JSON.stringify(s)), id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+        // `_srcId` is clipboard bookkeeping, not stream data: it must not reach
+        // the model, or it would sit inside the stem fingerprint.
+        const { _srcId, _srcProject, ...body } = JSON.parse(JSON.stringify(s));
+        return { ...body, id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
-      return { ...d, streams: [...d.streams, ...pasted] };
+      const withPaste = { ...d, streams: [...d.streams, ...pasted] };
+      // The copy joins the lane its original sits in (#141) — no similarity
+      // heuristic, just the track that already exists. `_srcId` is recorded at
+      // copy time because the source may have been deleted since; when it no
+      // longer resolves, `addStreamToTrackOf` opens a lane at the end, which is
+      // what paste did before tracks existed. Out of its own project the id
+      // means nothing, so ask for that fallback outright rather than matching a
+      // namesake.
+      let tr = TR.deriveTracks(withPaste);
+      copied.forEach((s, i) => {
+        const src = s._srcProject === activeProject ? (s._srcId || s.id) : null;
+        tr = TR.addStreamToTrackOf(tr, src, ids[i]);
+      });
+      return TR.applyTracks(withPaste, tr);
     });
     setSelectedIds(newIds);
     setDirty(true);
+  }
+  /* ---- split al cursore (tasto rimappabile, default "d") ----
+   * Il taglio di Reaper: la clip selezionata diventa due stream, la testa e la
+   * coda, e il suono non cambia. Cambiano solo i due modi in cui una meta' puo'
+   * mentire:
+   *   - la testa tiene gli inviluppi in posizione ASSOLUTA (il freeze del
+   *     lucchetto, imposto qui a prescindere dal toggle: uno stretch
+   *     riproporzionerebbe le curve e il taglio non sarebbe piu' un taglio);
+   *   - la coda deve ripartire a leggere il sample dove la testa aveva
+   *     lasciato, e quel punto lo sa solo il motore — e' il `ptr` del sidecar
+   *     dei grani, lo stesso numero che il riquadro sotto il cursore mostra
+   *     come "Read". Senza sidecar non lo si inventa: lo split si rifiuta.
+   * `pointer.start` va scritto nell'unita' in vigore (loop_unit o time_mode):
+   * ogni stream nato nell'editor e' `time_mode: normalized`, dove start vive in
+   * [0,1] del sample — scriverci dentro dei secondi lo manderebbe fuori file. */
+  function splitAtPlayhead() {
+    const t = time;
+    const R = (x) => +x.toFixed(4);
+    const targets = data.streams.filter(s =>
+      selectedIds.includes(s.id) && t > s.onset + 1e-4 && t < s.onset + s.duration - 1e-4);
+    if (!targets.length) {
+      pushToast({ kind: "warn", title: "Niente da tagliare",
+                  message: "il cursore non attraversa nessuna clip selezionata", duration: 3000 });
+      return;
+    }
+    const cuts = [];
+    for (const s of targets) {
+      ensureGrainData(s.id);   // se il sidecar non e' ancora in memoria, chiedilo
+      const gd = grainData[s.id];
+      const sampleDur = (mediaList.files || []).find(f => f.name === s.sample)?.duration || 0;
+      const ptr = gd && window.PGEGrainMap.readPositionAt(gd, t - s.onset, {
+        jitter: !!(s.pointer && (s.pointer.offsetRange != null || s.pointer.offsetRangeEnv)),
+        sampleDur,
+      });
+      if (!ptr) {
+        pushToast({ kind: "warn", title: `Split rifiutato: ${s.id}`,
+                    message: "posizione di lettura sconosciuta — renderizza lo stream e riprova",
+                    duration: 5000 });
+        return;
+      }
+      const unit = window.PGEEnvUtils.loopUnitInfo(s).unit;
+      if (unit === "normalized" && !(sampleDur > 0)) {
+        pushToast({ kind: "warn", title: `Split rifiutato: ${s.id}`,
+                    message: "durata del sample sconosciuta: pointer.start e' normalizzato e non e' convertibile",
+                    duration: 5000 });
+        return;
+      }
+      cuts.push({ s, start: R(unit === "normalized" ? ptr.pos / sampleDur : ptr.pos), exact: ptr.exact });
+    }
+    const halves = new Map();   // srcId → {head, tail}
+    let skipped = 0;
+    for (const { s, start } of cuts) {
+      const cutRel = t - s.onset;
+      const cutNorm = cutRel / s.duration;
+      const head = {
+        ...truncateStreamEnvelopes(rescaleStreamEnvelopes(s, s.duration, cutRel)),
+        duration: R(cutRel), durationImplicit: false, durationUnresolved: false,
+      };
+      const sliced = sliceStreamEnvelopes(s, cutNorm);
+      skipped += sliced.skipped;
+      const tail = {
+        ...sliced.stream,
+        onset: R(t), duration: R(s.duration - cutRel),
+        durationImplicit: false, durationUnresolved: false,
+        pointer: { ...(s.pointer || {}), start },
+      };
+      halves.set(s.id, { head, tail });
+    }
+    const newIds = [];
+    setData(d => {
+      const ids = window.PGEYaml.allocStreamIds(d.streams, halves.size, ownsStemFor);
+      const tails = [];
+      let i = 0;
+      const streams = d.streams.map(s => {
+        const h = halves.get(s.id);
+        if (!h) return s;
+        const id = ids[i++];
+        newIds.push(id);
+        tails.push({ src: s.id, stream: { ...h.tail, id } });
+        return h.head;
+      });
+      const withTails = { ...d, streams: [...streams, ...tails.map(x => x.stream)] };
+      // La coda nasce nella corsia della testa: e' la stessa clip, tagliata.
+      let tr = TR.deriveTracks(withTails);
+      tails.forEach(x => { tr = TR.addStreamToTrackOf(tr, x.src, x.stream.id); });
+      return TR.applyTracks(withTails, tr);
+    });
+    setSelectedIds([...targets.map(s => s.id), ...newIds]);
+    setDirty(true);
+    if (cuts.some(c => !c.exact)) {
+      pushToast({ kind: "warn", title: "pointer.start e' una stima",
+                  message: "pointer.offset_range devia ogni grano: la posizione di lettura e' la mediana dei grani vicini",
+                  duration: 5000 });
+    }
+    if (skipped) {
+      pushToast({ kind: "warn", title: "Blocchi compatti non tagliati",
+                  message: `${skipped} inviluppi contengono un blocco compatto e sono rimasti invariati nella coda`,
+                  duration: 5000 });
+    }
   }
   function updateStream(id, patch) {
     if (freezeEnvOnResize && patch.duration != null) {
@@ -927,15 +1124,145 @@ function App() {
     });
     setDirty(true);
   }
-  function reorderStreams(srcIdx, dstIdx) {
-    if (srcIdx === dstIdx) return;
+  /* ============ Tracks (issue #141) ============
+   * A lane is a track, and a track can hold several streams. The grouping is a
+   * single TOP-LEVEL `ui_tracks` key riding in `data._extra` — never a
+   * per-stream key, which would enter the stem fingerprint and make
+   * reorganizing lanes force a re-render that changes no sample. All the logic
+   * is in tracks.js; app.jsx only derives, mutates, applies. */
+  const TR = window.PGETracks;
+  const tracks = useMemoApp(() => TR.deriveTracks(data), [data]);
+
+  /* Every track mutation goes through here so the write path is one place:
+   * `applyTracks` reorders `data.streams` into visual order and writes (or
+   * drops) `ui_tracks`. It never rebuilds a stream object, so no stem goes
+   * stale. */
+  function mutateTracks(fn) {
+    // `setDirty` stays outside and unconditional, matching every other mutation
+    // in this file. It cannot move inside: an updater is not a place to run
+    // effects (that is the very defect this issue removed from Timeline.jsx),
+    // and a flag read back after `setData` would be stale — React runs the
+    // updater lazily. An over-eager dirty flag costs a redundant save; a missed
+    // one loses work, so the unconditional side is the safe one. `fn` returning
+    // null or `cur` still short-circuits the data change itself.
     setData(d => {
-      const arr = [...d.streams];
-      const [m] = arr.splice(srcIdx, 1);
-      arr.splice(dstIdx, 0, m);
-      return { ...d, streams: arr };
+      const cur = TR.deriveTracks(d);
+      const next = fn(cur, d);
+      if (!next || next === cur) return d;
+      return TR.applyTracks(d, next);
     });
     setDirty(true);
+  }
+  function reorderTracks(srcIdx, dstIdx) {
+    if (srcIdx === dstIdx) return;
+    mutateTracks(t => TR.reorderTracks(t, srcIdx, dstIdx));
+  }
+  function renameTrack(trackId, name) {
+    const cur = tracks.find(x => x.id === trackId);
+    // The rename lands on blur, so it fires even when nothing was typed:
+    // bail before mutateTracks rather than dirtying the project for nothing.
+    if (!cur || !String(name).trim() || String(name).trim() === cur.name) return;
+    mutateTracks(t => TR.renameTrack(t, trackId, name));
+  }
+  /* A lane with no clips: a track is an entity of its own, so it can be created
+   * empty and filled later by dropping clips (or a sample) on it. It also means
+   * a lane emptied by a move or a delete stays put — only this button removes
+   * one. `addTrack` materializes `ui_tracks` (an empty lane is not trivial). */
+  function addTrack() { mutateTracks(t => TR.addTrack(t)); }
+  function removeTrack(trackId) { mutateTracks(t => TR.removeTrack(t, trackId)); }
+  /* Vertical drag of a clip: join the lane it was dropped on, or (Alt) pull it
+   * out into a lane of its own at that position. */
+  function moveStreamsToLane(streamIds, dstLaneIdx, opts) {
+    mutateTracks(t => TR.moveStreams(t, streamIds, dstLaneIdx, opts));
+  }
+  /* Keyboard twin of the vertical clip drag: move the whole selection one lane
+   * up or down. Like the drag it is a lane DELTA, not a destination — every
+   * clip keeps its offset from the anchor, so a selection spanning two lanes
+   * stays spread over two lanes. The clamps differ from the drag's on purpose:
+   * upward `moveStreams` already stops at lane 0, and downward a keypress must
+   * NOT grow the layout the way a drop does — holding the key would otherwise
+   * spawn empty lanes without end. So the move is refused once the lowest
+   * selected clip sits on the last lane. Use the drag (or `add track`) to
+   * create one. */
+  function moveSelectionByLane(dir) {
+    if (!selectedIds.length) return;
+    const laneOf = new Map();
+    tracks.forEach((t, i) => t.streamIds.forEach(id => laneOf.set(id, i)));
+    const anchor = selectedIds.find(id => laneOf.has(id));
+    if (anchor == null) return;
+    const lanes = selectedIds.filter(id => laneOf.has(id)).map(id => laneOf.get(id));
+    if (dir > 0 && Math.max(...lanes) >= tracks.length - 1) return;
+    moveStreamsToLane(selectedIds, laneOf.get(anchor) + dir, { anchor });
+  }
+  /* Fan-out: the header's M/S write the per-stream keys the engine actually
+   * reads. Partially-set groups go fully on, so one click always has an effect.
+   * The mute/solo write is NOT a track mutation — it must not rewrite
+   * `ui_tracks` — so it goes straight to the streams. */
+  function setTrackFlag(trackId, key) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    const ids = new Set(t.streamIds);
+    setData(d => {
+      // Both the read (is the group already all-on?) and the write come from
+      // the updater's `d`. Deriving `on` from the render closure instead would
+      // decide against a snapshot that a queued update may already have moved.
+      const group = d.streams.filter(s => ids.has(s.id));
+      if (!group.length) return d;
+      const on = !group.every(s => s[key]);
+      return { ...d, streams: d.streams.map(s => ids.has(s.id) ? { ...s, [key]: on } : s) };
+    });
+    setDirty(true);
+  }
+  /* Renaming a stream is an IDENTITY change, not a patch, so it does not go
+   * through `updateStream`: the id is the stem filename, the cache-manifest
+   * key, the RNG identity and what `ui_tracks` points at. Validate first, then
+   * rewrite the stream and every layout reference in one step.
+   *
+   * The sound is deliberately NOT preserved. `rng_id = rng_group or stream_id`
+   * (engine shared/seeding.py), so a renamed stream reseeds and draws different
+   * grains. Writing `rng_group: <old id>` would pin it bit-for-bit, at the price
+   * of a YAML carrying the old name forever and of a `rng_group` that means
+   * "renamed" instead of "shares an RNG" — we would rather a rename be a rename.
+   * The id is hashed on both sides, so the stem goes stale on its own: the 🟡
+   * dot says so and the next render is the whole story.
+   *
+   * Returns null on success, or a message for the field to show. */
+  function renameStream(oldId, rawName) {
+    const newId = String(rawName == null ? "" : rawName).trim();
+    if (!newId || newId === oldId) return null;
+    // The id becomes a filename (`<basename>__<id>.<ext>`) and a path segment
+    // on the way to server.py. Keep it to what is safe in both, and refuse a
+    // leading dot so it cannot land as a hidden file.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newId))
+      return "letters, digits, . _ - only, and must start with a letter or digit";
+    if (data.streams.some(s => s.id === newId)) return `"${newId}" is already a stream`;
+    // A stem still on disk under that name would be picked up as this stream's
+    // audio the moment it plays. Same hazard `allocStreamIds` guards against,
+    // same oracle — and it is format-agnostic on purpose.
+    if (ownsStemFor(newId)) return `a stem on disk still claims "${newId}"`;
+
+    setData(d => {
+      // Re-checked inside the updater: `data` in the closure may be a snapshot
+      // behind, and this is the one mutation where a stale read would produce
+      // two streams sharing an id.
+      if (!d.streams.some(s => s.id === oldId) || d.streams.some(s => s.id === newId)) return d;
+      const next = { ...d, streams: d.streams.map(s => s.id === oldId ? { ...s, id: newId } : s) };
+      return TR.applyTracks(next, TR.renameStreamId(TR.deriveTracks(d), oldId, newId));
+    });
+    setSelectedIds(ids => ids.map(x => x === oldId ? newId : x));
+    if (anchorIdRef.current === oldId) anchorIdRef.current = newId;
+    // The render sidecars are keyed by stream id. Nothing reads the old key any
+    // more, but leaving it means a stream that is one day allocated that id
+    // would show a dead stream's waveform.
+    const drop = (m) => { if (!(oldId in m)) return m; const n = { ...m }; delete n[oldId]; return n; };
+    setWaveforms(drop); setSpectrograms(drop); setGrainData(drop);
+    // A copy taken before the rename still points at the old id. Left alone it
+    // would stop resolving and the paste would silently open a new lane instead
+    // of joining the source's — `_srcId` has to keep naming the same stream.
+    clipboardRef.current = clipboardRef.current.map(s =>
+      (s._srcId === oldId && s._srcProject === activeProject) ? { ...s, _srcId: newId } : s);
+    setDirty(true);
+    return null;
   }
   function deleteStream(id) {
     if (!id) return;
@@ -946,12 +1273,23 @@ function App() {
     // that ids are never recycled (allocStreamIds) a leftover entry can never
     // be picked up by a different stream. It is simply what this stream had,
     // waiting for it if the delete is undone.
-    setData(d => ({ ...d, streams: d.streams.filter(s => s.id !== id) }));
+    setData(d => {
+      // The layout is read BEFORE the stream goes, and `removeStreams` empties
+      // its lane without removing it. Deriving from the post-delete data
+      // instead would lose the lane outright: with no `ui_tracks` in the file
+      // the lanes ARE the streams, so the only record of the lane is the one
+      // this call has to write.
+      const tracks = TR.removeStreams(TR.deriveTracks(d), [id]);
+      const next = { ...d, streams: d.streams.filter(s => s.id !== id) };
+      return TR.applyTracks(next, tracks);
+    });
     if (selectedIds.includes(id) && selectedIds.length === 1) setInspectorOpen(false);
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
   }
-  function createStreamFromSample({ sample, onset = 0, laneIdx }) {
+  /* `trackId` (a sample dropped on an EMPTY lane) fills that lane; otherwise the
+   * new stream gets a lane of its own at `laneIdx`. */
+  function createStreamFromSample({ sample, onset = 0, laneIdx, trackId }) {
     const media = mediaList.files || [];
     const sampleName = sample || (media[0] && media[0].name) || "";
     const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
@@ -977,32 +1315,76 @@ function App() {
         pitch: { semitones: 0, range: null },
         voices: { num: 1 },
       };
-      const arr = [...d.streams];
-      if (laneIdx != null && laneIdx <= arr.length) arr.splice(laneIdx, 0, newStream);
-      else arr.push(newStream);
-      return { ...d, streams: arr };
+      const withNew = { ...d, streams: [...d.streams, newStream] };
+      // `laneIdx` counts LANES, not streams: dropped below a three-clip lane the
+      // new stream belongs one lane down, not three streams down.
+      const base = TR.deriveTracks(withNew).filter(t => !t.streamIds.includes(newId));
+      const target = trackId != null && base.find(t => t.id === trackId);
+      const tr = target
+        ? base.map(t => t.id === trackId ? { ...t, streamIds: [...t.streamIds, newId] } : t)
+        : TR.insertStreamTrack(base, newId, laneIdx);
+      return TR.applyTracks(withNew, tr);
     });
     setDirty(true);
   }
+  /* `id` may be a single stream id (a clip) or a list (a lane header, which
+   * stands for every stream on the track). */
   function selectClip(id, multi) {
+    // Clicking a clip is a clip selection, never a lane one — `selectTrack`
+    // re-sets it right after, and the later setState wins.
+    setSelectedTrackId(null);
+    const ids = Array.isArray(id) ? id : [id];
+    if (!ids.length) return;
     if (multi) {
-      setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+      setSelectedIds(prev => ids.every(x => prev.includes(x))
+        ? prev.filter(x => !ids.includes(x))
+        : [...new Set([...prev, ...ids])]);
     } else {
-      anchorIdRef.current = id;
-      setSelectedIds([id]);
+      anchorIdRef.current = ids[0];
+      setSelectedIds(ids);
     }
   }
+  /* Clicking a track header selects the LANE: its clips light up as before, and
+   * the lane itself becomes the target of Delete. Ctrl/Cmd-click stays a plain
+   * multi-clip toggle — an additive selection is about clips, not lanes. */
+  function selectTrack(trackId, multi) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    if (t.streamIds.length) selectClip(t.streamIds, multi);
+    else if (!multi) setSelectedIds([]);
+    if (!multi) setSelectedTrackId(trackId);
+  }
+  /* Delete on a selected lane: the lane goes AND every stream on it. One
+   * setData, so it is one undo step. */
+  function deleteTrack(trackId) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    const ids = new Set(t.streamIds);
+    setData(d => {
+      const rest = TR.deriveTracks(d).filter(x => x.id !== trackId);
+      return TR.applyTracks({ ...d, streams: d.streams.filter(s => !ids.has(s.id)) }, rest);
+    });
+    if (ids.size && selectedIds.some(x => ids.has(x))) setInspectorOpen(false);
+    setSelectedIds(prev => prev.filter(x => !ids.has(x)));
+    setSelectedTrackId(null);
+    setDirty(true);
+  }
   function rangeSelectClip(id) {
+    setSelectedTrackId(null);
     const anchor = anchorIdRef.current;
-    const ss = data.streams;
-    const anchorIdx = anchor ? ss.findIndex(s => s.id === anchor) : -1;
-    const targetIdx = ss.findIndex(s => s.id === id);
+    // Shift-range runs down what the user SEES. Track order is the visual
+    // order and `data.streams` follows it (applyTracks), but a hand-edited
+    // ui_tracks can put a stream elsewhere — so read the layout, not the file.
+    const ss = TR.visualOrder(tracks);
+    const anchorIdx = anchor ? ss.indexOf(anchor) : -1;
+    const targetIdx = ss.indexOf(id);
     if (anchorIdx === -1 || targetIdx === -1) { setSelectedIds([id]); return; }
     const lo = Math.min(anchorIdx, targetIdx);
     const hi = Math.max(anchorIdx, targetIdx);
-    setSelectedIds(ss.slice(lo, hi + 1).map(s => s.id));
+    setSelectedIds(ss.slice(lo, hi + 1));
   }
   function marqueeSelectClips(ids, additive) {
+    setSelectedTrackId(null);
     if (additive) setSelectedIds(prev => [...new Set([...prev, ...ids])]);
     else setSelectedIds(ids);
   }
@@ -1426,8 +1808,13 @@ function App() {
   );
   const timelineEl = (
     <ErrorBoundary label="Timeline">
-    <Timeline streams={data.streams} selected={selectedIds}
-              onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream} onReorder={reorderStreams}
+    <Timeline streams={data.streams} tracks={tracks} selected={selectedIds}
+              onSelect={selectClip} onTrackSelect={selectTrack} selectedTrack={selectedTrackId}
+              onDeselect={() => { setSelectedIds([]); setSelectedTrackId(null); }} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream}
+              onTrackReorder={reorderTracks} onTrackRename={renameTrack}
+              onTrackMute={(id) => setTrackFlag(id, "mute")} onTrackSolo={(id) => setTrackFlag(id, "solo")}
+              onMoveStreams={moveStreamsToLane}
+              onAddTrack={addTrack} onTrackRemove={removeTrack}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={compDuration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showGrains={!!tweaks.showGrains} showClipLabels={tweaks.showClipLabels !== false}
@@ -1439,7 +1826,16 @@ function App() {
               spectrogramFor={(id) => spectrograms[id]}
               grainsFor={(id) => grainData[id]}
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
-              analyserFor={(id) => window.PGEAudio?.engine?.trackAnalyser(id)} />
+              arrowOwnerRef={envArrowRef}
+              sampleDurOf={(name) => ((mediaList.files || []).find(f => f.name === name) || {}).duration || 0}
+              stemDurFor={(id) => {
+                const b = window.PGEBackend.current.render;
+                return b.stemDur ? b.stemDur(activeProject.replace(/\.yml$/, ""), id) : null;
+              }}
+              onNeedGrains={ensureGrainData}
+              laneMoveKeys={[tweaks.shortcutMoveLaneUp || MOVE_LANE_UP,
+                             tweaks.shortcutMoveLaneDown || MOVE_LANE_DOWN]}
+              analysersFor={(ids) => ids.map(id => window.PGEAudio?.engine?.trackAnalyser(id)).filter(Boolean)} />
     </ErrorBoundary>
   );
   const envelopeEl = (
@@ -1448,6 +1844,7 @@ function App() {
                     playhead={time}
                     samples={mediaList.files}
                     onChange={(p) => selectedId && updateStream(selectedId, p)}
+               onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
                     onLoopPanelChange={setLoopPanelOpen}
                     focusKey={envFocusKey}
                     arrowOwnerRef={envArrowRef} />
@@ -1467,6 +1864,7 @@ function App() {
     <ErrorBoundary label="Inspector">
     <Inspector stream={selected() || null}
                onChange={(p) => selectedId && updateStream(selectedId, p)}
+               onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab}
                samples={mediaList.files}
@@ -1612,6 +2010,12 @@ function prettyGesture(g) {
 // Match a keyboard event against a shortcut spec like "cmd+i", "shift+cmd+p",
 // "ctrl+alt+e", or a bare key like "f1". cmd matches metaKey on mac and ctrlKey
 // elsewhere (so the same spec works cross-platform).
+// Defaults for the lane-move pair. They live on `window` because three places
+// need the same fallback: the handler, the Timeline (which must know what to
+// keep its hands off) and the Settings row.
+const MOVE_LANE_UP = "alt+arrowup";
+const MOVE_LANE_DOWN = "alt+arrowdown";
+window.PGE_MOVE_LANE_DEFAULTS = { up: MOVE_LANE_UP, down: MOVE_LANE_DOWN };
 function matchShortcut(e, spec) {
   if (!spec) return false;
   const parts = spec.toLowerCase().split("+").map(s => s.trim()).filter(Boolean);
@@ -1641,6 +2045,10 @@ function prettyShortcut(spec) {
     if (p === "ctrl") return "⌃";
     if (p === "shift") return "⇧";
     if (p === "alt" || p === "opt" || p === "option") return "⌥";
+    if (p === "arrowup") return "↑";
+    if (p === "arrowdown") return "↓";
+    if (p === "arrowleft") return "←";
+    if (p === "arrowright") return "→";
     return p.length === 1 ? p.toUpperCase() : p;
   }).join(" ");
 }
