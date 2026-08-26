@@ -848,8 +848,15 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 continue
             sid = p.stem[len(prefix):]
             if sid:
+                # `dur` e' la durata dello stem SUL DISCO, che non e' quella
+                # dello stream nell'editor appena una modifica lo ha accorciato
+                # (un taglio, un resize) senza un nuovo render. Serve a disegnare
+                # il waveform nel tempo giusto invece di stirarlo sulla clip:
+                # senza, una clip dimezzata mostra tutto lo stem compresso.
+                # Lettura del solo header (audio_duration), None se illeggibile.
                 stems.append({"streamId": sid, "ext": p.suffix,
-                              "mtime": p.stat().st_mtime})
+                              "mtime": p.stat().st_mtime,
+                              "dur": audio_duration(p)})
         return jsonify({"basename": basename, "stems": stems})
 
     @app.get("/grains/<basename>/<streamId>")

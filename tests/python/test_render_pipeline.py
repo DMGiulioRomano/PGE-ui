@@ -567,6 +567,11 @@ def test_list_stems_reports_each_format_separately(tmp_path):
         ("stream3", ".aif"),
         ("stream3", ".wav"),
     ]
+    # La durata dello stem SUL DISCO viaggia con l'elenco: e' quella che
+    # permette di disegnare il waveform nel tempo invece di stirarlo sulla
+    # clip, che dopo un taglio o un resize non e' piu' lunga uguale. Qui i
+    # file sono finti, quindi il valore e' None — la chiave, no.
+    assert all("dur" in s for s in stems)
 
 
 def test_gunicorn_has_enough_threads_for_concurrent_stems():

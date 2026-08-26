@@ -289,6 +289,21 @@ Streams without a rendered stem stay silent but **never silently**: a missing/un
 
 The pure clock math (`audiblePosition`, `playAt`) is exposed as `window.PGEAudioClock`, node-tested in `test-audio-clock.js`.
 
+**A clip's waveform is drawn in time, not stretched to the clip.** Peaks (and
+the spectrogram grid) cover the whole stem *on disk*, whose length stops
+matching the clip's the moment an edit shortens the stream without a re-render —
+a split, a resize. Mapped onto the clip's width, half a clip showed the entire
+waveform squeezed into it, which reads as a broken redraw rather than as a stem
+to regenerate. `GET /stems/<basename>` therefore carries `dur` per file
+(`audio_duration`, a header-only read), `backend.render.stemDur(basename, id)`
+serves it format-agnostically like `ownsStem`, and `ClipWaveform` /
+`ClipSpectrogram` take a `span` = stem duration / clip duration: the excess
+falls outside the clip, the missing tail stays flat, and the 🟡 dot says the
+rest. `span` defaults to 1 when the duration is unknown — which is also the
+truth right after a render, so `_markStemFresh` **drops** the cached duration
+when a stem is rewritten (keeping the old one would be worse than having none:
+it would crop the drawing to the previous length).
+
 ### Stream identity (`allocStreamIds`, the stem index)
 
 A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again.

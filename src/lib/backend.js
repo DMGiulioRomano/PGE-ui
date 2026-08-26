@@ -189,8 +189,24 @@
       stemIndex = JSON.parse(localStorage.getItem("pge-local-stems") || "{}");
     } catch {}
 
+    // Durata degli stem SUL DISCO, per nome file. Cache di sessione, non
+    // persistita: la riempie /stems al caricamento del progetto e serve solo a
+    // disegnare il waveform nel tempo giusto. Quando manca, chi disegna assume
+    // "stem lungo quanto la clip", che e' l'ipotesi giusta subito dopo un
+    // render — l'unico momento in cui la mappa puo' non avere ancora la voce.
+    const stemDurIndex = {};
+
     function _persistStemIndex() {
       try { localStorage.setItem("pge-local-stems", JSON.stringify(stemIndex)); } catch {}
+    }
+
+    // Uno stem appena scritto ha una durata nuova, e quella in `stemDurIndex`
+    // e' quella di prima: tenerla sarebbe peggio che non averla (un waveform
+    // tagliato sulla misura vecchia). Dimenticarla riporta chi disegna
+    // all'ipotesi "stem lungo quanto la clip", vera appena dopo un render.
+    function _markStemFresh(key) {
+      stemIndex[key] = Date.now();
+      delete stemDurIndex[key];
     }
 
     const render = {
@@ -206,8 +222,9 @@
         try {
           const sd = await jget(`/stems/${encodeURIComponent(yamlBasename)}`);
           if (sd && Array.isArray(sd.stems)) {
-            for (const { streamId, ext, mtime } of sd.stems) {
+            for (const { streamId, ext, mtime, dur } of sd.stems) {
               stemIndex[`${yamlBasename}__${streamId}${ext || ""}`] = mtime * 1000;
+              if (dur > 0) stemDurIndex[`${yamlBasename}__${streamId}${ext || ""}`] = dur;
             }
             _persistStemIndex();
           }
@@ -237,7 +254,7 @@
           const suffix = EXT_OF[opts.outputFormat] || EXT_OF.wav;
           const prefix = `${opts.yamlBasename}__`;
           for (const k of Object.keys(stemIndex)) {
-            if (k.startsWith(prefix) && k.endsWith(suffix)) delete stemIndex[k];
+            if (k.startsWith(prefix) && k.endsWith(suffix)) { delete stemIndex[k]; delete stemDurIndex[k]; }
           }
           _persistStemIndex();
         }
@@ -296,7 +313,7 @@
                     if (!streamId) continue;
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
                     if (stemIndex[key]) continue;  // already handled
-                    stemIndex[key] = Date.now();
+                    _markStemFresh(key);
                     const s = (opts.streams || []).find(x => x.id === streamId);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                     onEvent && onEvent({ type: "stream-done", streamId, cached: false });
@@ -304,7 +321,7 @@
                   _persistStemIndex();
                 }
                 if (ev.type === "stream-done") {
-                  stemIndex[`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`] = Date.now();
+                  _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
                   _persistStemIndex();
                   // freeze the browser-side fingerprint for this stream so the
                   // UI can mark it fresh (and detect later edits as stale).
@@ -342,6 +359,17 @@
       ownsStem(yamlBasename, streamId) {
         return Object.values(EXT_OF).some(
           (e) => !!stemIndex[`${yamlBasename}__${streamId}${e}`]);
+      },
+      // Durata dello stem su disco, format-agnostica come ownsStem: chi
+      // disegna vuole sapere quanto dura l'audio che ha in mano, non in che
+      // formato sta. `null` = non lo sappiamo (nessun /stems ancora, render
+      // appena fatto, file illeggibile).
+      stemDur(yamlBasename, streamId) {
+        for (const e of Object.values(EXT_OF)) {
+          const d = stemDurIndex[`${yamlBasename}__${streamId}${e}`];
+          if (d > 0) return d;
+        }
+        return null;
       },
       stemUrl(yamlBasename, streamId, format) {
         // aiff → /audio/ (server transcodes to WAV via sox; browsers can't decode AIFF natively)

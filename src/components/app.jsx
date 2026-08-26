@@ -1828,6 +1828,10 @@ function App() {
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
               arrowOwnerRef={envArrowRef}
               sampleDurOf={(name) => ((mediaList.files || []).find(f => f.name === name) || {}).duration || 0}
+              stemDurFor={(id) => {
+                const b = window.PGEBackend.current.render;
+                return b.stemDur ? b.stemDur(activeProject.replace(/\.yml$/, ""), id) : null;
+              }}
               onNeedGrains={ensureGrainData}
               laneMoveKeys={[tweaks.shortcutMoveLaneUp || MOVE_LANE_UP,
                              tweaks.shortcutMoveLaneDown || MOVE_LANE_DOWN]}

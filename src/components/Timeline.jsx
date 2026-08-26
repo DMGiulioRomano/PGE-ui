@@ -62,8 +62,17 @@ function ClipRenderStatus({ status }) {
  * `peaks` is a Float32Array (0..1) from the audio engine; we downsample it to
  * the clip's pixel width so detail follows timeline zoom. Canvas (not SVG) so
  * the repaint on every zoom step stays cheap. Renders nothing when peaks are
- * missing (e.g. a never-rendered stream). */
-function ClipWaveform({ peaks, width, height, color }) {
+ * missing (e.g. a never-rendered stream).
+ *
+ * `span` = durata dello stem / durata della clip, quando la sappiamo. I peaks
+ * coprono TUTTO lo stem su disco, che dopo un taglio o un resize non e' piu'
+ * lungo quanto la clip: mappandoli sulla larghezza si otteneva un waveform
+ * STIRATO (mezza clip col disegno intero compresso dentro), che leggeva come un
+ * aggiornamento sbagliato invece che come uno stem da rigenerare. Mappati sul
+ * tempo, la parte in piu' esce dalla clip e quella che manca resta piatta —
+ * quello che fa un DAW, e il pallino 🟡 dice il resto. span = 1 (default) e'
+ * l'ipotesi giusta appena dopo un render. */
+function ClipWaveform({ peaks, width, height, color, span }) {
   const canvasRef = useRefTL(null);
   useEffTL(() => {
     const cvs = canvasRef.current;
@@ -74,13 +83,19 @@ function ClipWaveform({ peaks, width, height, color }) {
     const mid = H / 2;
     const half = H / 2;
     const n = peaks.length;
+    // Quanti pixel della clip lo stem copre davvero: piu' corto della clip →
+    // il resto resta piatto; piu' lungo → l'eccedenza esce dal disegno.
+    const sp = (typeof span === "number" && span > 0) ? span : 1;
+    const drawW = Math.min(W, Math.max(1, Math.round(W / sp)));
+    // Indice nei peaks del pixel x: e' il tempo, non la frazione di clip.
+    const kOf = (x) => (x / W) * sp * n;
     // Per-pixel peak: take the MAX of every bucket this column spans, so
     // transients aren't dropped when n >> W (the usual case at normal zoom).
     // Computed once, reused for both mirrored edges.
-    const cols = new Float32Array(W);
-    for (let x = 0; x < W; x++) {
-      let k0 = Math.floor((x / W) * n);
-      let k1 = Math.floor(((x + 1) / W) * n);
+    const cols = new Float32Array(drawW);
+    for (let x = 0; x < drawW; x++) {
+      let k0 = Math.floor(kOf(x));
+      let k1 = Math.floor(kOf(x + 1));
       if (k1 <= k0) k1 = k0 + 1;          // zoomed in (W > n) → 1 bucket/pixel
       if (k1 > n) k1 = n;
       let p = 0;
@@ -89,16 +104,16 @@ function ClipWaveform({ peaks, width, height, color }) {
     }
     ctx.beginPath();
     // top edge left→right, then bottom edge right→left, mirrored about mid.
-    for (let x = 0; x < W; x++) {
+    for (let x = 0; x < drawW; x++) {
       const y = mid - cols[x] * half;
       x === 0 ? ctx.moveTo(0, y) : ctx.lineTo(x, y);
     }
-    for (let x = W - 1; x >= 0; x--) {
+    for (let x = drawW - 1; x >= 0; x--) {
       ctx.lineTo(x, mid + cols[x] * half);
     }
     ctx.closePath();
     ctx.fill();
-  }, [peaks, width, height]);
+  }, [peaks, width, height, span]);
   return <canvas className="wave" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
 }
 
@@ -135,7 +150,8 @@ function _specColorTL(v) {
  * then width*height uint8 magnitudes (column-major, low freq first). Painted at
  * native resolution offscreen, then scaled onto the clip-sized canvas. Same
  * binary protocol + draw as MediaPreview's _drawSpec. */
-function ClipSpectrogram({ buf, width, height }) {
+/* `span` come in ClipWaveform: la griglia copre tutto lo stem, non la clip. */
+function ClipSpectrogram({ buf, width, height, span }) {
   const canvasRef = useRefTL(null);
   useEffTL(() => {
     const cvs = canvasRef.current;
@@ -163,8 +179,9 @@ function ClipSpectrogram({ buf, width, height }) {
     const { ctx, W, H } = setupClipCanvas(cvs, width, height);
     ctx.imageSmoothingEnabled = true;
     ctx.clearRect(0, 0, W, H);
-    ctx.drawImage(off, 0, 0, cols, bins, 0, 0, W, H);
-  }, [buf, width, height]);
+    const sp = (typeof span === "number" && span > 0) ? span : 1;
+    ctx.drawImage(off, 0, 0, cols, bins, 0, 0, W / sp, H);
+  }, [buf, width, height, span]);
   return <canvas className="wave spec" ref={canvasRef} style={{ width: "100%", height: "100%" }} />;
 }
 
@@ -229,7 +246,7 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
   pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor, spectrogramFor, grainsFor,
   loopEnabled, loopRegion, onLoopRegionChange,
-  arrowOwnerRef, laneMoveKeys, sampleDurOf, onNeedGrains, analysersFor }) {
+  arrowOwnerRef, laneMoveKeys, sampleDurOf, stemDurFor, onNeedGrains, analysersFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   // solo/mute stay PER STREAM: that is what the engine filters on
@@ -260,6 +277,15 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
    * clip farebbe altrimenti ri-renderizzare l'intera timeline a ogni pixel —
    * il difetto che `hoverX` teneva in piedi qui prima. Stesso idiom della
    * sincronia delle testate (head.style.transform). */
+  /* Quanta parte della clip copre lo stem su disco. I peaks e la griglia dello
+   * spettrogramma coprono TUTTO lo stem, che dopo un taglio o un resize non e'
+   * piu' lungo quanto la clip: senza questo rapporto il disegno viene stirato
+   * sulla larghezza invece che mappato sul tempo. 1 = non lo sappiamo (nessun
+   * /stems ancora, o render appena fatto), che e' anche l'ipotesi giusta li'. */
+  function stemSpan(s) {
+    const d = stemDurFor ? stemDurFor(s.id) : null;
+    return d > 0 && s.duration > 0 ? d / s.duration : 1;
+  }
   function fmtTime(t) {
     const m = Math.floor(t / 60);
     const sec = t - m * 60;
@@ -1126,9 +1152,11 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?
-              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={clipH} /> :
+              <ClipSpectrogram buf={spectrogramFor(s.id)} width={s.duration * PX_PER_S} height={clipH}
+                               span={stemSpan(s)} /> :
               showWaveforms !== false && waveformFor && waveformFor(s.id) ?
-              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={clipH} color={s.color} /> :
+              <ClipWaveform peaks={waveformFor(s.id)} width={s.duration * PX_PER_S} height={clipH} color={s.color}
+                            span={stemSpan(s)} /> :
               null}
                 {showGrains && grainsFor && grainsFor(s.id) ?
               <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={clipH} /> :
