@@ -41,8 +41,23 @@ assert("PGEEnvUtils exposes the 18 helpers",
 console.log("\n── rescaleEnvArray ──");
 assert("breakpoints scaled by ratio",
   eq(U.rescaleEnvArray([[0, 1], [1, 0.5]], 0.5), [[0, 1], [0.5, 0.5]]));
-assert("breakpoint times clamp at 1.0",
-  eq(U.rescaleEnvArray([[0, 0], [1, 1]], 2), [[0, 0], [1, 1]]));
+// Il tappo a 1.0 c'era e mangiava il dato che serve al truncate: ogni punto
+// oltre la nuova fine finiva impilato sul bordo, indistinguibile da un envelope
+// che li' ci finisce davvero. La x fuori scala e' uno stato transitorio fra
+// rescale e truncate, non un valore da salvare.
+assert("i tempi oltre la fine NON vengono tappati a 1.0",
+  eq(U.rescaleEnvArray([[0, 0], [1, 1]], 2), [[0, 0], [2, 1]]));
+assert("accorciare a meta' butta la coda invece di impilarla sul bordo",
+  eq(U.truncateEnvArray(U.rescaleEnvArray([[0, 0], [0.5, 1], [1, 0]], 2)),
+     [[0, 0], [1, 1]]),
+  JSON.stringify(U.truncateEnvArray(U.rescaleEnvArray([[0, 0], [0.5, 1], [1, 0]], 2))));
+assert("anche il blocco compatto conserva l'end_time fuori scala",
+  eq(U.rescaleEnvArray([[[[0, 0], [1, 1]], 0.8, 2]], 2), [[[[0, 0], [1, 1]], 1.6, 2]]));
+// Il tag interp sta sul punto di partenza e governa il segmento in uscita:
+// su uno step il valore si tiene, e interpolarlo sarebbe un salto inventato.
+assert("il punto di chiusura onora lo step del segmento tagliato",
+  eq(U.truncateEnvArray([[0, 0.2, "step"], [1.5, 1]]), [[0, 0.2, "step"], [1, 0.2]]),
+  JSON.stringify(U.truncateEnvArray([[0, 0.2, "step"], [1.5, 1]])));
 assert("object-form {type,points} scaled",
   eq(U.rescaleEnvArray({ type: "exp", points: [[0, 0], [1, 1]] }, 0.5),
      { type: "exp", points: [[0, 0], [0.5, 1]] }));
@@ -962,6 +977,16 @@ assert("i breakpoint prima del taglio spariscono, quelli dopo si riscalano",
   JSON.stringify(U.sliceEnvArray([[0, 0], [0.25, 1], [0.75, 1], [1, 0]], 0.5)));
 assert("un breakpoint esattamente sul taglio non viene duplicato",
   eq(U.sliceEnvArray([[0, 0], [0.5, 0.3], [1, 1]], 0.5), [[0, 0.3], [1, 1]]));
+assert("il punto di apertura onora lo step del segmento tagliato",
+  eq(U.sliceEnvArray([[0, 0.2, "step"], [1, 1]], 0.5), [[0, 0.2, "step"], [1, 1]]),
+  JSON.stringify(U.sliceEnvArray([[0, 0.2, "step"], [1, 1]], 0.5)));
+// Un gruppo tutto prima del taglio esce di scena e lascia il posto al valore
+// interpolato dal punto che il taglio attraversa davvero: senza questo la coda
+// si apriva sull'ultimo punto del gruppo, che non e' il valore al taglio.
+assert("un gruppo prima del taglio non riapre l'envelope al posto sbagliato",
+  eq(U.sliceEnvArray([[[[0, 0], [0.1, 0.4]], "step"], [0.2, 0], [0.6, 1]], 0.4),
+     [[0, 0.5], [0.33333, 1]]),
+  JSON.stringify(U.sliceEnvArray([[[[0, 0], [0.1, 0.4]], "step"], [0.2, 0], [0.6, 1]], 0.4)));
 assert("l'interp per-punto sopravvive allo spostamento",
   eq(U.sliceEnvArray([[0, 0], [1, 1, "exp"]], 0.5), [[0, 0.5], [1, 1, "exp"]]));
 // Un envelope vuoto il motore non lo accetta: se dopo il taglio non resta
@@ -982,6 +1007,29 @@ assert("un array con un blocco compatto risponde null",
 assert("un BP group viene tagliato come i breakpoint",
   eq(U.sliceEnvArray([[[[0, 0], [1, 1]], "exp"]], 0.5), [[[[0, 0.5], [1, 1]], "exp"]]),
   JSON.stringify(U.sliceEnvArray([[[[0, 0], [1, 1]], "exp"]], 0.5)));
+
+/* La proprieta' che il taglio deve avere, e l'unica che si vede a occhio nel
+ * grafico: rimesse in tempo assoluto, le due meta' ridanno l'envelope di
+ * partenza. Il punto sul taglio e' l'unico nuovo, ed e' lo stesso nelle due. */
+console.log("\n── testa + coda = originale (tempi assoluti) ──");
+{
+  const abs = (env, dur, off) => env.map(p => [+(off + p[0] * dur).toFixed(4), p[1]]);
+  const check = (label, env, dur, cut, expHead, expTail) => {
+    const head = U.truncateEnvArray(U.rescaleEnvArray(env, dur / cut));
+    const tail = U.sliceEnvArray(env, cut / dur);
+    assert(label + " — testa", eq(abs(head, cut, 0), expHead), JSON.stringify(abs(head, cut, 0)));
+    assert(label + " — coda", eq(abs(tail, dur - cut, cut), expTail), JSON.stringify(abs(tail, dur - cut, cut)));
+  };
+  check("taglio dentro un segmento", [[0, 0], [0.25, 1], [0.5, 0.5], [1, 0]], 4, 2.5,
+        [[0, 0], [1, 1], [2, 0.5], [2.5, 0.375]],
+        [[2.5, 0.375], [4, 0]]);
+  check("taglio esattamente su un breakpoint", [[0, 0], [0.5, 1], [1, 0]], 4, 2,
+        [[0, 0], [2, 1]],
+        [[2, 1], [4, 0]]);
+  check("taglio prima del primo breakpoint interno", [[0, 0.3], [0.75, 1]], 4, 1,
+        [[0, 0.3], [1, 0.5333]],
+        [[1, 0.5333], [3, 1]]);
+}
 
 console.log("\n── sliceStreamEnvelopes ──");
 {

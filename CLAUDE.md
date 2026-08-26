@@ -224,6 +224,25 @@ The two halves fail in two different ways, and each has its own guard:
 seconds there would send it off the end of the file. Normalized with an unknown
 sample duration is the third refusal.
 
+**`rescaleEnvArray` deliberately does not clamp x to 1** (and that clamp was a
+bug, not a safety net): it ate exactly the information `truncateEnvArray` needs.
+Shortening a stream with freeze on, every breakpoint past the new end used to
+land on x=1 — `[[0,0],[0.5,1],[1,0]]` at ratio 2 became `[[0,0],[1,1],[1,0]]` —
+indistinguishable from an envelope that genuinely ends there, so truncate kept
+the pile instead of dropping the tail and interpolating one closing point. An
+x > 1 is a **transient** state that lives between rescale and truncate (i.e.
+inside a resize gesture); every commit path goes through `truncateEnvArray` or
+`sliceEnvArray`. This fixed the split's head and the freeze-on-resize drag at
+once — they are the same code.
+
+The one y these functions *compute* rather than copy (the closing point of a
+truncate, the opening point of a slice) goes through `boundaryY`, which reads
+the interp tag of the **previous** point — the tag governs the *outgoing*
+segment (`expandMixed` in `envelope-loops.js`), so on a `step` the value is held
+instead of interpolated into a jump the envelope never had. `cubic` stays linear
+there: real PCHIP needs the points beyond the segment and would misdraw the
+surviving half anyway; the error is one point wide.
+
 `sliceStreamEnvelopes` / `sliceEnvArray` in `envelope-utils.js` (node-tested)
 are the tail's half of the freeze math: `x' = (x - cut) / (1 - cut)`, with an
 interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
