@@ -597,6 +597,20 @@ function App() {
     }
   }, [lastRenderedFps]);
 
+  /* Chiave stabile per i tre effetti che caricano media per stream (peaks,
+   * spettrogrammi, grani). Prima dipendevano da `data.streams`, cioe'
+   * dall'IDENTITA' dell'array: e lo stato e' immutabile, quindi ogni gesto che
+   * ricompone la lista ne fabbrica una nuova anche quando non cambia un dato.
+   * `applyTracks` la ricompone a ogni spostamento fra corsie — stessi oggetti,
+   * stesso contenuto, array nuovo — e faceva ripartire il caricamento di TUTTI
+   * gli stem, ognuno con la sua setState. A questi effetti interessa quali
+   * stream esistono e quanto sono lunghi, non in che ordine stanno: `onset` sta
+   * deliberatamente fuori, muovere una clip nel tempo non tocca il suo audio.
+   * Stesso idioma degli effetti mute/solo e onset/duration qui sopra. */
+  const streamMediaKey = useMemoApp(
+    () => data.streams.map(s => `${s.id}:${s.duration}:${s.sample}`).join("|"),
+    [data.streams]);
+
   // Load waveform peaks for clips. Lazy-ish: decode each rendered stem once
   // (cached in the engine by url#fingerprint) and stash its peak array in
   // `waveforms` for the Timeline to draw. Only streams with a rendered stem
@@ -628,12 +642,15 @@ function App() {
         const peaksFp = (last || currentFps[s.id]) + "#r" + rev;
         try {
           const peaks = await engine.ensurePeaks(s.id, { duration: s.duration, fingerprint: peaksFp, url, peaksUrl });
-          if (!cancelled && peaks) setWaveforms(w => ({ ...w, [s.id]: peaks }));
+          // Stesso oggetto peaks -> stesso state: senza questa guardia ogni giro
+          // dell'effetto produceva una mappa nuova, quindi un render, per un
+          // dato identico. E' la meta' del ciclo che bloccava la pagina.
+          if (!cancelled && peaks) setWaveforms(w => w[s.id] === peaks ? w : ({ ...w, [s.id]: peaks }));
         } catch (e) { /* stem missing or undecodable — leave clip flat */ }
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -658,12 +675,12 @@ function App() {
           const res = await fetch(backend.render.spectrogramUrl(basename, s.id, tweaks.spectrogramScale || "linear"));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = await res.arrayBuffer();
-          if (!cancelled && buf) setSpectrograms(m => ({ ...m, [s.id]: buf }));
+          if (!cancelled && buf) setSpectrograms(m => m[s.id] === buf ? m : ({ ...m, [s.id]: buf }));
         } catch (e) { /* stem missing / numpy absent — leave clip without spectrogram */ }
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
   // canvas inside clips and the score panel. Same lazy trigger as peaks/spectro:
@@ -731,7 +748,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [data.streams, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
 
   useEffectApp(() => {
     function onSeek(e) {

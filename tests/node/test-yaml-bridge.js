@@ -2232,6 +2232,13 @@ console.log("\n\u2500\u2500 duration implicita: risoluzione tardiva (engine #205
   const data = parse(durationYaml(null), { samples: SAMPLES });
   assert("niente da risolvere \u2192 stesso oggetto",
     resolveImplicitDurations(data, data.samples) === data);
+  // Con un array `samples` di identita' diversa ma contenuto uguale l'oggetto
+  // data si rifa' (porta `samples`), ma `streams` NO: chi lo osserva per
+  // identita' — gli effetti che caricano peaks/spettrogrammi/grani — altrimenti
+  // ricaricherebbe ogni stem per una lista che non e' cambiata.
+  const again = resolveImplicitDurations(data, [...data.samples]);
+  assert("samples nuovo, niente risolto \u2192 streams e' lo stesso array",
+    again.streams === data.streams);
 }
 
 console.log("\n\u2500\u2500 cambio sample: la durata implicita segue (engine #205) \u2500\u2500");

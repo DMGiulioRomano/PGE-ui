@@ -300,6 +300,22 @@ whole contract:
   It reuses the stream objects untouched, so **no stem goes stale**; if you ever
   make it rebuild one, the fingerprint moves with it.
 
+That reorder has a cost on the React side, and it bit: **no effect may depend
+on the identity of `data.streams`**. State is immutable, so every gesture that
+recomposes the list produces a new array even when not one value changed, and
+`applyTracks` recomposes it on every move between lanes. The three effects that
+load per-stream media (peaks, spectrograms, grain sidecars) used to list
+`data.streams` among their deps and so reloaded *every* stem on every lane
+gesture, each reload calling `setState` — the engine of a render loop that
+locked the page up (Firefox's "stop script", the stack pinned inside
+`createElement`). They now key on `streamMediaKey`, a string of
+`id:duration:sample` — `onset` deliberately left out, moving a clip in time does
+not touch its audio — and their `setState`s bail out when the value is already
+there. `resolveImplicitDurations` follows the same rule: it reuses
+`data.streams` when it resolved nothing. The idiom was already in the file (the
+mute/solo and onset/duration effects key on a string); the media effects were
+the ones that had not been converted.
+
 That reorder of `data.streams` is audio-neutral, and only because the engine
 says so: `_create_streams` iterates the list without an index and every
 stochastic site draws from an RNG derived from `(seed, stream_id, component)`,
