@@ -382,19 +382,41 @@ toggle. The Delete branch is gated on `defaultPrevented` alone — the
 EnvelopeEditor calls `preventDefault` only when a breakpoint or a loop really is
 selected, so its own Delete still wins there.
 
-Clip drag moves between lanes: plain drop joins the target lane, **Alt**-drop
-extracts into a new lane at that position. The drag threshold reads both axes —
-a purely vertical drag leaves `onset` alone and would otherwise never start.
+Clip drag moves between lanes, and a vertical drag is a **lane delta, not a
+destination** — the DAW rule. `dstIdx` is where the *anchor* (the grabbed clip,
+`opts.anchor`) lands; every other selected clip keeps its offset from it, so a
+selection spanning two lanes never collapses onto one. The clamp is one-sided:
+upward the drag stops when the **highest** selected clip reaches lane 0 (hence
+`topLane` in `Timeline.jsx`, over the whole selection, and the same clamp again
+inside `moveStreams` — the pure function does not trust its caller); downward
+the layout **grows**, `moveStreams` appending empty lanes until the lowest clip
+has one, the way a DAW creates tracks under a drag. Undo takes them away with
+the rest of the gesture for free: the lanes live in `ui_tracks` inside
+`data._extra`, the whole `data` is the history snapshot, and the drag is
+bracketed by `beginGesture`/`endGesture`, so onset and layout come back
+together in one step.
+
+**Alt**-drop is the exception, and stays a destination: everything extracts into
+one new lane at that position. The drag threshold reads both axes — a purely
+vertical drag leaves `onset` alone and would otherwise never start.
+
+Because the drop creates lanes, the preview has to be able to point at lanes
+that do not exist yet: `laneIndexAtY(y, overflow)` keeps counting past the
+bottom, and `laneTracks` appends **phantom** lanes (`__new<i>`, `phantom: true`)
+for the duration of the drag so the ghost, the highlight and the preview clip
+all land somewhere visible. Per-clip destinations come from `dstLaneOf(id)`;
+under Alt it collapses to the single target lane.
 
 The lane move is gated on **vertical intent** (`verticalRef`, latched in `move`
 once `|dy| >= THRESHOLD`), which also gates the lane highlight. Neither
 `dstLane != null` alone nor `dstLane !== srcLane` works: the cursor never
 leaves the grabbed clip's lane during an ordinary horizontal drag, so with no
-gate a selection spanning two lanes silently collapses into one every time it
-is moved along the time axis; and `srcLane` is the *grabbed* clip's lane, so
-comparing against it swallows the real "gather them all here" gesture. Alt is
-sampled the same way, in `move`, so the dashed highlight and the outcome can't
-disagree.
+gate a selection spanning two lanes would move vertically every time it is
+dragged along the time axis; and `srcLane` is the *grabbed* clip's lane, so
+comparing against it swallows a real move whose anchor happens to come back to
+its own row (the rest of the selection having been clamped at the ceiling). Alt
+is sampled the same way, in `move`, so the dashed highlight and the outcome
+can't disagree.
 
 Clips sharing a lane are placed by `onset` alone, so they can cover each other
 exactly — a paste with the playhead still on the source does it every time.

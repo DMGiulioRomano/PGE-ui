@@ -260,41 +260,54 @@
     return arr;
   }
 
-  /* Move streams onto the lane at `dstIdx`.
-   *   default    → they join the track already living there
-   *   {extract}  → they go into a NEW track inserted at that position
+  /* Move streams vertically. `dstIdx` is where the ANCHOR clip lands (the one
+   * the user grabbed, `opts.anchor`, defaulting to the first id); every other
+   * selected clip keeps its lane OFFSET from it. That is the DAW rule: pushing
+   * a two-lane selection to the top stops when the highest clip hits lane 0,
+   * it never collapses the two onto one lane.
+   *   default    → each clip joins the lane at its own source + delta
+   *   {extract}  → all of them go into ONE new track inserted at `dstIdx`
+   *
+   * The clamp is one-sided on purpose: upward it is a hard stop, downward the
+   * layout GROWS — empty lanes are appended until the lowest clip has one, the
+   * way a DAW creates tracks under a drag. Undo takes them away with the rest
+   * of the gesture (they live in `ui_tracks`, inside the data snapshot).
    * `dstIdx` indexes the layout as the caller sees it, before any emptied
    * source track is pruned. */
   function moveStreams(tracks, streamIds, dstIdx, opts) {
     const ids = (streamIds || []).filter(Boolean);
     if (!ids.length) return tracks;
     const extract = !!(opts && opts.extract);
-    const dstTrack = (tracks || [])[dstIdx];
-    if (!extract && !dstTrack) return tracks;
-    const idSet = new Set(ids);
-
-    // A no-op must not churn history. The target lane already holding exactly
-    // these streams means the layout is what the drop asks for — under
-    // `extract` too, since extracting them again rebuilds the same lane.
-    // The check lives HERE and not in the caller: a multi-lane selection
-    // dropped back on the grabbed clip's own lane is a real move (it gathers
-    // the others), and only the target's contents can tell the two apart.
-    if (dstTrack && dstTrack.streamIds.length === ids.length &&
-        ids.every(id => dstTrack.streamIds.includes(id))) return tracks;
-
-    let next = (tracks || []).map(t => ({
-      ...t, streamIds: t.streamIds.filter(id => !idSet.has(id)),
-    }));
+    const arr = tracks || [];
+    const laneOf = new Map();
+    arr.forEach((t, i) => t.streamIds.forEach(id => laneOf.set(id, i)));
+    const moving = ids.filter(id => laneOf.has(id));
+    if (!moving.length) return tracks;
+    const idSet = new Set(moving);
 
     if (extract) {
-      const at = Math.max(0, Math.min(next.length, dstIdx));
-      next.splice(at, 0, freshTrack(next, ids));
-    } else {
-      next = next.map(t => t.id === dstTrack.id
-        ? { ...t, streamIds: [...t.streamIds, ...ids] }
-        : t);
+      const dstTrack = arr[dstIdx];
+      // A no-op must not churn history: extracting a lane that already holds
+      // exactly these streams rebuilds the same lane.
+      if (dstTrack && dstTrack.streamIds.length === moving.length &&
+          moving.every(id => dstTrack.streamIds.includes(id))) return tracks;
+      const next = arr.map(t => ({ ...t, streamIds: t.streamIds.filter(id => !idSet.has(id)) }));
+      next.splice(Math.max(0, Math.min(next.length, dstIdx)), 0, freshTrack(next, moving));
+      return next;
     }
-    return next;
+
+    const anchor = (opts && opts.anchor && laneOf.has(opts.anchor)) ? opts.anchor : moving[0];
+    const top = Math.min(...moving.map(id => laneOf.get(id)));
+    const delta = Math.max(dstIdx - laneOf.get(anchor), -top);
+    if (!delta) return tracks;
+
+    let next = arr.map(t => ({ ...t, streamIds: t.streamIds.filter(id => !idSet.has(id)) }));
+    const bottom = Math.max(...moving.map(id => laneOf.get(id) + delta));
+    while (next.length <= bottom) next = addTrack(next);
+    return next.map((t, i) => {
+      const landing = moving.filter(id => laneOf.get(id) + delta === i);
+      return landing.length ? { ...t, streamIds: [...t.streamIds, ...landing] } : t;
+    });
   }
 
   /* Paste lands next to its original: the copy joins the track the source

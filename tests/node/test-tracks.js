@@ -262,19 +262,35 @@ console.log("\n── moving a clip between lanes ──");
   assert("...and so is extracting a clip that is already alone there",
          T.moveStreams(tr, ["stream1"], 0, { extract: true }) === tr);
 
-  const multi = T.moveStreams(tr, ["stream2", "stream3"], 0);
-  assert("a multi-selection moves together",
-         eq(shape(multi), ["stream1:stream1:stream1+stream2+stream3",
-                           "stream2:stream2:", "stream3:stream3:"]),
+  // The DAW rule: a selection keeps its lane SPACING. stream2 (lane 1) is the
+  // grabbed one and lands on lane 0, so stream3 follows onto lane 1 — the two
+  // do not collapse onto the target.
+  const multi = T.moveStreams(tr, ["stream2", "stream3"], 0, { anchor: "stream2" });
+  assert("a multi-selection keeps its lane spacing",
+         eq(shape(multi), ["stream1:stream1:stream1+stream2",
+                           "stream2:stream2:stream3", "stream3:stream3:"]),
          JSON.stringify(shape(multi)));
 
-  // The gesture the old `dstLane !== srcLane` guard in Timeline.jsx swallowed:
-  // a selection spanning lanes, dropped on the grabbed clip's OWN lane. Only
-  // the target's contents can tell "gather them here" from a real no-op.
-  const gather = T.moveStreams(tr, ["stream1", "stream3"], 0);
-  assert("a cross-lane selection dropped on the grabbed clip's lane gathers it",
-         eq(shape(gather).slice(0, 2), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
-         JSON.stringify(shape(gather)));
+  // The ceiling: pushing that same pair up again cannot go anywhere, because
+  // the higher of the two is already on lane 0. It must NOT collapse them.
+  const ceiling = T.moveStreams(multi, ["stream2", "stream3"], 0, { anchor: "stream3" });
+  assert("against the top the whole selection stops instead of collapsing",
+         ceiling === multi, JSON.stringify(shape(ceiling)));
+
+  // Downward there is no ceiling: the layout grows the lanes the drop needs.
+  const below = T.moveStreams(tr, ["stream3"], 4, { anchor: "stream3" });
+  assert("dragging past the last lane creates the lanes it lands in",
+         below.length === 5 && eq(shape(below)[4].split(":")[2], "stream3") &&
+         eq(shape(below)[2], "stream3:stream3:"),
+         JSON.stringify(shape(below)));
+  assert("...and the lanes it opens on the way are empty",
+         eq(below[3].streamIds, []), JSON.stringify(shape(below)));
+
+  // The anchor is the GRABBED clip, not the first id: dropping the pair with
+  // stream3 under the cursor moves them by a different delta.
+  const byAnchor = T.moveStreams(tr, ["stream1", "stream3"], 0, { anchor: "stream3" });
+  assert("the delta is measured from the anchor, and clamps on the top clip",
+         byAnchor === tr, JSON.stringify(shape(byAnchor)));
 }
 
 console.log("\n── paste lands in the original's lane ──");
@@ -396,7 +412,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          /verticalRef\.current = true/.test(tlCode) &&
          /Math\.abs\(dy\) >= THRESHOLD/.test(tlCode));
   assert("with no vertical intent no lane is even highlighted",
-         /verticalRef\.current \? laneIndexAtClientY\(ev\.clientY\) : -1/.test(tlCode));
+         /verticalRef\.current \? laneIndexAtClientY\(ev\.clientY, true\) : -1/.test(tlCode));
   // Two clips at the same onset on one lane must not hide each other: a paste
   // at the playhead lands exactly on its source, and a fully covered clip can
   // never be selected (selecting means clicking). The rows are staggered.
@@ -489,6 +505,29 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          /analysersFor/.test(appSrc) && /analysersFor/.test(tlSrc));
   assert("the group VU never re-reads a single trackAnalyser per lane",
          !/analyserFor=/.test(appSrc));
+  // Alt+arrow moves the selection a lane at a time. Three things have to stay
+  // true together, and each is a real defect if it slips.
+  const spSrc = fs.readFileSync(path.join(__dirname, "../../src/components/SettingsPanel.jsx"), "utf8");
+  assert("the lane move goes through matchShortcut on a rebindable tweak",
+         /shortcutMoveLaneUp/.test(appSrc) && /shortcutMoveLaneDown/.test(appSrc) &&
+         /matchShortcut\(e, tweaks\.shortcutMoveLaneUp/.test(appSrc));
+  // Downward a KEYPRESS must not grow the layout the way a drop does: holding
+  // the key would spawn empty lanes without end.
+  assert("the keyboard move refuses to open a lane past the last one",
+         /dir > 0 && Math\.max\(\.\.\.lanes\) >= tracks\.length - 1/.test(appSrc));
+  // The Timeline's vertical scroll and the lane move would otherwise both fire
+  // on the same keypress. It bows out on the LIVE spec, so a rebind keeps them
+  // in agreement instead of leaving a hardcoded alt behind.
+  assert("the timeline's vertical scroll yields to the lane-move spec, not to a hardcoded alt",
+         /laneMoveKeys\.some\(k => window\.matchShortcut\(e, k\)\)/.test(tlCode) &&
+         !/vert && e\.altKey/.test(tlCode));
+  // One held key = one undo step, and the gesture is closed by whichever arrow
+  // opened it — the ←/→ nudge and the lane move share the ref.
+  assert("the arrow gesture closes on every arrow, not only the horizontal pair",
+         /e\.key\.startsWith\("Arrow"\) && arrowGestureRef\.current/.test(appSrc));
+  assert("both directions are rebindable from Settings",
+         /shortcutMoveLaneUp/.test(spSrc) && /shortcutMoveLaneDown/.test(spSrc));
+
   assert("tracks.js is loaded before the components that use it",
          (() => {
            const html = fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8");
