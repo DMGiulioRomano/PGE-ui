@@ -140,6 +140,7 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .add-btn { width: 100%; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: transparent; color: var(--fg-3); border: 1px dashed var(--border-default); border-radius: 3px; font: 11px/1 var(--font-mono); cursor: pointer; }
 .add-btn .add-btn-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .add-btn:hover { color: var(--fg-1); border-color: var(--fg-3); }
+.lanes-head-add { display: flex; flex-direction: column; gap: 4px; }
 
 .track-head { display: flex; align-items: center; gap: 8px; height: var(--lane-h); padding: 0 10px; border-bottom: 1px solid var(--border-subtle); border-left: 3px solid var(--clip-1); cursor: default; position: relative;; }
 .track-head:hover { background: var(--bg-hover); }

@@ -43,16 +43,18 @@
  * MATERIALIZATION
  * ---------------
  * `deriveTracks` is total and self-healing: unknown or duplicated stream ids
- * are dropped, emptied tracks disappear, and any stream `ui_tracks` does not
- * mention becomes its own singleton track (appended in `data.streams` order).
+ * are dropped and any stream `ui_tracks` does not mention becomes its own
+ * singleton track (appended in `data.streams` order). An EMPTY lane is kept:
+ * a track exists on its own, like a DAW track — created empty, filled by
+ * dropping clips on it, removed only on purpose (`addTrack`/`removeTrack`).
  * With the key absent this yields exactly one track per stream, in file order —
  * today's behaviour, bit for bit.
  *
  * `applyTracks` is the inverse and holds the invariant that keeps the file
  * clean: it reorders `data.streams` into visual order (which is what reordering
  * lanes has always done) and writes `ui_tracks` ONLY when the grouping says
- * something the stream order alone cannot — a lane with two streams, a renamed
- * lane, an id that is not its stream's. A project that never groups anything
+ * something the stream order alone cannot — a lane with two streams, an empty
+ * lane, a renamed lane, an id that is not its stream's. A project that never groups anything
  * never grows the key. Note that a single rename or a single group materializes
  * the WHOLE list — the price of a form that declares its own order.
  *
@@ -137,10 +139,14 @@
         placed.add(id);
         ids.push(id);
       }
-      if (!ids.length) continue;              // lost every stream → the track goes
+      // An empty lane SURVIVES. A track is an entity of its own, like a DAW
+      // track: it is created empty, filled by dropping clips on it, and only
+      // ever removed on purpose (`removeTrack`). Pulling the last clip out of
+      // a lane, or deleting it, leaves the lane standing.
+      const id = claim(t.id, ids[0] || "t" + (out.length + 1));
       out.push({
-        id: claim(t.id, ids[0]),
-        name: t.name != null ? String(t.name) : ids[0],
+        id,
+        name: t.name != null ? String(t.name) : (ids[0] || id),
         streamIds: ids,
       });
     }
@@ -245,10 +251,6 @@
 
   /* ---------- mutations (all pure) ---------- */
 
-  function prune(tracks) {
-    return tracks.filter(t => t.streamIds.length > 0);
-  }
-
   function reorderTracks(tracks, srcIdx, dstIdx) {
     const arr = [...(tracks || [])];
     if (srcIdx === dstIdx || srcIdx < 0 || srcIdx >= arr.length) return tracks;
@@ -286,13 +288,13 @@
 
     if (extract) {
       const at = Math.max(0, Math.min(next.length, dstIdx));
-      next.splice(at, 0, freshTrack(prune(next), ids));
+      next.splice(at, 0, freshTrack(next, ids));
     } else {
       next = next.map(t => t.id === dstTrack.id
         ? { ...t, streamIds: [...t.streamIds, ...ids] }
         : t);
     }
-    return prune(next);
+    return next;
   }
 
   /* Paste lands next to its original: the copy joins the track the source
@@ -321,11 +323,34 @@
     return arr;
   }
 
+  /* Deleting a stream empties its lane but does not remove it — same rule as
+   * moving the last clip out (see deriveTracks). */
   function removeStreams(tracks, streamIds) {
     const idSet = new Set(streamIds || []);
-    return prune((tracks || []).map(t => ({
+    return (tracks || []).map(t => ({
       ...t, streamIds: t.streamIds.filter(id => !idSet.has(id)),
-    })));
+    }));
+  }
+
+  /* A new, empty lane — a track without a stream. Appended, or inserted at
+   * `atIdx`. */
+  function addTrack(tracks, atIdx) {
+    const arr = [...(tracks || [])];
+    const id = newTrackId(arr);
+    const t = { id, name: id, streamIds: [] };
+    if (atIdx != null && atIdx >= 0 && atIdx <= arr.length) arr.splice(atIdx, 0, t);
+    else arr.push(t);
+    return arr;
+  }
+
+  /* The only way a lane disappears. Refuses a lane that still holds clips:
+   * removing it would either orphan them (applyTracks re-appends unmentioned
+   * streams as singletons, silently rebuilding lanes) or delete audio, and
+   * neither is what a "remove lane" button should mean. */
+  function removeTrack(tracks, trackId) {
+    const t = (tracks || []).find(x => x.id === trackId);
+    if (!t || t.streamIds.length) return tracks;
+    return tracks.filter(x => x.id !== trackId);
   }
 
   /* A stream changed its id. Rewrite every reference the layout holds.
@@ -379,6 +404,8 @@
     addStreamToTrackOf,
     insertStreamTrack,
     removeStreams,
+    addTrack,
+    removeTrack,
     renameStreamId,
     renameTrack,
   };

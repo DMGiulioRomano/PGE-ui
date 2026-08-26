@@ -224,7 +224,7 @@ const CLIP_MIN_H      = 22;  // the last clip in a stack never goes thinner than
 
 function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onTrackReorder, onTrackRename, onTrackMute, onTrackSolo, onMoveStreams,
-  playhead, duration, onCreateStream,
+  playhead, duration, onCreateStream, onAddTrack, onTrackRemove,
   pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor, spectrogramFor, grainsFor,
   loopEnabled, loopRegion, onLoopRegionChange,
@@ -541,10 +541,14 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
     if (!sample) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left + bodyRef.current.scrollLeft;
-    // Always create a NEW track at this position, inserted after the lane dropped onto.
-    // `laneIdx` indexes tracks, not streams — dropping below a three-clip lane
-    // must land one lane down, not three streams down.
-    onCreateStream && onCreateStream({ sample, onset: +(x / PX_PER_S).toFixed(2), laneIdx: idx + 1 });
+    // An empty lane is waiting to be filled: the drop lands IN it. Otherwise a
+    // NEW track at this position, inserted after the lane dropped onto —
+    // `laneIdx` indexes tracks, not streams, so dropping below a three-clip
+    // lane must land one lane down, not three streams down.
+    const t = laneTracks[idx];
+    const empty = t && !t.streamIds.length;
+    onCreateStream && onCreateStream({ sample, onset: +(x / PX_PER_S).toFixed(2),
+                                       laneIdx: idx + 1, trackId: empty ? t.id : null });
   }
 
   function onEmptyDrop(e) {
@@ -773,6 +777,7 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
               onRangeSelect={() => onRangeSelect && onRangeSelect(t.streamIds[0])}
               onDoubleSelect={() => onDoubleSelect && onDoubleSelect(t.streamIds[0])}
               onRename={(name) => onTrackRename && onTrackRename(t.id, name)}
+              onRemove={() => onTrackRemove && onTrackRemove(t.id)}
               onMute={() => onTrackMute && onTrackMute(t.id)} onSolo={() => onTrackSolo && onTrackSolo(t.id)}
               isEffMuted={isEffMuted} anySolo={anySolo}
               analysers={analysersFor ? analysersFor(t.streamIds) : null} />
@@ -782,6 +787,10 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
         <div className="lanes-head-add">
           <button className="add-btn" onClick={() => onCreateStream && onCreateStream({ onset: 0 })}>
             <Icon name="plus" size={12} /> <span className="add-btn-lbl">add stream</span>
+          </button>
+          <button className="add-btn" onClick={() => onAddTrack && onAddTrack()}
+                  title="add an empty track — drop a sample or a clip on it to fill it">
+            <Icon name="plus" size={12} /> <span className="add-btn-lbl">add track</span>
           </button>
         </div>
       </div>
@@ -965,7 +974,7 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
  * group. For a lane with one clip — still the default — this is byte-identical
  * to the per-stream button it replaces. Per-clip M/S buttons appear on the
  * clips themselves once a lane holds more than one. */
-function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoubleSelect, onRename, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, isEffMuted, anySolo, analysers }) {
+function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoubleSelect, onRename, onRemove, onMute, onSolo, height, onResizeStart, onReorderStart, dragOver, isEffMuted, anySolo, analysers }) {
   const VUMeter = window.PGE?.VUMeter;
   const laneH = typeof height === "number" ? height : 56;
   const [editing, setEditing] = useStateTL(false);
@@ -979,7 +988,7 @@ function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoub
   const lead = ss[0];
   const sub = n > 1
     ? n + " streams · " + Array.from(new Set(ss.map(s => s.sample))).join(", ")
-    : (lead ? lead.sample : "");
+    : (lead ? lead.sample : "empty");
   // `dim-by-solo` below deliberately reads "none of this lane is soloed": with
   // one stream soloed out of three the lane still sounds, so dimming the whole
   // header would misreport it. The muting of the other two shows on their own
@@ -1014,6 +1023,12 @@ function TrackHeader({ track, streams, selected, onSelect, onRangeSelect, onDoub
                   title={n > 1 ? "mute every stream on this track" : "mute"}>M</button>
           <button className={"pill" + (allSolo ? " on-s" : someSolo ? " part-s" : "")} onClick={(e) => {e.stopPropagation();onSolo();}}
                   title={n > 1 ? "solo every stream on this track" : "solo"}>S</button>
+          {/* An empty lane is the only one that can go: with clips on it,
+              removing the lane would either orphan them or delete audio. */}
+          {n === 0 ? (
+            <button className="pill" onClick={(e) => {e.stopPropagation();onRemove && onRemove();}}
+                    title="remove this empty track">×</button>
+          ) : null}
         </div>
         <span className="sub" title={sub}>{sub}</span>
       </div>

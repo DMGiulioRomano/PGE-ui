@@ -990,6 +990,12 @@ function App() {
     if (!cur || !String(name).trim() || String(name).trim() === cur.name) return;
     mutateTracks(t => TR.renameTrack(t, trackId, name));
   }
+  /* A lane with no clips: a track is an entity of its own, so it can be created
+   * empty and filled later by dropping clips (or a sample) on it. It also means
+   * a lane emptied by a move or a delete stays put — only this button removes
+   * one. `addTrack` materializes `ui_tracks` (an empty lane is not trivial). */
+  function addTrack() { mutateTracks(t => TR.addTrack(t)); }
+  function removeTrack(trackId) { mutateTracks(t => TR.removeTrack(t, trackId)); }
   /* Vertical drag of a clip: join the lane it was dropped on, or (Alt) pull it
    * out into a lane of its own at that position. */
   function moveStreamsToLane(streamIds, dstLaneIdx, opts) {
@@ -1085,7 +1091,9 @@ function App() {
     setSelectedIds(ids => ids.filter(x => x !== id));
     setDirty(true);
   }
-  function createStreamFromSample({ sample, onset = 0, laneIdx }) {
+  /* `trackId` (a sample dropped on an EMPTY lane) fills that lane; otherwise the
+   * new stream gets a lane of its own at `laneIdx`. */
+  function createStreamFromSample({ sample, onset = 0, laneIdx, trackId }) {
     const media = mediaList.files || [];
     const sampleName = sample || (media[0] && media[0].name) || "";
     const sampleRec = media.find(s => s.name === sampleName) || { duration: 4 };
@@ -1114,8 +1122,11 @@ function App() {
       const withNew = { ...d, streams: [...d.streams, newStream] };
       // `laneIdx` counts LANES, not streams: dropped below a three-clip lane the
       // new stream belongs one lane down, not three streams down.
-      const tr = TR.insertStreamTrack(TR.deriveTracks(withNew).filter(t => !t.streamIds.includes(newId)),
-                                      newId, laneIdx);
+      const base = TR.deriveTracks(withNew).filter(t => !t.streamIds.includes(newId));
+      const target = trackId != null && base.find(t => t.id === trackId);
+      const tr = target
+        ? base.map(t => t.id === trackId ? { ...t, streamIds: [...t.streamIds, newId] } : t)
+        : TR.insertStreamTrack(base, newId, laneIdx);
       return TR.applyTracks(withNew, tr);
     });
     setDirty(true);
@@ -1576,6 +1587,7 @@ function App() {
               onTrackReorder={reorderTracks} onTrackRename={renameTrack}
               onTrackMute={(id) => setTrackFlag(id, "mute")} onTrackSolo={(id) => setTrackFlag(id, "solo")}
               onMoveStreams={moveStreamsToLane}
+              onAddTrack={addTrack} onTrackRemove={removeTrack}
               onCreateStream={createStreamFromSample}
               playhead={time} duration={compDuration}
               pxPerSec={tweaks.zoom} showWaveforms={tweaks.showWaveforms} showSpectrograms={!!tweaks.showSpectrograms} showGrains={!!tweaks.showGrains} showClipLabels={tweaks.showClipLabels !== false}

@@ -273,9 +273,9 @@ Two pure functions in `tracks.js` (`window.PGETracks`, node-tested) are the
 whole contract:
 
 - **`deriveTracks(data)`** is total and self-healing — dead ids dropped, a
-  stream laid out exactly once, emptied tracks removed, unmentioned streams
-  appended as singletons in file order. With the key absent it reproduces
-  one-lane-per-stream exactly. Track ids and stream ids share **one** namespace
+  stream laid out exactly once, unmentioned streams appended as singletons in
+  file order. With the key absent it reproduces one-lane-per-stream exactly.
+  Track ids and stream ids share **one** namespace
   (a singleton lane's id is its stream's), so the ids of the streams
   `ui_tracks` doesn't place are reserved *before* group ids are handed out: a
   hand-written group calling itself `stream2` gets suffixed, and the real
@@ -284,10 +284,18 @@ whole contract:
   lane, and that's fine: a duplicate id is already fatal a layer down (stem
   filename, manifest key) and no `ui_tracks` could round-trip two lanes
   pointing at one id.
+  An **empty lane is kept**: a track is an entity of its own, like a DAW track —
+  `addTrack` creates one with no stream behind it, a move or a delete that
+  empties a lane leaves it standing, and only `removeTrack` (the × on an empty
+  header, refused on a lane that still holds clips) takes one away. Cost of that
+  rule: group-then-ungroup no longer returns to the trivial layout, because the
+  extracted lane can't reclaim its stream id while the empty source lane still
+  holds it.
 - **`applyTracks(data, tracks)`** reorders `data.streams` into visual order and
   writes `ui_tracks` **only when it says something the stream order doesn't** —
-  a lane with two streams, a chosen name, an id that isn't its stream's. A
-  project that never groups never grows the key; but the key is all-or-nothing,
+  a lane with two streams, an empty lane, a chosen name, an id that isn't its
+  stream's. A project that never groups never grows the key; but the key is
+  all-or-nothing,
   so **one rename or one group materializes every lane**, singletons included.
   It reuses the stream objects untouched, so **no stem goes stale**; if you ever
   make it rebuild one, the fingerprint moves with it.

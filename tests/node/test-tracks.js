@@ -72,14 +72,16 @@ console.log("\n── deriveTracks is total against a hand-edited file ──");
   // another entirely.
   const d = data(["stream1", "stream2", "stream3"], [
     { id: "t1", name: "a", streams: ["stream1", "ghost", "stream1"] },
-    { id: "t2", name: "b", streams: ["stream1"] },   // already placed → empties → dropped
+    { id: "t2", name: "b", streams: ["stream1"] },   // already placed → empties, but stays
   ]);
   const tr = T.deriveTracks(d);
   assert("the dead id is dropped", !T.visualOrder(tr).includes("ghost"), JSON.stringify(shape(tr)));
   assert("a stream is placed exactly once",
          T.visualOrder(tr).length === new Set(T.visualOrder(tr)).size, JSON.stringify(shape(tr)));
-  assert("a track emptied by the dedupe disappears",
-         !tr.some(t => t.id === "t2"), JSON.stringify(shape(tr)));
+  // A lane is an entity, not a by-product of its clips: emptied by the dedupe
+  // it survives, empty. Only removeTrack takes one away.
+  assert("a track emptied by the dedupe survives, empty",
+         eq(shape(tr).filter(x => x.startsWith("t2:")), ["t2:b:"]), JSON.stringify(shape(tr)));
   assert("the unmentioned streams get their own lanes, in file order",
          eq(T.visualOrder(tr), ["stream1", "stream2", "stream3"]), JSON.stringify(shape(tr)));
   assert("every live stream is laid out",
@@ -151,13 +153,16 @@ console.log("\n── applyTracks never rewrites a stream (the fingerprint stays
   const before = d.streams.map(s => s);
   const tr = T.moveStreams(T.deriveTracks(d), ["stream2"], 0);
   const out = T.applyTracks(d, tr);
-  assert("grouping puts both streams on one lane", tr.length === 1, JSON.stringify(shape(tr)));
+  assert("grouping puts both streams on one lane, the source lane left empty",
+         eq(shape(tr), ["stream1:stream1:stream1+stream2", "stream2:stream2:"]),
+         JSON.stringify(shape(tr)));
   assert("stream objects are the SAME references — nothing to re-hash",
          out.streams.every(s => before.includes(s)), "a stream object was rebuilt");
   assert("no stream gained a track key",
          out.streams.every(s => !("track" in s) && !("ui_track" in s)));
   assert("the grouping is written top-level",
-         eq(out._extra.ui_tracks, [{ id: "stream1", name: "stream1", streams: ["stream1", "stream2"] }]),
+         eq(out._extra.ui_tracks, [{ id: "stream1", name: "stream1", streams: ["stream1", "stream2"] },
+                                   { id: "stream2", name: "stream2", streams: [] }]),
          JSON.stringify(out._extra));
 }
 
@@ -173,19 +178,43 @@ console.log("\n── applyTracks reorders data.streams into visual order ──
   assert("input untouched", eq(d.streams.map(s => s.id), ["stream1", "stream2", "stream3"]));
 }
 
-console.log("\n── group then ungroup returns the file to where it started ──");
+console.log("\n── group leaves the source lane standing, empty ──");
 {
   const d = data(["stream1", "stream2"]);
   const grouped = T.moveStreams(T.deriveTracks(d), ["stream2"], 0);
   assert("grouped writes the key", T.applyTracks(d, grouped)._extra !== undefined);
-  // The lane a lone clip lands in reclaims its stream id, so the layout is
-  // trivial again — a `t1` here would keep the key alive saying nothing.
-  const split = T.moveStreams(grouped, ["stream2"], 1, { extract: true });
-  assert("two lanes again", split.length === 2, JSON.stringify(shape(split)));
-  assert("the layout is trivial once more", T.isTrivial(split) === true, JSON.stringify(shape(split)));
-  const out = T.applyTracks(d, split);
-  assert("_extra is gone entirely, not left as an empty object",
-         out._extra === undefined, JSON.stringify(out._extra));
+  assert("the lane stream2 came from is still there, holding nothing",
+         eq(shape(grouped), ["stream1:stream1:stream1+stream2", "stream2:stream2:"]),
+         JSON.stringify(shape(grouped)));
+  // The empty lane round-trips through the file: it is exactly what the key is
+  // for now, so it must survive derive(apply(...)).
+  const back = T.deriveTracks(T.applyTracks(d, grouped));
+  assert("an empty lane survives the round trip", eq(shape(back), shape(grouped)),
+         JSON.stringify(shape(back)));
+  // Removing it by hand is the only way it goes. The layout does NOT return to
+  // trivial: the extracted lane could not reclaim the id `stream2` while the
+  // empty lane still held it, so it is `t1` and the key stays. Harmless, and
+  // the price of lanes that outlive their clips.
+  const cleaned = T.removeTrack(T.moveStreams(grouped, ["stream2"], 1, { extract: true }), "stream2");
+  assert("...and once removed only the two real lanes are left",
+         eq(shape(cleaned), ["stream1:stream1:stream1", "t1:stream2:stream2"]),
+         JSON.stringify(shape(cleaned)));
+}
+
+console.log("\n── addTrack / removeTrack ──");
+{
+  const d = data(["stream1"]);
+  const withEmpty = T.addTrack(T.deriveTracks(d));
+  assert("an empty lane can be created with no stream behind it",
+         eq(shape(withEmpty), ["stream1:stream1:stream1", "t1:t1:"]), JSON.stringify(shape(withEmpty)));
+  assert("it is not trivial, so it reaches the file", T.isTrivial(withEmpty) === false);
+  assert("a clip dropped on it lands there",
+         eq(shape(T.moveStreams(withEmpty, ["stream1"], 1)), ["stream1:stream1:", "t1:t1:stream1"]),
+         JSON.stringify(shape(T.moveStreams(withEmpty, ["stream1"], 1))));
+  assert("removeTrack takes it away", eq(shape(T.removeTrack(withEmpty, "t1")), ["stream1:stream1:stream1"]));
+  // A lane still holding clips is refused: dropping it would either orphan them
+  // (applyTracks re-appends unmentioned streams) or delete audio.
+  assert("a lane with clips is refused", T.removeTrack(withEmpty, "stream1") === withEmpty);
 }
 
 console.log("\n── a NAMED lane survives losing a clip ──");
@@ -217,9 +246,10 @@ console.log("\n── moving a clip between lanes ──");
   const tr = T.deriveTracks(d);
   const joined = T.moveStreams(tr, ["stream3"], 0);
   assert("the clip joins the target lane",
-         eq(shape(joined), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
+         eq(shape(joined).slice(0, 2), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
          JSON.stringify(shape(joined)));
-  assert("the emptied source lane is pruned", joined.length === 2);
+  assert("the emptied source lane stays, empty",
+         eq(shape(joined)[2], "stream3:stream3:"), JSON.stringify(shape(joined)));
 
   const back = T.moveStreams(joined, ["stream3"], 1, { extract: true });
   assert("extract inserts a new lane at the drop position",
@@ -234,7 +264,8 @@ console.log("\n── moving a clip between lanes ──");
 
   const multi = T.moveStreams(tr, ["stream2", "stream3"], 0);
   assert("a multi-selection moves together",
-         eq(shape(multi), ["stream1:stream1:stream1+stream2+stream3"]),
+         eq(shape(multi), ["stream1:stream1:stream1+stream2+stream3",
+                           "stream2:stream2:", "stream3:stream3:"]),
          JSON.stringify(shape(multi)));
 
   // The gesture the old `dstLane !== srcLane` guard in Timeline.jsx swallowed:
@@ -242,7 +273,7 @@ console.log("\n── moving a clip between lanes ──");
   // the target's contents can tell "gather them here" from a real no-op.
   const gather = T.moveStreams(tr, ["stream1", "stream3"], 0);
   assert("a cross-lane selection dropped on the grabbed clip's lane gathers it",
-         eq(shape(gather), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
+         eq(shape(gather).slice(0, 2), ["stream1:stream1:stream1+stream3", "stream2:stream2:stream2"]),
          JSON.stringify(shape(gather)));
 }
 
@@ -261,16 +292,17 @@ console.log("\n── paste lands in the original's lane ──");
          eq(shape(orphan)[0], "t1:bassi:stream1+stream2"), JSON.stringify(shape(orphan)));
 }
 
-console.log("\n── delete prunes the lane it empties ──");
+console.log("\n── delete empties the lane but leaves it standing ──");
 {
   const tr = T.deriveTracks(data(["stream1", "stream2", "stream3"], [
     { id: "t1", name: "bassi", streams: ["stream1", "stream2"] },
   ]));
   const after = T.removeStreams(tr, ["stream3"]);
-  assert("the singleton lane goes", eq(shape(after), ["t1:bassi:stream1+stream2"]), JSON.stringify(shape(after)));
+  assert("the singleton lane stays, empty",
+         eq(shape(after), ["t1:bassi:stream1+stream2", "stream3:stream3:"]), JSON.stringify(shape(after)));
   const gutted = T.removeStreams(tr, ["stream1", "stream2"]);
-  assert("a lane that loses every stream goes too",
-         eq(shape(gutted), ["stream3:stream3:stream3"]), JSON.stringify(shape(gutted)));
+  assert("a lane that loses every stream stays too",
+         eq(shape(gutted), ["t1:bassi:", "stream3:stream3:stream3"]), JSON.stringify(shape(gutted)));
 }
 
 console.log("\n── a new stream gets its own lane at the drop index ──");
