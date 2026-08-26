@@ -194,6 +194,11 @@ function App() {
   });
 
   const [selectedIds, setSelectedIds] = useStateApp([]);
+  // The selected LANE, when the selection was made on a track header. Distinct
+  // from `selectedIds` on purpose: it is the only handle on an empty lane (it
+  // has no clip to select), and it is what Delete needs to tell "remove these
+  // clips" from "remove this track".
+  const [selectedTrackId, setSelectedTrackId] = useStateApp(null);
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const anchorIdRef = React.useRef(null);
   const [loopPanelOpen, setLoopPanelOpen] = useStateApp(false);
@@ -804,6 +809,14 @@ function App() {
       if (e.key === " ") { e.preventDefault(); doPlay(); }
       else if (e.key === "Escape") { setInspectorOpen(false); }
       else if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); setBrowserOpen(o => !o); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && selectedTrackId && !e.defaultPrevented) {
+        // A lane was selected from its header: Delete takes the lane and every
+        // clip on it. No envelope-editor guard here — `defaultPrevented` is
+        // already the one that matters (the editor preventDefaults only when a
+        // breakpoint or a loop is actually selected).
+        e.preventDefault();
+        deleteTrack(selectedTrackId);
+      }
       else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && !e.defaultPrevented) {
         // Envelope editor is visible and showing this stream — let it handle Delete (BP deletion)
         if (tweaks.showEnvelopeEditor !== false && selected()) return;
@@ -1137,6 +1150,9 @@ function App() {
   /* `id` may be a single stream id (a clip) or a list (a lane header, which
    * stands for every stream on the track). */
   function selectClip(id, multi) {
+    // Clicking a clip is a clip selection, never a lane one — `selectTrack`
+    // re-sets it right after, and the later setState wins.
+    setSelectedTrackId(null);
     const ids = Array.isArray(id) ? id : [id];
     if (!ids.length) return;
     if (multi) {
@@ -1148,7 +1164,33 @@ function App() {
       setSelectedIds(ids);
     }
   }
+  /* Clicking a track header selects the LANE: its clips light up as before, and
+   * the lane itself becomes the target of Delete. Ctrl/Cmd-click stays a plain
+   * multi-clip toggle — an additive selection is about clips, not lanes. */
+  function selectTrack(trackId, multi) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    if (t.streamIds.length) selectClip(t.streamIds, multi);
+    else if (!multi) setSelectedIds([]);
+    if (!multi) setSelectedTrackId(trackId);
+  }
+  /* Delete on a selected lane: the lane goes AND every stream on it. One
+   * setData, so it is one undo step. */
+  function deleteTrack(trackId) {
+    const t = tracks.find(x => x.id === trackId);
+    if (!t) return;
+    const ids = new Set(t.streamIds);
+    setData(d => {
+      const rest = TR.deriveTracks(d).filter(x => x.id !== trackId);
+      return TR.applyTracks({ ...d, streams: d.streams.filter(s => !ids.has(s.id)) }, rest);
+    });
+    if (ids.size && selectedIds.some(x => ids.has(x))) setInspectorOpen(false);
+    setSelectedIds(prev => prev.filter(x => !ids.has(x)));
+    setSelectedTrackId(null);
+    setDirty(true);
+  }
   function rangeSelectClip(id) {
+    setSelectedTrackId(null);
     const anchor = anchorIdRef.current;
     // Shift-range runs down what the user SEES. Track order is the visual
     // order and `data.streams` follows it (applyTracks), but a hand-edited
@@ -1162,6 +1204,7 @@ function App() {
     setSelectedIds(ss.slice(lo, hi + 1));
   }
   function marqueeSelectClips(ids, additive) {
+    setSelectedTrackId(null);
     if (additive) setSelectedIds(prev => [...new Set([...prev, ...ids])]);
     else setSelectedIds(ids);
   }
@@ -1586,7 +1629,8 @@ function App() {
   const timelineEl = (
     <ErrorBoundary label="Timeline">
     <Timeline streams={data.streams} tracks={tracks} selected={selectedIds}
-              onSelect={selectClip} onDeselect={() => setSelectedIds([])} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream}
+              onSelect={selectClip} onTrackSelect={selectTrack} selectedTrack={selectedTrackId}
+              onDeselect={() => { setSelectedIds([]); setSelectedTrackId(null); }} onRangeSelect={rangeSelectClip} onMarqueeSelect={marqueeSelectClips} onDoubleSelect={openInspector} onUpdate={updateStream}
               onTrackReorder={reorderTracks} onTrackRename={renameTrack}
               onTrackMute={(id) => setTrackFlag(id, "mute")} onTrackSolo={(id) => setTrackFlag(id, "solo")}
               onMoveStreams={moveStreamsToLane}

@@ -471,6 +471,17 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
   // with no `ui_tracks` in the file the lanes ARE the streams.
   assert("deleting a stream empties its lane instead of deriving it away",
          /TR\.removeStreams\(TR\.deriveTracks\(d\), \[id\]\)/.test(appSrc));
+  // Selecting a lane from its header and hitting Delete removes the lane AND
+  // its streams — one setData, so one undo step. The lane selection is a piece
+  // of state of its own: an empty lane has no clip to stand in for it.
+  assert("a track header selects the lane, not just its clips",
+         /onTrackSelect/.test(appSrc) && /onTrackSelect/.test(tlSrc) &&
+         /selectedTrackId/.test(appSrc));
+  assert("Delete on a selected lane deletes the lane with its streams",
+         /deleteTrack\(selectedTrackId\)/.test(appSrc) &&
+         /function deleteTrack[\s\S]*?streams: d\.streams\.filter\(s => !ids\.has\(s\.id\)\)/.test(appSrc));
+  assert("selecting a clip drops the lane selection",
+         /function selectClip\([\s\S]{0,200}setSelectedTrackId\(null\)/.test(appSrc));
   assert("the empty-lane buttons are wired",
          /TR\.addTrack\(/.test(appSrc) && /TR\.removeTrack\(/.test(appSrc) &&
          /onAddTrack/.test(tlSrc) && /onTrackRemove/.test(tlSrc));

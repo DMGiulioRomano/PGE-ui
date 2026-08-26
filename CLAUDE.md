@@ -357,6 +357,15 @@ one clip. The header VU sums the group's analyser **powers** — there is no
 summing node to read, and a visual meter doesn't justify rebuilding the audio
 graph.
 
+Clicking a **track header selects the lane** (`selectedTrackId` in `app.jsx`),
+not only its clips: it is the only handle on an empty lane, and it is what tells
+Delete "remove this track, with everything on it" (`deleteTrack`, one `setData`
+= one undo step) from "remove this clip" (`deleteStream`). Clicking a clip, a
+marquee or a range drops it; Ctrl-click on a header stays a plain multi-clip
+toggle. The Delete branch is gated on `defaultPrevented` alone — the
+EnvelopeEditor calls `preventDefault` only when a breakpoint or a loop really is
+selected, so its own Delete still wins there.
+
 Clip drag moves between lanes: plain drop joins the target lane, **Alt**-drop
 extracts into a new lane at that position. The drag threshold reads both axes —
 a purely vertical drag leaves `onset` alone and would otherwise never start.

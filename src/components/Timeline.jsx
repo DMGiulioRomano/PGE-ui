@@ -222,7 +222,7 @@ const CLIP_PAD        = 6;   // inset from the lane's top and bottom edges
 const CLIP_STACK_STEP = 6;   // how far each stacked clip starts below the previous
 const CLIP_MIN_H      = 22;  // the last clip in a stack never goes thinner than this
 
-function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSelect, onMarqueeSelect,
+function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackSelect, onDeselect, onRangeSelect, onMarqueeSelect,
   onDoubleSelect, onUpdate, onTrackReorder, onTrackRename, onTrackMute, onTrackSolo, onMoveStreams,
   playhead, duration, onCreateStream, onAddTrack, onTrackRemove,
   pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
@@ -769,11 +769,12 @@ function Timeline({ streams, tracks, selected, onSelect, onDeselect, onRangeSele
           <div className="track-heads" ref={headRef}>
             {laneTracks.map((t, i) =>
             <TrackHeader key={t.id} track={t} streams={laneStreams[i]}
-              selected={laneStreams[i].length > 0 && laneStreams[i].every(s => selected.includes(s.id))}
+              selected={selectedTrack === t.id ||
+                        (laneStreams[i].length > 0 && laneStreams[i].every(s => selected.includes(s.id)))}
               height={getH(t.id)} index={i} dragOver={dragOver === i}
               onResizeStart={(e) => startResizeLane(e, t.id)}
               onReorderStart={(e) => startReorder(e, i)}
-              onSelect={(multi) => onSelect(t.streamIds, multi)}
+              onSelect={(multi) => onTrackSelect ? onTrackSelect(t.id, multi) : onSelect(t.streamIds, multi)}
               onRangeSelect={() => onRangeSelect && onRangeSelect(t.streamIds[0])}
               onDoubleSelect={() => onDoubleSelect && onDoubleSelect(t.streamIds[0])}
               onRename={(name) => onTrackRename && onTrackRename(t.id, name)}
