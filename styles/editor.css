@@ -230,10 +230,10 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .lanes-area { position: relative; }
 .lane { height: var(--lane-h); border-bottom: 1px solid var(--border-subtle); position: relative; background-image: none; }
 /* the lane a dragged clip would land on */
-.lane.drop-target { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.lane.drop-target { background: rgba(255,255,255,.05); }
 /* Alt held: the clip would be pulled OUT into a new lane here, not joined to
  * this one. Two different outcomes must not look the same before release. */
-.lane.drop-target.drop-extract { background: color-mix(in srgb, var(--accent) 6%, transparent); box-shadow: none; outline: 1px dashed var(--accent); outline-offset: -2px; }
+.lane.drop-target.drop-extract { background: rgba(255,255,255,.05); outline: 1px dashed var(--accent); outline-offset: -2px; }
 /* per-clip mute/solo, shown only where the header's group buttons are ambiguous
  * — i.e. once a lane holds more than one clip */
 .clip-ms { position: absolute; top: 3px; right: 4px; display: flex; gap: 3px; z-index: 5; }
@@ -486,4 +486,29 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
   align-self: stretch;
   display: block;
   pointer-events: none;
+}
+
+/* Lane-move drag: the clip stays in its lane but faded, and a preview shows
+   where it would land in the lane under the cursor. */
+.clip.ghosting { opacity: .25; }
+.clip-preview { position: absolute; border-radius: 4px; pointer-events: none; opacity: .5; outline: 1px solid var(--accent); outline-offset: 0; z-index: 4; overflow: hidden; }
+.clip-preview.extract { outline-style: dashed; }
+.clip-preview .lbl { font-family: var(--font-mono); font-size: 10px; color: rgba(255,255,255,.92); padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drag-guide-v { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: .55; pointer-events: none; z-index: 6; }
+.drag-guide-h { position: absolute; left: 0; right: 0; height: 1px; background: var(--accent); opacity: .55; pointer-events: none; z-index: 6; }
+
+/* Riquadro informativo della clip, sul modello del tooltip di Reaper: fondo
+   chiaro, testo scuro, monospazio, multi-riga. Deliberatamente FUORI dalla
+   palette scura dell'editor — e' un overlay temporaneo del puntatore, e in
+   Reaper e' proprio la sua estraneita' a renderlo leggibile sopra qualsiasi
+   clip. position:fixed sulle coordinate del puntatore (nessun calcolo di
+   scroll) e pointer-events:none, perche' non deve mai rubare il drag. */
+.ptr-readout {
+  position: fixed; z-index: 60; pointer-events: none;
+  white-space: pre;
+  padding: 3px 7px; border-radius: 2px;
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 14px;
+  background: #FBF2CE; color: #1A1A1A;
+  border: 1px solid #8A8060;
+  box-shadow: 0 2px 6px rgba(0,0,0,.45);
 }

@@ -220,6 +220,7 @@ function gestureMatches(rule, e) {
  * many clips a lane holds. Keep CLIP_PAD equal to the CSS inset. */
 const CLIP_PAD        = 6;   // inset from the lane's top and bottom edges
 const CLIP_STACK_STEP = 6;   // how far each stacked clip starts below the previous
+const SEEK_SNAP_PX = 8;   // click within this of a clip's left edge = seek to its onset
 const CLIP_MIN_H      = 22;  // the last clip in a stack never goes thinner than this
 
 function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackSelect, onDeselect, onRangeSelect, onMarqueeSelect,
@@ -228,7 +229,7 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
   pxPerSec, showWaveforms, showSpectrograms, showGrains, showClipLabels, laneHeight, gestures, onZoom, onLaneHeight,
   renderStatusFor, waveformFor, spectrogramFor, grainsFor,
   loopEnabled, loopRegion, onLoopRegionChange,
-  analysersFor }) {
+  arrowOwnerRef, laneMoveKeys, sampleDurOf, onNeedGrains, analysersFor }) {
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   // solo/mute stay PER STREAM: that is what the engine filters on
@@ -237,19 +238,85 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
   // A lane is a track; with no track model supplied it degrades to one lane per
   // stream, which is what the timeline did before tracks existed.
-  const laneTracks = (tracks && tracks.length)
+  const baseTracks = (tracks && tracks.length)
     ? tracks
     : streams.map(s => ({ id: s.id, name: s.id, streamIds: [s.id] }));
   const streamById = new Map(streams.map(s => [s.id, s]));
-  const laneStreams = laneTracks.map(t => t.streamIds.map(id => streamById.get(id)).filter(Boolean));
   const laneOfStream = new Map();
-  laneTracks.forEach((t, i) => t.streamIds.forEach(id => laneOfStream.set(id, i)));
+  baseTracks.forEach((t, i) => t.streamIds.forEach(id => laneOfStream.set(id, i)));
   const PX_PER_S = pxPerSec || 36;
+  /* Riquadro informativo sotto il cursore, sul modello di Reaper: compare
+   * passando sopra una clip SELEZIONATA e dice dove si trova la clip nel tempo
+   * e, in piu', dove sta leggendo la testina nel sample a quell'istante.
+   *
+   * Position/End ci sono SEMPRE: sono onset e durata, dati che abbiamo. La
+   * riga `read` compare solo se il motore ha gia' scritto il sidecar dei grani
+   * (layer grani acceso + un render fatto), perche' il `ptr` lo calcola lui e
+   * non lo inventiamo noi (grain-map.js:readPositionAt). Quando manca lo dice,
+   * invece di far sparire tutto il riquadro: una scatola che non compare non
+   * si distingue da una funzione rotta.
+   *
+   * L'aggiornamento e' IMPERATIVO, non via setState: un pointermove su una
+   * clip farebbe altrimenti ri-renderizzare l'intera timeline a ogni pixel —
+   * il difetto che `hoverX` teneva in piedi qui prima. Stesso idiom della
+   * sincronia delle testate (head.style.transform). */
+  function fmtTime(t) {
+    const m = Math.floor(t / 60);
+    const sec = t - m * 60;
+    return `${m}:${sec < 10 ? "0" : ""}${sec.toFixed(3)}`;
+  }
+  function showReadout(e, s) {
+    const el = readoutRef.current;
+    if (!el) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const tRel = (e.clientX - rect.left) / PX_PER_S;
+    const lines = [
+      `Position: ${fmtTime(s.onset)}`,
+      `End: ${fmtTime(s.onset + s.duration)}   Len: ${s.duration.toFixed(3)}`,
+    ];
+    // Il sidecar sta su disco appena lo stream e' stato renderizzato: se non e'
+    // ancora in memoria lo si chiede, invece di pretendere che l'utente accenda
+    // il layer grani per un dato che non c'entra con quel toggle.
+    if (onNeedGrains) onNeedGrains(s.id);
+    const data = grainsFor && grainsFor(s.id);
+    const ptr = data && window.PGEGrainMap.readPositionAt(data, tRel, {
+      // La deviazione stocastica esiste solo se offset_range e' dichiarato: il
+      // centro della deviazione e' inchiodato a zero nello schema del motore
+      // (`pointer_deviation`, yaml_path '_dummy_fixed_zero_'). Senza quella
+      // chiave il ptr della voce 0 e' la posizione base, esatta.
+      jitter: !!(s.pointer && (s.pointer.offsetRange != null || s.pointer.offsetRangeEnv)),
+      sampleDur: sampleDurOf ? sampleDurOf(s.sample) : 0,
+    });
+    lines.push(ptr
+      ? `Read: ${ptr.exact ? "" : "~"}${ptr.pos.toFixed(3)}  @ ${tRel.toFixed(3)}`
+      : `Read: — (${readoutWhy(s, data)})`);
+    el.textContent = lines.join("\n");
+    el.title = ptr && !ptr.exact ? "stima: pointer.offset_range devia ogni grano" : "";
+    // Il riquadro sta sotto-destra della punta, come in Reaper, e si ribalta
+    // sul lato opposto quando toccherebbe il bordo della finestra.
+    el.style.display = "block";
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const x = e.clientX + 16, y = e.clientY + 16;
+    el.style.left = (x + w > window.innerWidth  - 8 ? e.clientX - w - 8 : x) + "px";
+    el.style.top  = (y + h > window.innerHeight - 8 ? e.clientY - h - 8 : y) + "px";
+  }
+  // Perche' la riga manca. Lo stato di render lo sappiamo gia' (e' lo stesso
+  // che accende il pallino sulla clip): distinguere "mai renderizzato" da
+  // "sto caricando" e' la differenza fra un'istruzione e un mistero.
+  function readoutWhy(s, data) {
+    if (data) return "nessun grano qui";
+    const st = renderStatusFor && renderStatusFor(s.id);
+    if (st && st.state === "never") return "stream mai renderizzato";
+    return "sidecar in caricamento…";
+  }
+  function hideReadout() {
+    if (readoutRef.current) readoutRef.current.style.display = "none";
+  }
   const HEAD_W = 220;
   const ref = useRefTL(null);
   const headRef = useRefTL(null);
   const bodyRef = useRefTL(null);
-  const [hoverX, setHoverX] = useStateTL(null);
+  const readoutRef = useRefTL(null);
   const [hint, setHint] = useStateTL(null);
   const [dragOver, setDragOver] = useStateTL(null);
   const [sampleDragOver, setSampleDragOver] = useStateTL(false);
@@ -278,6 +345,89 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
   // (see tracks.js), so heights saved before tracks existed keep applying.
   function getH(id) { return laneHeights[id] || laneHeight || 56; }
 
+  /* Lane index under a content-space y (already scroll-corrected). Clamped, so
+   * dragging past either end lands on the first/last lane rather than nowhere —
+   * except with `overflow`, which keeps counting past the bottom in lanes that
+   * do not exist yet: the clip drag creates them, so it must be able to point
+   * at them. Upward there is nothing to count into: lane 0 is a hard floor. */
+  function laneIndexAtY(y, overflow) {
+    if (!laneTracks.length) return -1;
+    for (let i = 0; i < laneTracks.length; i++) {
+      if (y < laneTops[i] + getH(laneTracks[i].id)) return Math.max(0, i);
+    }
+    const last = laneTracks.length - 1;
+    if (!overflow) return last;
+    const bottom = laneTops[last] + getH(laneTracks[last].id);
+    return last + 1 + Math.floor((y - bottom) / (laneHeight || 56));
+  }
+  /* Same, from a raw clientY. `.lanes-area` is the scrolled content itself, so
+   * its rect already carries scrollTop — adding it again would double-count. */
+  function laneIndexAtClientY(clientY, overflow) {
+    const area = lanesAreaRef.current;
+    if (!area) return -1;
+    return laneIndexAtY(clientY - area.getBoundingClientRect().top, overflow);
+  }
+
+  // The drop target during a drag. Mirrored in a ref because a state updater is
+  // not a place to run effects: calling onReorder from inside setDragOver let a
+  // concurrent replay of the updater apply the move twice.
+  const dragOverRef = useRefTL(null);
+  // Ids of the clips a lane-move drag is carrying, so the source lane can show
+  // them faded and the target lane a preview of where they would land. Latched
+  // once (a fresh array every pointermove would kill React's bail-out).
+  const dragIdsRef = useRefTL(null);
+  const [dragIds, setDragIds] = useStateTL(null);
+  // How many lanes down (or up) the drag would shift what it carries. The lane
+  // under the cursor is not enough on its own: the clips that are NOT the
+  // grabbed one land relative to it.
+  const [dragDelta, setDragDelta] = useStateTL(null);
+  function setDrop(v, ids, delta) {
+    dragOverRef.current = v;
+    setDragOver(v);
+    setDragDelta(v === null ? null : (delta == null ? null : delta));
+    if (v === null) {
+      setDropExtract(false);   // never outlive its own drag
+      if (dragIdsRef.current) { dragIdsRef.current = null; setDragIds(null); }
+    } else if (ids && !dragIdsRef.current) {
+      dragIdsRef.current = ids;
+      setDragIds(ids);
+    }
+  }
+  // Reaper-style drag guides: the two vertical rules on the grabbed clip's
+  // start/end, spanning every lane, plus the two horizontal rules on its top
+  // and bottom edges. Content-space px, cleared on release.
+  const [dragGuides, setDragGuides] = useStateTL(null);
+  // Whether the pending drop would JOIN the target lane or EXTRACT into a new
+  // one. Drawn differently, so the modifier's effect is visible before release.
+  const [dropExtract, setDropExtract] = useStateTL(false);
+
+  /* Where each dragged clip would land: its own lane plus the drag's delta
+   * (the DAW rule — a selection keeps its lane spacing, see tracks.js). Null
+   * outside a lane drag, and collapsed onto the one target lane under Alt,
+   * which extracts everything into a single new lane. */
+  function dstLaneOf(id) {
+    if (dragDelta == null) return null;
+    if (dropExtract) return dragOver;
+    const src = laneOfStream.get(id);
+    return src == null ? null : src + dragDelta;
+  }
+  /* Downward the drag GROWS the layout (moveStreams appends lanes), so the
+   * lanes it would create are drawn as empty phantoms while it is held: the
+   * preview must not stop at a bottom edge the drop does not respect. */
+  const laneTracks = React.useMemo(() => {
+    if (dragDelta == null || !dragIds) return baseTracks;
+    let bottom = baseTracks.length - 1;
+    for (const id of dragIds) {
+      const d = dstLaneOf(id);
+      if (d != null && d > bottom) bottom = d;
+    }
+    if (bottom < baseTracks.length) return baseTracks;
+    const out = [...baseTracks];
+    for (let i = baseTracks.length; i <= bottom; i++) out.push({ id: "__new" + i, name: "", streamIds: [], phantom: true });
+    return out;
+  }, [baseTracks, dragDelta, dragIds, dropExtract, dragOver]);
+  const laneStreams = laneTracks.map(t => t.streamIds.map(id => streamById.get(id)).filter(Boolean));
+
   // Top edge of each lane inside .lanes-area, in content pixels.
   const laneTops = [];
   {
@@ -285,35 +435,6 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
     for (const t of laneTracks) { laneTops.push(y); y += getH(t.id); }
   }
 
-  /* Lane index under a content-space y (already scroll-corrected). Clamped, so
-   * dragging past either end lands on the first/last lane rather than nowhere. */
-  function laneIndexAtY(y) {
-    if (!laneTracks.length) return -1;
-    for (let i = 0; i < laneTracks.length; i++) {
-      if (y < laneTops[i] + getH(laneTracks[i].id)) return Math.max(0, i);
-    }
-    return laneTracks.length - 1;
-  }
-  /* Same, from a raw clientY. `.lanes-area` is the scrolled content itself, so
-   * its rect already carries scrollTop — adding it again would double-count. */
-  function laneIndexAtClientY(clientY) {
-    const area = lanesAreaRef.current;
-    if (!area) return -1;
-    return laneIndexAtY(clientY - area.getBoundingClientRect().top);
-  }
-
-  // The drop target during a drag. Mirrored in a ref because a state updater is
-  // not a place to run effects: calling onReorder from inside setDragOver let a
-  // concurrent replay of the updater apply the move twice.
-  const dragOverRef = useRefTL(null);
-  function setDrop(v) {
-    dragOverRef.current = v;
-    setDragOver(v);
-    if (v === null) setDropExtract(false);   // never outlive its own drag
-  }
-  // Whether the pending drop would JOIN the target lane or EXTRACT into a new
-  // one. Drawn differently, so the modifier's effect is visible before release.
-  const [dropExtract, setDropExtract] = useStateTL(false);
 
   function startReorder(e, srcIdx) {
     e.preventDefault(); e.stopPropagation();
@@ -423,20 +544,32 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
     const origs = Object.fromEntries(targets.map(s => [s.id, { onset: s.onset, duration: s.duration }]));
     const srcLane = laneOfStream.has(stream.id) ? laneOfStream.get(stream.id) : -1;
     const canMoveLane = mode === "drag" && !!onMoveStreams && srcLane !== -1;
+    // The highest lane the selection sits on: the drag stops when THAT clip
+    // reaches lane 0, so a selection spanning two lanes never collapses onto
+    // one against the ceiling (Reaper's rule, mirrored in tracks.js).
+    const topLane = targets.reduce((m, s) => Math.min(m, laneOfStream.has(s.id) ? laneOfStream.get(s.id) : m), srcLane);
     // Alt is sampled while dragging, not at release: releasing the modifier a
     // frame before the button must not silently invert the outcome, and this is
     // the same value the lane highlight is drawn from.
     const extractRef = { current: false };
+    // The clip's vertical extent, read once: it does not move until release
+    // (a lane change lands on drop), and reading it per-move would trail the
+    // React render by a frame.
+    const areaR = lanesAreaRef.current && lanesAreaRef.current.getBoundingClientRect();
+    const clipR = e.currentTarget.closest && e.currentTarget.closest(".clip")
+      ? e.currentTarget.closest(".clip").getBoundingClientRect() : null;
+    const gy = areaR && clipR ? { top: clipR.top - areaR.top, bottom: clipR.bottom - areaR.top } : null;
     // Vertical INTENT, sampled the same way, and the gate for the whole lane
     // move. Without it an ordinary horizontal drag still reports a drop lane —
     // the cursor never leaves the grabbed clip's own lane — so a selection
     // spanning two lanes would silently collapse into one every time it is
     // moved along the time axis, writing `ui_tracks` into the file.
     // `dstLane !== srcLane` is NOT the guard: `srcLane` is the lane of the
-    // GRABBED clip, and gathering a multi-lane selection onto it is a real
-    // gesture. It just has to ask vertically to be told apart from a plain
-    // horizontal move. Once latched it stays latched: the drag has declared
-    // itself, and coming back to the starting row is then a choice.
+    // GRABBED clip, and a drag that returns it to its own row while the rest of
+    // the selection has been clamped against the ceiling is still a real move.
+    // It just has to ask vertically to be told apart from a plain horizontal
+    // one. Once latched it stays latched: the drag has declared itself, and
+    // coming back to the starting row is then a choice.
     const verticalRef = { current: false };
     let moved = false;
     const THRESHOLD = 4;
@@ -458,9 +591,24 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
         extractRef.current = !!ev.altKey;
         setDropExtract(extractRef.current);
         // No vertical intent, no highlight: the affordance must not promise a
-        // lane change the release will not perform.
-        const lane = verticalRef.current ? laneIndexAtClientY(ev.clientY) : -1;
-        setDrop(lane === -1 ? null : lane);
+        // lane change the release will not perform. Past the bottom the index
+        // keeps counting into lanes the drop will create.
+        const lane = verticalRef.current ? laneIndexAtClientY(ev.clientY, true) : -1;
+        // Clamped upward only, and on the whole selection, not on the grabbed
+        // clip: that is what preserves the spacing at the ceiling.
+        const delta = lane === -1 ? null : Math.max(lane - srcLane, -topLane);
+        setDrop(delta === null ? null : srcLane + delta, targets.map(s => s.id), delta);
+      }
+      if (gy) {
+        const onset = mode === "drag" ? Math.max(0, origs[stream.id].onset + dt) : origs[stream.id].onset;
+        const dur = mode === "resize" ? Math.max(0.5, origs[stream.id].duration + dt) : origs[stream.id].duration;
+        // The horizontal rules ride the lane the drop would land on, not the
+        // one the clip is still drawn in — that lane is where the eye is.
+        const lane = dragOverRef.current;
+        const y = lane != null && laneTracks[lane]
+          ? { top: laneTops[lane] + CLIP_PAD, bottom: laneTops[lane] + getH(laneTracks[lane].id) - CLIP_PAD }
+          : gy;
+        setDragGuides({ ...y, x0: onset * PX_PER_S, x1: (onset + dur) * PX_PER_S });
       }
     }
     function up(ev) {
@@ -468,16 +616,28 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
       window.removeEventListener("pointerup", up);
       const dstLane = canMoveLane ? dragOverRef.current : null;
       setDrop(null);
+      setDragGuides(null);
       // Inside the gesture, so the vertical move and the onset it travelled
       // with collapse into one undo step. `dstLane` is non-null only when
       // `verticalRef` latched (see move), so a horizontal drag never reaches
       // here. Whether a real drop changes anything is `moveStreams`' call — it
       // sees all the targets, this does not.
       if (moved && dstLane != null) {
-        onMoveStreams(targets.map(s => s.id), dstLane, { extract: extractRef.current });
+        onMoveStreams(targets.map(s => s.id), dstLane, { extract: extractRef.current, anchor: stream.id });
       }
       if (moved && window.PGEHistory) window.PGEHistory.endGesture();
       if (!moved) {
+        // Clicking a clip also moves the playhead where it was clicked (DAW
+        // habit) — but only a plain click: shift/ctrl are selection gestures.
+        if (areaR && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+          const x = e.clientX - areaR.left;
+          // Near the clip's left edge, snap to its exact onset: clicking "at
+          // the start" always lands a few px in, and starting a hair late is
+          // exactly what you don't want when you click the head of a clip.
+          const t = Math.abs(x - stream.onset * PX_PER_S) <= SEEK_SNAP_PX
+            ? stream.onset : x / PX_PER_S;
+          window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, t) }));
+        }
         if (e.shiftKey) onRangeSelect && onRangeSelect(stream.id);
         else onSelect(stream.id, e.ctrlKey || e.metaKey);
       }
@@ -490,12 +650,11 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
     if (e.button !== 0) return;
     e.preventDefault();
     const additive = e.ctrlKey || e.metaKey;
+    // The rect of the scrolled content already carries the scroll offset, so
+    // these are content coords — the same space as clip lefts and laneTops.
     const getCoords = (ev) => {
       const r = lanesAreaRef.current.getBoundingClientRect();
-      return {
-        x: ev.clientX - r.left + bodyRef.current.scrollLeft,
-        y: ev.clientY - r.top + bodyRef.current.scrollTop,
-      };
+      return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     };
     const { x: x0, y: y0 } = getCoords(e);
     setMarquee({ x0, y0, x1: x0, y1: y0 });
@@ -526,6 +685,9 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
         if (ids.length > 0) onMarqueeSelect && onMarqueeSelect(ids, additive);
         else onDeselect && onDeselect();
       } else {
+        // Click in empty timeline space = move the playhead, like a DAW. x0 is
+        // already in content coords (scroll included).
+        window.dispatchEvent(new CustomEvent("pge-seek", { detail: Math.max(0, x0 / PX_PER_S) }));
         onDeselect && onDeselect();
       }
       setMarquee(null);
@@ -539,8 +701,8 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
     e.stopPropagation();
     const sample = e.dataTransfer.getData("text/sample");
     if (!sample) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left + bodyRef.current.scrollLeft;
+    // The lane is scrolled content: its rect already carries scrollLeft.
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
     // An empty lane is waiting to be filled: the drop lands IN it. Otherwise a
     // NEW track at this position, inserted after the lane dropped onto —
     // `laneIdx` indexes tracks, not streams, so dropping below a three-clip
@@ -732,24 +894,47 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
         onZoom && onZoom(next);
         return;
       }
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const vert = e.key === "ArrowUp" || e.key === "ArrowDown";
+      if (!vert && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       if (e.defaultPrevented) return;
-      // Selection present → arrows belong to the app (nudge onset / ctrl-resize).
-      if (selected && selected.length > 0) return;
+      // Selection present → the horizontal arrows belong to the app (nudge
+      // onset / ctrl-resize). ↑/↓ have no app-level owner, so they keep
+      // scrolling the lanes even with clips selected; the only other claimant
+      // is the envelope editor's breakpoint nudge, and it can't be detected via
+      // defaultPrevented (this listener is registered first — Timeline mounts
+      // before EnvelopeEditor), hence the same ref the app consults.
+      if (!vert && selected && selected.length > 0) return;
+      if (vert && arrowOwnerRef && arrowOwnerRef.current &&
+          arrowOwnerRef.current.focused && arrowOwnerRef.current.singleBPSelected) return;
+      // The lane-move shortcut (alt+↑/↓ by default) belongs to the app: it
+      // moves the selected clips, and scrolling under them at the same time
+      // would fight it. Matched against the live spec rather than hardcoding
+      // alt, so a rebind keeps the two in agreement.
+      if (vert && laneMoveKeys && window.matchShortcut &&
+          laneMoveKeys.some(k => window.matchShortcut(e, k))) return;
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       const body = bodyRef.current;
       if (!body) return;
       e.preventDefault();
+      if (vert) {
+        // One lane per press (the vertical twin of one second per press),
+        // half a viewport with shift. The header column follows via the
+        // scroll-sync transform, so nothing else has to move.
+        const step = e.shiftKey ? body.clientHeight * 0.5 : (laneHeight || 56);
+        body.scrollTop += e.key === "ArrowUp" ? -step : step;
+        return;
+      }
       const step = e.shiftKey ? body.clientWidth * 0.5 : PX_PER_S;
       body.scrollLeft += e.key === "ArrowLeft" ? -step : step;
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [PX_PER_S, selected, onZoom, laneHeight, onLaneHeight]);
+  }, [PX_PER_S, selected, onZoom, laneHeight, onLaneHeight, arrowOwnerRef, laneMoveKeys]);
 
   return (
     <div className="pge-timeline split-tl" ref={ref}>
+      <div className="ptr-readout mono" ref={readoutRef} style={{ display: "none" }} />
       <SplitPane dir="horiz" persist="tl-heads" initial={220} min={140} max={420}>
       {/* track header column */}
       <div className="lanes-head">
@@ -905,9 +1090,10 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
             const step = n > 1
               ? Math.min(CLIP_STACK_STEP, Math.max(0, laneH - CLIP_PAD * 2 - CLIP_MIN_H) / (n - 1))
               : 0;
+            const landing = dragIds ? dragIds.filter(id => dstLaneOf(id) === i) : [];
+            const isDrop = dragDelta != null ? landing.length > 0 : dragOver === i;
             return (
-            <div key={t.id} className={"lane" + (dragOver === i ? (dropExtract ? " drop-target drop-extract" : " drop-target") : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
-            onMouseMove={(e) => setHoverX((e.clientX - e.currentTarget.getBoundingClientRect().left) / PX_PER_S)}
+            <div key={t.id} className={"lane" + (isDrop ? (dropExtract ? " drop-target drop-extract" : " drop-target") : "")} style={{ height: laneH }} onDragOver={onSampleDragOver} onDrop={(e) => { dragEnterCount.current = 0; setSampleDragOver(false); onLaneDrop(e, i); }}
             onClick={(e) => { if (e.target === e.currentTarget) onDeselect?.(); }}>
               {laneStreams[i].map((s, k) => {
               const top = CLIP_PAD + k * step;
@@ -915,10 +1101,16 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
               // clip's own box, not the lane's, or a staggered row draws its
               // waveform past its own bottom edge and gets cropped.
               const clipH = Math.max(1, laneH - top - CLIP_PAD);
+              // A clip fades where it is leaving from, not merely because some
+              // lane is highlighted: with a delta drag several lanes are both
+              // a source and a target at once.
+              const ghosting = dragIds && dragIds.includes(s.id) && dstLaneOf(s.id) !== i;
               return (
-              <div key={s.id} className={"clip" + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
+              <div key={s.id} className={"clip" + (ghosting ? " ghosting" : "") + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, top, background: s.color, zIndex: selected.includes(s.id) ? 3 : 1 }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
+            onPointerMove={selected.includes(s.id) ? (e) => showReadout(e, s) : undefined}
+            onPointerLeave={selected.includes(s.id) ? hideReadout : undefined}
             onDoubleClick={() => onDoubleSelect && onDoubleSelect(s.id)}>
                 {renderStatusFor ? <ClipRenderStatus status={renderStatusFor(s.id)} /> : null}
                 {laneStreams[i].length > 1 ? (
@@ -946,12 +1138,30 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
               </div>
               );
               })}
+              {landing.length ? landing
+                .filter(id => !t.streamIds.includes(id))
+                .map(id => streamById.get(id))
+                .filter(Boolean)
+                .map(s => (
+                  <div key={"prev-" + s.id} className={"clip-preview" + (dropExtract ? " extract" : "")}
+                       style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S,
+                                top: CLIP_PAD, height: Math.max(1, laneH - CLIP_PAD * 2),
+                                background: s.color }}>
+                    <div className="lbl">{s.id}</div>
+                  </div>
+                )) : null}
             </div>
             );
           })}
           <div className="comp-end-line" style={{ left: duration * PX_PER_S }} />
           <div className="playhead-line" style={{ left: playhead * PX_PER_S }} />
           <div className="playhead-glow" style={{ left: playhead * PX_PER_S - 7 }} />
+          {dragGuides ? (<>
+            <div className="drag-guide-v" style={{ left: dragGuides.x0 }} />
+            <div className="drag-guide-v" style={{ left: dragGuides.x1 }} />
+            <div className="drag-guide-h" style={{ top: dragGuides.top }} />
+            <div className="drag-guide-h" style={{ top: dragGuides.bottom }} />
+          </>) : null}
           {marquee && (() => {
             const x = Math.min(marquee.x0, marquee.x1);
             const y = Math.min(marquee.y0, marquee.y1);

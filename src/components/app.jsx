@@ -683,6 +683,32 @@ function App() {
   }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
+  /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
+   * timeline. L'effetto qui sotto carica i grani di tutti gli stream, ma solo
+   * col layer grani acceso: il readout non ha motivo di dipendere da quel
+   * toggle — il file e' su disco appena il motore ha renderizzato lo stream.
+   * Scrive nella stessa mappa e negli stessi ref del caricamento in blocco,
+   * cosi' i due non si rifanno il lavoro a vicenda; `grainRegenRef` resta la
+   * fonte di verita' sullo stale, quindi un nuovo render lo fa rifetchare. */
+  const grainReqRef = useRefApp(new Set());
+  function ensureGrainData(id) {
+    const stale = grainRegenRef.current.has(id);
+    if ((grainData[id] && !stale) || grainReqRef.current.has(id)) return;
+    const backend = window.PGEBackend.current;
+    if (!backend.render.loadGrainData || !hasStemFor(id)) return;
+    grainReqRef.current.add(id);
+    const basename = activeProject.replace(/\.yml$/, "");
+    backend.render.loadGrainData(basename, id).then(j => {
+      grainReqRef.current.delete(id);
+      if (!j) return;
+      const GM = window.PGEGrainMap;
+      if (GM) j._ext = GM.computeExtents(j.grains || []);
+      setGrainData(m => ({ ...m, [id]: j }));
+      grainLoadedRef.current.add(id);
+      grainRegenRef.current.delete(id);
+    }).catch(() => { grainReqRef.current.delete(id); });
+  }
+
   // canvas inside clips and the score panel. Same lazy trigger as peaks/spectro:
   // refetches on fingerprint change (each stream-done). Gated by either the
   // in-clip toggle or the score panel being open.
@@ -800,6 +826,20 @@ function App() {
         targets.forEach(s => updateStream(s.id, { solo: !allSoloed }));
         return;
       }
+      // Alt+↑/↓ (rebindable): move the selected clips one lane. Placed before
+      // the ←/→ nudge and gated on a full shortcut match, so a rebind moves the
+      // whole behaviour — including the Timeline's decision to stay out of it.
+      if (selectedIds.length > 0 &&
+          (matchShortcut(e, tweaks.shortcutMoveLaneUp || MOVE_LANE_UP) ||
+           matchShortcut(e, tweaks.shortcutMoveLaneDown || MOVE_LANE_DOWN))) {
+        e.preventDefault();
+        if (!arrowGestureRef.current) {
+          arrowGestureRef.current = true;
+          window.PGEHistory && window.PGEHistory.beginGesture();
+        }
+        moveSelectionByLane(matchShortcut(e, tweaks.shortcutMoveLaneUp || MOVE_LANE_UP) ? -1 : 1);
+        return;
+      }
       if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selectedIds.length > 0) {
         // Defer to the envelope editor when it owns the arrows (a breakpoint is
         // selected and the pointer last landed inside it) — ←/→ nudges the BP.
@@ -842,7 +882,7 @@ function App() {
       }
     }
     function onKeyUp(e) {
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && arrowGestureRef.current) {
+      if (e.key.startsWith("Arrow") && arrowGestureRef.current) {
         arrowGestureRef.current = false;
         window.PGEHistory && window.PGEHistory.endGesture();
       }
@@ -1030,6 +1070,25 @@ function App() {
    * out into a lane of its own at that position. */
   function moveStreamsToLane(streamIds, dstLaneIdx, opts) {
     mutateTracks(t => TR.moveStreams(t, streamIds, dstLaneIdx, opts));
+  }
+  /* Keyboard twin of the vertical clip drag: move the whole selection one lane
+   * up or down. Like the drag it is a lane DELTA, not a destination — every
+   * clip keeps its offset from the anchor, so a selection spanning two lanes
+   * stays spread over two lanes. The clamps differ from the drag's on purpose:
+   * upward `moveStreams` already stops at lane 0, and downward a keypress must
+   * NOT grow the layout the way a drop does — holding the key would otherwise
+   * spawn empty lanes without end. So the move is refused once the lowest
+   * selected clip sits on the last lane. Use the drag (or `add track`) to
+   * create one. */
+  function moveSelectionByLane(dir) {
+    if (!selectedIds.length) return;
+    const laneOf = new Map();
+    tracks.forEach((t, i) => t.streamIds.forEach(id => laneOf.set(id, i)));
+    const anchor = selectedIds.find(id => laneOf.has(id));
+    if (anchor == null) return;
+    const lanes = selectedIds.filter(id => laneOf.has(id)).map(id => laneOf.get(id));
+    if (dir > 0 && Math.max(...lanes) >= tracks.length - 1) return;
+    moveStreamsToLane(selectedIds, laneOf.get(anchor) + dir, { anchor });
   }
   /* Fan-out: the header's M/S write the per-stream keys the engine actually
    * reads. Partially-set groups go fully on, so one click always has an effect.
@@ -1663,6 +1722,11 @@ function App() {
               spectrogramFor={(id) => spectrograms[id]}
               grainsFor={(id) => grainData[id]}
               loopEnabled={loopEnabled} loopRegion={loopRegion} onLoopRegionChange={setLoopRegion}
+              arrowOwnerRef={envArrowRef}
+              sampleDurOf={(name) => ((mediaList.files || []).find(f => f.name === name) || {}).duration || 0}
+              onNeedGrains={ensureGrainData}
+              laneMoveKeys={[tweaks.shortcutMoveLaneUp || MOVE_LANE_UP,
+                             tweaks.shortcutMoveLaneDown || MOVE_LANE_DOWN]}
               analysersFor={(ids) => ids.map(id => window.PGEAudio?.engine?.trackAnalyser(id)).filter(Boolean)} />
     </ErrorBoundary>
   );
@@ -1838,6 +1902,12 @@ function prettyGesture(g) {
 // Match a keyboard event against a shortcut spec like "cmd+i", "shift+cmd+p",
 // "ctrl+alt+e", or a bare key like "f1". cmd matches metaKey on mac and ctrlKey
 // elsewhere (so the same spec works cross-platform).
+// Defaults for the lane-move pair. They live on `window` because three places
+// need the same fallback: the handler, the Timeline (which must know what to
+// keep its hands off) and the Settings row.
+const MOVE_LANE_UP = "alt+arrowup";
+const MOVE_LANE_DOWN = "alt+arrowdown";
+window.PGE_MOVE_LANE_DEFAULTS = { up: MOVE_LANE_UP, down: MOVE_LANE_DOWN };
 function matchShortcut(e, spec) {
   if (!spec) return false;
   const parts = spec.toLowerCase().split("+").map(s => s.trim()).filter(Boolean);
@@ -1867,6 +1937,10 @@ function prettyShortcut(spec) {
     if (p === "ctrl") return "⌃";
     if (p === "shift") return "⇧";
     if (p === "alt" || p === "opt" || p === "option") return "⌥";
+    if (p === "arrowup") return "↑";
+    if (p === "arrowdown") return "↓";
+    if (p === "arrowleft") return "←";
+    if (p === "arrowright") return "→";
     return p.length === 1 ? p.toUpperCase() : p;
   }).join(" ");
 }

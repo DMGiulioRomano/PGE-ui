@@ -263,6 +263,16 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
             <ShortcutInput value={tweaks.shortcutSolo || "s"}
                            onChange={(v) => setTweak("shortcutSolo", v)} />
           </div>
+          <div className="sp-row">
+            <span className="sp-k" title="sposta gli stream selezionati sulla traccia sopra">move to track above</span>
+            <ShortcutInput value={tweaks.shortcutMoveLaneUp || window.PGE_MOVE_LANE_DEFAULTS.up}
+                           onChange={(v) => setTweak("shortcutMoveLaneUp", v)} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k" title="sposta gli stream selezionati sulla traccia sotto">move to track below</span>
+            <ShortcutInput value={tweaks.shortcutMoveLaneDown || window.PGE_MOVE_LANE_DEFAULTS.down}
+                           onChange={(v) => setTweak("shortcutMoveLaneDown", v)} />
+          </div>
           <div className="sp-hint">
             Click sul campo e premi la combinazione desiderata. Funziona anche cliccando
             di nuovo sullo stesso stream in timeline. Se nessuno stream è selezionato,
