@@ -53,6 +53,16 @@ const CORPUS = [
     engine: { type: "cubic", points: [[0, 0], [1, 100]] } },
   { label: "dict con solo points",
     js: { points: [[0, 0], [1, 100]] }, engine: { points: [[0, 0], [1, 100]] } },
+  // I due casi che separano `'points' in obj` da una sua approssimazione piu'
+  // larga. Senza di loro, allargare isEnvValue a `('points' in v) || ('type' in
+  // v)` lasciava la suite verde — proprio il difetto che l'intestazione di
+  // questo file nomina («un errore qui apre il pannello sbagliato»). Il motore
+  // li separa: senza `points` sono un dict per-parametro (SPECIFIC), con
+  // `points` un envelope globale.
+  { label: "dict con solo type (NON envelope-like)",
+    js: { type: "cubic" }, engine: { type: "cubic" } },
+  { label: "dict con solo interp (NON envelope-like)",
+    js: { interp: "step" }, engine: { interp: "step" } },
   { label: "dict per-parametro", js: { volume: 50 }, engine: { volume: 50 } },
   { label: "dict per-parametro con envelope",
     js: { volume: [[0, 0], [1, 100]] }, engine: { volume: [[0, 0], [1, 100]] } },
@@ -267,6 +277,51 @@ parity({
           "\n      (se il motore ha smesso di rifiutarli, la lista MUST_FLAG va rivista)");
         assert(`${reqs.length} coppie (corpo, posizione): la UI le segnala tutte`,
           uiMute.length === 0, uiMute.join("\n      "));
+      },
+    },
+    {
+      label: "le liste di chiavi sono complete, non solo corrette",
+      run: async (ask, assert, ctx) => {
+        // Il caso dopo verifica che ogni chiave dichiarata dalla UI sia
+        // consultata dal motore: inclusione, non completezza. `PARAM_KEYS = []`
+        // lo lasciava verde («0 chiavi sempre vive, tutte consultate»). Qui la
+        // domanda e' rovesciata, e la risposta viene dal motore: ogni chiave che
+        // gli spec DICHIARANO dentro deviation_probability deve essere nota alla
+        // UI.
+        const c = (await ask("constants", {})).value;
+        const declared = c.deviation_probability_keys;
+        assert("il motore dichiara le sue chiavi (schema leggibile)",
+          Array.isArray(declared) && declared.length > 0,
+          c.deviation_probability_keys_error || JSON.stringify(declared));
+        if (!Array.isArray(declared) || !declared.length) return;
+
+        ctx.note(`${declared.length} chiavi dichiarate negli spec del motore`,
+          declared.map(d => `${d.key} (${d.schema}, is_smart=${d.is_smart})`));
+
+        // ALL_PARAM_KEYS e' la lista con cui envelope-utils cammina gli
+        // envelope: una chiave dichiarata che manchi li' e' un envelope che il
+        // resize non riscala.
+        const unknown = declared.filter(d => !D.ALL_PARAM_KEYS.includes(d.key));
+        assert("ALL_PARAM_KEYS conosce ogni chiave dichiarata dal motore",
+          unknown.length === 0,
+          unknown.map(d => `${d.key} (${d.schema}) non e' in ALL_PARAM_KEYS`).join("\n      "));
+
+        // PARAM_KEYS sono le SEMPRE vive: le dichiarate con is_smart, meno il
+        // gruppo esclusivo del verso, che e' condizionale al blocco `grain` e
+        // vive in liveParamKeys.
+        const CONDITIONAL = ["reverse", "read_direction"];
+        const alwaysLive = declared
+          .filter(d => d.is_smart && !CONDITIONAL.includes(d.key))
+          .map(d => d.key);
+        const missing = alwaysLive.filter(k => !D.PARAM_KEYS.includes(k));
+        assert(`PARAM_KEYS contiene le ${alwaysLive.length} dichiarate sempre vive`,
+          missing.length === 0,
+          missing.join(", ") + " — dichiarate con is_smart e non condizionali");
+
+        // E le condizionali stanno dove devono: in liveParamKeys, non qui.
+        const strayed = CONDITIONAL.filter(k => D.PARAM_KEYS.includes(k));
+        assert("e non le condizionali, che dipendono dal blocco grain",
+          strayed.length === 0, strayed.join(", "));
       },
     },
     {

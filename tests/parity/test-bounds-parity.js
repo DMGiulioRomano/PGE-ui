@@ -138,6 +138,21 @@ parity({
         }
         assert(`${Object.keys(B.ENGINE_PARAM_MAP).length} chiavi mappate, tutte su un parametro reale`,
           missing.length === 0, missing.join("\n      "));
+
+        /* E il verso opposto, che mancava: la mappa e' COMPLETA?
+           Togliere una riga da ENGINE_PARAM_MAP lasciava la suite verde, con
+           l'etichetta che continuava a dire "20 chiavi mappate" essendone 19 —
+           e quel clamp tornava silenziosamente al fallback statico. L'invariante
+           e' la regola gia' scritta in CLAUDE.md ("se aggiungi un clamp, aggiungi
+           il fallback in yaml-bridge.js E la mappatura in bounds.js"): ogni
+           chiave di PGE_BOUNDS o e' mappata, o e' `pitch`, che segue una strada
+           sua (il motore lo consegna gia' calcolato per unita'). */
+        const unmapped = Object.keys(STATIC)
+          .filter(k => k !== "pitch" && !(k in B.ENGINE_PARAM_MAP));
+        assert("ogni clamp di PGE_BOUNDS ha la sua mappatura (pitch a parte)",
+          unmapped.length === 0,
+          unmapped.join(", ") + " — senza mappatura restano al fallback statico " +
+          "anche col bridge acceso");
       },
     },
     {

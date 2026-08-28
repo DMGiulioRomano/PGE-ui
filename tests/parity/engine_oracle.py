@@ -639,6 +639,27 @@ def _op_constants(args):
     except OracleError:
         out["default_prob"] = None
 
+    # Le chiavi che gli spec del motore DICHIARANO dentro deviation_probability,
+    # con il loro is_smart. Non coincidono con le PARAM_KEYS della UI — `envelope`
+    # e' dichiarata ma inerte (is_smart=False), `pitch` e `pc_rand_envelope` sono
+    # costruite a runtime fuori dallo schema — ma sono cio' che permette di
+    # verificare la COMPLETEZZA di quelle liste invece del solo contenuto: senza,
+    # svuotare PARAM_KEYS lasciava la suite verde.
+    try:
+        psch = ENGINE.module("pge.parameters.parameter_schema")
+        declared = []
+        for schema_name, specs in psch.ALL_SCHEMAS.items():
+            for sp in specs:
+                key = getattr(sp, "deviation_probability_key", None)
+                if key:
+                    declared.append({"key": key,
+                                     "is_smart": bool(sp.is_smart),
+                                     "schema": schema_name})
+        out["deviation_probability_keys"] = declared
+    except OracleError as exc:
+        out["deviation_probability_keys"] = None
+        out["deviation_probability_keys_error"] = str(exc)
+
     try:
         ns = _load_magnify_from_source()
         out["magnify_source"] = ns["_source"]
