@@ -243,20 +243,42 @@ console.log("\n── la catena dal motore al pallino ──");
     "semanticsVersion() non chiama piu' la route: il numero non arriva");
   assert("backend espone semanticsVersion",
     /semanticsVersion\s*[,}]/.test(backendSrc));
+  /* Col numero ignoto la voce si CANCELLA, in tutti e due i posti che la
+   * tengono. Saltare la scrittura lascerebbe in piedi la versione di un render
+   * precedente: uno stem appena reso, con il bridge senza route, resterebbe
+   * marcato `2` e diventerebbe giallo appena il numero si sapesse. Assente vuol
+   * dire "non lo so", che e' la verita'. */
+  assert("backend cancella la voce quando il numero e' ignoto",
+    /if \(sem === null\) delete next\[id\];/.test(backendSrc),
+    "saltare la scrittura lascia in piedi una versione vecchia su uno stem nuovo");
+  assert("...e app.jsx fa lo stesso nello stato vivo",
+    /delete next\[e\.streamId\];/.test(appSrc));
+
+  /* Il fallimento della fetch non si memorizza: le altre due letture del motore
+   * al massimo nascondono un filtro, questa decide un pallino, e un bridge giu'
+   * al boot condannerebbe la sessione a mostrare verde anche dopo che e'
+   * tornato su. Un `null` che ARRIVA dal bridge e' invece una risposta. */
+  assert("un bridge irraggiungibile non si ricorda per tutta la sessione",
+    /catch \{\s*\n\s*return null;\s+\/\/ non memorizzato/.test(backendSrc),
+    "memorizzare il fallimento spegne l'asse fino al reload della pagina");
+
   assert("backend registra la semantica insieme ai fingerprint",
     /_persistSem\(/.test(backendSrc) && /loadSemantics\(/.test(backendSrc),
     "senza persistenza l'asse si spegne al reload della pagina");
   assert("...e la scrive dopo un render, non solo la legge",
-    /const sem = await semanticsVersion\(\);[\s\S]{0,400}_persistSem\(/.test(backendSrc),
+    /await semanticsVersion\(\)[\s\S]{0,600}_persistSem\(/.test(backendSrc),
     "run() non registra la versione: ogni stem resta senza, per sempre");
 
   assert("app legge la versione del motore al boot",
     /semanticsVersion\(\)[\s\S]{0,120}setEngineSem/.test(appSrc));
   assert("app carica le versioni registrate al cambio progetto",
-    /loadSemantics\(basename\)[\s\S]{0,80}setRenderedSem/.test(appSrc));
+    /loadSemantics\([\s\S]{0,120}?setRenderedSem/.test(appSrc));
+  // Regex lasca sullo spazio: la riga e' lunga e una riformattazione non deve
+  // farla rossa. Cio' che conta e' che lo stato vivo venga aggiornato con la
+  // versione del motore sull'evento del singolo stream.
   assert("app aggiorna la versione dello stem appena reso",
-    /stream-done|setLastRenderedFps/.test(appSrc) &&
-    /setRenderedSem\(m => \(\{ \.\.\.m, \[e\.streamId\]: engineSem \}\)\)/.test(appSrc),
+    /setLastRenderedFps/.test(appSrc) &&
+    /setRenderedSem\([\s\S]{0,200}?e\.streamId\][\s\S]{0,40}?engineSem/.test(appSrc),
     "senza questa riga uno stem appena renderizzato torna giallo subito");
   assert("app passa la coppia a entrambi i consumatori",
     /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),

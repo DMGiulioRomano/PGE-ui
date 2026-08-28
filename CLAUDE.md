@@ -66,7 +66,9 @@ exists):
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
   suites in `tests/parity/`, which ask the **engine itself** the questions the
   mirrors in `src/lib/` answer from memory. See "Parity harness" below and
-  `tests/parity/README.md`.
+  `tests/parity/README.md`. The parity suites don't own their
+  verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
+  guards them against taking it back with a brutal exit.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
 checks out the sibling engine and builds its venv. The node job checks it out
@@ -162,7 +164,9 @@ fallback).
 Two options exit 1 (taking audio with them): unknown `--plot-envelopes` name, malformed `--magnify-at` SPEC. Both are filtered before reaching argv, but in different places:
 
 - **Envelope names** → filtered *server-side* (`server.py` intersects them with `engine_envelope_keys(root)`) because the valid set lives in engine source.
-- **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, `window.PGEMagnifySpec.error`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing. The grammar mirrors Python's `float()`, not JS's `Number()` — they disagree on `0x10`, `1_000`, `inf` — and `tests/parity/test-magnify-parity.js` checks the whole corpus against the engine.
+- **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing. The grammar mirrors Python's `float()`, not JS's `Number()` — they disagree on `0x10`, `1_000`, `inf` — and the strip is ASCII-only, a subset of Python's `str.strip()`, so the residual divergence is guaranteed safe-direction (JS `trim()` eats U+FEFF, `str.strip()` doesn't — that one killed renders). `tests/parity/test-magnify-parity.js` checks the whole corpus against the engine.
+
+  **`error()` and `sendable()` answer different questions, and both live in the module.** `error(spec)` is the red text under the field; `sendable(spec)` returns *the bytes that reach argv*, or `null` when the flag must not be sent at all (empty SPEC, separators only, bad grammar). `app.jsx` and `RenderButton.buildCommand` both call `sendable` — when the gate was a copy in `app.jsx` it stayed on `.trim()` while the module moved to the ASCII strip, and the popover showed red on a SPEC that then went out cleaned. The tests call it too, so removing the empty-SPEC guard is red instead of silent.
 
 The request body carries `yamlContent`. `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* a throwaway temp file. A temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY, defeating incremental caching. Writing the stable basename keeps the manifest persistent. Consequence: a render persists the editor state to the source config even if the user never hit Save. **Git is the rollback mechanism** (`git checkout -- configs/<basename>.yml`).
 

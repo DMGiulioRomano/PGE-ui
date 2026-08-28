@@ -651,6 +651,26 @@ def test_engine_semantics_version_rejects_bool(tmp_path):
     assert server.engine_semantics_version(tmp_path) is None
 
 
+def test_engine_semantics_version_sees_a_live_bump(tmp_path):
+    """La cache si invalida sul mtime, e non e' pedanteria: il caso e' il motore
+    aggiornato sotto un `make serve` in corso. Con una cache a vita il bridge
+    continuerebbe a servire il numero vecchio fino al restart — cioe' proprio
+    l'evento che questa lettura esiste per intercettare resterebbe invisibile."""
+    import os
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n")
+    assert server.engine_semantics_version(tmp_path) == 2
+
+    src = tmp_path / "src" / "pge" / "rendering" / "stream_cache_manager.py"
+    src.write_text("VARIATION_SEMANTICS_VERSION = 3\n")
+    # mtime esplicito: su un filesystem a bassa risoluzione due scritture nello
+    # stesso istante sarebbero indistinguibili, e il test misurerebbe l'orologio
+    # invece della cache.
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert server.engine_semantics_version(tmp_path) == 3
+
+
 def test_semantics_version_endpoint(tmp_path):
     import server
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)

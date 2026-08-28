@@ -91,4 +91,5 @@ tests-parity:
 dev-clean:
 	@echo "Reset the editor's cached stem index: open devtools and run"
 	@echo "    localStorage.clear()"
-	@echo "(clears pge-local-stems / pge-local-fp; the server keeps the real files)."
+	@echo "(clears pge-local-stems / pge-local-fp / pge-local-sem; the server"
+	@echo " keeps the real files)."

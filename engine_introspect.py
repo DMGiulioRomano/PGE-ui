@@ -311,14 +311,29 @@ def engine_semantics_version(root: Path):
     il pacchetto del motore (e il suo venv), leggere l'assegnazione no.
 
     None = un motore senza la costante (piu' vecchio del suo introdursi): chi
-    chiama non deve inventarsi un numero, deve non pretendere niente."""
-    key = str(root)
-    if key in _SEMANTICS_CACHE:
-        return _SEMANTICS_CACHE[key]
+    chiama non deve inventarsi un numero, deve non pretendere niente.
+
+    La cache si invalida sul mtime dei sorgenti, a differenza delle altre due di
+    questo modulo, e la ragione e' che qui il dato cambia esattamente quando
+    serve: se il motore viene aggiornato sotto un `make serve` in corso, con una
+    cache a vita il bump resterebbe invisibile fino al restart del bridge —
+    proprio l'evento che questa lettura esiste per intercettare. Le altre due
+    (chiavi degli envelope, bound) al massimo tengono in piedi un filtro
+    leggermente vecchio."""
     candidates = (
         root / "src" / "pge" / "rendering" / "stream_cache_manager.py",
         root / "src" / "rendering" / "stream_cache_manager.py",
     )
+    stamps = []
+    for src in candidates:
+        try:
+            st = src.stat()
+            stamps.append((str(src), st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamps.append((str(src), None, None))
+    key = (str(root), tuple(stamps))
+    if key in _SEMANTICS_CACHE:
+        return _SEMANTICS_CACHE[key]
     version = None
     for src in candidates:
         try:

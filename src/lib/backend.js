@@ -365,13 +365,19 @@
             // ...e la semantica con cui il motore li ha appena scritti. Chiesta
             // qui e non presa da chi chiama: e' una proprieta' del motore che
             // ha reso, e la risposta e' gia' in cache dopo il primo giro.
+            //
+            // Col numero ignoto la voce si CANCELLA, non si salta: saltarla
+            // lascerebbe in piedi la versione di un render precedente, e uno
+            // stem appena reso apparirebbe giallo appena il numero si sapesse.
+            // Assente vuol dire "non lo so", che e' la verita'.
             const sem = await semanticsVersion();
-            if (sem !== null) {
-              const prev = await this.loadSemantics(opts.yamlBasename);
-              const fresh = {};
-              for (const id of Object.keys(localFps)) fresh[id] = sem;
-              this._persistSem(opts.yamlBasename, { ...prev, ...fresh });
+            const prev = await this.loadSemantics(opts.yamlBasename);
+            const next = { ...prev };
+            for (const id of Object.keys(localFps)) {
+              if (sem === null) delete next[id];
+              else next[id] = sem;
             }
+            this._persistSem(opts.yamlBasename, next);
           }
           return lastResult;
         } catch (e) {
@@ -563,16 +569,22 @@
     // bridge irraggiungibile: chi classifica non pretende niente e i pallini
     // restano quelli di prima. Un numero e' un'affermazione, l'assenza no.
     //
-    // Cache di sessione: il motore non cambia sotto i piedi del bridge, e la
-    // chiede sia il boot sia ogni render.
+    // Cache di sessione, ma solo delle RISPOSTE. Un bridge irraggiungibile al
+    // boot non deve condannare la sessione a non sapere: le altre due letture
+    // del motore (envelopeKeys, bounds) al massimo nascondono un filtro, questa
+    // decide un pallino, e ricordare il fallimento lo terrebbe verde anche dopo
+    // che il bridge e' tornato su. Un `null` che ARRIVA dal bridge (motore senza
+    // la costante) e' invece una risposta, e si ricorda come le altre.
     let _semantics;
     async function semanticsVersion() {
       if (_semantics !== undefined) return _semantics;
       try {
         const d = await jget("/semantics-version");
         _semantics = Number.isInteger(d && d.version) ? d.version : null;
-      } catch { _semantics = null; }
-      return _semantics;
+        return _semantics;
+      } catch {
+        return null;   // non memorizzato: si richiede al prossimo giro
+      }
     }
 
     // Eagerly pull config so currentPath() works without an await.

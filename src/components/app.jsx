@@ -1589,8 +1589,17 @@ function App() {
         // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
         // riga lo stem resterebbe marcato con quella del render precedente e
         // tornerebbe giallo subito dopo essere stato rifatto. La persistenza su
-        // localStorage la fa backend.js insieme ai fingerprint.
-        if (engineSem !== null) setRenderedSem(m => ({ ...m, [e.streamId]: engineSem }));
+        // localStorage la fa backend.js insieme ai fingerprint, con la stessa
+        // regola: col numero ignoto la voce si cancella invece di restare
+        // indietro, perche' una versione vecchia su uno stem nuovo e' peggio di
+        // nessuna versione.
+        setRenderedSem(m => {
+          if (engineSem !== null) return { ...m, [e.streamId]: engineSem };
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
       }
     });
 
