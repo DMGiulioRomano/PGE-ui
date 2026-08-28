@@ -77,6 +77,12 @@ const CORPUS = [
   // errori di struttura
   "t=,t=14", "t=14,bogus=1", "zoom=10", "t=", "t", "t=abc", "t=14;zoom=3",
   "T=14", "stream=s1", "t=14,zoom", "t=14,zom=10",
+  // SPEC non vuoti che non producono nessun target: il motore ha un controllo
+  // finale dopo il ciclo (cli.py), la UI non l'aveva e li lasciava partire.
+  ";", ";;", " ; ", ";  ;",
+  // U+FEFF: `trim()` di JS lo toglie, `str.strip()` di Python no. Tre
+  // posizioni, tre errori diversi dal motore, tutti exit 1.
+  "t=\uFEFF12", "\uFEFFt=12", "t=12\uFEFF", "t=14;\uFEFF",
 ];
 
 /* Le divergenze che restano, ognuna con la ragione per cui resta. Il test le
@@ -102,6 +108,25 @@ const KNOWN = {
          "divergenza e' nel verso sicuro (UI piu' stretta del motore)",
   },
 };
+
+/* Lo strip: `str.strip()` di Python toglie tutto cio' per cui `str.isspace()`
+ * e' vero, la UI toglie il solo insieme ASCII. La differenza e' voluta e va in
+ * un verso solo — la UI e' piu' stretta — quindi questi SPEC sono validi per il
+ * motore e rifiutati qui. Replicare `isspace()` vorrebbe dire portarsi dietro
+ * una tabella Unicode per guadagnare il permesso di scrivere uno SPEC con un
+ * separatore di record in mezzo.
+ *
+ * Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no: quello
+ * e' chiuso, e i suoi casi stanno nel CORPUS sopra, dove ora i due lati
+ * concordano. */
+const STRIP_ONLY_PYTHON = ["\u001c", "\u0085", "\u00a0"];
+for (const ch of STRIP_ONLY_PYTHON) {
+  KNOWN[`t=${ch}14`] = {
+    js: false, engine: true,
+    why: "Python lo toglie con str.strip(), la UI (strip ASCII) no: verso " +
+         "sicuro, la UI e' piu' stretta del motore",
+  };
+}
 
 parity({
   suite: "magnify-spec",

@@ -27,6 +27,28 @@
   const STR_KEYS = ["stream"];
   const KEYS = [...NUMERIC_KEYS, ...STR_KEYS];
 
+  /* Lo strip del motore, non quello di JS.
+   *
+   * `_parse_magnify_spec` usa `str.strip()`, che toglie ciò per cui
+   * `str.isspace()` è vero. `String.prototype.trim()` toglie un insieme
+   * diverso, e le due differenze non sono simmetriche:
+   *
+   *   - Python toglie `\x1c`–`\x1f`, `\x85`, U+00A0 e altri spazi Unicode che
+   *     `trim()` lascia. Lì la UI è più stretta del motore: verso sicuro.
+   *   - `trim()` toglie **U+FEFF**, che `str.strip()` non tocca. Lì la UI era
+   *     più larga, ed è il verso che uccide il render: `t=<BOM>12` passava la
+   *     UI e faceva uscire il motore con 1 («valore non numerico per 't'»).
+   *     Lo stesso in tre posizioni — prima della chiave, nel valore, in coda —
+   *     con tre errori diversi.
+   *
+   * Qui si toglie il solo insieme ASCII, che è un sottoinsieme di quello di
+   * Python: così la divergenza residua è garantita nel verso sicuro, senza
+   * dover replicare `str.isspace()`. */
+  const ASCII_WS = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
+  function strip(text) {
+    return String(text).replace(ASCII_WS, "");
+  }
+
   /* Il motore converte con `float()`, non con `Number()`, e le due grammatiche
      non coincidono. La differenza non è accademica: `Number("0x10")` fa 16,
      `float("0x10")` alza ValueError — quindi la vecchia guardia lasciava
@@ -70,14 +92,14 @@
   function parseTarget(raw) {
     const target = {};
     for (const rawPair of raw.split(",")) {
-      const pair = rawPair.trim();
+      const pair = strip(rawPair);
       if (!pair) continue;
       const eq = pair.indexOf("=");
       if (eq < 0) {
         return { error: `token non valido '${pair}': usa chiave=valore (es. t=14,zoom=10)` };
       }
-      const key = pair.slice(0, eq).trim();
-      const value = pair.slice(eq + 1).trim();
+      const key = strip(pair.slice(0, eq));
+      const value = strip(pair.slice(eq + 1));
       if (!KEYS.includes(key)) {
         return { error: `chiave ignota '${key}': valide ${KEYS.join(", ")}` };
       }
@@ -100,13 +122,23 @@
   /* null se lo SPEC è valido (o vuoto), altrimenti il messaggio da mostrare. */
   function error(spec) {
     if (spec === null || spec === undefined) return null;
-    const text = String(spec).trim();
+    const text = strip(spec);
     if (!text) return null;
+    let produced = 0;
     for (const raw of text.split(";")) {
-      const chunk = raw.trim();
+      const chunk = strip(raw);
       if (!chunk) continue;
       const parsed = parseTarget(chunk);
       if (parsed.error) return parsed.error;
+      produced++;
+    }
+    // Uno SPEC non vuoto che non produce nessun target: `;`, `;;`, ` ; `. La UI
+    // li lasciava partire (error() null, e `magnifySpecSendable` guarda solo che
+    // il testo non sia vuoto), e il motore ha un controllo finale che li rifiuta
+    // — cli.py, dopo il ciclo. Sono diversi dallo SPEC VUOTO, che resta la
+    // divergenza dichiarata: lì il flag non parte proprio.
+    if (produced === 0) {
+      return "nessun target valido nello SPEC: usa chiave=valore (es. t=14,zoom=10)";
     }
     return null;
   }
@@ -116,11 +148,11 @@
    * a chi vuole contarli o mostrarli (es. "2 lenti"). */
   function targets(spec) {
     if (error(spec) !== null) return [];
-    const text = String(spec === null || spec === undefined ? "" : spec).trim();
+    const text = strip(spec === null || spec === undefined ? "" : spec);
     if (!text) return [];
     const out = [];
     for (const raw of text.split(";")) {
-      const chunk = raw.trim();
+      const chunk = strip(raw);
       if (!chunk) continue;
       const parsed = parseTarget(chunk);
       if (parsed.target) out.push(parsed.target);

@@ -105,10 +105,9 @@ assert("prefissi non decimali rifiutati (0x/0b/0o)",
   JSON.stringify([M.error("t=0x10"), M.error("t=0b101"), M.error("t=0o17")]));
 
 assert("underscore fra cifre accettato, come in float()",
-  M.error("t=1_000") === null && M.targets("t=1_000")[0].t === 1000,
-  JSON.stringify(M.targets("t=1_000")));
+  M.error("t=1_000") === null && t("t=1_000") === 1000, JSON.stringify(M.targets("t=1_000")));
 assert("underscore anche nella parte decimale",
-  M.error("t=1.000_1") === null && M.targets("t=1.000_1")[0].t === 1.0001,
+  M.error("t=1.000_1") === null && t("t=1.000_1") === 1.0001,
   JSON.stringify(M.targets("t=1.000_1")));
 assert("underscore ai bordi o doppio rifiutato",
   M.error("t=_1") !== null && M.error("t=1_") !== null && M.error("t=1__0") !== null,
@@ -117,21 +116,23 @@ assert("underscore ai bordi o doppio rifiutato",
 // Il ramo scritto a mano di toNumber: `Number()` non conosce "inf"/"nan", e il
 // segno si legge dal primo carattere. È la parte del modulo che nessuna regex
 // copre, quindi è quella che vale di più fissare qui.
+//
+// `t()` invece di `M.targets(spec)[0].t`: senza la guardia, una regressione su
+// `inf` fa morire il file con un TypeError e NESSUN riepilogo — l'handler
+// `exit` è registrato in fondo, quindi la riga "interrotto prima della fine"
+// non arriva.
+function t(spec) { return (M.targets(spec)[0] || {}).t; }
+
 assert("inf / infinity / Infinity valgono +∞",
-  M.targets("t=inf")[0].t === Infinity &&
-  M.targets("t=infinity")[0].t === Infinity &&
-  M.targets("t=Infinity")[0].t === Infinity,
-  JSON.stringify(M.targets("t=inf").concat(M.targets("t=infinity"), M.targets("t=Infinity"))));
+  t("t=inf") === Infinity && t("t=infinity") === Infinity && t("t=Infinity") === Infinity,
+  JSON.stringify([t("t=inf"), t("t=infinity"), t("t=Infinity")].map(String)));
 assert("il segno di -inf è conservato",
-  M.targets("t=-inf")[0].t === -Infinity && M.targets("t=-infinity")[0].t === -Infinity,
-  String(M.targets("t=-inf")[0].t));
-assert("+inf esplicito resta +∞", M.targets("t=+inf")[0].t === Infinity,
-  String(M.targets("t=+inf")[0].t));
+  t("t=-inf") === -Infinity && t("t=-infinity") === -Infinity, String(t("t=-inf")));
+assert("+inf esplicito resta +∞", t("t=+inf") === Infinity, String(t("t=+inf")));
 assert("nan / NaN sono NaN, non ±∞",
-  Number.isNaN(M.targets("t=nan")[0].t) && Number.isNaN(M.targets("t=NaN")[0].t),
-  String(M.targets("t=nan")[0].t));
+  Number.isNaN(t("t=nan")) && Number.isNaN(t("t=NaN")), String(t("t=nan")));
 assert("un overflow decimale è +∞ da entrambe le grammatiche",
-  M.targets("t=1e400")[0].t === Infinity, String(M.targets("t=1e400")[0].t));
+  t("t=1e400") === Infinity, String(t("t=1e400")));
 
 // Le forme ordinarie non devono essere state strette per sbaglio insieme al
 // resto: sono quelle che si scrivono davvero nel campo.
@@ -139,14 +140,49 @@ for (const [spec, atteso] of [["t=14", 14], ["t=-3", -3], ["t=+5", 5],
                               ["t=.5", 0.5], ["t=5.", 5], ["t=1e3", 1000],
                               ["t=1E3", 1000], ["t=1e-3", 0.001], ["t=00012", 12]])
   assert(`${spec} → ${atteso}`,
-    M.error(spec) === null && M.targets(spec)[0].t === atteso,
-    JSON.stringify(M.targets(spec)));
+    M.error(spec) === null && t(spec) === atteso, JSON.stringify(M.targets(spec)));
 
 assert("le forme che non sono numeri restano rifiutate",
   ["t=", "t=.", "t=1e", "t=1e+", "t=--5", "t=1d", "t=1.2.3", "t=1 4", "t=abc"]
     .every(s => M.error(s) !== null),
   ["t=", "t=.", "t=1e", "t=1e+", "t=--5", "t=1d", "t=1.2.3", "t=1 4", "t=abc"]
     .filter(s => M.error(s) === null).join(", "));
+
+/* ============================================================
+ * Due SPEC che la UI lasciava partire e che uccidono il render.
+ *
+ * Non stanno nei numeri, quindi la parità numerica — ora esatta — non li
+ * copriva. Entrambi verificati contro il motore vero in
+ * tests/parity/test-magnify-parity.js; qui valgono anche senza motore.
+ * ============================================================ */
+
+console.log("\n── SPEC che il motore rifiuta e la UI lasciava passare ──");
+
+// `;` non è lo SPEC vuoto: quello è la divergenza dichiarata (il flag non
+// parte). Questi il flag lo fanno partire, e il motore ha un controllo finale
+// dopo il ciclo che li rifiuta con exit 1.
+for (const spec of [";", ";;", " ; ", ";  ;"])
+  assert(`${JSON.stringify(spec)} non produce target → errore`, M.error(spec) !== null,
+    "il motore: '--magnify-at: nessun target valido nello SPEC.'");
+assert("ma lo SPEC vuoto resta valido (divergenza dichiarata)",
+  M.error("") === null && M.error("   ") === null);
+
+// U+FEFF: `trim()` di JS lo toglie, `str.strip()` di Python no. Tre posizioni,
+// tre errori diversi dal motore.
+const BOM = "\uFEFF";
+assert("U+FEFF nel valore → errore, come nel motore",
+  M.error(`t=${BOM}12`) !== null, JSON.stringify(M.error(`t=${BOM}12`)));
+assert("U+FEFF prima della chiave → errore",
+  M.error(`${BOM}t=12`) !== null, JSON.stringify(M.error(`${BOM}t=12`)));
+assert("U+FEFF in coda al valore → errore",
+  M.error(`t=12${BOM}`) !== null, JSON.stringify(M.error(`t=12${BOM}`)));
+
+// E lo strip ASCII continua a togliere ciò che deve: se sparisse, gli spazi
+// ordinari attorno alle coppie tornerebbero un errore.
+assert("gli spazi ASCII attorno alle coppie restano tollerati",
+  M.error(" t = 14 , zoom = 10 ") === null && t(" t = 14 ") === 14);
+assert("e anche tab e newline, che str.strip() toglie",
+  M.error("\tt=14\n") === null && t("\tt=14\n") === 14);
 
 console.log("\n── il flag non parte quando lo spec non regge ──");
 // Contratto usato da app.jsx: si invia magnifyAt solo se error() è null e la
