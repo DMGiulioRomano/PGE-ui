@@ -1555,8 +1555,8 @@ function App() {
       // espliciti parte solo se la grammatica regge: il motore lo rifiuterebbe
       // con exit 1, portandosi via anche l'audio gia' renderizzato.
       magnify: renderOptions.visualize && renderOptions.magnify ? true : undefined,
-      magnifyAt: renderOptions.visualize && magnifySpecSendable(renderOptions.magnifyAt)
-        ? renderOptions.magnifyAt.trim() : undefined,
+      magnifyAt: (renderOptions.visualize
+        && magnifySpecToSend(renderOptions.magnifyAt)) || undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
@@ -2014,15 +2014,21 @@ function App() {
   );
 }
 
-/* SPEC delle lenti esplicite (--magnify-at): si invia solo se c'è ed è valido.
+/* SPEC delle lenti esplicite (--magnify-at): cosa parte, o null.
+ *
  * Il motore rifiuta uno SPEC malformato con exit 1 — la partitura non si
- * degrada, muore l'intero render — quindi il filtro sta qui e in
- * RenderButton.buildCommand, che deve mostrare quello che parte davvero. La
- * grammatica vive in src/lib/magnify-spec.js (node-testata). */
-function magnifySpecSendable(spec) {
-  const text = (spec || "").trim();
-  if (!text) return false;
-  return !window.PGEMagnifySpec || window.PGEMagnifySpec.error(text) === null;
+ * degrada, muore l'intero render — quindi il filtro esiste; ma non vive piu'
+ * qui. Era una copia, e come copia si e' disallineata: usava `.trim()` di JS
+ * mentre il modulo era passato allo strip ASCII, cosi' la popover mostrava
+ * rosso su uno SPEC che poi partiva ripulito. Ora la decisione e il testo che
+ * finisce in argv vengono dalla stessa funzione (`sendable` in
+ * src/lib/magnify-spec.js, node-testata), qui e in RenderButton.buildCommand.
+ *
+ * Il ramo senza modulo resta per il caso in cui magnify-spec.js non sia
+ * caricato: manda quel che c'e', com'e' sempre stato. */
+function magnifySpecToSend(spec) {
+  if (window.PGEMagnifySpec) return window.PGEMagnifySpec.sendable(spec);
+  return (spec || "").trim() || null;
 }
 
 function classifyLogLine(s) {

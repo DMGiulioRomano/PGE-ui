@@ -143,6 +143,32 @@
     return null;
   }
 
+  /* Cosa parte davvero sulla riga di comando, o null se non parte niente.
+   *
+   * IL GATE VIVE QUI, e non piu' in app.jsx, per una ragione che si e' gia'
+   * verificata: quando era una copia locale, il commit che ha portato questo
+   * modulo dallo `.trim()` di JS allo strip ASCII non l'ha seguito. Le due
+   * meta' della stessa popover si contraddicevano — `error()` mostrava rosso
+   * su `t=12<U+00A0>` mentre il gate, che aveva gia' tolto l'NBSP col trim,
+   * lo spediva ripulito. Un rosso su un campo che poi funziona e' peggio di
+   * nessun rosso.
+   *
+   * Adesso la stessa funzione risponde a "parte?" e a "cosa parte?", quindi
+   * le due meta' concordano per costruzione e non per coincidenza. Il testo
+   * restituito e' esattamente quello che finisce in argv, cosi'
+   * `RenderButton.buildCommand` mostra i byte veri.
+   *
+   * Attenzione al confine: qui lo SPEC vuoto vale null (non si manda il flag),
+   * mentre `error()` lo dice valido. E' la divergenza dichiarata numero uno —
+   * il motore rifiuta `--magnify-at ""` perche' il flag gli e' stato passato,
+   * e nella UI il campo vuoto significa "nessun target esplicito". Le due
+   * risposte diverse alla stessa stringa sono il punto, non un difetto. */
+  function sendable(spec) {
+    const text = strip(spec === null || spec === undefined ? "" : spec);
+    if (!text) return null;
+    return error(text) === null ? text : null;
+  }
+
   /* I target dello SPEC, [] se vuoto o malformato. Non è la sorgente di verità
    * del render — quella resta lo SPEC testuale che il motore riparsa — ma serve
    * a chi vuole contarli o mostrarli (es. "2 lenti"). */
@@ -160,5 +186,5 @@
     return out;
   }
 
-  window.PGEMagnifySpec = { KEYS, NUMERIC_KEYS, STR_KEYS, error, targets };
+  window.PGEMagnifySpec = { KEYS, NUMERIC_KEYS, STR_KEYS, strip, error, sendable, targets };
 })();

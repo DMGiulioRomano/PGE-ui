@@ -119,7 +119,7 @@ const KNOWN = {
  * Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no: quello
  * e' chiuso, e i suoi casi stanno nel CORPUS sopra, dove ora i due lati
  * concordano. */
-const STRIP_ONLY_PYTHON = ["\u001c", "\u0085", "\u00a0"];
+const STRIP_ONLY_PYTHON = ["\u001c", "\u0085", "\u00a0", "\u2028", "\u3000"];
 for (const ch of STRIP_ONLY_PYTHON) {
   KNOWN[`t=${ch}14`] = {
     js: false, engine: true,
@@ -224,17 +224,43 @@ parity({
     },
     {
       label: "gli SPEC che la UI lascia partire il motore non li rifiuta mai",
-      run: async (ask, assert) => {
-        // Il contratto di app.jsx: `magnifySpecSendable` manda il flag solo se
-        // error() e' null e la stringa non e' vuota. Questa e' quella regola,
-        // misurata contro il motore invece che descritta.
-        const sendable = CORPUS.filter(s => s.trim() && M.error(s) === null);
+      run: async (ask, assert, ctx) => {
+        /* Il giudizio e' del motore, ma la DOMANDA la sceglie il codice: si
+         * chiede `M.sendable(spec)` — la stessa funzione che app.jsx e
+         * RenderButton chiamano — e si manda al motore esattamente il testo che
+         * finirebbe in argv, non lo SPEC grezzo.
+         *
+         * Prima questa riga era `CORPUS.filter(s => s.trim() && error(s) ===
+         * null)`, cioe' il gate riscritto qui. Costava due cose: la copia
+         * conteneva ancora la guardia sullo SPEC vuoto anche dopo che il codice
+         * l'avesse persa (togliere quella guardia lasciava la suite verde), e
+         * chiedeva al motore lo SPEC grezzo mentre il codice ne spedisce uno
+         * ripulito. Con `sendable` non c'e' piu' niente da tenere allineato. */
+        const inviati = [];
+        for (const spec of CORPUS.concat(Object.keys(KNOWN))) {
+          const wire = M.sendable(spec);
+          if (wire !== null) inviati.push({ spec, wire });
+        }
         const answers = await ask(
-          sendable.map(spec => ({ op: "parse_magnify_spec", args: { spec } })));
-        const killed = sendable.filter((s, i) => !answers[i].ok);
-        assert(`${sendable.length} SPEC inviabili, nessuno fa uscire il motore con 1`,
+          inviati.map(({ wire }) => ({ op: "parse_magnify_spec", args: { spec: wire } })));
+        const killed = inviati.filter((_, i) => !answers[i].ok);
+        assert(`${inviati.length} SPEC inviabili, nessuno fa uscire il motore con 1`,
           killed.length === 0,
-          killed.map((s, i) => `${JSON.stringify(s)}`).join(", "));
+          killed.map(({ spec, wire }, i) =>
+            `${JSON.stringify(spec)} → argv ${JSON.stringify(wire)}`).join(", "));
+
+        // Lo SPEC vuoto e' nel corpus (sta in KNOWN come divergenza numero uno)
+        // e non deve MAI comparire fra gli inviati: e' il caso per cui il motore
+        // esce 1, e l'unica cosa che lo tiene fuori e' la guardia dentro
+        // `sendable`. Senza questa riga, toglierla resterebbe verde qui.
+        assert("nessuno SPEC vuoto o di soli separatori arriva al motore",
+          !inviati.some(({ wire }) => wire === "" || /^[;\s]*$/.test(wire)),
+          inviati.filter(({ wire }) => /^[;\s]*$/.test(wire))
+            .map(({ spec }) => JSON.stringify(spec)).join(", "));
+
+        ctx.note("il testo spedito e' quello ripulito, non il grezzo",
+          inviati.filter(({ spec, wire }) => spec !== wire)
+            .map(({ spec, wire }) => `${JSON.stringify(spec)} → ${JSON.stringify(wire)}`));
       },
     },
   ],
