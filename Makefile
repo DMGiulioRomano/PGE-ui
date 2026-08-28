@@ -10,11 +10,20 @@ VENV     := .venv
 VENV_BIN := $(VENV)/bin
 
 # I test di parita' girano da tests/parity/, quindi il path del motore va
-# assolutizzato qui: relativo si romperebbe al primo cd. Un PGE_ENGINE_ROOT
-# gia' nell'ambiente vince: il README lo documenta come variabile valida, e
-# scavalcarlo faceva annunciare "nessun motore in ..." puntando a un path che
-# l'utente non aveva nominato.
+# assolutizzato qui: relativo si romperebbe al primo cd.
+#
+# La precedenza e' quella di make, non l'inverso: `ROOT=` da riga di comando
+# batte tutto, poi PGE_ENGINE_ROOT dall'ambiente, poi il default. Le due
+# versioni precedenti sbagliavano una a testa — `$(abspath $(ROOT))` secco
+# ignorava un PGE_ENGINE_ROOT esportato (che il README documenta come variabile
+# valida, e con direnv c'e' sempre); il `$(if ...)` che l'ha sostituito faceva
+# vincere l'ambiente su un ROOT= esplicito, rendendo muto proprio il consiglio
+# che `make tests` stampa quando la parita' salta.
+ifeq ($(origin ROOT),command line)
+ENGINE_ROOT := $(abspath $(ROOT))
+else
 ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
+endif
 
 .PHONY: help serve install dev-clean tests tests-node tests-python tests-parity
 

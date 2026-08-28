@@ -136,6 +136,26 @@ assert("il runner di tests/parity/ e' nella lista",
   suiteFiles.some(f => f.label === "parity/harness.js"),
   "harness.js governa cinque suite: il contratto d'uscita vale anche per lui");
 
+/* Le CINQUE suite di parita' non devono rispettare l'intero contratto — il
+ * verdetto non e' loro, lo tiene harness.js per tutte — ma non devono nemmeno
+ * poterselo riprendere. Un'uscita brutale appesa in fondo a una di loro la
+ * fa uscire 0 senza riepilogo, con un sabotaggio reale dentro, e la guardia
+ * qui sopra resta verde perche' guarda solo harness.js: #132 una directory
+ * piu' in la'. Quindi su di loro si controlla la sola uscita brutale. */
+const PARITY_DIR = path.join(__dirname, "..", "parity");
+const paritySuites = fs.existsSync(PARITY_DIR)
+  ? fs.readdirSync(PARITY_DIR).filter(f => /^test-.*\.js$/.test(f)).sort()
+  : [];
+assert("le suite di tests/parity/ sono nel presidio",
+  paritySuites.length >= 5,
+  `trovate ${paritySuites.length}: se sono sparite, e' la guardia a essere ` +
+  `diventata muta, non la parita' a essere finita`);
+for (const f of paritySuites) {
+  const src = fs.readFileSync(path.join(PARITY_DIR, f), "utf8");
+  assert(`parity/${f} — nessuna uscita brutale`, !src.includes(HARD_EXIT),
+    "il verdetto e' di harness.js: uscire di qui lo salta, riepilogo compreso");
+}
+
 for (const { label, file } of suiteFiles) {
   const src = fs.readFileSync(file, "utf8");
   assert(`${label} — nessun gate di uscita posizionale`, !src.includes(HARD_EXIT),
@@ -159,11 +179,19 @@ for (const { label, file } of suiteFiles) {
 if (fs.existsSync(PARITY_HARNESS)) {
   const src = fs.readFileSync(PARITY_HARNESS, "utf8");
   assert("parity/harness.js — bail chiude l'oracolo prima di lanciare",
-    /function bail\([^)]*\)\s*\{\s*\n\s*if \(oracle\) oracle\.close\(\);/.test(src),
+    /function bail\([^)]*\)\s*\{[\s\S]{0,80}?if \(oracle\) oracle\.close\(\);/.test(src),
     "un salto dopo l'apertura lascia vivo il processo python e la suite si appende");
   assert("parity/harness.js — `oracle` e' dichiarato prima di bail",
     src.indexOf("let oracle;") < src.indexOf("function bail("),
     "altrimenti la close dentro bail legge una TDZ e lancia al posto del salto");
+  // Il salto e la morte a meta' devono restare due casi: con il solo
+  // `verdict === null` a distinguerli, una suite che muore prima della fine
+  // usciva 1 stampando il solo stack, senza nemmeno dire che il riepilogo
+  // mancava. E' l'unico modo in cui questo file puo' tacere del tutto.
+  assert("parity/harness.js — il salto ha un flag suo, distinto dal verdetto",
+    /let bailed = false;/.test(src) && /bailed = true;/.test(src) &&
+    /if \(bailed\) return;/.test(src),
+    "senza, un crash a meta' run non stampa nessun riepilogo");
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

@@ -120,9 +120,26 @@ function commitLine(commit) {
 let pass = 0, fail = 0;
 const notRun = [];
 let verdict = null;   // { bar, commit } una volta che la suite ha girato
+/* Distinto da `verdict === null`, e non e' pedanteria: quel solo controllo
+ * confondeva "salto dichiarato" con "morta a meta'". Il salto ha gia' parlato e
+ * deve tacere; una suite che muore prima della fine — un rigetto non gestito a
+ * 50 ms — usciva 1 stampando il solo stack, senza riepilogo e senza la riga che
+ * dice che il riepilogo e' parziale. Era l'unico punto in cui il verdetto taceva
+ * del tutto, e il piu' facile da leggere come "non e' successo niente". */
+let bailed = false;
 
 process.on("exit", (code) => {
-  if (verdict === null) return;   // bail: il blocco di salto ha gia' parlato
+  if (bailed) return;             // il blocco di salto ha gia' parlato
+  if (verdict === null) {
+    // Morta prima di arrivare in fondo: i contatori sono quelli raccolti fin
+    // li', e vanno detti proprio perche' sono parziali.
+    console.error(`\n${"─".repeat(60)}`);
+    console.error(`${pass} passed, ${fail} failed — interrotto prima della fine: ` +
+      `la suite non e' arrivata al riepilogo, i conteggi sono parziali e i casi ` +
+      `rimanenti non hanno girato.`);
+    if (fail > 0 && !process.exitCode) process.exitCode = 1;
+    return;
+  }
   console.log(`\n${verdict.bar}`);
   console.log(`${pass} passed, ${fail} failed  ·  ${commitLine(verdict.commit)}`);
   if (notRun.length) {
@@ -181,6 +198,7 @@ async function parity({ suite, why, cases }) {
   let oracle;
 
   function bail(reason, hint) {
+    bailed = true;
     if (oracle) oracle.close();
     console.error(`\n  ${strict ? "PARITA' NON VERIFICATA" : "PARITA' SALTATA"}: ${reason}`);
     console.error(`  ${cases.length} cas${cases.length === 1 ? "o" : "i"} non ${cases.length === 1 ? "ha" : "hanno"} girato:`);
