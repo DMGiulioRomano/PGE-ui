@@ -324,10 +324,16 @@ per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
 engine import). Two rules hold it up:
 
-- **Unknown on either side claims nothing.** An engine without the constant, a
-  bridge that's down, a stem rendered before the editor recorded the number: all
-  leave the dot exactly as it was. A number is an assertion, an absence is not —
-  otherwise the upgrade would have turned every existing stem yellow.
+- **The two unknowns are not the same unknown**, and the difference is whether
+  the yellow could ever clear. *Engine* unknown (bridge down, engine without the
+  constant) claims nothing — `_persistSem` only writes when the number is known,
+  so that yellow would be **permanent** on perfect stems. A *stem* with no
+  recorded version and a known engine reads `stale`: that's every stem written
+  before the axis existed, and the engine was already at 3, so they are all
+  stems it will redo differently. That yellow clears itself on the first pass,
+  even an empty one — the engine emits `stream-done` for the streams it skips
+  (`cached: true`) and `backend.js` records the version on that event like a
+  real render. One render too many, never one too few.
 - **The number is never transcribed into this repo.** It used to be, as a canary
   (`ATTESA` in `test-fingerprint-parity.js`); with the UI reading it for itself
   the transcription became the very mirror the parity folder exists to close.

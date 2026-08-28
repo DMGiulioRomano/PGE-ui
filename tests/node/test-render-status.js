@@ -35,7 +35,7 @@ assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.S
   RS.STATES.NEVER === "never" && RS.STATES.RUNNING === "running");
 assert("TOOLTIPS present (5 strings)", RS.TOOLTIPS &&
   RS.TOOLTIPS.staleSemantics ===
-    "the engine changed how it reads this YAML since the last render — re-render to update" &&
+    "the engine's reading of this YAML doesn't match this stem — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&
@@ -123,15 +123,34 @@ console.log("\n── staleReason: due assi indipendenti ──");
   assert("yaml uguale e semantica diversa → 'semantics'",
     RS.staleReason("a", "a", { rendered: 2, engine: 3 }) === "semantics");
 
-  // I quattro modi di non sapere. Nessuno inventa staleness.
+  // I DUE IGNOTI NON SONO LO STESSO IGNOTO, e la differenza e' se il giallo si
+  // possa poi spegnere.
+  //
+  // Motore ignoto: nessuna pretesa, e non per prudenza generica. `_persistSem`
+  // scrive solo quando il numero si sa, quindi quel giallo non lo cancellerebbe
+  // nessun re-render: sarebbe permanente su stem perfetti.
   assert("nessun sem → null (comportamento pre-#133 esatto)",
     RS.staleReason("a", "a", undefined) === null);
   assert("sem vuoto → null",
     RS.staleReason("a", "a", {}) === null);
   assert("motore ignoto (bridge giu', route assente) → null",
     RS.staleReason("a", "a", { rendered: 2, engine: null }) === null);
-  assert("stem senza versione registrata (renderizzato prima di #133) → null",
-    RS.staleReason("a", "a", { rendered: undefined, engine: 3 }) === null);
+  assert("...anche senza versione dello stem: due ignoti non fanno un'asserzione",
+    RS.staleReason("a", "a", { rendered: undefined, engine: null }) === null);
+
+  // Versione dello stem assente ma motore noto: "semantics". E' lo stem scritto
+  // prima che l'editor registrasse il numero — cioe' OGNI stem esistente quando
+  // questo asse e' entrato, e il motore era gia' passato a 3 (PGE #222): sono
+  // tutti stem che rifara' diversi. Tacere qui vuol dire essere ciechi proprio
+  // nel caso per cui l'asse esiste.
+  //
+  // E questo giallo si spegne da solo: il motore emette `stream-done` anche per
+  // gli stream che salta (`cached: true`), e backend.js registra la versione su
+  // quell'evento come su un render vero. Un giro per progetto, una volta.
+  assert("stem senza versione registrata, motore noto → 'semantics'",
+    RS.staleReason("a", "a", { rendered: undefined, engine: 3 }) === "semantics");
+  assert("...e vale anche col motore a 0 (il ramo non guarda il valore)",
+    RS.staleReason("a", "a", { rendered: undefined, engine: 0 }) === "semantics");
 
   // `0` e' una versione come le altre: il guardiano e' `== null`, non falsiness.
   // Con `!rendered` uno stem a semantica 0 sarebbe stato indistinguibile da uno
@@ -142,10 +161,32 @@ console.log("\n── staleReason: due assi indipendenti ──");
     RS.staleReason("a", "a", { rendered: 0, engine: 0 }) === null);
 }
 
+// I quattro incroci, in un colpo: e' la tabella su cui la decisione e' stata
+// presa, e tenerla come tabella rende visibile che i due `null` non sono lo
+// stesso caso.
+{
+  const M = [
+    // [rendered,   engine, atteso,        cosa e' nel mondo reale]
+    [undefined,     3,      "semantics",   "stem reso prima di questo asse, motore a 3"],
+    [2,             3,      "semantics",   "stem reso con semantica 2, motore a 3"],
+    [3,             3,      null,          "stem reso con semantica 3, motore a 3"],
+    [2,             null,   null,          "motore ignoto: il giallo sarebbe ineliminabile"],
+  ];
+  const bad = M.filter(([r, e, atteso]) =>
+    RS.staleReason("a", "a", { rendered: r, engine: e }) !== atteso);
+  assert("i quattro incroci rendered x engine",
+    bad.length === 0,
+    bad.map(([r, e, atteso, why]) =>
+      `rendered=${r} engine=${e}: atteso ${atteso}, ottenuto ` +
+      `${RS.staleReason("a", "a", { rendered: r, engine: e })} (${why})`).join("\n      "));
+}
+
 console.log("\n── classifyStream con l'asse semantica ──");
 {
   assert("stem mai renderizzato resta 'never' anche a semantica diversa",
     RS.classifyStream(null, "x", true, { rendered: 2, engine: 3 }) === "never");
+  assert("...e resta 'never' anche senza versione registrata",
+    RS.classifyStream(null, "x", true, { rendered: undefined, engine: 3 }) === "never");
   assert("stem senza file su disco resta 'never'",
     RS.classifyStream("x", "x", false, { rendered: 2, engine: 3 }) === "never");
   assert("yaml fermo + bump del motore → 'stale'",

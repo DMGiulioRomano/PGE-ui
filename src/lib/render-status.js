@@ -27,8 +27,8 @@
     never:   "this stream has never been rendered",
     fresh:   "rendered and up-to-date with the YAML",
     stale:   "YAML changed since last render — re-render to update",
-    staleSemantics: "the engine changed how it reads this YAML since the last " +
-                    "render — re-render to update",
+    staleSemantics: "the engine's reading of this YAML doesn't match this " +
+                    "stem — re-render to update",
   };
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
@@ -56,14 +56,32 @@
   // muove. Sono due domande, e restano due record (vedi loadSemantics in
   // backend.js). `sem` e' { rendered, engine }, entrambi opzionali.
   //
-  // Ignoto da un lato = nessuna pretesa. Un numero e' un'affermazione,
-  // l'assenza no: uno stem renderizzato prima che l'editor registrasse la
-  // versione, o un bridge che non la sa dire, non devono inventare staleness.
+  // I DUE IGNOTI NON SONO LO STESSO IGNOTO, e la differenza e' se il giallo si
+  // possa poi spegnere:
+  //
+  //   - motore ignoto (bridge giu', motore senza la costante): nessuna
+  //     pretesa. Non e' prudenza generica — e' che quel giallo sarebbe
+  //     INELIMINABILE: `_persistSem` scrive solo quando il numero si sa,
+  //     quindi nessun re-render lo cancellerebbe, e l'editor resterebbe giallo
+  //     per sempre su stem perfetti.
+  //   - versione dello stem assente, con motore noto: "semantics". E' lo stem
+  //     scritto prima che l'editor registrasse il numero, cioe' OGNI stem
+  //     esistente al momento di questa modifica — e siccome il motore e' gia'
+  //     passato a 3 (PGE #222), sono tutti stem che il motore rifara' diversi.
+  //     Tacere qui vorrebbe dire essere ciechi esattamente nel caso per cui
+  //     l'asse e' stato scritto. E quel giallo si spegne da solo al primo
+  //     giro, anche a vuoto: il motore emette `stream-done` anche per gli
+  //     stream che salta (`cached: true`, render_pipeline.py), e backend.js
+  //     registra la versione su quell'evento come su un render vero.
+  //
+  // Cioe' la regola del repo applicata bene: un render di troppo, mai uno di
+  // meno.
   function staleReason(lastFp, currentFp, sem) {
     if (lastFp !== currentFp) return "yaml";
     const rendered = sem && sem.rendered;
     const engine = sem && sem.engine;
-    if (rendered == null || engine == null) return null;
+    if (engine == null) return null;
+    if (rendered == null) return "semantics";
     return rendered !== engine ? "semantics" : null;
   }
 

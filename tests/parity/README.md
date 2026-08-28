@@ -174,10 +174,15 @@ raggiunge la UI — legga **lo stesso** numero della costante importata, e che
 quel numero sia davvero dentro l'hash del motore (chiesto rifacendo il conto con
 la costante cambiata, e verificando che il patch non resti attaccato).
 
-Regola che governa entrambi i lati, e che vale la pena non perdere: **ignoto da
-un lato = nessuna pretesa**. Un motore senza la costante, un bridge irraggiungibile
-o uno stem renderizzato prima che l'editor registrasse il numero non devono
-inventare staleness. Un numero è un'affermazione, l'assenza no.
+Regola che governa i due lati, e che vale la pena non perdere: **i due ignoti
+non sono lo stesso ignoto**, e la differenza è se il giallo si possa poi
+spegnere. *Motore* ignoto (bridge irraggiungibile, motore senza la costante) non
+pretende niente: `_persistSem` scrive solo quando il numero si sa, quindi quel
+giallo sarebbe **ineliminabile**. Uno *stem* senza versione registrata, con
+motore noto, è invece stale — è ogni stem scritto prima che l'asse esistesse, e
+il motore era già passato a 3: sono tutti stem che rifarà diversi. Quel giallo si
+spegne da solo al primo giro, anche a vuoto, perché il motore emette
+`stream-done` anche per gli stream che salta (`cached: true`).
 
 ## Aggiungere un caso
 
