@@ -109,8 +109,19 @@ parity({
   cases: [
     {
       label: "il registro delle chiavi e' quello del motore",
-      run: async (ask, assert) => {
+      run: async (ask, assert, ctx) => {
         const c = (await ask("constants", {})).value;
+        // Da quale dei due rami arriva la grammatica. Non e' un dettaglio: i
+        // rami hanno gia' divergiuto (il ramo import non popolava le tre
+        // costanti, e la suite faceva 8/3 col venv del motore e 11/0 senza).
+        // La CI ora li esercita entrambi — job node senza venv, job python con
+        // — e questa riga dice a chi legge quale ha girato.
+        ctx.note(`grammatica letta dal ramo '${c.magnify_source}'`);
+        assert("il ramo e' uno dei due noti, non un terzo silenzioso",
+          c.magnify_source === "import" || c.magnify_source === "ast-slice",
+          // Senza questo, un namespace incompleto arrivava agli assert sotto
+          // come `null` e basta: tre FAIL senza una ragione stampata.
+          c.magnify_error || JSON.stringify(c.magnify_source));
         assert("KEYS === _MAGNIFY_KEYS",
           eq([...M.KEYS].sort(), c.magnify_keys), JSON.stringify(c.magnify_keys));
         assert("NUMERIC_KEYS === _MAGNIFY_NUMERIC_KEYS",

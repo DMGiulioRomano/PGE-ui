@@ -119,3 +119,21 @@ jobs:
         env:
           PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: python -m pytest tests/python/ -v
+      # La parita' gira DUE volte in CI, e non per ridondanza: l'oracolo ha due
+      # strade per la grammatica di --magnify-at, e possono divergere. Il job
+      # node non costruisce il venv del motore, quindi li' vince sempre il ramo
+      # ast-slice; qui il venv c'e', `pickPython` lo preferisce, e a girare e' il
+      # ramo import — quello che il README chiama piu' fedele e che, fino a
+      # questo commit, nessuna CI esercitava mai. Il primo difetto finitoci
+      # dentro (il namespace senza le tre costanti) e' arrivato in main verde.
+      #
+      # Se il venv non e' stato costruito, `pickPython` ripiega su python3 e
+      # questo passo replica il job node: ridondante, mai sbagliato.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: run parity suite (ramo import, col venv del motore)
+        working-directory: PGE-ui
+        env:
+          PGE_PARITY_STRICT: ${{ steps.engine.outcome == 'success' && '1' || '' }}
+        run: make tests-parity

@@ -289,6 +289,28 @@ def _op_fingerprint(args):
 
 _MAGNIFY_NAMESPACE = None
 
+# I nomi che la grammatica di `--magnify-at` deve consegnare, qualunque strada
+# l'oracolo prenda per procurarseli. UNA lista sola, e questo e' il punto: i
+# due rami (import e ast-slice) hanno gia' divergiuto una volta — il ramo
+# import popolava il solo `_parse_magnify_spec`, quindi `constants` leggeva
+# None per le tre chiavi e la suite falliva con `null` come unico messaggio.
+# Chi ha il venv del motore vedeva 8/3, chi non ce l'ha 11/0, sullo stesso
+# commit.
+_MAGNIFY_NAMES = ("_MAGNIFY_NUMERIC_KEYS", "_MAGNIFY_STR_KEYS", "_MAGNIFY_KEYS",
+                  "_parse_magnify_spec")
+
+
+def _check_magnify_namespace(ns, source, where):
+    """Nessun ramo consegna un namespace incompleto in silenzio."""
+    missing = [n for n in _MAGNIFY_NAMES if ns.get(n) is None]
+    if missing:
+        raise OracleError(
+            f"parse_magnify_spec: il ramo '{source}' non ha prodotto "
+            f"{', '.join(missing)} ({where}). I due rami devono consegnare gli "
+            f"stessi nomi: vedi _MAGNIFY_NAMES."
+        )
+    return ns
+
 
 def _load_magnify_from_source():
     """La grammatica di `--magnify-at` presa dai byte di `cli.py`.
@@ -302,6 +324,12 @@ def _load_magnify_from_source():
     non una parafrasi, gli stessi byte. Se domani la grammatica cambia, questa
     estrazione la segue senza modifiche; se cambia il NOME dei nodi, l'op
     fallisce dicendo quale manca, che e' il fallimento giusto.
+
+    Entrambi i rami passano da `_check_magnify_namespace`: un nome mancante e'
+    un errore parlante su QUALUNQUE interprete, non un `None` che scende fino
+    all'assert. Che i due rami diano poi le stesse risposte lo verifica la CI,
+    che gira la parita' due volte — job node senza venv (ast-slice) e job
+    python col venv del motore (import).
     """
     global _MAGNIFY_NAMESPACE
     if _MAGNIFY_NAMESPACE is not None:
@@ -311,13 +339,15 @@ def _load_magnify_from_source():
     # totale e non c'e' ragione di estrarre niente.
     try:
         cli = ENGINE.module("pge.cli")
-        _MAGNIFY_NAMESPACE = {
-            "_parse_magnify_spec": cli._parse_magnify_spec,
-            "_source": "import",
-        }
+        ns = {n: getattr(cli, n, None) for n in _MAGNIFY_NAMES}
+        ns["_source"] = "import"
+        _MAGNIFY_NAMESPACE = _check_magnify_namespace(ns, "import", "pge.cli")
         return _MAGNIFY_NAMESPACE
-    except OracleError:
-        pass
+    except OracleError as exc:
+        # Un namespace incompleto e' un guasto da dichiarare, non una ragione
+        # per ripiegare sull'altro ramo e nasconderlo.
+        if "il ramo 'import'" in str(exc):
+            raise
 
     import ast
 
@@ -326,8 +356,6 @@ def _load_magnify_from_source():
         raise OracleError(f"parse_magnify_spec: {path} non esiste")
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
-    wanted = ("_MAGNIFY_NUMERIC_KEYS", "_MAGNIFY_STR_KEYS", "_MAGNIFY_KEYS",
-              "_parse_magnify_spec")
     picked, found = [], set()
     for node in tree.body:
         name = None
@@ -336,11 +364,11 @@ def _load_magnify_from_source():
         elif isinstance(node, ast.Assign):
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
             name = names[0] if names else None
-        if name in wanted:
+        if name in _MAGNIFY_NAMES:
             picked.append(node)
             found.add(name)
 
-    missing = [w for w in wanted if w not in found]
+    missing = [w for w in _MAGNIFY_NAMES if w not in found]
     if missing:
         raise OracleError(
             f"parse_magnify_spec: {path.name} non definisce {', '.join(missing)} "
@@ -350,8 +378,8 @@ def _load_magnify_from_source():
     ns = {"__name__": "pge_cli_magnify_slice"}
     exec(compile(ast.Module(body=picked, type_ignores=[]), str(path), "exec"), ns)
     ns["_source"] = "ast-slice"
-    _MAGNIFY_NAMESPACE = ns
-    return ns
+    _MAGNIFY_NAMESPACE = _check_magnify_namespace(ns, "ast-slice", str(path))
+    return _MAGNIFY_NAMESPACE
 
 
 @op("parse_magnify_spec")
@@ -613,12 +641,14 @@ def _op_constants(args):
 
     try:
         ns = _load_magnify_from_source()
+        out["magnify_source"] = ns["_source"]
         out["magnify_keys"] = sorted(ns["_MAGNIFY_KEYS"]) if "_MAGNIFY_KEYS" in ns else None
         out["magnify_numeric_keys"] = (
             sorted(ns["_MAGNIFY_NUMERIC_KEYS"]) if "_MAGNIFY_NUMERIC_KEYS" in ns else None)
         out["magnify_str_keys"] = (
             sorted(ns["_MAGNIFY_STR_KEYS"]) if "_MAGNIFY_STR_KEYS" in ns else None)
     except OracleError as exc:
+        out["magnify_source"] = None
         out["magnify_keys"] = None
         out["magnify_error"] = str(exc)
 
