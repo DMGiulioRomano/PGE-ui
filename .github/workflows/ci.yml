@@ -60,13 +60,19 @@ jobs:
       # il python3 del runner basta e il venv del motore non serve — che e' il
       # motivo per cui questo passo sta qui e non nel job python.
       #
-      # Se il checkout sopra e' fallito (fork PR, token assente) le suite
-      # saltano rumorosamente ed escono 0, come gia' fanno le fixture
-      # `configs/*.yml`. Se invece il motore c'e', l'harness accende da solo la
-      # modalita' stretta (CI + motore presente) e un caso saltato diventa
-      # rosso: vedi tests/parity/harness.js.
+      # PGE_PARITY_STRICT come PGE_REQUIRE_ENGINE_FIXTURES sopra, e per la
+      # stessa ragione: se il checkout ha riportato successo, un caso di parita'
+      # saltato e' un fallimento. La decisione sta qui e non in harness.js
+      # perche' qui si sa se il checkout e' riuscito; il runner sa solo se
+      # trova i sorgenti, e un checkout riuscito che non li lascia dove i test
+      # li cercano e' proprio il caso che deve diventare rosso.
+      #
+      # Se invece il checkout fallisce — fork PR, token assente — la variabile
+      # resta vuota e le suite saltano rumorosamente uscendo 0, come le fixture.
       - name: run parity suite (mirror JS ↔ engine)
         working-directory: PGE-ui
+        env:
+          PGE_PARITY_STRICT: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: make tests-parity
 
   python:

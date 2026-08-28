@@ -14,13 +14,18 @@
  *
  * ## Quando saltare e' un fallimento
  *
- * `strict` = un caso saltato fa uscire 1. Si accende:
- *   - se `PGE_PARITY_STRICT` e' 1/true/yes — la leva manuale;
- *   - in CI **quando il motore e' presente**. Li' non c'e' nessuna ragione
- *     legittima per cui una domanda al motore non dovrebbe ricevere risposta,
- *     quindi ogni salto e' un guasto.
+ * `strict` = un caso saltato fa uscire 1, e si accende SOLO da
+ * `PGE_PARITY_STRICT` (1/true/yes). In CI e' il workflow a passarla, quando il
+ * passo di checkout del motore ha riportato successo — la stessa regola, e la
+ * stessa riga, di `PGE_REQUIRE_ENGINE_FIXTURES`.
  *
- * In CI senza motore si salta e basta: il checkout del motore nel workflow e'
+ * Il runner non decide da se': lo faceva, con `CI && engineRoot() !== null`, e
+ * quella condizione si spegneva esattamente sul caso che doveva intercettare.
+ * `engineRoot()` guarda il filesystem, quindi un checkout riuscito che non
+ * lascia i sorgenti dove i test li cercano faceva saltare tutte le suite col
+ * job verde. Chi sa se il checkout e' riuscito e' il workflow, non il runner.
+ *
+ * In CI senza motore si salta e basta: il checkout nel workflow e'
  * `continue-on-error` apposta (una PR da un fork non ha il token), e trasformare
  * quella condizione in un fallimento renderebbe rosse PR che non c'entrano.
  * Il salto resta rumoroso: elenca i casi e li conta.
@@ -99,9 +104,22 @@ function commitLine(commit) {
 }
 
 async function parity({ suite, why, cases }) {
-  const strictEnv = truthy(process.env.PGE_PARITY_STRICT);
+  // Strict = un caso saltato fa uscire 1, e la decisione arriva da FUORI.
+  //
+  // Prima era `strictEnv || (CI && root !== null)`, e quella seconda meta' si
+  // spegneva esattamente sulla condizione che doveva intercettare: `root` viene
+  // da `engineRoot()`, cioe' da un test sul filesystem, quindi il salto piu'
+  // probabile in CI — il motore non c'e', o non e' dove lo cerchiamo — era
+  // l'unico che non diventava mai rosso. Un checkout che RIPORTA successo ma non
+  // lascia i sorgenti dove i test li cercano faceva saltare tutte e cinque le
+  // suite col job verde: la stessa forma della trappola conclusion/outcome di
+  // #132, spostata dal workflow al runner.
+  //
+  // Adesso l'informazione sta dove la si ha davvero: il workflow sa se il
+  // checkout e' riuscito e passa PGE_PARITY_STRICT di conseguenza, come gia'
+  // fa con PGE_REQUIRE_ENGINE_FIXTURES.
+  const strict = truthy(process.env.PGE_PARITY_STRICT);
   const root = engineRoot();
-  const strict = strictEnv || (truthy(process.env.CI) && root !== null);
 
   const bar = "─".repeat(60);
   console.log(`\n${bar}\nparita' · ${suite}`);
@@ -115,9 +133,10 @@ async function parity({ suite, why, cases }) {
     for (const c of cases) console.error(`    · ${c.label}`);
     if (strict) {
       console.error(
-        `\n  In CI con il motore presente (o con PGE_PARITY_STRICT=1) un caso\n` +
-        `  saltato e' un fallimento: nessuno di questi confronti e' avvenuto,\n` +
-        `  quindi il verde di questa suite non direbbe niente.`);
+        `\n  Con PGE_PARITY_STRICT=1 un caso saltato e' un fallimento: nessuno\n` +
+        `  di questi confronti e' avvenuto, quindi il verde di questa suite non\n` +
+        `  direbbe niente. In CI la variabile arriva dal workflow quando il\n` +
+        `  checkout del motore ha riportato successo.`);
       process.exit(1);
     }
     console.error(

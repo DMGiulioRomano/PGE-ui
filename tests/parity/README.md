@@ -92,14 +92,21 @@ invece di eseguire i soli nodi AST della grammatica di `--magnify-at`).
 ## Un caso saltato non è un caso passato
 
 Senza motore le suite **saltano rumorosamente**: elencano i casi che non hanno
-girato e li contano. Il salto diventa un fallimento quando:
+girato e li contano. Il salto diventa un fallimento quando `PGE_PARITY_STRICT`
+è acceso — e basta: il runner non lo decide da sé.
 
-- `PGE_PARITY_STRICT=1`, oppure
-- si è in CI **e il motore è presente**.
+In CI lo passa il workflow, quando il passo di checkout del motore ha riportato
+`outcome: success`, esattamente come fa con `PGE_REQUIRE_ENGINE_FIXTURES`. La
+decisione sta lì e non qui perché **il runner sa solo se trova i sorgenti**: la
+versione precedente usava `CI && engineRoot() !== null`, e quella condizione si
+spegneva sul caso che doveva intercettare — un checkout riuscito che non lascia
+i sorgenti dove i test li cercano faceva saltare tutte e cinque le suite col job
+verde. È la trappola `conclusion`/`outcome` di #132, spostata dal workflow al
+runner.
 
-In CI senza motore si salta e basta: il checkout del motore nel workflow è
-`continue-on-error` apposta, perché una PR da un fork non ha il token, e
-trasformare quella condizione in un rosso punirebbe PR che non c'entrano.
+In CI senza motore si salta e basta: il checkout è `continue-on-error` apposta,
+perché una PR da un fork non ha il token, e trasformare quella condizione in un
+rosso punirebbe PR che non c'entrano.
 
 ## Quando una parità fallisce
 
