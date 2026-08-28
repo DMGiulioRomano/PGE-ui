@@ -103,6 +103,48 @@ function commitLine(commit) {
   return `motore @ ${commit.short}${commit.dirty ? " (albero sporco)" : ""} — ${commit.subject}`;
 }
 
+/* ---------------------------------------------------------------------------
+ * Il verdetto e' un handler `exit`, non una riga in fondo alla funzione.
+ *
+ * Stessa regola di ogni file in tests/node/, e per la stessa ragione, che qui
+ * si vede meglio che altrove: con un'uscita brutale alla fine di `parity`,
+ * tutto cio' che si risolve DOPO la catena di await del caso viene buttato via.
+ * Un `ask` senza `await` con un assert sopra stampava "1 passed, 0 failed" e
+ * usciva 0, mentre quell'assert era un FAIL. Un `await` dimenticato in una
+ * suite di parita' era verde — la tesi di questa PR applicata al suo runner.
+ *
+ * Con `process.exitCode` il microtask viene drenato prima del riepilogo, e il
+ * FAIL arriva. Lo stato e' di modulo perche' l'handler deve vederlo: c'e' una
+ * sola suite per processo, come in tests/node/.
+ * ------------------------------------------------------------------------- */
+let pass = 0, fail = 0;
+const notRun = [];
+let verdict = null;   // { bar, commit } una volta che la suite ha girato
+
+process.on("exit", (code) => {
+  if (verdict === null) return;   // bail: il blocco di salto ha gia' parlato
+  console.log(`\n${verdict.bar}`);
+  console.log(`${pass} passed, ${fail} failed  ·  ${commitLine(verdict.commit)}`);
+  if (notRun.length) {
+    console.error(`${notRun.length} caso/i interrotto/i: ${notRun.join(", ")}`);
+  }
+  if (code && !fail) {
+    console.error("interrotto prima della fine: il riepilogo e' parziale");
+  }
+  if (fail > 0) {
+    console.error(
+      `\nUna parita' rotta ha due letture: il mirror JS ha sbagliato, oppure il\n` +
+      `motore e' cambiato. Il commit qui sopra e' quello contro cui il confronto\n` +
+      `e' stato fatto — confrontalo con quello registrato in tests/parity/README.md.`);
+    process.exitCode = 1;
+  }
+});
+
+/* Uscita anticipata senza `process.exit`: `bail` alza questo, `run` lo assorbe.
+ * Serve perche' senza il taglio brutale il codice dopo `bail(...)` continuerebbe
+ * (openOracle su una root nulla). */
+class BailOut extends Error {}
+
 async function parity({ suite, why, cases }) {
   // Strict = un caso saltato fa uscire 1, e la decisione arriva da FUORI.
   //
@@ -126,8 +168,12 @@ async function parity({ suite, why, cases }) {
   if (why) console.log(why);
   console.log(bar);
 
-  /* --- il motore non c'e', o l'oracolo non parte ------------------------- */
-  function bail(reason) {
+  /* --- il motore non c'e', o l'oracolo non parte -------------------------
+   * Due guasti diversi, due consigli diversi: `hint` arriva dal chiamante.
+   * Prima la coda era una sola e parlava sempre del checkout, quindi con
+   * PGE_PARITY_PYTHON=/bin/false si veniva mandati a clonare un motore che
+   * c'era gia'. */
+  function bail(reason, hint) {
     console.error(`\n  ${strict ? "PARITA' NON VERIFICATA" : "PARITA' SALTATA"}: ${reason}`);
     console.error(`  ${cases.length} cas${cases.length === 1 ? "o" : "i"} non ${cases.length === 1 ? "ha" : "hanno"} girato:`);
     for (const c of cases) console.error(`    · ${c.label}`);
@@ -137,24 +183,29 @@ async function parity({ suite, why, cases }) {
         `  di questi confronti e' avvenuto, quindi il verde di questa suite non\n` +
         `  direbbe niente. In CI la variabile arriva dal workflow quando il\n` +
         `  checkout del motore ha riportato successo.`);
-      process.exit(1);
+      process.exitCode = 1;
+      throw new BailOut();
     }
-    console.error(
-      `\n  Per eseguirli serve un checkout di PythonGranularEngine accanto a\n` +
-      `  PGE-ui, oppure PGE_ENGINE_ROOT=/path/to/PythonGranularEngine.\n` +
-      `  PGE_PARITY_STRICT=1 rende questo salto un fallimento.`);
-    process.exit(0);
+    console.error(hint);
+    throw new BailOut();
   }
 
   if (root === null) {
-    bail(`nessun motore in ${process.env.PGE_ENGINE_ROOT || "../PythonGranularEngine"}`);
+    bail(`nessun motore in ${process.env.PGE_ENGINE_ROOT || "../PythonGranularEngine"}`,
+      `\n  Per eseguirli serve un checkout di PythonGranularEngine accanto a\n` +
+      `  PGE-ui, oppure PGE_ENGINE_ROOT=/path/to/PythonGranularEngine.\n` +
+      `  PGE_PARITY_STRICT=1 rende questo salto un fallimento.`);
   }
 
   let oracle;
   try {
     oracle = await openOracle({ root });
   } catch (err) {
-    bail(`l'oracolo non parte: ${err.message}`);
+    bail(`l'oracolo non parte: ${err.message}`,
+      `\n  Il motore c'e' (${root}): a mancare e' l'interprete o l'import.\n` +
+      `  PGE_PARITY_PYTHON=/path/to/python sceglie quello da usare; l'errore\n` +
+      `  qui sopra porta con se' lo stderr del processo.\n` +
+      `  PGE_PARITY_STRICT=1 rende questo salto un fallimento.`);
   }
 
   console.log(`  ${commitLine(oracle.hello.engine_commit)}`);
@@ -165,8 +216,6 @@ async function parity({ suite, why, cases }) {
   }
 
   /* --- esecuzione -------------------------------------------------------- */
-  let pass = 0, fail = 0;
-  const notRun = [];
   /* Informativo, non un'asserzione: si vede sempre e non entra nel conteggio.
      `righe` può essere una stringa, un array, o mancare del tutto. */
   function note(label, righe) {
@@ -202,28 +251,19 @@ async function parity({ suite, why, cases }) {
   }
 
   oracle.close();
-
-  console.log(`\n${bar}`);
-  console.log(`${pass} passed, ${fail} failed  ·  ${commitLine(ctx.commit)}`);
-  if (notRun.length) {
-    console.error(`${notRun.length} caso/i interrotto/i: ${notRun.join(", ")}`);
-  }
-  if (fail > 0) {
-    console.error(
-      `\nUna parita' rotta ha due letture: il mirror JS ha sbagliato, oppure il\n` +
-      `motore e' cambiato. Il commit qui sopra e' quello contro cui il confronto\n` +
-      `e' stato fatto — confrontalo con quello registrato in tests/parity/README.md.`);
-  }
-  process.exit(fail ? 1 : 0);
+  // Da qui in poi parla l'handler `exit`: cosi' un assert che si risolve dopo
+  // questa riga entra ancora nel conteggio.
+  verdict = { bar, commit: ctx.commit };
 }
 
 /* Le suite sono `async` in cima: senza questo un rigetto non gestito uscirebbe
  * 0 su node vecchi e il fallimento passerebbe per un successo. */
 function run(spec) {
   parity(spec).catch((err) => {
+    if (err instanceof BailOut) return;   // il blocco di salto ha gia' parlato
     console.error("\nharness: guasto non gestito");
     console.error(err && err.stack ? err.stack : err);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }
 

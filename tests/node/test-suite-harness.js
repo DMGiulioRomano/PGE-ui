@@ -108,20 +108,41 @@ function runScript(body) {
 
 console.log("\n── guardia sui file della suite ──");
 
-const suiteFiles = fs.readdirSync(__dirname)
+/* I file da controllare: le suite di qui, piu' il runner di tests/parity/.
+ *
+ * `readdirSync(__dirname)` da solo si ferma a tests/node/, e per un po' e'
+ * bastato — poi e' arrivato harness.js, che di suite ne governa cinque e usciva
+ * con quattro uscite brutali. Non era stile: con quella alla fine di `parity`,
+ * un assert che si risolveva dopo la catena di await veniva buttato via, e un
+ * `await` dimenticato in una suite di parita' stampava "1 passed, 0 failed"
+ * uscendo 0. Lo stesso difetto di test-yaml-bridge.js, un piano piu' in la'.
+ *
+ * Le suite di tests/parity/ NON sono in questa lista: il verdetto non e' loro,
+ * lo tiene harness.js per tutte. E' lui che deve rispettare il contratto. */
+const HERE = fs.readdirSync(__dirname)
   .filter(f => /^test-.*\.js$/.test(f))
-  .sort();
+  .sort()
+  .map(f => ({ label: f, file: path.join(__dirname, f) }));
+
+const PARITY_HARNESS = path.join(__dirname, "..", "parity", "harness.js");
+const suiteFiles = HERE.concat(
+  fs.existsSync(PARITY_HARNESS)
+    ? [{ label: "parity/harness.js", file: PARITY_HARNESS }]
+    : []);
 
 assert("la suite ha piu' di un file da controllare", suiteFiles.length > 1,
   `trovati ${suiteFiles.length}`);
+assert("il runner di tests/parity/ e' nella lista",
+  suiteFiles.some(f => f.label === "parity/harness.js"),
+  "harness.js governa cinque suite: il contratto d'uscita vale anche per lui");
 
-for (const f of suiteFiles) {
-  const src = fs.readFileSync(path.join(__dirname, f), "utf8");
-  assert(`${f} — nessun gate di uscita posizionale`, !src.includes(HARD_EXIT),
+for (const { label, file } of suiteFiles) {
+  const src = fs.readFileSync(file, "utf8");
+  assert(`${label} — nessun gate di uscita posizionale`, !src.includes(HARD_EXIT),
     "usa l'handler `exit` invece di uscire in una riga in fondo al file");
-  assert(`${f} — registra il verdetto in un handler exit`,
+  assert(`${label} — registra il verdetto in un handler exit`,
     /process\.on\("exit", \(code\)/.test(src) && /process\.exitCode\s*=\s*1/.test(src));
-  assert(`${f} — un crash a meta' non passa per un riepilogo pulito`,
+  assert(`${label} — un crash a meta' non passa per un riepilogo pulito`,
     /code && !fail/.test(src),
     "l'handler deve dire che il riepilogo e' parziale quando il processo muore prima della fine");
 }
