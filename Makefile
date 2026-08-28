@@ -10,8 +10,11 @@ VENV     := .venv
 VENV_BIN := $(VENV)/bin
 
 # I test di parita' girano da tests/parity/, quindi il path del motore va
-# assolutizzato qui: relativo si romperebbe al primo cd.
-ENGINE_ROOT := $(abspath $(ROOT))
+# assolutizzato qui: relativo si romperebbe al primo cd. Un PGE_ENGINE_ROOT
+# gia' nell'ambiente vince: il README lo documenta come variabile valida, e
+# scavalcarlo faceva annunciare "nessun motore in ..." puntando a un path che
+# l'utente non aveva nominato.
+ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
 
 .PHONY: help serve install dev-clean tests tests-node tests-python tests-parity
 
@@ -66,9 +69,15 @@ tests-python:
 
 # js-yaml sta in tests/node/node_modules (unico package.json del repo): le
 # suite di parita' che serializzano uno stream lo caricano da li'.
+# `|| exit 1` fermerebbe il ciclo alla prima suite rossa, e con cinque suite
+# significa vedere un fallimento per giro invece di tutti. Qui l'esito si
+# accumula e si esce in fondo: un giro, il censimento completo.
 tests-parity:
 	cd tests/node && npm install --silent
-	cd tests/parity && for f in test-*.js; do echo "▶ $$f"; PGE_ENGINE_ROOT="$(ENGINE_ROOT)" node "$$f" || exit 1; done
+	@cd tests/parity && rc=0; for f in test-*.js; do \
+	  echo "▶ $$f"; \
+	  PGE_ENGINE_ROOT="$(ENGINE_ROOT)" node "$$f" || rc=1; \
+	done; exit $$rc
 
 dev-clean:
 	@echo "Reset the editor's cached stem index: open devtools and run"
