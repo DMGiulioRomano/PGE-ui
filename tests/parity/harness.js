@@ -173,7 +173,15 @@ async function parity({ suite, why, cases }) {
    * Prima la coda era una sola e parlava sempre del checkout, quindi con
    * PGE_PARITY_PYTHON=/bin/false si veniva mandati a clonare un motore che
    * c'era gia'. */
+  /* Dichiarato qui, non piu' in basso, perche' `bail` deve poterlo chiudere:
+     un salto che avviene dopo l'apertura dell'oracolo lascerebbe vivo il
+     processo python, e node non esce finche' i suoi stdio sono aperti — la
+     suite resta appesa invece di fallire. Vale per ogni bail futuro, non solo
+     per quello sulle op indisponibili. */
+  let oracle;
+
   function bail(reason, hint) {
+    if (oracle) oracle.close();
     console.error(`\n  ${strict ? "PARITA' NON VERIFICATA" : "PARITA' SALTATA"}: ${reason}`);
     console.error(`  ${cases.length} cas${cases.length === 1 ? "o" : "i"} non ${cases.length === 1 ? "ha" : "hanno"} girato:`);
     for (const c of cases) console.error(`    · ${c.label}`);
@@ -197,7 +205,6 @@ async function parity({ suite, why, cases }) {
       `  PGE_PARITY_STRICT=1 rende questo salto un fallimento.`);
   }
 
-  let oracle;
   try {
     oracle = await openOracle({ root });
   } catch (err) {
@@ -213,6 +220,21 @@ async function parity({ suite, why, cases }) {
   const unavailable = oracle.hello.unavailable || {};
   for (const [op, whyNot] of Object.entries(unavailable)) {
     console.log(`  ATTENZIONE op indisponibile: ${op} — ${whyNot}`);
+  }
+  /* Un'op che non risponde e' un buco nella parita' esattamente come un caso
+     che non gira, e finora era solo una riga stampata: la suite proseguiva e
+     chiudeva verde su quello che restava.
+     Sotto strict e' un fallimento, e lo e' senza distinguere quali op questa
+     suite usi: l'elenco arriva dall'oracolo che le prova TUTTE all'avvio, le
+     cinque suite girano nello stesso `make tests-parity`, e un buco vale per
+     tutte. Non e' nemmeno un caso atteso: nessuna op deve dipendere dal venv
+     del motore (in CI il job node fa il checkout e basta), quindi con il motore
+     presente un'op indisponibile significa che quella regola e' saltata. */
+  const holes = Object.keys(unavailable);
+  if (strict && holes.length) {
+    bail(`${holes.length} op non risponde/rispondono: ${holes.join(", ")}`,
+      `\n  Nessuna op deve richiedere il venv del motore: verifica quale import\n` +
+      `  l'ha introdotta (il motivo e' stampato qui sopra, op per op).`);
   }
 
   /* --- esecuzione -------------------------------------------------------- */

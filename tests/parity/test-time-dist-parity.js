@@ -18,10 +18,12 @@
  *   1. NESSUN FALSO POSITIVO. Dove il mirror segnala un errore, il motore deve
  *      rifiutare davvero. Un avviso su uno YAML che rende e' il difetto peggiore
  *      di uno specchio: insegna a ignorare gli avvisi.
- *   2. La banda int/float e' larga uno. `timeDistError` modella la semantica
- *      INTERA di Python (piu' permissiva): dove ratio/rate sono float il motore
- *      trabocca un n_reps prima e la UI tace. La suite misura la larghezza di
- *      quella banda invece di crederle sulla parola.
+ *   2. La banda int/float e' larga al piu' uno, e da qualche parte esiste.
+ *      `timeDistError` modella la semantica INTERA di Python (piu' permissiva):
+ *      dove ratio/rate sono float il motore trabocca un n_reps prima e la UI
+ *      tace. La suite misura la larghezza invece di crederle sulla parola —
+ *      tetto per sonda, pavimento sul corpus, perche' su qualche sonda le due
+ *      soglie combaciano e la banda e' zero.
  *   3. Le durate disegnate sono quelle del motore, quando la UI non dichiara
  *      un ripiego.
  *
@@ -169,8 +171,8 @@ parity({
       },
     },
     {
-      label: "la banda int/float e' larga uno, non 'circa uno'",
-      run: async (ask, assert) => {
+      label: "la banda int/float e' larga zero o uno, e da qualche parte esiste",
+      run: async (ask, assert, ctx) => {
         // I tre casi che test-time-dist.js afferma a mano. La soglia della UI
         // e la soglia del motore vengono cercate, non scritte.
         const probes = [
@@ -178,6 +180,7 @@ parity({
           [{ type: "exponential", rate: 0.5 }, 900, 1200],
           [{ type: "geometric", ratio: 10 }, 200, 400],
         ];
+        const widths = [];
         for (const [spec, lo, hi] of probes) {
           const uiN = await firstRejected(ask, spec, lo, hi, "ui");
           const engN = await firstRejected(ask, spec, lo, hi, "engine");
@@ -187,9 +190,30 @@ parity({
           if (uiN === null || engN === null) continue;
           assert(`${label}: la UI non segnala prima del motore (motore @${engN}, ui @${uiN})`,
             uiN >= engN, `ui=${uiN} motore=${engN}`);
-          assert(`${label}: la banda e' larga ${uiN - engN} (dichiarata: al massimo 1)`,
+          assert(`${label}: la banda e' larga ${uiN - engN}, non piu' di 1`,
             uiN - engN <= 1, `ui=${uiN} motore=${engN}`);
+          widths.push({ label, width: uiN - engN, uiN, engN });
         }
+
+        // Il tetto da solo non basta, ed e' quello che c'era: `<= 1` e' vero
+        // anche quando la banda e' zero ovunque, cioe' quando la divergenza
+        // dichiarata nel README non esiste piu'. Lo stesso patto degli altri
+        // file — una divergenza che sparisce deve far parlare il test, non
+        // lasciare invecchiare una riga di tabella.
+        //
+        // Il pavimento e' sul CORPUS, non sulla singola coppia: la banda e'
+        // larga uno solo dove la soglia intera di Python e quella in virgola
+        // mobile cadono ai due lati di un intero, e su `{geometric, ratio: 10}`
+        // combaciano. Pretendere 1 su ogni sonda sarebbe pretendere un
+        // arrotondamento, non una semantica.
+        const withBand = widths.filter(w => w.width === 1);
+        assert(`la banda esiste ancora: ${withBand.length}/${widths.length} sonde a 1`,
+          withBand.length >= 1,
+          `larghezze: ${widths.map(w => `${w.label}=${w.width}`).join(", ")}. ` +
+          "Se sono tutte zero le due soglie coincidono: la divergenza int/float " +
+          "e' sparita, e vanno aggiornati il README e test-time-dist.js.");
+        ctx.note("larghezza per sonda (0 = le due soglie coincidono)",
+          widths.map(w => `${w.label}: motore @${w.engN}, ui @${w.uiN} → ${w.width}`));
       },
     },
     {

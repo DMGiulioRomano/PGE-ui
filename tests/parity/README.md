@@ -139,7 +139,7 @@ commento.
 | magnify-spec | SPEC vuoto: valido per la UI, rifiutato dal motore | nella UI "campo vuoto" significa "nessun target", e il flag non parte |
 | magnify-spec | `stream=` vuoto: rifiutato dalla UI, accettato dal motore | la UI è più stretta; una lente su nessuno stream è un refuso |
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
-| time-dist | la banda int/float larga uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo |
+| time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |

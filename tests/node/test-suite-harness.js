@@ -147,6 +147,25 @@ for (const { label, file } of suiteFiles) {
     "l'handler deve dire che il riepilogo e' parziale quando il processo muore prima della fine");
 }
 
+/* Il salto della parita' deve chiudere l'oracolo.
+ *
+ * `bail` termina la suite lanciando, e da quando esiste un salto DOPO
+ * l'apertura dell'oracolo (op indisponibili sotto strict) quel lancio scavalca
+ * `oracle.close()`. Con il processo python ancora vivo node non esce: la suite
+ * non fallisce, resta appesa — in CI un job che va in timeout invece di dare un
+ * verdetto, cioe' il modo peggiore di rompersi. Guardia sul sorgente perche'
+ * riprodurlo qui vorrebbe dire far partire un oracolo e aspettarne il non
+ * ritorno. */
+if (fs.existsSync(PARITY_HARNESS)) {
+  const src = fs.readFileSync(PARITY_HARNESS, "utf8");
+  assert("parity/harness.js — bail chiude l'oracolo prima di lanciare",
+    /function bail\([^)]*\)\s*\{\s*\n\s*if \(oracle\) oracle\.close\(\);/.test(src),
+    "un salto dopo l'apertura lascia vivo il processo python e la suite si appende");
+  assert("parity/harness.js — `oracle` e' dichiarato prima di bail",
+    src.indexOf("let oracle;") < src.indexOf("function bail("),
+    "altrimenti la close dentro bail legge una TDZ e lancia al posto del salto");
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

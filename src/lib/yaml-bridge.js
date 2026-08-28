@@ -75,6 +75,9 @@
     // su file:// o server spento no. Adesso non puo' tornare senza farsi
     // notare: tests/parity/test-bounds-parity.js pretende che nessun clamp
     // statico sia piu' largo di quello del motore.
+    // Il valore 1 arriva da 876afc1 («il fallback statico di duration_range e'
+    // max_range, non max_val»), non da questo commento: chi lo cambia deve
+    // partire di li'.
     durationRange:{ min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
