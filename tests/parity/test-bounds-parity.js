@@ -39,21 +39,44 @@ const STATIC = JSON.parse(JSON.stringify(window.PGE_BOUNDS));
  * oggetto qualunque cosa faccia la funzione. Verificato rendendola un no-op
  * (`return deepClone(base)`): la suite restava 18/0.
  *
- * Partendo da SENTINELLA — un valore che non compare da nessuna parte nel
- * registro del motore — un merge che non fa niente si vede subito. E la stessa
- * costruzione fa parlare l'altra meta' della divergenza `loop_*`: dove il
- * motore ha `max_val: null` il merge deve LASCIARE la base, quindi il tetto
- * deve restare SENTINELLA. Togliendo la guardia `typeof hi === "number"` in
- * bounds.js quel tetto diventa `null` e i knob dei loop perdono il clamp: la
- * suite prima taceva, ora no. */
-const SENTINEL = 424242;
-function wrongBase() {
+ * Partendo da una sentinella — un valore che il registro del motore non puo'
+ * produrre — un merge che non fa niente si vede subito. E la stessa costruzione
+ * fa parlare l'altra meta' della divergenza `loop_*`: dove il motore ha
+ * `max_val: null` il merge deve LASCIARE la base, quindi il tetto deve restare
+ * la sentinella. Togliendo la guardia `typeof hi === "number"` in bounds.js quel
+ * tetto diventa `null` e i knob dei loop perdono il clamp: la suite prima
+ * taceva, ora no.
+ *
+ * La sentinella e' DERIVATA dal motore, non scelta. Era `424242` con accanto
+ * l'affermazione «non compare da nessuna parte nel registro del motore»: cioe'
+ * esattamente il genere di cosa che questa cartella esiste per non credere sulla
+ * parola, e che nessuno ricontrollerebbe quando il motore aggiunge un bound. Un
+ * numero che il registro contiene davvero renderebbe questi assert bugiardi al
+ * contrario — un merge corretto che produce quel valore verrebbe letto come "non
+ * toccato". `max + 1` non e' producibile per costruzione, e c'e' un assert che
+ * lo ricontrolla. */
+function sentinelFor(payload) {
+  let max = 0;
+  const walk = (v) => {
+    if (typeof v === "number") { if (Number.isFinite(v) && v > max) max = v; return; }
+    if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(payload);
+  return max + 1;
+}
+function wrongBase(sentinel) {
   const w = JSON.parse(JSON.stringify(STATIC));
   for (const k of Object.keys(B.ENGINE_PARAM_MAP)) {
-    if (w[k]) w[k] = { min: SENTINEL, max: SENTINEL };
+    if (w[k]) w[k] = { min: sentinel, max: sentinel };
   }
-  w.pitch = { edoFactor: SENTINEL };
+  w.pitch = { edoFactor: sentinel };
   return w;
+}
+/* Ogni numero del payload, per il controllo di cui sopra. */
+function everyNumber(v, out = []) {
+  if (typeof v === "number") out.push(v);
+  else if (v && typeof v === "object") Object.values(v).forEach(x => everyNumber(x, out));
+  return out;
 }
 
 /* Eccezioni dichiarate, ognuna con la ragione. Non sono sviste: sono i punti
@@ -164,7 +187,12 @@ parity({
 
         /* Prima la domanda che il merge deve saper reggere: da una base
            sbagliata, i valori del motore devono comunque arrivare. */
-        const fromWrong = B.mergeEngineBounds(wrongBase(), raw.value);
+        const SENTINEL = sentinelFor(raw.value);
+        assert(`la sentinella (${SENTINEL}) non e' un valore che il motore produce`,
+          !everyNumber(raw.value).includes(SENTINEL),
+          "con una sentinella producibile, un merge corretto che la restituisce " +
+          "verrebbe letto come 'non toccato': gli assert qui sotto direbbero il falso");
+        const fromWrong = B.mergeEngineBounds(wrongBase(SENTINEL), raw.value);
         const notMerged = [];
         for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
           const e = engineBound(raw.value, uiKey);

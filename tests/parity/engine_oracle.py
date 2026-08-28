@@ -319,11 +319,24 @@ _MAGNIFY_NAMES = ("_MAGNIFY_NUMERIC_KEYS", "_MAGNIFY_STR_KEYS", "_MAGNIFY_KEYS",
                   "_parse_magnify_spec")
 
 
+class IncompleteNamespace(OracleError):
+    """Un ramo ha consegnato un namespace incompleto.
+
+    Ha un tipo suo perche' e' l'unico errore che NON deve far ripiegare
+    `_load_magnify_from_source` sull'altro ramo: se `pge.cli` si importa ma non
+    ha piu' uno dei nomi, ripiegare nasconderebbe la rinomina dietro un
+    ast-slice che riesce. Prima la distinzione era una substring del messaggio
+    (`if "il ramo 'import'" in str(exc)`), cioe' flusso di controllo appeso al
+    testo italiano di una frase che qualcuno riscrivera' — e la rottura sarebbe
+    stata il ritorno al ripiego muto, cioe' proprio il difetto che quella riga
+    chiudeva."""
+
+
 def _check_magnify_namespace(ns, source, where):
     """Nessun ramo consegna un namespace incompleto in silenzio."""
     missing = [n for n in _MAGNIFY_NAMES if ns.get(n) is None]
     if missing:
-        raise OracleError(
+        raise IncompleteNamespace(
             f"parse_magnify_spec: il ramo '{source}' non ha prodotto "
             f"{', '.join(missing)} ({where}). I due rami devono consegnare gli "
             f"stessi nomi: vedi _MAGNIFY_NAMES."
@@ -362,11 +375,15 @@ def _load_magnify_from_source():
         ns["_source"] = "import"
         _MAGNIFY_NAMESPACE = _check_magnify_namespace(ns, "import", "pge.cli")
         return _MAGNIFY_NAMESPACE
-    except OracleError as exc:
+    except IncompleteNamespace:
         # Un namespace incompleto e' un guasto da dichiarare, non una ragione
-        # per ripiegare sull'altro ramo e nasconderlo.
-        if "il ramo 'import'" in str(exc):
-            raise
+        # per ripiegare sull'altro ramo e nasconderlo: `pge.cli` si e' importato,
+        # quindi il motore c'e' e un nome manca davvero.
+        raise
+    except OracleError:
+        # L'import non e' andato (nessun venv): si passa all'ast-slice, che e'
+        # il ramo previsto in CI.
+        pass
 
     import ast
 
