@@ -583,3 +583,98 @@ def test_gunicorn_has_enough_threads_for_concurrent_stems():
     m = re.search(r'"threads":\s*(\d+)', src)
     assert m, '"threads" non trovato nella config gunicorn di server.py'
     assert int(m.group(1)) >= 32
+
+
+# ---------------------------------------------------------------------------
+# Semantica del motore — engine_semantics_version + /semantics-version (#133)
+#
+# VARIATION_SEMANTICS_VERSION e' il numero con cui il motore dichiara COME
+# legge lo YAML. Entra nel suo fingerprint: quando cambia, ogni stem gia' su
+# disco e' stato scritto con una lettura diversa dello stesso testo. L'editor
+# lo legge di qui per non mostrare "renderizzato" su audio che il motore
+# rifara' diverso — e questa e' l'unica strada per cui quel numero lo
+# raggiunge, quindi None non e' un dettaglio: e' l'asse spento.
+# ---------------------------------------------------------------------------
+
+def _stub_stream_cache_manager(root, body, layout="pge"):
+    d = (root / "src" / "pge" / "rendering") if layout == "pge" \
+        else (root / "src" / "rendering")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "stream_cache_manager.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_semantics_version_parses_source(tmp_path):
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 7\n")
+    assert server.engine_semantics_version(tmp_path) == 7
+
+
+def test_engine_semantics_version_legacy_layout(tmp_path):
+    """Layout piatto pre-PGE #162: src/rendering/ invece di src/pge/rendering/."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n",
+                               layout="flat")
+    assert server.engine_semantics_version(tmp_path) == 2
+
+
+def test_engine_semantics_version_prefers_current_layout(tmp_path):
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n",
+                               layout="flat")
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 5\n")
+    assert server.engine_semantics_version(tmp_path) == 5
+
+
+def test_engine_semantics_version_missing_is_none(tmp_path):
+    """Un motore senza la costante, o senza il file. None e non 0: chi legge
+    deve poter distinguere "non lo so" da una versione, o marchierebbe stale
+    ogni stem di ogni progetto."""
+    import server
+    assert server.engine_semantics_version(tmp_path / "nope") is None
+    _stub_stream_cache_manager(tmp_path, "FINGERPRINT_IGNORE_KEYS = {'solo'}\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_non_literal_is_none(tmp_path):
+    """Se la costante smette di essere un letterale (calcolata, importata), il
+    parser AST non deve inventare: None, e l'editor non pretende niente."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 1 + int(x)\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_rejects_bool(tmp_path):
+    """`True` e' un int in Python. Non e' una versione."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = True\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_semantics_version_endpoint(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 4\n")
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/semantics-version").get_json()
+    assert body["ok"] is True
+    assert body["version"] == 4
+
+
+def test_semantics_version_endpoint_without_engine(tmp_path):
+    """Nessun motore sotto --root: la route risponde comunque, con null. La UI
+    la tratta come "non lo so" e i pallini restano quelli di prima."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/semantics-version").get_json()
+    assert body["ok"] is True
+    assert body["version"] is None

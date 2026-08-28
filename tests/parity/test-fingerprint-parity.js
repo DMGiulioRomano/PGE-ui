@@ -183,32 +183,74 @@ parity({
       },
     },
     {
-      label: "la versione di semantica del motore e' un canarino, non un dettaglio",
+      label: "la versione di semantica del motore la legge il bridge, non un umano",
       run: async (ask, assert) => {
-        // VARIATION_SEMANTICS_VERSION entra nell'hash del motore e non ha
-        // controparte in quello della UI — non e' una svista: i due hash
-        // rispondono a domande diverse ("il motore deve rifare lo stem" contro
-        // "l'utente ha modificato qualcosa dall'ultimo render"), e la seconda
+        // VARIATION_SEMANTICS_VERSION entra nell'hash del MOTORE e non in
+        // quello della UI. Non e' una svista, ed e' rimasta cosi': i due hash
+        // rispondono a domande diverse — "il motore deve rifare lo stem" contro
+        // "l'utente ha modificato qualcosa dall'ultimo render" — e la seconda
         // non dipende dalla semantica del motore.
         //
-        // Il numero e' fissato qui APPOSTA, e questo e' l'unico posto del repo
-        // in cui una costante del motore va trascritta a mano. Un bump la fa
-        // diventare rossa, ed e' l'effetto voluto: un bump marca dirty ogni
-        // stem di ogni progetto, quindi qualcuno qui deve decidere se e come
-        // l'editor debba dirlo all'utente. Se la decisione e' "niente da fare",
-        // si aggiorna il numero e si va avanti — ma consapevolmente.
-        const ATTESA = 2;
+        // Ma il PALLINO dell'editor risponde alla prima, e per un po' ha
+        // mentito: a un bump del motore (2 -> 3, PGE #222) l'hash della UI non
+        // si muove, quindi gli stem restavano verdi mentre il motore era gia'
+        // pronto a rifarli diversi. La decisione, presa qui e non rimandata:
+        // la versione diventa un SECONDO asse di staleness, separato
+        // dall'hash — `staleReason` in render-status.js, registrata per stream
+        // insieme ai fingerprint (loadSemantics in backend.js) e letta dal
+        // motore via GET /semantics-version.
+        //
+        // Quindi qui non c'e' piu' nessun numero trascritto a mano: era
+        // l'ultima costante del motore ricopiata in questo repo, e un ATTESA
+        // aggiornato a mano a ogni bump sarebbe stato lo stesso specchio che
+        // questa cartella esiste per chiudere. Al suo posto i due fatti da cui
+        // dipende la decisione: che il numero arrivi alla UI per la strada
+        // giusta, e che sia davvero quello che sposta l'hash del motore.
         const c = (await ask("constants", {})).value;
-        assert(`VARIATION_SEMANTICS_VERSION === ${ATTESA}`,
-          c.variation_semantics_version === ATTESA,
-          `il motore e' a ${c.variation_semantics_version}. Un bump invalida ogni ` +
-          `stem gia' renderizzato: decidi se l'editor deve segnalarlo, poi aggiorna ` +
-          `ATTESA in questo file.`);
+        const imported = c.variation_semantics_version;
+        const fromAst = c.variation_semantics_version_ast;
 
+        assert("il motore la dichiara come intero",
+          Number.isInteger(imported),
+          `${JSON.stringify(imported)} — se e' sparita, l'asse "semantica" ` +
+          `dell'editor non ha piu' sorgente e va tolto, non lasciato muto`);
+
+        // Questa e' la strada VERA: la UI non importa niente del motore, riceve
+        // il numero da GET /semantics-version, che chiama
+        // engine_introspect.engine_semantics_version — lo stesso lettore AST
+        // usato qui. Se un giorno la costante si sposta di file o diventa
+        // un'espressione, l'AST torna null: il bridge risponde null, l'editor
+        // non pretende niente e i pallini tornano a mentire in silenzio. Questo
+        // assert e' cio' che impedisce al silenzio di passare inosservato.
+        assert("e il lettore AST del bridge legge lo stesso numero",
+          fromAst === imported,
+          `AST=${JSON.stringify(fromAst)} import=${JSON.stringify(imported)}` +
+          (c.variation_semantics_version_ast_error
+            ? ` (${c.variation_semantics_version_ast_error})` : "") +
+          ". La UI riceve il ramo AST: se diverge, l'editor giudica gli stem " +
+          "con un numero che il motore non usa.");
+
+        // E che quel numero sia dentro l'hash, non solo dichiarato: e' la
+        // premessa dell'intero asse. Dall'esadecimale non si legge, quindi si
+        // chiede al motore di rifare il conto con la sua costante cambiata.
         const s = base();
-        const r = await ask("fingerprint", { stream: yamlDict(s) });
-        assert("e resta dentro l'hash del motore (64 esadecimali di SHA-256)",
-          r.ok && /^[0-9a-f]{64}$/.test(r.value.hex), JSON.stringify(r));
+        const [plain, bumped, again] = await ask([
+          { op: "fingerprint", args: { stream: yamlDict(s) } },
+          { op: "fingerprint", args: { stream: yamlDict(s), semantics: imported + 1000 } },
+          { op: "fingerprint", args: { stream: yamlDict(s) } },
+        ]);
+        if (!plain.ok || !bumped.ok || !again.ok) {
+          throw new Error(plain.error || bumped.error || again.error);
+        }
+        assert("e' dentro l'hash: cambiarla a YAML fermo lo sposta",
+          plain.value.hex !== bumped.value.hex,
+          `${plain.value.hex} invariato con semantics=${imported + 1000}. ` +
+          "Se il motore ha smesso di metterla nel fingerprint, l'editor sta " +
+          "marcando stale degli stem per niente: togli l'asse.");
+
+        assert("l'hash e' un SHA-256 e il patch non e' rimasto attaccato",
+          /^[0-9a-f]{64}$/.test(plain.value.hex) && again.value.hex === plain.value.hex,
+          `${JSON.stringify(plain.value)} poi ${JSON.stringify(again.value)}`);
       },
     },
   ],

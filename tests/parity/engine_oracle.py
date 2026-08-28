@@ -265,6 +265,15 @@ def _op_fingerprint(args):
         stream       dict dello stream come appare nello YAML (snake_case)
         samples_dir  opzionale, per risolvere la durata di uno stream che
                      non dichiara `duration`
+        semantics    opzionale, int: rimpiazza VARIATION_SEMANTICS_VERSION per
+                     la durata della chiamata. Serve a una domanda sola —
+                     "quel numero e' davvero dentro l'hash?" — che dal solo
+                     esadecimale non si legge. Non e' logica riscritta: e' il
+                     `compute_fingerprint` del motore eseguito con un valore
+                     diverso della sua costante, la stessa cosa che fa il test
+                     del motore (test_stream_cache_manager.py). Il patch e'
+                     ripristinato sempre, cosi' le chiamate successive sullo
+                     stesso processo non ereditano il valore finto.
 
     Nota sulla durata implicita: il motore risolve la lunghezza dal file
     audio, e quel path importa `pge.shared.utils`, che importa soundfile. Su
@@ -280,7 +289,17 @@ def _op_fingerprint(args):
         cache_path=os.path.join(tempfile.gettempdir(), "pge-parity-unused.json"),
         samples_dir=args.get("samples_dir"),
     )
-    return {"hex": mgr.compute_fingerprint(stream)}
+    semantics = args.get("semantics")
+    if semantics is None:
+        return {"hex": mgr.compute_fingerprint(stream)}
+    if not isinstance(semantics, int) or isinstance(semantics, bool):
+        raise OracleError("fingerprint: 'semantics' deve essere un int")
+    previous = scm.VARIATION_SEMANTICS_VERSION
+    try:
+        scm.VARIATION_SEMANTICS_VERSION = semantics
+        return {"hex": mgr.compute_fingerprint(stream), "semantics": semantics}
+    finally:
+        scm.VARIATION_SEMANTICS_VERSION = previous
 
 
 # =============================================================================
@@ -584,18 +603,24 @@ def _bounds_from_import():
     return {"params": params, "pitch": pitch}
 
 
-def _bounds_from_ast():
-    # engine_introspect.py sta nella root di PGE-ui, due livelli sopra questo
-    # file. Importa solo ast e pathlib: nessun venv richiesto, che e' la
-    # ragione per cui e' stato estratto da server.py.
+def _introspect(where):
+    """Il modulo che il bridge usa per leggere il sorgente del motore.
+
+    engine_introspect.py sta nella root di PGE-ui, due livelli sopra questo
+    file. Importa solo ast e pathlib: nessun venv richiesto, che e' la ragione
+    per cui e' stato estratto da server.py."""
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
     try:
         import engine_introspect
     except ImportError as exc:
-        raise OracleError(f"parameter_bounds(ast): {exc}")
-    return engine_introspect.engine_parameter_bounds(ENGINE.root)
+        raise OracleError(f"{where}: {exc}")
+    return engine_introspect
+
+
+def _bounds_from_ast():
+    return _introspect("parameter_bounds(ast)").engine_parameter_bounds(ENGINE.root)
 
 
 # =============================================================================
@@ -616,6 +641,18 @@ def _op_constants(args):
     scm = ENGINE.module("pge.rendering.stream_cache_manager")
     out["fingerprint_ignore_keys"] = sorted(scm.FINGERPRINT_IGNORE_KEYS)
     out["variation_semantics_version"] = scm.VARIATION_SEMANTICS_VERSION
+
+    # Lo stesso numero, ma letto come lo legge il bridge: AST del sorgente,
+    # senza importare niente del motore. E' l'unica via per cui quel numero
+    # arriva alla UI, quindi e' quella che va confrontata con la costante vera.
+    # Prima era trascritto a mano in test-fingerprint-parity.js, ed era l'ultima
+    # costante del motore ricopiata in questo repo.
+    try:
+        out["variation_semantics_version_ast"] = (
+            _introspect("constants").engine_semantics_version(ENGINE.root))
+    except OracleError as exc:
+        out["variation_semantics_version_ast"] = None
+        out["variation_semantics_version_ast_error"] = str(exc)
 
     try:
         td = ENGINE.module("pge.envelopes.time_distribution")

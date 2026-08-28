@@ -233,6 +233,13 @@ function App() {
   /* ============ Render state ============ */
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
+  /* La semantica del motore, su due lati (#133). `engineSem` e' quella del
+     motore che il bridge ha davanti adesso; `renderedSem` quella con cui ogni
+     stem e' stato scritto. Quando divergono lo stem e' vecchio anche a YAML
+     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. `null` /
+     voce assente = non si sa, e non si pretende niente. */
+  const [engineSem, setEngineSem] = useStateApp(null);
+  const [renderedSem, setRenderedSem] = useStateApp({});
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -339,6 +346,15 @@ function App() {
         if (window.PGEBounds && window.PGEBackend.current.bounds) {
           window.PGEBackend.current.bounds()
             .then(raw => { if (raw && Object.keys(raw).length) window.PGEBounds.apply(raw); })
+            .catch(() => {});
+        }
+        // La versione di semantica del motore, per sapere se gli stem gia' su
+        // disco sono stati scritti con la lettura di adesso. Best-effort: un
+        // server.py senza la route o un motore senza la costante danno null, e
+        // i pallini restano quelli di prima.
+        if (window.PGEBackend.current.semanticsVersion) {
+          window.PGEBackend.current.semanticsVersion()
+            .then(v => setEngineSem(Number.isInteger(v) ? v : null))
             .catch(() => {});
         }
         // Run setup in background so the engine venv is ready.
@@ -458,6 +474,11 @@ function App() {
     backend.render.loadCache(basename).then(cache => {
       setLastRenderedFps(cache || {});
     });
+    if (backend.render.loadSemantics) {
+      backend.render.loadSemantics(basename).then(sem => setRenderedSem(sem || {}));
+    } else {
+      setRenderedSem({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -497,10 +518,16 @@ function App() {
     return backend.render.ownsStem ? backend.render.ownsStem(basename, id) : !!lastRenderedFps[id];
   };
 
+  /* La coppia che render-status.js legge per l'asse "semantica". Un oggetto
+     solo, cosi' summarize e statusForStream non possono ricevere versioni
+     diverse dello stesso dato. */
+  const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
+    [renderedSem, engineSem]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor),
-    [data.streams, currentFps, lastRenderedFps, activeProject]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -508,6 +535,7 @@ function App() {
       running: renderStatus.running,
       currentStreamId: renderStatus.currentStreamId,
       streamProgress,
+      sem: semCtx,
     });
   }
 
@@ -1558,6 +1586,11 @@ function App() {
         setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
         // bump fp for this stream (so UI marks it fresh)
         setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
+        // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
+        // riga lo stem resterebbe marcato con quella del render precedente e
+        // tornerebbe giallo subito dopo essere stato rifatto. La persistenza su
+        // localStorage la fa backend.js insieme ai fingerprint.
+        if (engineSem !== null) setRenderedSem(m => ({ ...m, [e.streamId]: engineSem }));
       }
     });
 

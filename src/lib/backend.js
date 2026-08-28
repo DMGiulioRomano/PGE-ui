@@ -241,6 +241,31 @@
           localStorage.setItem("pge-local-fp", JSON.stringify(all));
         } catch {}
       },
+
+      // La semantica del motore con cui ogni stem e' stato scritto, per
+      // progetto e per stream. Mappa parallela a `pge-local-fp`, non un campo
+      // dentro il fingerprint: i due dati rispondono a domande diverse — l'hash
+      // dice "l'utente ha modificato lo YAML", questa dice "il motore lo legge
+      // come allora" — e un progetto puo' portare stem scritti da motori
+      // diversi, quindi il dato e' per stream come l'hash.
+      //
+      // Voce assente = stem renderizzato prima che l'editor registrasse il
+      // numero. Resta assente: chi classifica non pretende niente da un dato
+      // che non c'e', e il primo render la scrive.
+      async loadSemantics(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistSem(yamlBasename, sems) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
+          all[yamlBasename] = sems;
+          localStorage.setItem("pge-local-sem", JSON.stringify(all));
+        } catch {}
+      },
       cancel() {
         if (cancelAbort) cancelAbort.abort();
         // fire-and-forget POST so the server kills the subprocess too
@@ -337,6 +362,16 @@
           if (Object.keys(localFps).length) {
             const existing = await this.loadCache(opts.yamlBasename);
             this._persistFp(opts.yamlBasename, { ...existing, ...localFps });
+            // ...e la semantica con cui il motore li ha appena scritti. Chiesta
+            // qui e non presa da chi chiama: e' una proprieta' del motore che
+            // ha reso, e la risposta e' gia' in cache dopo il primo giro.
+            const sem = await semanticsVersion();
+            if (sem !== null) {
+              const prev = await this.loadSemantics(opts.yamlBasename);
+              const fresh = {};
+              for (const id of Object.keys(localFps)) fresh[id] = sem;
+              this._persistSem(opts.yamlBasename, { ...prev, ...fresh });
+            }
           }
           return lastResult;
         } catch (e) {
@@ -518,10 +553,33 @@
       } catch { return {}; }
     }
 
+    // `VARIATION_SEMANTICS_VERSION` del motore, letta dal bridge dalla sorgente
+    // del motore (#133). E' il numero che il motore mette nel PROPRIO
+    // fingerprint: quando cambia, ogni stem gia' su disco e' stato scritto con
+    // una lettura diversa dello stesso YAML, e il pallino verde dell'editor
+    // starebbe mentendo.
+    //
+    // `null` per un server.py senza la route, un motore senza la costante o un
+    // bridge irraggiungibile: chi classifica non pretende niente e i pallini
+    // restano quelli di prima. Un numero e' un'affermazione, l'assenza no.
+    //
+    // Cache di sessione: il motore non cambia sotto i piedi del bridge, e la
+    // chiede sia il boot sia ogni render.
+    let _semantics;
+    async function semanticsVersion() {
+      if (_semantics !== undefined) return _semantics;
+      try {
+        const d = await jget("/semantics-version");
+        _semantics = Number.isInteger(d && d.version) ? d.version : null;
+      } catch { _semantics = null; }
+      return _semantics;
+    }
+
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys, bounds };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup,
+             envelopeKeys, bounds, semanticsVersion };
   }
 
   window.PGEBackend = {

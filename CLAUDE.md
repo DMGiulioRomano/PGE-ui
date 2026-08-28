@@ -26,7 +26,8 @@ exists):
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
   (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary), `test-history-core.js` (undo/redo stack
+  classification + render summary, incl. the engine-semantics axis and source
+  guards on the chain that carries the version from the engine to the dot), `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
@@ -210,8 +211,10 @@ Everything in the two sections that follow — and the bounds, magnify-spec,
 deviation-probability and time-distribution mirrors above — is a **parity pact**
 with the engine. Those pacts used to live only in prose. They are now executable:
 `tests/parity/engine_oracle.py` imports the engine and answers JSON lines
-(`fingerprint`, `parse_magnify_spec`, `classify_deviation_probability`,
-`build_time_distribution`, `parameter_bounds`, `constants`);
+(`fingerprint` — optionally with the semantics version swapped, to ask whether
+it is really in the hash — `parse_magnify_spec`,
+`classify_deviation_probability`, `build_time_distribution`,
+`parameter_bounds`, `constants`);
 `tests/parity/oracle.js` is the node client (one python process per suite);
 `tests/parity/harness.js` runs the suites and, crucially, **counts and names the
 cases that did not run** when the engine is absent — a skipped parity case is a
@@ -235,7 +238,10 @@ were written against — the datum that tells "we broke it" from "the engine mov
 
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
-bridge and the oracle can use it.
+bridge and the oracle can use it. It reads the envelope keys, the parameter
+bounds and `VARIATION_SEMANTICS_VERSION`; each returns an empty/`None` result for
+an engine that doesn't have the thing, and every caller must treat that as "don't
+know", never as a value.
 
 ### Split at the playhead (`splitAtPlayhead` in `app.jsx`)
 
@@ -303,6 +309,34 @@ The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 
 - `deviationProbabilityLegacy`: provenance (which spelling), not content — reopening a pre-v7 project shouldn't mark every stem stale.
 
 The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
+
+**Staleness has a second axis, and it is not in the hash.** The engine's
+`VARIATION_SEMANTICS_VERSION` (`stream_cache_manager.py`) says *how* it reads
+the YAML; it sits inside the engine's fingerprint, so a bump marks every stem of
+every project dirty at rest. The UI hash deliberately has no counterpart — the
+two hashes answer different questions ("did the user edit this" vs "must the
+engine redo this stem") — but the *dot* answers the engine's, and at the 2→3 bump
+(PGE #222) it showed 🟢 on stems the engine was about to rewrite. So the version
+is a second axis beside the hash, never a field inside it: `staleReason` in
+`render-status.js` returns `"yaml"` or `"semantics"`, the version is recorded
+per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
+`backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
+`GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
+engine import). Two rules hold it up:
+
+- **Unknown on either side claims nothing.** An engine without the constant, a
+  bridge that's down, a stem rendered before the editor recorded the number: all
+  leave the dot exactly as it was. A number is an assertion, an absence is not —
+  otherwise the upgrade would have turned every existing stem yellow.
+- **The number is never transcribed into this repo.** It used to be, as a canary
+  (`ATTESA` in `test-fingerprint-parity.js`); with the UI reading it for itself
+  the transcription became the very mirror the parity folder exists to close.
+  The suite now pins the two facts the design rests on instead: the bridge's AST
+  read equals the imported constant, and that constant really is inside the
+  engine's hash.
+
+A stale-by-semantics dot carries its own tooltip; the state stays `stale` so
+nothing downstream needs a new case.
 
 ### YAML round-trip (`yaml-bridge.js`)
 

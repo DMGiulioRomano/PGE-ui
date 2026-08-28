@@ -20,11 +20,15 @@
   const STATES = { FRESH: "fresh", STALE: "stale", NEVER: "never", RUNNING: "running" };
 
   // Tooltip strings kept verbatim from app.jsx so the UI text is unchanged.
+  // `staleSemantics` is the one addition: same yellow dot, different reason —
+  // the YAML did not move, the engine's reading of it did.
   const TOOLTIPS = {
     running: "rendering this stream…",
     never:   "this stream has never been rendered",
     fresh:   "rendered and up-to-date with the YAML",
     stale:   "YAML changed since last render — re-render to update",
+    staleSemantics: "the engine changed how it reads this YAML since the last " +
+                    "render — re-render to update",
   };
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
@@ -36,20 +40,49 @@
     return out;
   }
 
+  // Perche' uno stem e' stale, o null se non lo e'. Due assi indipendenti:
+  //
+  //   "yaml"      — l'utente ha modificato lo stream dall'ultimo render. E'
+  //                 l'hash della UI a dirlo, ed e' l'unica cosa che sa dire.
+  //   "semantics" — VARIATION_SEMANTICS_VERSION del motore e' cambiata da
+  //                 quando quello stem e' stato scritto: stesso YAML, lettura
+  //                 diversa, audio diverso al prossimo render. Il motore la
+  //                 mette nel proprio fingerprint (stream_cache_manager.py) e
+  //                 rifara' lo stem; senza quest'asse l'editor mostrerebbe
+  //                 verde su audio che il motore considera gia' morto.
+  //
+  // Il numero NON entra nell'hash della UI, e non e' una svista: l'hash
+  // risponde a "l'utente ha toccato qualcosa", che a un bump del motore non si
+  // muove. Sono due domande, e restano due record (vedi loadSemantics in
+  // backend.js). `sem` e' { rendered, engine }, entrambi opzionali.
+  //
+  // Ignoto da un lato = nessuna pretesa. Un numero e' un'affermazione,
+  // l'assenza no: uno stem renderizzato prima che l'editor registrasse la
+  // versione, o un bridge che non la sa dire, non devono inventare staleness.
+  function staleReason(lastFp, currentFp, sem) {
+    if (lastFp !== currentFp) return "yaml";
+    const rendered = sem && sem.rendered;
+    const engine = sem && sem.engine;
+    if (rendered == null || engine == null) return null;
+    return rendered !== engine ? "semantics" : null;
+  }
+
   // The core stale/fresh/never decision, shared by summarize + statusForStream.
   // hasStem is a boolean. !lastFp uses falsiness on purpose (undefined / "" / 0
   // all read as never), matching the original `!last` guard in app.jsx.
-  function classifyStream(lastFp, currentFp, hasStem) {
+  // `sem` is optional: omitting it is the pre-#133 behaviour exactly.
+  function classifyStream(lastFp, currentFp, hasStem, sem) {
     if (!lastFp || !hasStem) return STATES.NEVER;
-    if (lastFp === currentFp) return STATES.FRESH;
-    return STATES.STALE;
+    return staleReason(lastFp, currentFp, sem) === null ? STATES.FRESH : STATES.STALE;
   }
 
   // Aggregate fresh/stale/never counts across all streams. hasStem is (id)=>bool.
-  function summarize(streams, currentFps, lastRenderedFps, hasStem) {
+  // `sem` is optional: { rendered: {[streamId]: version}, engine: version|null }.
+  function summarize(streams, currentFps, lastRenderedFps, hasStem, sem) {
     let fresh = 0, stale = 0, never = 0;
     for (const s of streams) {
-      const state = classifyStream(lastRenderedFps[s.id], currentFps[s.id], hasStem(s.id));
+      const state = classifyStream(lastRenderedFps[s.id], currentFps[s.id], hasStem(s.id),
+                                   semFor(sem, s.id));
       if (state === STATES.FRESH) fresh++;
       else if (state === STATES.STALE) stale++;
       else never++;
@@ -57,14 +90,28 @@
     return { fresh, stale, never, total: streams.length };
   }
 
+  // La coppia { rendered, engine } per un singolo stream, dalla forma che
+  // app.jsx tiene in stato. Una funzione sola perche' la usano sia summarize
+  // sia statusForStream, e sbagliarla in uno dei due significa due pallini che
+  // non concordano sullo stesso stem.
+  function semFor(sem, streamId) {
+    if (!sem) return null;
+    return { rendered: (sem.rendered || {})[streamId], engine: sem.engine };
+  }
+
   // Per-stream status object consumed by Timeline.jsx (ClipRenderStatus).
   // ctx = { currentFps, lastRenderedFps, hasStem:(id)=>bool, running:bool,
-  //         currentStreamId, streamProgress }.
+  //         currentStreamId, streamProgress, sem }.
   function statusForStream(streamId, ctx) {
     if (ctx.running && ctx.currentStreamId === streamId) {
       return { state: STATES.RUNNING, progress: ctx.streamProgress[streamId] || 0, tooltip: TOOLTIPS.running };
     }
-    const state = classifyStream(ctx.lastRenderedFps[streamId], ctx.currentFps[streamId], ctx.hasStem(streamId));
+    const sem = semFor(ctx.sem, streamId);
+    const lastFp = ctx.lastRenderedFps[streamId];
+    const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId), sem);
+    if (state === STATES.STALE && staleReason(lastFp, ctx.currentFps[streamId], sem) === "semantics") {
+      return { state, tooltip: TOOLTIPS.staleSemantics };
+    }
     return { state, tooltip: TOOLTIPS[state] };
   }
 
@@ -73,6 +120,7 @@
     TOOLTIPS,
     fingerprintAll,
     classifyStream,
+    staleReason,
     summarize,
     statusForStream,
   };

@@ -59,7 +59,7 @@ Le operazioni dell'oracolo:
 
 | op | risponde con | mirror che verifica |
 |---|---|---|
-| `fingerprint` | `StreamCacheManager.compute_fingerprint` | `backend.fingerprintStream` |
+| `fingerprint` | `StreamCacheManager.compute_fingerprint` (con `semantics` opzionale, che rimpiazza la costante per la durata della chiamata) | `backend.fingerprintStream` |
 | `parse_magnify_spec` | i target di `--magnify-at`, o l'errore | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
@@ -114,10 +114,14 @@ Ha due letture: **abbiamo sbagliato noi** oppure **il motore è cambiato**. Per
 distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
-**Commit del motore alla scrittura di questa cartella:**
-`2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
-(«Merge pull request #226 from DMGiulioRomano/claude/issue-225-investigation-u6lhik»,
-PythonGranularEngine v7.2.0)
+**Commit del motore contro cui i patti sono verificati:**
+`cce323447f0be5d798173ddaae632bc2f27fac0a`
+(«Merge pull request #238 from DMGiulioRomano/claude/issue-222-resolution-mcaeyy»)
+
+La cartella è nata contro `2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
+(PythonGranularEngine v7.2.0); fra i due commit il motore ha portato
+`VARIATION_SEMANTICS_VERSION` da 2 a 3 — il primo cambiamento che questi test
+hanno intercettato, e la ragione della sezione qui sotto.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -138,7 +142,42 @@ commento.
 | time-dist | la banda int/float larga uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
-| fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` lato UI | i due hash rispondono a domande diverse; il numero è fissato come canarino |
+| fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |
+
+## La semantica del motore, e perché non è più un numero scritto qui
+
+`VARIATION_SEMANTICS_VERSION` (motore, `stream_cache_manager.py`) dice **come**
+il motore legge lo YAML. Entra nel suo fingerprint, quindi un bump marca dirty
+ogni stem di ogni progetto anche a YAML fermo.
+
+La prima versione di questa cartella lo trascriveva a mano in
+`test-fingerprint-parity.js` (`const ATTESA = 2`), come canarino: al bump la
+suite diventava rossa e qualcuno decideva. È successo — il motore è passato a 3
+in `cf386e6` (PGE #222) — e la decisione presa non è stata «aggiorna il numero»:
+
+- l'hash della UI **non** contiene la versione, e continua a non contenerla: le
+  due domande restano distinte («l'utente ha modificato lo YAML» contro «il
+  motore deve rifare lo stem»);
+- ma il **pallino** risponde alla seconda, e a un bump mostrava verde su stem
+  che il motore avrebbe rifatto diversi. Quindi la versione è diventata un
+  secondo asse di staleness accanto all'hash: `staleReason` in
+  `render-status.js`, registrata per stream insieme ai fingerprint
+  (`loadSemantics` in `backend.js`), letta dal motore via
+  `GET /semantics-version` → `engine_introspect.engine_semantics_version`;
+- e con la UI che legge il numero da sola, trascriverlo qui non serviva più: era
+  l'ultima costante del motore ricopiata in questo repo, cioè lo stesso specchio
+  che questa cartella esiste per chiudere.
+
+Al posto di `ATTESA`, la suite pretende i due fatti da cui quella decisione
+dipende: che il lettore AST del bridge — l'unica strada per cui il numero
+raggiunge la UI — legga **lo stesso** numero della costante importata, e che
+quel numero sia davvero dentro l'hash del motore (chiesto rifacendo il conto con
+la costante cambiata, e verificando che il patch non resti attaccato).
+
+Regola che governa entrambi i lati, e che vale la pena non perdere: **ignoto da
+un lato = nessuna pretesa**. Un motore senza la costante, un bridge irraggiungibile
+o uno stem renderizzato prima che l'editor registrasse il numero non devono
+inventare staleness. Un numero è un'affermazione, l'assenza no.
 
 ## Aggiungere un caso
 

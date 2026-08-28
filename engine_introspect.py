@@ -288,3 +288,54 @@ def engine_parameter_bounds(root: Path) -> dict:
     out = {"params": params, "pitch": pitch} if (params or pitch) else {}
     _PARAMETER_BOUNDS_CACHE[key] = out
     return out
+
+
+_SEMANTICS_CACHE: dict = {}
+
+
+def engine_semantics_version(root: Path):
+    """`VARIATION_SEMANTICS_VERSION` del motore, o None se non c'e'.
+
+    E' la versione della semantica di variazione: il motore la mette dentro il
+    proprio fingerprint perche' uno stem dipende dal testo YAML **e** dal modo
+    in cui il motore lo interpreta, e la seconda puo' cambiare a YAML fermo
+    (`stream_cache_manager.py`). Un bump marca dirty ogni stem di ogni
+    progetto.
+
+    La UI ne ha bisogno per lo stesso motivo: il suo hash risponde a "l'utente
+    ha modificato qualcosa dall'ultimo render", che a un bump non si muove — e
+    il pallino resterebbe verde su audio che il motore rifara' diverso. Letto
+    di qui, e non trascritto a mano da nessuna parte.
+
+    AST come il resto del modulo: importare `stream_cache_manager` tira dentro
+    il pacchetto del motore (e il suo venv), leggere l'assegnazione no.
+
+    None = un motore senza la costante (piu' vecchio del suo introdursi): chi
+    chiama non deve inventarsi un numero, deve non pretendere niente."""
+    key = str(root)
+    if key in _SEMANTICS_CACHE:
+        return _SEMANTICS_CACHE[key]
+    candidates = (
+        root / "src" / "pge" / "rendering" / "stream_cache_manager.py",
+        root / "src" / "rendering" / "stream_cache_manager.py",
+    )
+    version = None
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "VARIATION_SEMANTICS_VERSION" not in names:
+                continue
+            val = _ast_literal(node.value)
+            if isinstance(val, int) and not isinstance(val, bool):
+                version = val
+            break
+        if version is not None:
+            break
+    _SEMANTICS_CACHE[key] = version
+    return version

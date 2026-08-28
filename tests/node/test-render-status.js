@@ -33,12 +33,14 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 console.log("\n── module surface ──");
 assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.STALE === "stale" &&
   RS.STATES.NEVER === "never" && RS.STATES.RUNNING === "running");
-assert("TOOLTIPS present (4 strings)", RS.TOOLTIPS &&
+assert("TOOLTIPS present (5 strings)", RS.TOOLTIPS &&
+  RS.TOOLTIPS.staleSemantics ===
+    "the engine changed how it reads this YAML since the last render — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&
   RS.TOOLTIPS.stale === "YAML changed since last render — re-render to update");
-for (const fn of ["fingerprintAll", "classifyStream", "summarize", "statusForStream"])
+for (const fn of ["fingerprintAll", "classifyStream", "staleReason", "summarize", "statusForStream"])
   assert(`exports ${fn}`, typeof RS[fn] === "function");
 
 console.log("\n── classifyStream(lastFp, currentFp, hasStem) ──");
@@ -95,6 +97,129 @@ console.log("\n── statusForStream(streamId, ctx) ──");
   // Running, but a *different* stream is current → falls through to classify.
   assert("running for other stream falls through to classify",
     eq(RS.statusForStream("b", running), { state: "stale", tooltip: RS.TOOLTIPS.stale }));
+}
+
+/* ---------------------------------------------------------------------------
+ * L'asse "semantica" (#133).
+ *
+ * VARIATION_SEMANTICS_VERSION e' il numero con cui il motore dichiara COME
+ * legge lo YAML. Entra nel fingerprint del motore e non in quello della UI, e
+ * resta cosi': i due hash rispondono a domande diverse. Ma il pallino risponde
+ * alla domanda del motore ("questo stem e' ancora buono?"), quindi la versione
+ * e' un secondo asse di staleness accanto all'hash — non un campo dentro.
+ *
+ * La regola che tiene in piedi tutto il resto: ignoto da un lato = nessuna
+ * pretesa. Un numero e' un'affermazione, l'assenza no. Senza questa regola
+ * l'aggiornamento avrebbe marcato giallo ogni stem di ogni progetto gia'
+ * renderizzato — non perche' fossero vecchi, ma perche' nessuno aveva ancora
+ * registrato con quale semantica erano stati scritti.
+ * ------------------------------------------------------------------------- */
+console.log("\n── staleReason: due assi indipendenti ──");
+{
+  assert("yaml diverso → 'yaml', qualunque sia la semantica",
+    RS.staleReason("a", "b", { rendered: 3, engine: 3 }) === "yaml");
+  assert("yaml uguale e semantica uguale → null",
+    RS.staleReason("a", "a", { rendered: 3, engine: 3 }) === null);
+  assert("yaml uguale e semantica diversa → 'semantics'",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }) === "semantics");
+
+  // I quattro modi di non sapere. Nessuno inventa staleness.
+  assert("nessun sem → null (comportamento pre-#133 esatto)",
+    RS.staleReason("a", "a", undefined) === null);
+  assert("sem vuoto → null",
+    RS.staleReason("a", "a", {}) === null);
+  assert("motore ignoto (bridge giu', route assente) → null",
+    RS.staleReason("a", "a", { rendered: 2, engine: null }) === null);
+  assert("stem senza versione registrata (renderizzato prima di #133) → null",
+    RS.staleReason("a", "a", { rendered: undefined, engine: 3 }) === null);
+
+  // `0` e' una versione come le altre: il guardiano e' `== null`, non falsiness.
+  // Con `!rendered` uno stem a semantica 0 sarebbe stato indistinguibile da uno
+  // senza versione, e sarebbe rimasto verde per sempre.
+  assert("la versione 0 e' un numero, non un'assenza",
+    RS.staleReason("a", "a", { rendered: 0, engine: 3 }) === "semantics");
+  assert("...e concorda con se stessa",
+    RS.staleReason("a", "a", { rendered: 0, engine: 0 }) === null);
+}
+
+console.log("\n── classifyStream con l'asse semantica ──");
+{
+  assert("stem mai renderizzato resta 'never' anche a semantica diversa",
+    RS.classifyStream(null, "x", true, { rendered: 2, engine: 3 }) === "never");
+  assert("stem senza file su disco resta 'never'",
+    RS.classifyStream("x", "x", false, { rendered: 2, engine: 3 }) === "never");
+  assert("yaml fermo + bump del motore → 'stale'",
+    RS.classifyStream("x", "x", true, { rendered: 2, engine: 3 }) === "stale");
+  assert("yaml fermo + stessa semantica → 'fresh'",
+    RS.classifyStream("x", "x", true, { rendered: 3, engine: 3 }) === "fresh");
+  assert("senza sem, la firma a 3 argomenti si comporta come prima",
+    RS.classifyStream("x", "x", true) === "fresh" &&
+    RS.classifyStream("x", "y", true) === "stale");
+}
+
+console.log("\n── il pallino dice PERCHE' e' giallo ──");
+{
+  const ctx = {
+    currentFps: { a: "1", b: "2", c: "3" },
+    lastRenderedFps: { a: "1", b: "9", c: "3" },
+    hasStem: () => true,
+    running: false, currentStreamId: null, streamProgress: {},
+    sem: { rendered: { a: 3, b: 3, c: 2 }, engine: 3 },
+  };
+  assert("yaml modificato → il testo di sempre",
+    eq(RS.statusForStream("b", ctx), { state: "stale", tooltip: RS.TOOLTIPS.stale }));
+  assert("motore cambiato a yaml fermo → il testo nuovo",
+    eq(RS.statusForStream("c", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleSemantics }));
+  assert("niente da dire → fresh",
+    eq(RS.statusForStream("a", ctx), { state: "fresh", tooltip: RS.TOOLTIPS.fresh }));
+
+  // Il conteggio aggregato deve vedere lo stesso stem giallo che vede il
+  // pallino: sono due funzioni, e la coppia { rendered, engine } la estrae una
+  // sola (semFor). Se divergessero, il riepilogo direbbe "3 rendered" mentre
+  // tre pallini su cinque sono gialli.
+  const streams = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  assert("summarize concorda con statusForStream",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem, ctx.sem),
+       { fresh: 1, stale: 2, never: 0, total: 3 }));
+  assert("senza sem, summarize conta come prima di #133",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem),
+       { fresh: 2, stale: 1, never: 0, total: 3 }));
+}
+
+/* ---------------------------------------------------------------------------
+ * Guardie sul sorgente: la catena che porta il numero dal motore al pallino.
+ * Nessuna di queste righe gira in node (sono React / fetch), e ognuna e' un
+ * anello che, se salta, spegne l'asse in silenzio — il pallino torna verde e
+ * nessun test se ne accorge.
+ * ------------------------------------------------------------------------- */
+console.log("\n── la catena dal motore al pallino ──");
+{
+  const backendSrc = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
+  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+
+  assert("backend chiede la versione al bridge",
+    /GET \/semantics-version|"\/semantics-version"/.test(backendSrc),
+    "semanticsVersion() non chiama piu' la route: il numero non arriva");
+  assert("backend espone semanticsVersion",
+    /semanticsVersion\s*[,}]/.test(backendSrc));
+  assert("backend registra la semantica insieme ai fingerprint",
+    /_persistSem\(/.test(backendSrc) && /loadSemantics\(/.test(backendSrc),
+    "senza persistenza l'asse si spegne al reload della pagina");
+  assert("...e la scrive dopo un render, non solo la legge",
+    /const sem = await semanticsVersion\(\);[\s\S]{0,400}_persistSem\(/.test(backendSrc),
+    "run() non registra la versione: ogni stem resta senza, per sempre");
+
+  assert("app legge la versione del motore al boot",
+    /semanticsVersion\(\)[\s\S]{0,120}setEngineSem/.test(appSrc));
+  assert("app carica le versioni registrate al cambio progetto",
+    /loadSemantics\(basename\)[\s\S]{0,80}setRenderedSem/.test(appSrc));
+  assert("app aggiorna la versione dello stem appena reso",
+    /stream-done|setLastRenderedFps/.test(appSrc) &&
+    /setRenderedSem\(m => \(\{ \.\.\.m, \[e\.streamId\]: engineSem \}\)\)/.test(appSrc),
+    "senza questa riga uno stem appena renderizzato torna giallo subito");
+  assert("app passa la coppia a entrambi i consumatori",
+    /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
+    "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

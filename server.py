@@ -83,11 +83,13 @@ from render_pipeline import (
 # concern. #43, #133
 # -------------------------------------------------------------------------
 
-# Engine-source introspection (envelope keys + parameter bounds) lives in
+# Engine-source introspection (envelope keys, parameter bounds, semantics
+# version) lives in
 # engine_introspect.py (#133): the parity oracle imports it with the standard
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
-from engine_introspect import engine_envelope_keys, engine_parameter_bounds
+from engine_introspect import (engine_envelope_keys, engine_parameter_bounds,
+                              engine_semantics_version)
 
 
 def _ensure_venv_events(root: Path):
@@ -326,6 +328,18 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         engine source so the UI's bounds aren't hardcoded. Empty dict = an
         engine without these files; the UI then keeps its static fallback."""
         return jsonify({"ok": True, "bounds": engine_parameter_bounds(root)})
+
+    @app.get("/semantics-version")
+    def semantics_version():
+        """`VARIATION_SEMANTICS_VERSION` del motore (stream_cache_manager.py).
+
+        E' la versione della semantica con cui il motore legge lo YAML: entra
+        nel SUO fingerprint, quindi un bump marca dirty ogni stem di ogni
+        progetto anche a YAML fermo. L'editor la registra insieme ai propri
+        fingerprint per non mostrare "renderizzato" su audio che il motore
+        rifara' diverso. `null` = un motore senza la costante; la UI allora non
+        pretende niente (mai staleness inventata da un dato che non c'e')."""
+        return jsonify({"ok": True, "version": engine_semantics_version(root)})
 
     # --------- listing ---------
 
