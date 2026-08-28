@@ -70,6 +70,32 @@ const CORPUS = [
     js: [[[0, 0], [1, 100]], "cubic"], engine: [[[0, 0], [1, 100]], "cubic"] },
 ];
 
+/* I corpi su cui il mirror NON puo' tacere.
+ *
+ * I due assert di questa suite sono unidirezionali — "nessun falso positivo" —
+ * e un mirror che non parla mai non ha falsi positivi: rendendo `error()` un
+ * `return null` la suite restava 7/0, con i corpi segnalati che scendevano da
+ * 35 a 0 dentro un'etichetta. Il conteggio non discrimina.
+ *
+ * Il verso mancante non si chiude con una soglia numerica — sarebbe un'altra
+ * costante trascritta, che drifta — ma con una LISTA: questi sono i corpi che
+ * la docstring di `error()` dichiara di intercettare («non possono essere un
+ * envelope in nessuna lettura»). Su ognuno si pretendono entrambe le cose: il
+ * motore rifiuta E la UI parla. Se `error()` ammutolisce, qui diventa rosso. */
+const MUST_FLAG = [
+  { label: "lista vuota", body: [] },
+  { label: "points: null", body: { points: null } },
+  { label: "points: []", body: { points: [] } },
+  { label: "points di spazzatura", body: { points: ["x"] } },
+  { label: "lista di spazzatura", body: ["x", "y"] },
+  // Solo sotto una chiave: al livello GLOBALE `{a: 1}` non e' un corpo
+  // malformato, e' un dict per-parametro con una chiave che il motore non
+  // consulta — lo classifica SPECIFIC e costruisce un NeverGate. Lo si e'
+  // scoperto scrivendo questo caso, che lo ha segnalato come "il motore lo
+  // costruisce": la lista era sbagliata, non il mirror.
+  { label: "dict senza points", body: { a: 1 }, only: "sotto volume" },
+];
+
 /* I corpi malformati sotto una chiave per-parametro (PGE #209). */
 const PER_PARAM_BODIES = [
   { label: "numero", body: 50 },
@@ -203,6 +229,44 @@ parity({
         assert(`${reqs.length} coppie (chiave, corpo): nessun falso positivo (${flagged} segnalate)`,
           falsePositives.length === 0, falsePositives.join("\n      "));
         ctx.note(`${silent} corpi che il motore rifiuta e la UI lascia passare (meta' conservativa, per costruzione)`);
+      },
+    },
+    {
+      label: "i corpi che la UI deve segnalare: entrambi i lati parlano",
+      run: async (ask, assert) => {
+        // Globale e per-parametro: lo stesso corpo passa per due strade
+        // diverse nel motore, e il mirror deve reggerle entrambe.
+        const reqs = [], meta = [];
+        for (const m of MUST_FLAG) {
+          const positions = [
+            { where: "globale", value: m.body },
+            { where: "sotto volume", value: { volume: m.body } },
+          ].filter(pos => !m.only || m.only === pos.where);
+          for (const pos of positions) {
+            reqs.push({ op: "classify_deviation_probability",
+                        args: { value: pos.value, param_key: "volume", duration: 10.0 } });
+            meta.push({ ...m, ...pos });
+          }
+        }
+        const answers = await ask(reqs);
+
+        const uiMute = [], engineAccepts = [];
+        answers.forEach((r, i) => {
+          const { label, where, value } = meta[i];
+          if (!r.ok) throw new Error(`oracolo su ${label}/${where}: ${r.error}`);
+          const engineRejects = r.value.mode_error !== null || r.value.gate_error !== null;
+          if (!engineRejects) {
+            engineAccepts.push(`${label} (${where}): il motore lo costruisce (${r.value.gate})`);
+          } else if (D.error(value) === null) {
+            uiMute.push(`${label} (${where}): il motore rifiuta e la UI tace`);
+          }
+        });
+        assert(`${reqs.length} coppie (corpo, posizione): il motore le rifiuta tutte`,
+          engineAccepts.length === 0,
+          engineAccepts.join("\n      ") +
+          "\n      (se il motore ha smesso di rifiutarli, la lista MUST_FLAG va rivista)");
+        assert(`${reqs.length} coppie (corpo, posizione): la UI le segnala tutte`,
+          uiMute.length === 0, uiMute.join("\n      "));
       },
     },
     {

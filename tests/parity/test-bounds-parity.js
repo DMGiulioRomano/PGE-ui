@@ -31,6 +31,31 @@ const window = loadUiLibs(["yaml-bridge.js", "bounds.js"]);
 const B = window.PGEBounds;
 const STATIC = JSON.parse(JSON.stringify(window.PGE_BOUNDS));
 
+/* Una base deliberatamente sbagliata, e non e' un vezzo.
+ *
+ * `PGE_BOUNDS` statico oggi COINCIDE col motore su ogni campo mappato — e'
+ * cio' che il caso 4 pretende. Quindi confrontare `mergeEngineBounds(STATIC,
+ * motore)` col motore non dice niente sul merge: i due lati sono lo stesso
+ * oggetto qualunque cosa faccia la funzione. Verificato rendendola un no-op
+ * (`return deepClone(base)`): la suite restava 18/0.
+ *
+ * Partendo da SENTINELLA — un valore che non compare da nessuna parte nel
+ * registro del motore — un merge che non fa niente si vede subito. E la stessa
+ * costruzione fa parlare l'altra meta' della divergenza `loop_*`: dove il
+ * motore ha `max_val: null` il merge deve LASCIARE la base, quindi il tetto
+ * deve restare SENTINELLA. Togliendo la guardia `typeof hi === "number"` in
+ * bounds.js quel tetto diventa `null` e i knob dei loop perdono il clamp: la
+ * suite prima taceva, ora no. */
+const SENTINEL = 424242;
+function wrongBase() {
+  const w = JSON.parse(JSON.stringify(STATIC));
+  for (const k of Object.keys(B.ENGINE_PARAM_MAP)) {
+    if (w[k]) w[k] = { min: SENTINEL, max: SENTINEL };
+  }
+  w.pitch = { edoFactor: SENTINEL };
+  return w;
+}
+
 /* Eccezioni dichiarate, ognuna con la ragione. Non sono sviste: sono i punti
  * in cui i bound statici del motore NON sono il vincolo vero. */
 const MIN_EXCEPTIONS = {
@@ -121,6 +146,43 @@ parity({
         const raw = await ask("parameter_bounds", { source: "import" });
         if (!raw.ok) throw new Error(raw.error);
         const merged = B.mergeEngineBounds(STATIC, raw.value);
+
+        /* Prima la domanda che il merge deve saper reggere: da una base
+           sbagliata, i valori del motore devono comunque arrivare. */
+        const fromWrong = B.mergeEngineBounds(wrongBase(), raw.value);
+        const notMerged = [];
+        for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
+          const e = engineBound(raw.value, uiKey);
+          if (!e) continue;
+          if (typeof e.min === "number" && fromWrong[uiKey].min === SENTINEL
+              && !(uiKey in MIN_EXCEPTIONS)) {
+            notMerged.push(`${uiKey}.min e' rimasto la sentinella: il merge non l'ha toccato`);
+          }
+          if (typeof e.max === "number" && fromWrong[uiKey].max === SENTINEL) {
+            notMerged.push(`${uiKey}.max e' rimasto la sentinella: il merge non l'ha toccato`);
+          }
+        }
+        assert("da una base sbagliata il merge porta comunque i valori del motore",
+          notMerged.length === 0, notMerged.join("\n      "));
+        assert("e anche i bound di pitch, che seguono un'altra strada",
+          fromWrong.pitch.edoFactor === raw.value.pitch.edoFactor &&
+          same(fromWrong.pitch.semitones, raw.value.pitch.semitones),
+          JSON.stringify(fromWrong.pitch));
+
+        /* E la meta' UI della divergenza loop_*: dove il motore non ha tetto,
+           il merge deve LASCIARE quello della base. */
+        const kept = [];
+        for (const uiKey of Object.keys(MAX_EXCEPTIONS)) {
+          if (fromWrong[uiKey].max !== SENTINEL) {
+            kept.push(`${uiKey}.max = ${JSON.stringify(fromWrong[uiKey].max)} invece della base: ` +
+                      `con max_val null il merge non deve toccare il tetto`);
+          }
+          if (merged[uiKey].max !== STATIC[uiKey].max) {
+            kept.push(`${uiKey}.max = ${JSON.stringify(merged[uiKey].max)} invece di ${STATIC[uiKey].max}`);
+          }
+        }
+        assert("loop_*: il tetto statico sopravvive al merge (max_val null)",
+          kept.length === 0, kept.join("\n      "));
 
         const diffs = [];
         for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
