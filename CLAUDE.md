@@ -50,6 +50,10 @@ exists):
   numbers of the semantics axis come from: `semanticsVersion` re-reading the
   bridge, and a whole `render.run()` writing/reading `pge-local-sem` — the real
   backend driven with a fake `fetch` and `localStorage`), and
+  `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
+  killed between the `_dead` check and the write used to raise an unhandled
+  `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
+  fake interpreter is `node -e`, so it needs no engine), and
   `test-suite-harness.js` (the suite's own
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
@@ -73,6 +77,10 @@ exists):
   `tests/parity/README.md`. The parity suites don't own their
   verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
   guards them against taking it back with a brutal exit.
+
+Both `tests-node` and `tests-parity` **accumulate** failures rather than stopping
+at the first red file: with twenty-odd suites, `|| exit 1` meant seeing one
+failure per run instead of the whole census.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
 checks out the sibling engine and builds its venv. The node job checks it out
@@ -257,6 +265,16 @@ bridge and the oracle can use it. It reads the envelope keys, the parameter
 bounds and `VARIATION_SEMANTICS_VERSION`; each returns an empty/`None` result for
 an engine that doesn't have the thing, and every caller must treat that as "don't
 know", never as a value.
+
+**Every one of those readings goes through `_assigned_value`**, which recognizes
+both `NAME = …` (`ast.Assign`) and `NAME: T = …` (`ast.AnnAssign`), because the
+annotated spelling is house style upstream — the engine already annotates
+`GRANULAR_PARAMETERS` and `PITCH_UNIT_PRESETS`. Two readings used to filter on
+`Assign` alone, and for `VARIATION_SEMANTICS_VERSION` that was the worst place
+for it: the fallback is `None` = "engine unknown", an unknown engine claims
+nothing, so a bump shipped with a type annotation would switch the whole axis
+off and turn every stem green exactly while the engine was about to rewrite
+them.
 
 ### Split at the playhead (`splitAtPlayhead` in `app.jsx`)
 
