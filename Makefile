@@ -70,8 +70,16 @@ tests: tests-node tests-python
 	@echo ""
 	@echo "All tests passed."
 
+# Stessa regola di `tests-parity`, e per la stessa ragione: `|| exit 1` fermava
+# il ciclo alla prima suite rossa, e con venti file significa vedere un
+# fallimento per giro invece di tutti. L'esito si accumula e si esce in fondo:
+# un giro, il censimento completo.
 tests-node:
-	cd tests/node && npm install --silent && for f in test-*.js; do echo "▶ $$f"; node "$$f" || exit 1; done
+	cd tests/node && npm install --silent
+	@cd tests/node && rc=0; for f in test-*.js; do \
+	  echo "▶ $$f"; \
+	  node "$$f" || rc=1; \
+	done; exit $$rc
 
 tests-python:
 	$(VENV_BIN)/python -m pytest tests/python/ -v

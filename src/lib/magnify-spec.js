@@ -159,8 +159,16 @@
    *
    * Adesso la stessa funzione risponde a "parte?" e a "cosa parte?", quindi
    * le due meta' concordano per costruzione e non per coincidenza. Il testo
-   * restituito e' esattamente quello che finisce in argv, cosi'
-   * `RenderButton.buildCommand` mostra i byte veri.
+   * restituito e' cio' che questo repo SPEDISCE, ed e' quello che
+   * `RenderButton.buildCommand` mostra.
+   *
+   * Non e' pero' l'ultima parola su argv: `server.py` ri-striscia con
+   * `str.strip()` pieno prima di costruire il comando. Quindi la divergenza
+   * residua fra lo strip ASCII di qui e quello di Python si chiude un piano
+   * piu' sotto, ed e' un motivo in piu' per cui e' safe-direction — la UI puo'
+   * segnalare rosso su uno SPEC che il bridge avrebbe ripulito, mai il
+   * contrario. Sta gia' nella tabella delle divergenze; sovradiceva solo
+   * questa riga.
    *
    * Attenzione al confine: qui lo SPEC vuoto vale null (non si manda il flag),
    * mentre `error()` lo dice valido. E' la divergenza dichiarata numero uno —
