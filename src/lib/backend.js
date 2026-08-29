@@ -364,7 +364,11 @@
             this._persistFp(opts.yamlBasename, { ...existing, ...localFps });
             // ...e la semantica con cui il motore li ha appena scritti. Chiesta
             // qui e non presa da chi chiama: e' una proprieta' del motore che
-            // ha reso, e la risposta e' gia' in cache dopo il primo giro.
+            // ha reso. SENZA `refresh` di proposito — il numero di questo render
+            // e' quello che `refreshEngineSem` ha appena riletto e messo nella
+            // cella (app.jsx lo attende prima di partire), quindi qui si prende
+            // quello: rileggere adesso potrebbe cadere su un'altra risposta e i
+            // due lati registrerebbero versioni diverse dello stesso giro.
             //
             // Col numero ignoto la voce si CANCELLA, non si salta: saltarla
             // lascerebbe in piedi la versione di un render precedente, e uno
@@ -569,29 +573,40 @@
     // bridge irraggiungibile: chi classifica non pretende niente e i pallini
     // restano quelli di prima. Un numero e' un'affermazione, l'assenza no.
     //
-    // Cache di sessione, ma solo delle RISPOSTE. Un bridge irraggiungibile al
-    // boot non deve condannare la sessione a non sapere: le altre due letture
-    // del motore (envelopeKeys, bounds) al massimo nascondono un filtro, questa
-    // decide un pallino, e ricordare il fallimento lo terrebbe verde anche dopo
-    // che il bridge e' tornato su. Un `null` che ARRIVA dal bridge (motore senza
-    // la costante) e' invece una risposta, e si ricorda come le altre.
+    // La cache NON e' a vita, ed e' la stessa decisione che il bridge prende un
+    // livello piu' sotto: `engine_introspect.engine_semantics_version` invalida
+    // sull'mtime, perche' se il motore viene aggiornato sotto un `make serve`
+    // acceso una cache a vita renderebbe il bump invisibile — proprio l'evento
+    // che questa lettura esiste per intercettare. Qui vale identico: il numero
+    // e' una proprieta' del motore accanto, non della sessione dell'editor, e un
+    // `git checkout` nel repo fratello lo cambia sotto i piedi. Memorizzarlo per
+    // sempre significherebbe pallini VERDI su stem che il motore rifara'
+    // diversi, fino al reload della pagina.
+    //
+    // Quindi la freschezza sta nei CHIAMANTI, non nella cella: `refreshEngineSem`
+    // (app.jsx: boot, cambio progetto, inizio render) chiede `{refresh:true}` e
+    // riscrive la cella; chi legge senza flag riceve quel valore.
+    //
+    // Ed e' cio' che tiene allineati i due lati di un render: app.jsx rilegge
+    // PRIMA di partire e mette il numero nel ref, `run()` lo richiede in FONDO
+    // per registrarlo sugli stem. Poiche' una rilettura scrive nella cella
+    // esattamente cio' che restituisce — numero o `null`, il fallimento
+    // compreso — la seconda lettura non puo' cadere su un'altra risposta.
     let _semantics;
-    async function semanticsVersion() {
-      if (_semantics !== undefined) return _semantics;
+    async function semanticsVersion(opts) {
+      if (!(opts && opts.refresh) && _semantics !== undefined) return _semantics;
+      let v = null;
       try {
         const d = await jget("/semantics-version");
-        _semantics = Number.isInteger(d && d.version) ? d.version : null;
-        return _semantics;
+        v = Number.isInteger(d && d.version) ? d.version : null;
       } catch {
-        // Non memorizzato, e il prossimo giro esiste davvero: app.jsx la
-        // richiede al boot, a ogni cambio progetto e all'inizio di ogni render
-        // (`refreshEngineSem`). Con la sola chiamata al boot — che ha le
-        // dipendenze vuote, e `serverDown` non torna mai a falso senza reload —
-        // chi apriva l'editor prima di `make serve` restava senza asse per
-        // tutta la sessione, mentre `run()` qui sotto REGISTRAVA comunque la
-        // versione: nessun pallino poteva dirlo.
-        return null;
+        // Bridge irraggiungibile o server.py senza la route: non si sa. Il
+        // fallimento non condanna piu' la sessione perche' la rilettura esiste
+        // — prima era la cella a doverlo garantire, non ricordandolo.
+        v = null;
       }
+      _semantics = v;
+      return v;
     }
 
     // Eagerly pull config so currentPath() works without an await.

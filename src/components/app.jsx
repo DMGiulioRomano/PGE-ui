@@ -258,15 +258,20 @@ function App() {
    * chiede per conto suo), ma il lato con cui confrontarla non arrivava mai,
    * quindi nessun pallino poteva dirlo.
    *
-   * Costa poco ripeterla: `semanticsVersion()` in backend.js memorizza le
-   * risposte, quindi dalla prima in poi non c'e' nemmeno una fetch. Memorizza
-   * solo quelle: un fallimento non si ricorda, ed e' cio' che rende utile
-   * richiederla. */
+   * `{refresh:true}` e non la cache: il numero e' una proprieta' del MOTORE
+   * accanto, e quello cambia sotto i piedi (un `git checkout` nel repo fratello,
+   * un pull) mentre l'editor resta aperto. Con la cella memorizzata a vita
+   * questi tre punti smettevano di essere riletture — diventavano `return`
+   * immediati — e un bump non arrivava mai al pallino: verde su stem che il
+   * motore rifara' diversi, fino al reload. Il bridge, un livello piu' sotto, fa
+   * gia' il contrario apposta (invalidazione sull'mtime in engine_introspect).
+   *
+   * Costa una fetch locale su una lettura AST gia' cachata lato bridge. */
   async function refreshEngineSem() {
     const backend = window.PGEBackend.current;
     if (!backend || !backend.semanticsVersion) return null;
     let v = null;
-    try { v = await backend.semanticsVersion(); } catch { v = null; }
+    try { v = await backend.semanticsVersion({ refresh: true }); } catch { v = null; }
     const n = Number.isInteger(v) ? v : null;
     engineSemRef.current = n;
     setEngineSem(n);
