@@ -86,6 +86,14 @@ class Oracle {
     proc.stderr.on("data", (chunk) => { this._stderr += chunk; });
     proc.on("error", (err) => this._die(`impossibile avviare ${python}: ${err.message}`));
     proc.on("close", (code) => this._die(`l'oracolo e' uscito con codice ${code}`));
+    /* Anche sullo STREAM, non solo sul processo. `close` ed `error` del processo
+       sono consegnati in modo asincrono, quindi un python che muore fra il
+       controllo `_dead` e la write fa emettere un EPIPE sulla pipe: senza
+       listener e' un'eccezione non gestita, e la suite muore con uno stack
+       grezzo invece della diagnostica con lo stderr che `_die`/`_withStderr`
+       esistono per produrre — cioe' proprio nel caso in cui quella diagnostica
+       serve di piu' (l'import del motore che esplode a meta' batch, un OOM). */
+    proc.stdin.on("error", (err) => this._die(`stdin dell'oracolo chiusa: ${err.message}`));
   }
 
   stderr() { return this._stderr.trim(); }
@@ -155,7 +163,16 @@ class Oracle {
       waits.push(this._expect(id, timeoutMs));
     }
     if (this._dead) throw new Error(this._withStderr(this._dead));
-    this.proc.stdin.write(lines.join("\n") + "\n");
+    try {
+      this.proc.stdin.write(lines.join("\n") + "\n");
+    } catch (err) {
+      // Su uno stream gia' distrutto la write puo' fallire in modo SINCRONO.
+      // Non si rilancia qui: `_die` ha appena rigettato le attese, e uscire
+      // adesso le lascerebbe senza chi le ascolta — cioe' si scambierebbe un
+      // EPIPE non gestito con un rigetto non gestito. L'await qui sotto porta
+      // fuori la diagnostica.
+      this._die(`scrittura sulla stdin dell'oracolo fallita: ${err.message}`);
+    }
 
     const answers = await Promise.all(waits);
     return Array.isArray(opOrBatch) ? answers : answers[0];
