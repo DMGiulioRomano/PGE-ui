@@ -316,6 +316,38 @@ console.log("\n── la catena dal motore al pallino ──");
   assert("...e il render l'aspetta prima di partire",
     /await refreshEngineSem\(\);/.test(appSrc),
     "senza await gli stream-done possono trovare il ref ancora vuoto");
+
+  /* ...ma quell'attesa non deve stare dentro la finestra della guardia di
+   * rientro, ed e' l'unico posto in cui questa PR ha allargato una finestra
+   * invece di chiuderla. `jget` ha un timeout di 10 s: con l'`await` fra la
+   * guardia e l'alzata dello stato, un secondo ingresso (la scorciatoia `r`, o
+   * `r` piu' click) passava anche lui, e due `run()` in volo si contendono
+   * l'unico `cancelAbort` di backend.js — Cancel ne ucciderebbe uno solo.
+   *
+   * Due guardie distinte perche' i difetti sono due:
+   *   - la guardia deve stare su un REF, non sullo stato: l'effetto della
+   *     scorciatoia ha dipendenze `[dirty]`, quindi chiude su un `onRender`
+   *     vecchio; riordinare le setState non lo raggiunge nemmeno.
+   *   - lo stato deve alzarsi PRIMA dell'attesa, o l'utente non vede niente
+   *     (log, toast, bottone) finche' il bridge non risponde. */
+  {
+    const entry = appSrc.slice(appSrc.indexOf("async function onRender()"),
+                               appSrc.indexOf("async function runRender()"));
+    assert("la guardia di rientro del render si alza su un ref, prima di ogni await",
+      /renderingRef\.current\) return;/.test(entry) &&
+      entry.indexOf("renderingRef.current = true") < entry.indexOf("await"),
+      entry);
+    assert("...e si riabbassa in un finally",
+      /finally\s*\{\s*renderingRef\.current = false;/.test(entry), entry);
+
+    const body = appSrc.slice(appSrc.indexOf("async function runRender()"));
+    const raise = body.indexOf("setRenderStatus({ running: true");
+    const wait  = body.indexOf("await refreshEngineSem()");
+    assert("lo stato di render si alza prima dell'attesa, non dopo",
+      raise >= 0 && wait >= 0 && raise < wait,
+      `setRenderStatus a ${raise}, await a ${wait}: col timeout di 10 s di jget ` +
+      `un click su Render non produce feedback per dieci secondi`);
+  }
   assert("app passa la coppia a entrambi i consumatori",
     /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");

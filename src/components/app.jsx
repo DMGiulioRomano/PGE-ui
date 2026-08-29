@@ -246,6 +246,13 @@ function App() {
      di prima della rilettura che `onRender` fa all'inizio. Il ref e' il valore
      di adesso; lo stato serve alla classificazione, che rigira da sola. */
   const engineSemRef = useRefApp(null);
+  /* Guardia di rientro del render, su un REF e non sullo stato.
+     `renderStatus.running` da solo non la fa: l'effetto della scorciatoia
+     (`onKey`) ha dipendenze `[dirty]`, quindi chiude su un `onRender` vecchio e
+     su un `renderStatus` piu' vecchio ancora — due `r` ravvicinati leggevano
+     entrambi `running: false` comunque si ordinassero le setState. Un ref si
+     alza nello stesso tick e vale per ogni chiusura, viva o stantia. */
+  const renderingRef = useRefApp(false);
 
   /* La versione di semantica del motore, richiesta al bridge.
    *
@@ -1558,23 +1565,46 @@ function App() {
     setTweak("renderPreclean",  next.preclean);
   }
 
+  /* Il render ha DUE ingressi — il bottone e la scorciatoia (`r`) — e nessuno
+     dei due e' serializzato dal browser. La guardia sta tutta qui, e sul ref:
+     con la sola `renderStatus.running` due ingressi ravvicinati passavano
+     entrambi, e il danno non era cosmetico. Due `POST /render` scrivono lo
+     stesso `configs/<basename>.yml` e gli stessi stem; e `cancelAbort` in
+     backend.js e' UNA variabile di chiusura, riassegnata a ogni `run()`, quindi
+     il secondo giro sovrascriveva quella del primo e Cancel ne uccideva uno
+     solo — l'altro restava a scrivere sul disco senza piu' un modo di fermarlo. */
   async function onRender() {
-    if (renderStatus.running) return;
+    if (renderStatus.running || renderingRef.current) return;
+    renderingRef.current = true;
+    try {
+      await runRender();
+    } finally {
+      renderingRef.current = false;
+    }
+  }
+
+  async function runRender() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
-    // Terza (e ultima utile) occasione per la versione di semantica: qui il
-    // bridge e' per forza raggiungibile, si sta per parlarci. Attesa prima di
-    // partire, cosi' gli `stream-done` la trovano gia' nel ref — e non e' un
-    // ritardo: dalla prima risposta in poi e' memorizzata.
-    await refreshEngineSem();
-
+    /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
+       `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
+       Render non produceva niente di visibile — log non svuotato, nessun toast,
+       bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
+       e poi il render partiva lo stesso. */
     setLogLines([]);
     setStreamProgress({});
     setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, streamProgress: 0, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
       pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
+
+    // Terza (e ultima utile) occasione per la versione di semantica: qui il
+    // bridge e' per forza raggiungibile, si sta per parlarci. Attesa prima di
+    // chiamare `run()`, cosi' gli `stream-done` la trovano gia' nel ref — e
+    // l'ordine stato-poi-attesa non toglie niente a quell'intento, perche' il
+    // consumatore legge `engineSemRef.current`, non lo stato.
+    await refreshEngineSem();
 
     let cacheHits = 0;
     let generated = 0;
