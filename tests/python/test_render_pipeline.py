@@ -348,6 +348,25 @@ def test_engine_envelope_keys_parses_source_in_order(tmp_path):
     assert server.engine_envelope_keys(tmp_path) == ["volume", "pan", "pitch"]
 
 
+def test_engine_envelope_keys_annotated(tmp_path):
+    """`ENVELOPE_COLORS: Dict[str, str] = {...}` e' un AnnAssign, non un Assign.
+    Il motore ANNOTA gia' due costanti di modulo (GRANULAR_PARAMETERS,
+    PITCH_UNIT_PRESETS): una terza annotazione a monte non e' un'ipotesi di
+    stile, e qui costerebbe il filtro degli envelope name."""
+    import server
+    d = tmp_path / "src" / "pge" / "rendering"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "envelope_extractor.py").write_text(
+        "from typing import Dict\n"
+        "ENVELOPE_COLORS: Dict[str, str] = {\n"
+        "    'volume': '#000000',\n"
+        "    'pan': '#111111',\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    assert server.engine_envelope_keys(tmp_path) == ["volume", "pan"]
+
+
 def test_engine_envelope_keys_pge_layout(tmp_path):
     # current engine layout (PGE #162): the literal lives in
     # src/pge/rendering/envelope_extractor.py (issue #109)
@@ -608,6 +627,27 @@ def test_engine_semantics_version_parses_source(tmp_path):
     import server
     _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 7\n")
     assert server.engine_semantics_version(tmp_path) == 7
+
+
+def test_engine_semantics_version_annotated(tmp_path):
+    """`VARIATION_SEMANTICS_VERSION: int = 7` e' un AnnAssign.
+
+    Il ripiego su None sarebbe MUTO e nel verso peggiore: None vuol dire
+    "motore ignoto", e per la regola di questo asse un motore ignoto non
+    pretende niente — cioe' l'asse si spegne e ogni stem torna verde proprio
+    mentre il motore sta per riscriverli. E l'innesco sarebbe l'evento che
+    l'asse sorveglia: un bump accompagnato da un'annotazione di tipo."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION: int = 7\n")
+    assert server.engine_semantics_version(tmp_path) == 7
+
+
+def test_engine_semantics_version_annotation_without_value(tmp_path):
+    """`VARIATION_SEMANTICS_VERSION: int` senza valore: non c'e' niente da
+    leggere, e None e' la risposta giusta (non un'eccezione)."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION: int\n")
+    assert server.engine_semantics_version(tmp_path) is None
 
 
 def test_engine_semantics_version_legacy_layout(tmp_path):

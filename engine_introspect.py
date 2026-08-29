@@ -61,12 +61,10 @@ def engine_envelope_keys(root: Path) -> list:
         try:
             tree = ast.parse(src.read_text(encoding="utf-8"))
             for node in tree.body:
-                if not isinstance(node, ast.Assign):
+                d = _assigned_dict(node, "ENVELOPE_COLORS")
+                if d is None:
                     continue
-                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-                if "ENVELOPE_COLORS" not in names or not isinstance(node.value, ast.Dict):
-                    continue
-                for k in node.value.keys:
+                for k in d.keys:
                     if isinstance(k, ast.Constant) and isinstance(k.value, str):
                         keys.append(k.value)
                 break
@@ -129,22 +127,37 @@ def _parse_bounds_call(call):
     return rec
 
 
-def _assigned_dict(node, name):
-    """Return the ast.Dict assigned to `name` by this node, handling both a
-    plain `name = {…}` (Assign) and an annotated `name: T = {…}` (AnnAssign —
-    the engine annotates GRANULAR_PARAMETERS / PITCH_UNIT_PRESETS). None if the
-    node isn't that assignment or the value isn't a dict literal."""
+def _assigned_value(node, name):
+    """Return the AST node assigned to `name` by this statement, handling both a
+    plain `name = …` (Assign) and an annotated `name: T = …` (AnnAssign). None
+    if the statement isn't that assignment, or is a bare annotation with no
+    value (`name: int`).
+
+    ONE recognizer for all three readings in this module, and the reason is that
+    the engine already annotates module constants — `GRANULAR_PARAMETERS`,
+    `PITCH_UNIT_PRESETS` — so the annotated spelling is house style upstream,
+    not a hypothetical. Two of the readings used to filter on `ast.Assign`
+    alone. For `ENVELOPE_COLORS` that would silently drop the envelope-name
+    filter; for `VARIATION_SEMANTICS_VERSION` it is worse, because the fallback
+    is `None` = "engine unknown", and by this axis's own rule an unknown engine
+    claims nothing — the whole axis would switch off and every stem go green
+    exactly while the engine is about to rewrite them, triggered by the very
+    event the axis watches for (a bump, shipped with a type annotation)."""
     if isinstance(node, ast.Assign):
         targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
         value = node.value
     elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
         targets = [node.target.id]
-        value = node.value
+        value = node.value          # None for a bare `name: T`
     else:
         return None
-    if name in targets and isinstance(value, ast.Dict):
-        return value
-    return None
+    return value if name in targets else None
+
+
+def _assigned_dict(node, name):
+    """`_assigned_value` narrowed to a dict literal: None if it isn't one."""
+    value = _assigned_value(node, name)
+    return value if isinstance(value, ast.Dict) else None
 
 
 def _parse_granular_parameters(src_text):
@@ -348,12 +361,10 @@ def engine_semantics_version(root: Path):
         except Exception:
             continue
         for node in tree.body:
-            if not isinstance(node, ast.Assign):
+            value = _assigned_value(node, "VARIATION_SEMANTICS_VERSION")
+            if value is None:
                 continue
-            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            if "VARIATION_SEMANTICS_VERSION" not in names:
-                continue
-            val = _ast_literal(node.value)
+            val = _ast_literal(value)
             if isinstance(val, int) and not isinstance(val, bool):
                 version = val
             break
