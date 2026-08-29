@@ -103,6 +103,68 @@ function runScript(body) {
 }
 
 /* ============================================================
+ * 1b — e harness.js lo rispetta DAVVERO, non solo per guardia sorgente
+ *
+ * Il punto 1 verifica l'idioma su uno script sintetico; questo fa girare il
+ * runner vero. Serve perche' harness.js ha un ramo in piu' di una suite di
+ * tests/node/: "morta prima della fine", cioe' entrata nei casi e non arrivata
+ * al riepilogo. Quel ramo alzava l'uscita solo se aveva GIA' contato un
+ * fallimento, quindi una suite in cui il primo caso passa e il secondo si
+ * appende — node resta senza lavoro ed esce da se' — stampava "1 passed, 0
+ * failed" e usciva 0. Un caso su due non aveva girato: la tesi di questa PR
+ * applicata al suo runner.
+ *
+ * L'oracolo e' iniettato nella require cache e il motore e' una directory vuota
+ * con src/pge dentro: la sonda non ha bisogno del repo fratello, quindi gira
+ * anche nel job che il motore non ce l'ha.
+ * ============================================================ */
+
+const HARNESS_JS = path.join(__dirname, "..", "parity", "harness.js");
+const ORACLE_JS  = path.join(__dirname, "..", "parity", "oracle.js");
+
+if (fs.existsSync(HARNESS_JS) && fs.existsSync(ORACLE_JS)) {
+  console.log("\n── harness.js: una suite morta a meta' non e' un pass ──");
+
+  const probe = [
+    'const fs = require("fs"), os = require("os"), path = require("path");',
+    // motore finto: engineRoot() guarda solo l'esistenza di src/pge
+    'const fake = fs.mkdtempSync(path.join(os.tmpdir(), "pge-fake-engine-"));',
+    'fs.mkdirSync(path.join(fake, "src", "pge"), { recursive: true });',
+    "process.env.PGE_ENGINE_ROOT = fake;",
+    "delete process.env.PGE_PARITY_STRICT;",
+    // oracolo finto, prima che harness.js lo chieda
+    `const id = require.resolve(${JSON.stringify(ORACLE_JS)});`,
+    "require.cache[id] = { id, filename: id, loaded: true, exports: {",
+    "  openOracle: async () => ({",
+    '    hello: { engine_commit: null, python: "3.x", ops: [], unavailable: {} },',
+    "    ask: async () => ({}), close() {},",
+    "  }) } };",
+    `const { parity } = require(${JSON.stringify(HARNESS_JS)});`,
+    "parity({",
+    '  suite: "sonda", why: "il secondo caso non arriva mai in fondo",',
+    "  cases: [",
+    '    { label: "un assert che passa", run: async (ask, assert) => { assert("passa", true); } },',
+    '    { label: "e poi il processo resta senza lavoro", run: async (ask, assert, ctx) => {',
+    "        ctx.oracle.close();",
+    "        await new Promise(() => {});",
+    "      } },",
+    "  ],",
+    "});",
+  ].join("\n");
+
+  const r = runScript(probe);
+  const out = (r.stdout || "") + (r.stderr || "");
+  assert("una suite che muore a meta' esce 1", r.status === 1,
+    `status ${r.status}\n${out}`);
+  assert("...dicendo che il riepilogo e' parziale",
+    /interrotto prima della fine/.test(out), out);
+  assert("...ed elencando il caso che non ha girato",
+    /e poi il processo resta senza lavoro/.test(out.slice(out.indexOf("interrotto prima della fine"))),
+    out);
+  assert("il caso che ha girato e' comunque contato", /1 passed/.test(out), out);
+}
+
+/* ============================================================
  * 2 — la guardia: nessun file della suite e' tornato indietro
  * ============================================================ */
 

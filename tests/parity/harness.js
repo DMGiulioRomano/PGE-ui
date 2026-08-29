@@ -118,7 +118,9 @@ function commitLine(commit) {
  * sola suite per processo, come in tests/node/.
  * ------------------------------------------------------------------------- */
 let pass = 0, fail = 0;
-const notRun = [];
+const notRun = [];      // casi che hanno sollevato: hanno girato a meta'
+let remaining = [];     // casi che non sono arrivati in fondo, tutti
+let started = false;    // `parity` e' stata davvero invocata
 let verdict = null;   // { bar, commit } una volta che la suite ha girato
 /* Distinto da `verdict === null`, e non e' pedanteria: quel solo controllo
  * confondeva "salto dichiarato" con "morta a meta'". Il salto ha gia' parlato e
@@ -128,8 +130,22 @@ let verdict = null;   // { bar, commit } una volta che la suite ha girato
  * del tutto, e il piu' facile da leggere come "non e' successo niente". */
 let bailed = false;
 
+/* L'elenco dei casi che non hanno girato, uguale nei due rami. Prima esisteva
+   solo nel ramo normale: chi moriva a meta' — cioe' chi ne aveva di piu' — era
+   l'unico a non vederlo. */
+function listNotRun() {
+  if (notRun.length) {
+    console.error(`${notRun.length} caso/i interrotto/i: ${notRun.join(", ")}`);
+  }
+  if (remaining.length) {
+    console.error(`${remaining.length} caso/i non arrivato/i in fondo:`);
+    for (const label of remaining) console.error(`  · ${label}`);
+  }
+}
+
 process.on("exit", (code) => {
   if (bailed) return;             // il blocco di salto ha gia' parlato
+  if (!started) return;           // modulo caricato e mai usato: niente da dire
   if (verdict === null) {
     // Morta prima di arrivare in fondo: i contatori sono quelli raccolti fin
     // li', e vanno detti proprio perche' sono parziali.
@@ -137,14 +153,20 @@ process.on("exit", (code) => {
     console.error(`${pass} passed, ${fail} failed — interrotto prima della fine: ` +
       `la suite non e' arrivata al riepilogo, i conteggi sono parziali e i casi ` +
       `rimanenti non hanno girato.`);
-    if (fail > 0 && !process.exitCode) process.exitCode = 1;
+    listNotRun();
+    /* Sempre 1, non "se ho gia' contato un fallimento". Un riepilogo parziale
+       non e' un pass: la sonda che lo ha scoperto ha due casi, il primo passa e
+       il secondo si appende a una promise che non si risolve — node resta senza
+       lavoro ed esce da se', e il verdetto era "1 passed, 0 failed", EXIT=0. Un
+       caso su due non aveva girato. E' la tesi di questa PR applicata al suo
+       runner: un caso saltato non e' un caso passato, e vale anche quando a
+       saltarlo e' il runner. */
+    process.exitCode = 1;
     return;
   }
   console.log(`\n${verdict.bar}`);
   console.log(`${pass} passed, ${fail} failed  ·  ${commitLine(verdict.commit)}`);
-  if (notRun.length) {
-    console.error(`${notRun.length} caso/i interrotto/i: ${notRun.join(", ")}`);
-  }
+  listNotRun();
   if (code && !fail) {
     console.error("interrotto prima della fine: il riepilogo e' parziale");
   }
@@ -177,6 +199,8 @@ async function parity({ suite, why, cases }) {
   // Adesso l'informazione sta dove la si ha davvero: il workflow sa se il
   // checkout e' riuscito e passa PGE_PARITY_STRICT di conseguenza, come gia'
   // fa con PGE_REQUIRE_ENGINE_FIXTURES.
+  started = true;
+  remaining = cases.map(c => c.label);
   const strict = truthy(process.env.PGE_PARITY_STRICT);
   const root = engineRoot();
 
@@ -287,6 +311,12 @@ async function parity({ suite, why, cases }) {
       fail++;
       notRun.push(c.label);
       console.error(`FAIL  il caso non ha potuto girare: ${err.message}`);
+    } finally {
+      // Sollevato o no, questo caso e' arrivato in fondo: cio' che resta in
+      // `remaining` sono quelli che il runner non ha mai chiuso — l'elenco che
+      // serve quando a morire e' la suite, non il caso.
+      const i = remaining.indexOf(c.label);
+      if (i >= 0) remaining.splice(i, 1);
     }
   }
 
