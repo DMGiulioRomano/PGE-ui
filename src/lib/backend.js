@@ -583,7 +583,14 @@
         _semantics = Number.isInteger(d && d.version) ? d.version : null;
         return _semantics;
       } catch {
-        return null;   // non memorizzato: si richiede al prossimo giro
+        // Non memorizzato, e il prossimo giro esiste davvero: app.jsx la
+        // richiede al boot, a ogni cambio progetto e all'inizio di ogni render
+        // (`refreshEngineSem`). Con la sola chiamata al boot — che ha le
+        // dipendenze vuote, e `serverDown` non torna mai a falso senza reload —
+        // chi apriva l'editor prima di `make serve` restava senza asse per
+        // tutta la sessione, mentre `run()` qui sotto REGISTRAVA comunque la
+        // versione: nessun pallino poteva dirlo.
+        return null;
       }
     }
 

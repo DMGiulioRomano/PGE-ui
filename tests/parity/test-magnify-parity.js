@@ -223,6 +223,62 @@ parity({
       },
     },
     {
+      label: "i bordi che solo Python striscia: la divergenza la pretende il GATE",
+      run: async (ask, assert, ctx) => {
+        /* La riga 4 della tabella delle divergenze («i bordi che solo Python
+         * striscia») era pretesa da `error()` soltanto. Non basta: `error()` e
+         * `sendable()` strisciano entrambi, e nel mezzo dello SPEC i due
+         * coincidono — riportando il solo gate a `.trim()` la parita' restava
+         * verde e parlava la sola suite node. La divergenza si vede ai bordi
+         * ESTERNI dello SPEC intero, che sono l'unico punto in cui lo strip del
+         * gate decide da solo: li' `trim()` toglierebbe il carattere e
+         * manderebbe uno SPEC pulito, lo strip ASCII no.
+         *
+         * E il giudice e' il motore: si chiede a lui se lo SPEC grezzo passa,
+         * invece di dichiararlo qui. */
+        const SOLO_PYTHON = ["\u00a0", "\u1680", "\u2000", "\u2028", "\u2029",
+                             "\u202f", "\u205f", "\u3000"];
+        const casi = [];
+        for (const ch of SOLO_PYTHON) {
+          casi.push({ ch, spec: ch + "t=14" }, { ch, spec: "t=14" + ch });
+        }
+        const answers = await ask(
+          casi.map(({ spec }) => ({ op: "parse_magnify_spec", args: { spec } })));
+
+        const nonAccettati = casi.filter((_, i) => !answers[i].ok);
+        assert(`${casi.length} SPEC coi bordi che Python striscia: il motore li accetta tutti`,
+          nonAccettati.length === 0,
+          nonAccettati.map(({ spec }, i) => `${JSON.stringify(spec)}`).join(", ") +
+          " — se il motore ha smesso di accettarli, la divergenza ha cambiato " +
+          "verso e va rivista, non solo la tabella");
+
+        const partiti = casi.filter(({ spec }) => M.sendable(spec) !== null);
+        assert("...e il gate della UI non ne manda nessuno (piu' stretta, verso sicuro)",
+          partiti.length === 0,
+          partiti.map(({ spec }) => `${JSON.stringify(spec)} → argv ` +
+            `${JSON.stringify(M.sendable(spec))}`).join(", ") +
+          ". Se il gate ha ripreso lo strip di JS, la UI e il messaggio d'errore " +
+          "tornano a rispondere due cose diverse sulla stessa stringa.");
+
+        /* Il verso opposto, e quello che uccideva i render: U+FEFF non e'
+         * `isspace()` per Python, quindi il motore NON lo striscia e esce 1.
+         * Qui i due lati devono concordare, e concordano solo perche' il gate
+         * usa lo strip ASCII: con `trim()` la UI lo toglierebbe e manderebbe
+         * uno SPEC che il motore rifiuta. */
+        const bom = ["\ufefft=14", "t=14\ufeff"];
+        const rispB = await ask(bom.map(spec => ({ op: "parse_magnify_spec", args: { spec } })));
+        assert("U+FEFF: il motore lo rifiuta ai due bordi, e il gate non lo manda",
+          rispB.every(r => !r.ok) && bom.every(spec => M.sendable(spec) === null),
+          bom.map((spec, i) => `${JSON.stringify(spec)}: motore ` +
+            `${rispB[i].ok ? "accetta" : "rifiuta"}, ui ` +
+            `${JSON.stringify(M.sendable(spec))}`).join(" | "));
+
+        ctx.note(`${SOLO_PYTHON.length} code point provati ai due bordi esterni`,
+          SOLO_PYTHON.map(c => `U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`)
+            .join(", "));
+      },
+    },
+    {
       label: "gli SPEC che la UI lascia partire il motore non li rifiuta mai",
       run: async (ask, assert, ctx) => {
         /* Il giudizio e' del motore, ma la DOMANDA la sceglie il codice: si

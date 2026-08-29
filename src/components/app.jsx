@@ -240,6 +240,38 @@ function App() {
      voce assente = non si sa, e non si pretende niente. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
+  /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
+     eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
+     l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
+     di prima della rilettura che `onRender` fa all'inizio. Il ref e' il valore
+     di adesso; lo stato serve alla classificazione, che rigira da sola. */
+  const engineSemRef = useRefApp(null);
+
+  /* La versione di semantica del motore, richiesta al bridge.
+   *
+   * Chiamata in tre punti — boot, cambio progetto, inizio di un render — e non
+   * solo al boot, che e' il difetto che questa funzione chiude: l'effetto di
+   * boot ha le dipendenze vuote e `serverDown` non torna mai a falso senza un
+   * reload, quindi chi apriva l'editor PRIMA di lanciare `make serve` restava
+   * senza asse semantica per tutta la sessione. E in modo asimmetrico: il
+   * render REGISTRAVA comunque la versione su `pge-local-sem` (backend.js la
+   * chiede per conto suo), ma il lato con cui confrontarla non arrivava mai,
+   * quindi nessun pallino poteva dirlo.
+   *
+   * Costa poco ripeterla: `semanticsVersion()` in backend.js memorizza le
+   * risposte, quindi dalla prima in poi non c'e' nemmeno una fetch. Memorizza
+   * solo quelle: un fallimento non si ricorda, ed e' cio' che rende utile
+   * richiederla. */
+  async function refreshEngineSem() {
+    const backend = window.PGEBackend.current;
+    if (!backend || !backend.semanticsVersion) return null;
+    let v = null;
+    try { v = await backend.semanticsVersion(); } catch { v = null; }
+    const n = Number.isInteger(v) ? v : null;
+    engineSemRef.current = n;
+    setEngineSem(n);
+    return n;
+  }
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -351,12 +383,9 @@ function App() {
         // La versione di semantica del motore, per sapere se gli stem gia' su
         // disco sono stati scritti con la lettura di adesso. Best-effort: un
         // server.py senza la route o un motore senza la costante danno null, e
-        // i pallini restano quelli di prima.
-        if (window.PGEBackend.current.semanticsVersion) {
-          window.PGEBackend.current.semanticsVersion()
-            .then(v => setEngineSem(Number.isInteger(v) ? v : null))
-            .catch(() => {});
-        }
+        // i pallini restano quelli di prima. Questo e' il primo dei tre punti
+        // in cui si chiede — vedi refreshEngineSem.
+        refreshEngineSem();
         // Run setup in background so the engine venv is ready.
         setTimeout(async () => {
           const backend = window.PGEBackend.current;
@@ -474,6 +503,9 @@ function App() {
     backend.render.loadCache(basename).then(cache => {
       setLastRenderedFps(cache || {});
     });
+    // Con le versioni registrate si rilegge anche quella del motore: se al boot
+    // il bridge era giu', questo e' il primo momento in cui puo' arrivare.
+    refreshEngineSem();
     if (backend.render.loadSemantics) {
       backend.render.loadSemantics(basename).then(sem => setRenderedSem(sem || {}));
     } else {
@@ -1526,6 +1558,12 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
+    // Terza (e ultima utile) occasione per la versione di semantica: qui il
+    // bridge e' per forza raggiungibile, si sta per parlarci. Attesa prima di
+    // partire, cosi' gli `stream-done` la trovano gia' nel ref — e non e' un
+    // ritardo: dalla prima risposta in poi e' memorizzata.
+    await refreshEngineSem();
+
     setLogLines([]);
     setStreamProgress({});
     setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, streamProgress: 0, lastOk: null, lastGenerated: 0 });
@@ -1594,7 +1632,8 @@ function App() {
         // indietro, perche' una versione vecchia su uno stem nuovo e' peggio di
         // nessuna versione.
         setRenderedSem(m => {
-          if (engineSem !== null) return { ...m, [e.streamId]: engineSem };
+          const sem = engineSemRef.current;
+          if (sem !== null) return { ...m, [e.streamId]: sem };
           if (!(e.streamId in m)) return m;
           const next = { ...m };
           delete next[e.streamId];

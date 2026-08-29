@@ -331,9 +331,16 @@ def engine_semantics_version(root: Path):
             stamps.append((str(src), st.st_mtime_ns, st.st_size))
         except OSError:
             stamps.append((str(src), None, None))
-    key = (str(root), tuple(stamps))
-    if key in _SEMANTICS_CACHE:
-        return _SEMANTICS_CACHE[key]
+    # Una voce sola per root, non una per stato dei sorgenti: la chiave e' la
+    # root e il timbro sta nel valore. Con il timbro dentro la chiave ogni
+    # salvataggio del motore ne aggiungeva una invece di sostituirla, e sotto un
+    # `make serve` durante lo sviluppo del motore il dizionario cresceva a ogni
+    # salvataggio.
+    key = str(root)
+    stamp = tuple(stamps)
+    cached = _SEMANTICS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
     version = None
     for src in candidates:
         try:
@@ -352,5 +359,5 @@ def engine_semantics_version(root: Path):
             break
         if version is not None:
             break
-    _SEMANTICS_CACHE[key] = version
+    _SEMANTICS_CACHE[key] = (stamp, version)
     return version

@@ -671,6 +671,23 @@ def test_engine_semantics_version_sees_a_live_bump(tmp_path):
     assert server.engine_semantics_version(tmp_path) == 3
 
 
+def test_engine_semantics_cache_keeps_one_entry_per_root(tmp_path):
+    """Il timbro sta nel valore, non nella chiave: altrimenti ogni salvataggio
+    del motore aggiungerebbe una voce invece di sostituirla, e sotto un
+    `make serve` durante lo sviluppo il dizionario crescerebbe a ogni Ctrl-S."""
+    import os
+    import engine_introspect as ei
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 1\n")
+    src = tmp_path / "src" / "pge" / "rendering" / "stream_cache_manager.py"
+    for i, v in enumerate((1, 2, 3, 4)):
+        src.write_text(f"VARIATION_SEMANTICS_VERSION = {v}\n")
+        st = src.stat()
+        os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + (i + 1) * 1_000_000_000))
+        assert ei.engine_semantics_version(tmp_path) == v
+    mine = [k for k in ei._SEMANTICS_CACHE if str(tmp_path) in str(k)]
+    assert len(mine) == 1, f"{len(mine)} voci per una sola root: {mine}"
+
+
 def test_semantics_version_endpoint(tmp_path):
     import server
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)

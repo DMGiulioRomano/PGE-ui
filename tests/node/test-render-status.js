@@ -258,9 +258,16 @@ console.log("\n── la catena dal motore al pallino ──");
    * al massimo nascondono un filtro, questa decide un pallino, e un bridge giu'
    * al boot condannerebbe la sessione a mostrare verde anche dopo che e'
    * tornato su. Un `null` che ARRIVA dal bridge e' invece una risposta. */
-  assert("un bridge irraggiungibile non si ricorda per tutta la sessione",
-    /catch \{\s*\n\s*return null;\s+\/\/ non memorizzato/.test(backendSrc),
-    "memorizzare il fallimento spegne l'asse fino al reload della pagina");
+  {
+    // Guardia sull'invariante, non sulla forma: dentro il `catch` di
+    // `semanticsVersion` non deve comparire un'assegnazione a `_semantics`.
+    // Memorizzare il fallimento spegne l'asse fino al reload della pagina.
+    const fn = backendSrc.slice(backendSrc.indexOf("async function semanticsVersion"));
+    const cat = fn.slice(fn.indexOf("} catch"), fn.indexOf("} catch") + 700);
+    assert("un bridge irraggiungibile non si ricorda per tutta la sessione",
+      !/_semantics\s*=/.test(cat) && /return null;/.test(cat),
+      cat.slice(0, 200));
+  }
 
   assert("backend registra la semantica insieme ai fingerprint",
     /_persistSem\(/.test(backendSrc) && /loadSemantics\(/.test(backendSrc),
@@ -273,13 +280,31 @@ console.log("\n── la catena dal motore al pallino ──");
     /semanticsVersion\(\)[\s\S]{0,120}setEngineSem/.test(appSrc));
   assert("app carica le versioni registrate al cambio progetto",
     /loadSemantics\([\s\S]{0,120}?setRenderedSem/.test(appSrc));
-  // Regex lasca sullo spazio: la riga e' lunga e una riformattazione non deve
-  // farla rossa. Cio' che conta e' che lo stato vivo venga aggiornato con la
-  // versione del motore sull'evento del singolo stream.
+  // Regex lasca sullo spazio: le righe sono lunghe e una riformattazione non
+  // deve farle rosse. Cio' che conta e' che lo stato vivo venga aggiornato
+  // sull'evento del singolo stream, leggendo il REF e non lo stato.
   assert("app aggiorna la versione dello stem appena reso",
     /setLastRenderedFps/.test(appSrc) &&
-    /setRenderedSem\([\s\S]{0,200}?e\.streamId\][\s\S]{0,40}?engineSem/.test(appSrc),
+    /setRenderedSem\([\s\S]{0,300}?engineSemRef\.current[\s\S]{0,200}?e\.streamId\]/.test(appSrc),
     "senza questa riga uno stem appena renderizzato torna giallo subito");
+  assert("...leggendo il ref, non lo stato catturato quando onRender fu definita",
+    !/setRenderedSem\([\s\S]{0,300}?\[e\.streamId\]:\s*engineSem\b/.test(appSrc),
+    "gli stream-done arrivano dentro un await gia' in volo: lo stato li' e' " +
+    "quello di prima della rilettura che onRender fa all'inizio");
+
+  /* La versione del motore si richiede in TRE punti, e questa e' la guardia che
+   * tiene in vita l'asse. Con la sola chiamata al boot — effetto con dipendenze
+   * vuote, e `serverDown` che non torna mai a falso senza reload — chi apre
+   * l'editor prima di lanciare `make serve` resta senza asse per tutta la
+   * sessione: `staleReason` esce dal ramo `engine == null` e nessun pallino lo
+   * dice, mentre backend.js continua a REGISTRARE la versione a ogni render. */
+  assert("app richiede la versione del motore in tre punti, non solo al boot",
+    (appSrc.match(/refreshEngineSem\(\)/g) || []).length >= 3,
+    "boot, cambio progetto e inizio render: con uno solo l'asse muore " +
+    "silenziosamente quando il bridge parte dopo l'editor");
+  assert("...e il render l'aspetta prima di partire",
+    /await refreshEngineSem\(\);/.test(appSrc),
+    "senza await gli stream-done possono trovare il ref ancora vuoto");
   assert("app passa la coppia a entrambi i consumatori",
     /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
