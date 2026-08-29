@@ -333,8 +333,10 @@ engine import). Two rules hold it up:
   constant) claims nothing — `_persistSem` only writes when the number is known,
   so that yellow would be **permanent** on perfect stems. A *stem* with no
   recorded version and a known engine reads `stale`: that's every stem written
-  before the axis existed, and the engine was already at 3, so they are all
-  stems it will redo differently. That yellow clears itself on the first pass,
+  before the axis existed — a stem written by an engine whose reading we don't
+  know. The rule needs no number, and must not carry one: transcribing it here
+  would put back the engine constant `ATTESA` already put in this repo once.
+  That yellow clears itself on the first pass,
   even an empty one — the engine emits `stream-done` for the streams it skips
   (`cached: true`) and `backend.js` records the version on that event like a
   real render. One render too many, never one too few.

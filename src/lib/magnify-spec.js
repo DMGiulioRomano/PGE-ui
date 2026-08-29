@@ -16,7 +16,11 @@
  * Una differenza voluta rispetto al motore: qui lo spec VUOTO non è un errore.
  * Il motore rifiuta `--magnify-at ""` perché il flag gli è stato passato; nella
  * UI il campo vuoto significa "nessun target esplicito", e chi chiama omette il
- * flag — vedi `error() === null && spec.trim()` in app.jsx.
+ * flag. A deciderlo è `sendable()`, qui sotto: torna i byte che arrivano ad
+ * argv, oppure `null` quando il flag non va spedito affatto. Non è una
+ * distinzione stilistica — quel gate è già stato una copia in app.jsx, è
+ * rimasto su `.trim()` mentre qui si passava allo strip ASCII, e il popover
+ * mostrava rosso su uno SPEC che poi partiva ripulito.
  *
  * Parità: se il motore cambia la grammatica, cambia anche qui — è lo stesso
  * patto del fingerprint JS/python descritto in CLAUDE.md.

@@ -66,8 +66,10 @@
   //     per sempre su stem perfetti.
   //   - versione dello stem assente, con motore noto: "semantics". E' lo stem
   //     scritto prima che l'editor registrasse il numero, cioe' OGNI stem
-  //     esistente al momento di questa modifica — e siccome il motore e' gia'
-  //     passato a 3 (PGE #222), sono tutti stem che il motore rifara' diversi.
+  //     esistente al momento di questa modifica: stem scritti da un motore di
+  //     cui non sappiamo la lettura. La regola non ha bisogno del numero, e non
+  //     deve averlo — trascriverlo qui sarebbe di nuovo una costante del motore
+  //     tenuta a mano in questo repo, gia' falsa su un checkout qualunque.
   //     Tacere qui vorrebbe dire essere ciechi esattamente nel caso per cui
   //     l'asse e' stato scritto. E quel giallo si spegne da solo al primo
   //     giro, anche a vuoto: il motore emette `stream-done` anche per gli

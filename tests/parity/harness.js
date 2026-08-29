@@ -282,9 +282,12 @@ async function parity({ suite, why, cases }) {
   /* --- esecuzione -------------------------------------------------------- */
   /* Informativo, non un'asserzione: si vede sempre e non entra nel conteggio.
      `righe` può essere una stringa, un array, o mancare del tutto. */
+  /* `righe == null`, non la falsita': `note("banda int/float", 0)` deve stampare
+     lo zero. E' proprio il genere di elenco informativo che questa cartella ha
+     gia' promosso da `assert` a `note` perche' si vedesse. */
   function note(label, righe) {
     console.log("  ·   " + label);
-    const list = Array.isArray(righe) ? righe : (righe ? [righe] : []);
+    const list = Array.isArray(righe) ? righe : (righe == null ? [] : [righe]);
     for (const r of list) console.log("        " + r);
   }
   const ctx = {
