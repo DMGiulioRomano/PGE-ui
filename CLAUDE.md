@@ -46,7 +46,11 @@ exists):
   reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
-  guards on the audio-error path), and `test-suite-harness.js` (the suite's own
+  guards on the audio-error path), and `test-semantics-store.js` (where the two
+  numbers of the semantics axis come from: `semanticsVersion` re-reading the
+  bridge, and a whole `render.run()` writing/reading `pge-local-sem` — the real
+  backend driven with a fake `fetch` and `localStorage`), and
+  `test-suite-harness.js` (the suite's own
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
   positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
@@ -134,7 +138,14 @@ argument covers the other half of the same lie: a file that dies mid-run (an
 exception in an appended section) exits 1 but its counters still read `0 failed`,
 so the handler prints `interrotto prima della fine` instead of a clean summary
 under a stack trace. `test-suite-harness.js` verifies all of it — the idiom, by
-running it, and every suite file, by source guard.
+running it, and every suite file, by source guard. `harness.js` has one branch a
+`tests/node` suite doesn't: *entered the cases and never reached the summary*.
+That one exits 1 **unconditionally** — a partial summary is not a pass — and
+lists the cases that never finished; before, it raised the code only if it had
+already counted a failure, so a suite whose second case hung printed
+`1 passed, 0 failed` and exited 0. `test-suite-harness.js` drives the real
+runner for it (fake oracle in the require cache, a fake engine root), so the
+probe needs no sibling checkout.
 
 There is no linter or typechecker — `test-jsx-parse.js` is the whole static net,
 and it only proves a component parses. UI verification is manual (open
@@ -326,7 +337,22 @@ is a second axis beside the hash, never a field inside it: `staleReason` in
 per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
-engine import). Two rules hold it up:
+engine import).
+
+**The engine's number is re-read, never remembered for the session.** It is a
+property of the sibling checkout, not of the editor's session: a `git checkout`
+or a pull next door changes it while the page stays open, and a cell memoized
+for the session turns that into 🟢 on stems the engine will redo differently,
+until a reload. So freshness lives in the callers: `refreshEngineSem` (app.jsx —
+boot, project change, render start) asks `semanticsVersion({refresh: true})`;
+`run()` reads the cell without the flag. That split is also what keeps **one**
+render coherent: a re-read stores exactly what it returns — the failure `null`
+included — so the ref app.jsx fills before starting and the number `backend.js`
+records at the end cannot be two different answers. It is the same decision
+`engine_introspect` takes one level down (mtime invalidation, pinned by
+`test_engine_semantics_version_sees_a_live_bump`).
+
+Two rules hold it up:
 
 - **The two unknowns are not the same unknown**, and the difference is whether
   the yellow could ever clear. *Engine* unknown (bridge down, engine without the
