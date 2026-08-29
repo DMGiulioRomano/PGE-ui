@@ -4,7 +4,7 @@
  * `render-status.js` decide il colore del pallino a partire da due numeri: la
  * `VARIATION_SEMANTICS_VERSION` del motore che il bridge ha davanti adesso, e
  * quella con cui ogni stem e' stato scritto. `test-render-status.js` verifica la
- * DECISIONE; qui si verifica da dove arriva il primo dei due, che e' la meta'
+ * DECISIONE; qui si verifica da dove arrivano i due numeri, che e' la meta'
  * che nessuna esecuzione toccava:
  *
  *   - la lettura dal bridge (`semanticsVersion`), che deve poter vedere un bump
@@ -13,6 +13,11 @@
  *     (`engine_introspect` invalida la cache sull'mtime, con
  *     `test_engine_semantics_version_sees_a_live_bump` a pretenderlo); questo
  *     e' lo stesso argomento un livello piu' in su.
+ *   - la persistenza per stem (`loadSemantics` / `_persistSem`), che prima era
+ *     difesa da sole guardie sorgente: `_persistSem` reso un no-op lasciava la
+ *     suite verde, mentre il comportamento vero sarebbe stato GIALLO PERMANENTE
+ *     su ogni stem a ogni reload (versione registrata mai presente, motore
+ *     noto), cioe' l'unico esito che il design dichiara inaccettabile.
  *
  * Idioma: il backend VERO guidato con `fetch` e `localStorage` finti, come in
  * test-stem-index.js.
@@ -131,14 +136,21 @@ console.log("\n── un bump del motore sotto la sessione arriva al pallino ─
 console.log("\n── un bridge che non risponde non condanna la sessione ──");
 {
   const backend = window.PGEBackend.create({ baseUrl: "http://x" });
-  SEM_DOWN = true; SEM_VERSION = 3; semFetches = 0;
+  SEM_DOWN = false; SEM_VERSION = 3; semFetches = 0;
 
+  // Prima una risposta buona: e' l'ordine che conta. Con la cella mai scritta il
+  // ripiego su `null` e' gratis; il caso vero e' il bridge che HA risposto e poi
+  // cade — li' il numero vecchio e' ancora in mano.
+  assert("una risposta buona arriva e resta", await backend.semanticsVersion() === 3);
+
+  SEM_DOWN = true;
   const down = await backend.semanticsVersion({ refresh: true });
-  assert("bridge giu' → non si sa (null, non un numero)", down === null, `down=${down}`);
+  assert("bridge giu' → non si sa (null, non il numero di prima)", down === null, `down=${down}`);
 
   /* E il fallimento non lascia in giro il numero di prima: chi legge senza
      rilettura — `run()`, in fondo al render — deve ricevere ESATTAMENTE quello
-     che la rilettura ha dato a chi l'ha chiesta, o i due lati divergono. */
+     che la rilettura ha dato a chi l'ha chiesta, o i due lati registrerebbero
+     versioni diverse dello stesso giro. */
   const after = await backend.semanticsVersion();
   assert("...e la lettura senza rilettura dice la stessa cosa", after === null, `after=${after}`);
 
@@ -155,6 +167,85 @@ console.log("\n── i tre punti di rilettura chiedono davvero una rilettura (s
          /const sem = await semanticsVersion\(\);/.test(BACKEND_SRC));
   assert("refreshEngineSem e' chiamata in tre punti",
          (APP_SRC.match(/refreshEngineSem\(\)/g) || []).length >= 4);   // 1 def + 3 usi
+}
+
+/* ===========================================================================
+ * 2. La meta' persistente dell'asse, ESEGUITA.
+ *
+ * `_persistSem` reso un no-op, o `loadSemantics` che torna sempre {}, non
+ * spengono l'asse: lo bloccano sul giallo. Un giro completo di `render.run()`
+ * e' l'unica cosa che lo dice.
+ * ========================================================================= */
+console.log("\n── un render registra la versione, anche a vuoto ──");
+{
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = false; SEM_VERSION = 3;
+  await backend.semanticsVersion({ refresh: true });
+
+  // Uno `stream-done` con cached:true e' il percorso su cui poggia la promessa
+  // "quel giallo si spegne da solo al primo giro, anche a vuoto": il motore
+  // emette l'evento anche per gli stream che SALTA (render_pipeline.py), e
+  // backend.js registra la versione li' come su un render vero.
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: true },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }] },
+    () => {});
+
+  assert("pge-local-sem porta la versione dello stem",
+         JSON.stringify(sem("proj")) === JSON.stringify({ stream1: 3 }),
+         `pge-local-sem = ${store["pge-local-sem"]}`);
+  const loaded = await backend.render.loadSemantics("proj");
+  assert("loadSemantics la rilegge",
+         JSON.stringify(loaded) === JSON.stringify({ stream1: 3 }),
+         `loadSemantics = ${JSON.stringify(loaded)}`);
+}
+
+console.log("\n── un render parziale non cancella le versioni degli altri stem ──");
+{
+  store = { "pge-local-sem": JSON.stringify({ proj: { stream1: 1, stream2: 1 } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = false; SEM_VERSION = 3;
+  await backend.semanticsVersion({ refresh: true });
+
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }, { id: "stream2" }] },
+    () => {});
+
+  const now = sem("proj");
+  assert("lo stem reso prende la versione di adesso", now && now.stream1 === 3, JSON.stringify(now));
+  assert("quello non toccato tiene la sua", now && now.stream2 === 1, JSON.stringify(now));
+}
+
+console.log("\n── col numero ignoto la voce si CANCELLA, non resta indietro ──");
+{
+  store = { "pge-local-sem": JSON.stringify({ proj: { stream1: 3, stream2: 3 } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = true;
+  await backend.semanticsVersion({ refresh: true });
+
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }] },
+    () => {});
+
+  const now = sem("proj");
+  // Una versione VECCHIA su uno stem NUOVO e' peggio di nessuna versione: la
+  // prima e' un'affermazione falsa, la seconda e' la verita'.
+  assert("lo stem appena reso perde la versione di prima", now && !("stream1" in now),
+         JSON.stringify(now));
+  assert("gli altri restano dove sono", now && now.stream2 === 3, JSON.stringify(now));
+  SEM_DOWN = false;
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file: cosi'

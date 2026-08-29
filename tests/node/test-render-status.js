@@ -259,13 +259,24 @@ console.log("\n── la catena dal motore al pallino ──");
    * al boot condannerebbe la sessione a mostrare verde anche dopo che e'
    * tornato su. Un `null` che ARRIVA dal bridge e' invece una risposta. */
   {
-    // Guardia sull'invariante, non sulla forma: dentro il `catch` di
-    // `semanticsVersion` non deve comparire un'assegnazione a `_semantics`.
-    // Memorizzare il fallimento spegne l'asse fino al reload della pagina.
-    const fn = backendSrc.slice(backendSrc.indexOf("async function semanticsVersion"));
-    const cat = fn.slice(fn.indexOf("} catch"), fn.indexOf("} catch") + 700);
-    assert("un bridge irraggiungibile non si ricorda per tutta la sessione",
-      !/_semantics\s*=/.test(cat) && /return null;/.test(cat),
+    /* Guardie sull'invariante, non sulla forma. Il COMPORTAMENTO e' eseguito in
+       test-semantics-store.js (fetch finta che cambia versione fra due
+       chiamate); qui si pretende cio' che lo rende vero anche dopo una
+       riscrittura, e che di qui non si vede: la lettura deve poter essere una
+       RILETTURA — senza, un bump del motore sotto la sessione non arriva mai al
+       pallino — e la cella deve prendere esattamente cio' che la lettura
+       restituisce, fallimento compreso, o app.jsx (che rilegge prima del
+       render) e run() (che legge la cella in fondo) registrerebbero versioni
+       diverse dello stesso giro. */
+    const fn = backendSrc.slice(backendSrc.indexOf("async function semanticsVersion"),
+                                backendSrc.indexOf("// Eagerly pull config"));
+    assert("la lettura della versione puo' essere una rilettura",
+      /async function semanticsVersion\(opts\)/.test(fn) &&
+      /opts\.refresh/.test(fn) && /_semantics !== undefined/.test(fn),
+      fn.slice(0, 200));
+    const cat = fn.slice(fn.indexOf("} catch"));
+    assert("la cella prende cio' che la lettura restituisce, fallimento compreso",
+      /_semantics = v;/.test(fn) && /return v;/.test(fn) && !/return/.test(cat.slice(0, cat.indexOf("}", cat.indexOf("{")))),
       cat.slice(0, 200));
   }
 
@@ -276,8 +287,8 @@ console.log("\n── la catena dal motore al pallino ──");
     /await semanticsVersion\(\)[\s\S]{0,600}_persistSem\(/.test(backendSrc),
     "run() non registra la versione: ogni stem resta senza, per sempre");
 
-  assert("app legge la versione del motore al boot",
-    /semanticsVersion\(\)[\s\S]{0,120}setEngineSem/.test(appSrc));
+  assert("app legge la versione del motore al boot, e la RILEGGE",
+    /semanticsVersion\(\{\s*refresh:\s*true\s*\}\)[\s\S]{0,200}setEngineSem/.test(appSrc));
   assert("app carica le versioni registrate al cambio progetto",
     /loadSemantics\([\s\S]{0,120}?setRenderedSem/.test(appSrc));
   // Regex lasca sullo spazio: le righe sono lunghe e una riformattazione non
