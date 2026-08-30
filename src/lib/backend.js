@@ -108,6 +108,17 @@
     const baseUrl = (opts.baseUrl || "http://localhost:7878").replace(/\/$/, "");
     let cachedConfig = null;
     let cancelAbort = null;
+    /* `cancelAbort` e' UNA variabile di chiusura: due `run()` in volo se la
+       contendono, il secondo sovrascrive l'AbortController del primo, e
+       `cancel()` ne uccide uno solo — l'altro resta a scrivere stem senza piu'
+       un modo di fermarlo. Anche il file su disco e' uno: due POST /render
+       scrivono lo stesso `configs/<basename>.yml` e gli stessi stem.
+       La guardia sta QUI, nel file che subisce l'invariante, e non solo nel
+       chiamante: `renderingRef` in app.jsx copre i due ingressi della UI
+       (bottone e scorciatoia `r`), che sono un problema di app.jsx, ma
+       lasciava `run()` ad accettare in silenzio una seconda entrata — un patto
+       fra due file tenuto dalla prosa. */
+    let running = false;
 
     async function jget(path) {
       const r = await fetchWithTimeout(baseUrl + path);
@@ -272,6 +283,23 @@
         fetch(baseUrl + "/render/cancel", { method: "POST" }).catch(() => {});
       },
       async run(opts, onEvent) {
+        /* Rigetto esplicito, e PRIMA di ogni scrittura di stato: alzare la
+           guardia dopo aver toccato `cancelAbort` avrebbe gia' fatto il danno
+           che la guardia esiste per impedire.
+           Ritorna invece di lanciare, come ogni altro fallimento di `run()`
+           (il catch in fondo non rilancia mai): il chiamante non ha try/catch,
+           e un throw diventerebbe una unhandled rejection. `configWritten:
+           false` e' la verita' su QUESTA chiamata — non ha fatto il POST,
+           quindi non ha riscritto il config, quindi non spegne l'avviso di
+           migrazione di `dephase`. Nessun evento `done`: la teardown dello
+           stato la fa il chiamante col valore di ritorno, ed emetterlo qui
+           spegnerebbe la UI del render ancora in volo. */
+        if (running) {
+          const msg = "render already in progress";
+          onEvent && onEvent({ type: "log", line: `[ERROR] ${msg}` });
+          return { ok: false, error: msg, configWritten: false };
+        }
+        running = true;
         cancelAbort = new AbortController();
         const localFps = {};   // computed browser-side per stream as we go
         if (opts.preclean) {
@@ -391,6 +419,7 @@
           return { ok: false, error: msg, configWritten };
         } finally {
           cancelAbort = null;
+          running = false;
         }
       },
       // Playable *now*: a stem in the format stemUrl() is about to request.

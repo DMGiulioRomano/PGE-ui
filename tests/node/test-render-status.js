@@ -353,10 +353,142 @@ console.log("\n── la catena dal motore al pallino ──");
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
 }
 
+/* ── un solo run() per volta, e pretesa eseguendo ──────────────────────────
+ *
+ * `cancelAbort` in backend.js e' UNA variabile di chiusura: con due `run()`
+ * in volo il secondo la sovrascrive, `cancel()` ne uccide uno solo e l'altro
+ * resta a scrivere stem senza piu' un modo di fermarlo. Due POST /render
+ * scrivono anche lo stesso `configs/<basename>.yml`.
+ *
+ * Il fix precedente ha chiuso il rientro nel CHIAMANTE (`renderingRef` in
+ * app.jsx, pinnato qui sopra), che e' il posto giusto per i due ingressi
+ * della UI — bottone e scorciatoia `r` sono un problema di app.jsx. Ma
+ * lasciava l'invariante a vivere in un file e a essere subita da un altro,
+ * senza niente che la pretendesse: `run()` accettava una seconda entrata in
+ * silenzio. Qui si pretende dal file che la subisce, e si pretende
+ * ESEGUENDO — due run() sovrapposti davvero, e si guarda chi muore quando si
+ * preme Cancel.
+ *
+ * La sezione e' asincrona e sta PRIMA della registrazione dell'handler:
+ * l'handler si registra sincronamente, il loop resta vivo per i timer di
+ * `tick`/`withTimeout`, quindi il riepilogo si stampa dopo che questi assert
+ * hanno contato. `withTimeout` c'e' perche' un'attesa che non si chiude qui
+ * sarebbe un job in timeout invece di un verdetto: il modo peggiore di
+ * rompersi. */
+let reentrancyDone = false;
+(async () => {
+  console.log("\n── un solo run() per volta, dentro backend.js ──");
+
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  function withTimeout(p, why, ms = 5000) {
+    let t;
+    return Promise.race([
+      p.finally(() => clearTimeout(t)),
+      new Promise((_, rej) => { t = setTimeout(() => rej(new Error(why)), ms); }),
+    ]);
+  }
+
+  // fetch finta: /render resta appesa finche' non la si annulla, cosi' due
+  // run() possono davvero sovrapporsi invece di accodarsi.
+  let renderPosts = 0, cancelPosts = 0;
+  global.fetch = (url, init = {}) => {
+    const u = String(url);
+    if (u.endsWith("/render")) {
+      renderPosts++;
+      return new Promise((_, reject) => {
+        const sig = init.signal;
+        const die = () => { const e = new Error("aborted"); e.name = "AbortError"; reject(e); };
+        if (!sig) return;                       // niente signal: resta appesa
+        if (sig.aborted) die(); else sig.addEventListener("abort", die);
+      });
+    }
+    if (u.endsWith("/render/cancel")) { cancelPosts++; return Promise.resolve({ ok: true }); }
+    return Promise.reject(new Error("no network in test"));
+  };
+
+  const be = window.PGEBackend.create({ baseUrl: "http://test" });
+  const opts = { yamlBasename: "proj", streams: [], outputFormat: "wav" };
+
+  const ev2 = [];
+  const p1 = be.render.run(opts, () => {});
+  await tick();
+  /* `withTimeout` anche qui, e non e' cintura in piu': SENZA la guardia questa
+     attesa non finisce (il secondo run() fa il POST e la fetch finta resta
+     appesa), il processo non ha piu' timer, node esce 0 e l'handler stampa il
+     riepilogo con gli assert di questa sezione mai contati — verde. Il
+     sabotaggio che deve provare la guardia la farebbe SPARIRE invece che
+     fallire: e' il salto silenzioso di #133 dentro la suite che lo condanna.
+     Cosi' invece diventa un fallimento con un nome. */
+  const r2 = await withTimeout(be.render.run(opts, e => ev2.push(e)),
+    "il secondo run() non e' tornato: la guardia di rientro non c'e', " +
+    "e i due giri stanno scrivendo gli stessi stem");
+
+  assert("il secondo run() e' rifiutato mentre il primo e' in volo",
+    r2 && r2.ok === false && /already in progress/.test(r2.error || ""),
+    JSON.stringify(r2));
+  assert("...e non ha fatto il POST", renderPosts === 1,
+    `POST /render: ${renderPosts} — il secondo giro riscriverebbe lo stesso ` +
+    `configs/<basename>.yml e gli stessi stem del primo`);
+  assert("...ne' dichiara scritto un config che non ha scritto",
+    r2.configWritten === false,
+    "col campo assente il chiamante legge `!== false` e spegne l'avviso di " +
+    "migrazione di `dephase` per un render che non e' mai partito");
+  assert("...e non emette `done`, che spegnerebbe la UI del render in volo",
+    ev2.every(e => e.type !== "done") && ev2.some(e => e.type === "log"),
+    JSON.stringify(ev2));
+
+  // Il danno vero che la guardia impedisce: senza, il secondo giro avrebbe
+  // preso `cancelAbort` e Cancel avrebbe ucciso lui, lasciando il primo a
+  // scrivere. Qui Cancel deve raggiungere il giro che e' davvero in volo.
+  be.render.cancel();
+  const r1 = await withTimeout(p1, "il primo run() non risponde a cancel()");
+  assert("Cancel raggiunge il render che e' davvero in volo",
+    r1 && r1.ok === false && r1.error === "cancelled", JSON.stringify(r1));
+  assert("...e il POST di annullamento parte una volta sola", cancelPosts === 1,
+    `POST /render/cancel: ${cancelPosts}`);
+
+  // La guardia deve riabbassarsi, o il primo render della sessione sarebbe
+  // anche l'ultimo. Si riabbassa nel `finally`, quindi anche sul ramo di
+  // errore — che e' quello appena percorso.
+  const p3 = be.render.run(opts, () => {});
+  await tick();
+  assert("la guardia si riabbassa: dopo il primo giro un run() nuovo parte",
+    renderPosts === 2,
+    `POST /render: ${renderPosts} — con la guardia alzata per sempre il ` +
+    `bottone Render resterebbe muto per il resto della sessione`);
+  be.render.cancel();
+  await withTimeout(p3, "il run() di verifica non si chiude");
+
+  // ...e nel MEDESIMO finally di `cancelAbort`, che il ramo di successo qui
+  // non percorre: le due variabili descrivono lo stesso giro e devono morire
+  // insieme, o una `return` sul percorso buono lascerebbe la guardia alzata.
+  assert("`running` si riabbassa nello stesso finally che azzera `cancelAbort`",
+    /finally\s*\{\s*cancelAbort = null;\s*running = false;\s*\}/
+      .test(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8")),
+    "separarli fa vivere la guardia piu' del giro che descrive");
+
+  reentrancyDone = true;
+})().catch(e => {
+  /* Un'eccezione qui non deve tornare a essere un'uscita muta: senza questo
+     catch e' una unhandled rejection, e il riepilogo direbbe "0 failed" sotto
+     uno stack trace. */
+  fail++;
+  console.error("FAIL  la sezione sul rientro e' morta a meta'\n      " +
+    (e && e.message ? e.message : String(e)));
+});
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
 process.on("exit", (code) => {
+  // La sezione sul rientro e' asincrona: se il loop si svuota prima che sia
+  // arrivata in fondo, i suoi assert non hanno contato e il riepilogo sarebbe
+  // verde su un confronto mai avvenuto. Qui non puo' sparire in silenzio.
+  if (!reentrancyDone) {
+    fail++;
+    console.error("FAIL  la sezione sul rientro non e' arrivata in fondo: " +
+      "i suoi assert non hanno contato");
+  }
   console.log(`\n${"─".repeat(50)}`);
   console.log(`${pass} passed, ${fail} failed`);
   if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
