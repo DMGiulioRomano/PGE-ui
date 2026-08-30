@@ -26,8 +26,10 @@ exists):
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
   (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary, incl. the engine-semantics axis and source
-  guards on the chain that carries the version from the engine to the dot), `test-history-core.js` (undo/redo stack
+  classification + render summary, incl. the engine-semantics axis, source
+  guards on the chain that carries the version from the engine to the dot, and
+  a live two-overlapping-renders check that `run()` refuses re-entry),
+  `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
@@ -177,6 +179,22 @@ fallback).
 ### NDJSON render protocol
 
 `POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`. `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
+
+**One `run()` at a time, and the guard lives on both sides.** `cancelAbort` in
+`backend.js` is a single closure variable: two overlapping `run()`s and the
+second overwrites the first's `AbortController`, so Cancel kills one and the
+other keeps writing stems with no way to stop it — and both POSTs write the
+same `configs/<basename>.yml` and the same stems. `renderingRef` in `app.jsx`
+guards the *entrances* (the button and the `r` shortcut, which are app.jsx's
+problem) and must be raised **before** any await — `runRender` awaits
+`refreshEngineSem()` with `jget`'s 10 s timeout, a window wide enough for a
+second entry. `run()` refuses re-entry on its own too, because the invariant
+has to be enforced in the file that suffers it: the refusal *returns*
+`{ok:false, configWritten:false}` rather than throwing (the caller has no
+try/catch, and `run()` never throws) and emits no `done` event, which would
+tear down the UI of the render still in flight. `test-render-status.js` pins
+both sides — the caller by source guard, `run()` by running two overlapping
+renders and pressing Cancel.
 
 ### Score options that can kill a render
 
