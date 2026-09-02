@@ -187,9 +187,33 @@ class Oracle {
     return r.value;
   }
 
-  close() {
+  /* Chiude l'oracolo, e se non basta lo uccide.
+   *
+   * `stdin.end()` + `unref()` era una richiesta, non un potere: funziona solo
+   * perche' l'oracolo VERO esce sull'EOF di stdin. Un interprete che non esca
+   * — muto, appeso, un python sbagliato — resta vivo, e `unref()` non basta
+   * perche' stacca l'handle del processo ma non quelli di stdout/stderr: node
+   * non esce, e la suite che aveva appena stampato il verdetto giusto va in
+   * timeout. Nessuno dei due job CI aveva un `timeout-minutes`, quindi il
+   * default e' sei ore di runner e un job "cancelled" al posto del rosso
+   * pulito appena scritto sullo schermo.
+   *
+   * Il timer e' `unref`ato di proposito: se il loop e' gia' vuoto node esce e
+   * il kill non serve; se e' pieno (i pipe del figlio) il timer scatta lo
+   * stesso ed e' esattamente il caso da chiudere. */
+  close({ graceMs = 500 } = {}) {
     if (this.proc.exitCode === null && !this._dead) {
       try { this.proc.stdin.end(); } catch (e) { /* gia' chiuso */ }
+    }
+    if (this.proc.exitCode === null) {
+      const t = setTimeout(() => {
+        try { this.proc.kill("SIGKILL"); } catch (e) { /* gia' morto */ }
+        for (const st of [this.proc.stdout, this.proc.stderr]) {
+          try { st && st.destroy(); } catch (e) { /* gia' chiuso */ }
+        }
+      }, graceMs);
+      if (t.unref) t.unref();
+      this.proc.once("close", () => clearTimeout(t));
     }
     this.proc.unref();
   }
@@ -207,15 +231,20 @@ async function openOracle({ root, timeoutMs = 30000 } = {}) {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const o = new Oracle(proc, python);
-  const hello = await o._expect(0, timeoutMs).catch((err) => {
+  /* Ogni uscita da qui che non sia l'oracolo aperto deve chiuderlo: chi chiama
+     non ha ancora un riferimento (in harness.js `oracle` e' ancora
+     `undefined`), quindi il suo `if (oracle) oracle.close()` non scatterebbe e
+     il processo resterebbe vivo a tenere su il loop. */
+  try {
+    const hello = await o._expect(0, timeoutMs);
+    if (!hello.ok || !hello.value || hello.value.hello !== "pge-parity-oracle") {
+      throw new Error(o._withStderr(`handshake inatteso: ${JSON.stringify(hello).slice(0, 300)}`));
+    }
+    o.hello = hello.value;
+  } catch (err) {
     o.close();
     throw err;
-  });
-  if (!hello.ok || !hello.value || hello.value.hello !== "pge-parity-oracle") {
-    o.close();
-    throw new Error(o._withStderr(`handshake inatteso: ${JSON.stringify(hello).slice(0, 300)}`));
   }
-  o.hello = hello.value;
   return o;
 }
 

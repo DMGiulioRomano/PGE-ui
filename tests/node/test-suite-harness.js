@@ -23,6 +23,7 @@ const fs   = require("fs");
 const os   = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const SG   = require("./source-guard.js");
 
 let pass = 0, fail = 0;
 
@@ -144,24 +145,88 @@ if (fs.existsSync(HARNESS_JS) && fs.existsSync(ORACLE_JS)) {
     '  suite: "sonda", why: "il secondo caso non arriva mai in fondo",',
     "  cases: [",
     '    { label: "un assert che passa", run: async (ask, assert) => { assert("passa", true); } },',
-    '    { label: "e poi il processo resta senza lavoro", run: async (ask, assert, ctx) => {',
-    "        ctx.oracle.close();",
-    "        await new Promise(() => {});",
-    "      } },",
+    // Il caso che uccide il runner FRA un caso e l'altro: il `console.log`
+    // dell'etichetta sta fuori dal try, quindi il rigetto esce dal ciclo e
+    // `parity()` non arriva mai al verdetto. E' il ramo "morta a meta'"
+    // riprodotto senza appendersi — la versione appesa la copre la sonda 1c,
+    // e con il tetto per caso non sarebbe piu' questo ramo.
     "  ],",
     "});",
-  ].join("\n");
+  ].join("\n").replace("  ],", [
+    '    { get label() { if (++reads > 2) throw new Error("il runner muore qui");',
+    '                    return "e poi il runner muore fra un caso e l\'altro"; },',
+    "      run: async () => {} },",
+    "  ],",
+  ].join("\n"));
 
-  const r = runScript(probe);
+  const r = runScript("let reads = 0;\n" + probe);
   const out = (r.stdout || "") + (r.stderr || "");
   assert("una suite che muore a meta' esce 1", r.status === 1,
     `status ${r.status}\n${out}`);
   assert("...dicendo che il riepilogo e' parziale",
     /interrotto prima della fine/.test(out), out);
   assert("...ed elencando il caso che non ha girato",
-    /e poi il processo resta senza lavoro/.test(out.slice(out.indexOf("interrotto prima della fine"))),
+    /e poi il runner muore fra un caso e l'altro/.test(out.slice(out.indexOf("interrotto prima della fine"))),
     out);
   assert("il caso che ha girato e' comunque contato", /1 passed/.test(out), out);
+}
+
+/* ============================================================
+ * 1c — un caso che si appende NON e' un job in timeout
+ *
+ * La sonda 1b prova il ramo "morta a meta'", che si raggiunge quando node
+ * resta senza lavoro. Con l'oracolo VERO quella condizione non si verifica
+ * mai: il processo python tiene su il loop, quindi un caso appeso non fa
+ * uscire node e il ramo non arriva — il job va in timeout invece di dare un
+ * verdetto. Il tetto per caso lo trasforma in un caso che non ha girato, col
+ * suo nome, e la suite prosegue fino al riepilogo.
+ *
+ * L'oracolo finto qui tiene un handle aperto (un `setInterval`), cosi' la
+ * sonda riproduce la configurazione vera invece di quella comoda.
+ * ============================================================ */
+
+if (fs.existsSync(HARNESS_JS) && fs.existsSync(ORACLE_JS)) {
+  console.log("\n── harness.js: un caso appeso non appende la suite ──");
+
+  const probe = [
+    'const fs = require("fs"), os = require("os"), path = require("path");',
+    'const fake = fs.mkdtempSync(path.join(os.tmpdir(), "pge-fake-engine-"));',
+    'fs.mkdirSync(path.join(fake, "src", "pge"), { recursive: true });',
+    "process.env.PGE_ENGINE_ROOT = fake;",
+    "delete process.env.PGE_PARITY_STRICT;",
+    "process.env.PGE_PARITY_CASE_TIMEOUT_MS = \"1500\";",
+    // L'handle che l'oracolo vero terrebbe aperto: senza, node uscirebbe da
+    // se' e la sonda proverebbe di nuovo il ramo 1b.
+    "const keepAlive = setInterval(() => {}, 1000);",
+    `const id = require.resolve(${JSON.stringify(ORACLE_JS)});`,
+    "require.cache[id] = { id, filename: id, loaded: true, exports: {",
+    "  openOracle: async () => ({",
+    '    hello: { engine_commit: null, python: "3.x", ops: [], unavailable: {} },',
+    "    ask: async () => ({}), close() { clearInterval(keepAlive); },",
+    "  }) } };",
+    `const { parity } = require(${JSON.stringify(HARNESS_JS)});`,
+    "parity({",
+    '  suite: "sonda", why: "il primo caso non si chiude mai",',
+    "  cases: [",
+    '    { label: "un caso che non si chiude mai", run: async () => new Promise(() => {}) },',
+    '    { label: "il caso dopo gira lo stesso", run: async (ask, assert) => { assert("gira", true); } },',
+    "  ],",
+    "});",
+  ].join("\n");
+
+  const t0 = Date.now();
+  const r = runScript(probe);
+  const out = (r.stdout || "") + (r.stderr || "");
+  const dt = Date.now() - t0;
+  assert("un caso appeso diventa un fallimento, non un timeout del job",
+    r.status === 1, `status ${r.status}\n${out}`);
+  assert("...con il suo nome, invece del silenzio",
+    /un caso che non si chiude mai/.test(out), out);
+  assert("...e la suite arriva comunque al riepilogo",
+    /1 passed, 1 failed/.test(out),
+    "il caso dopo deve girare: un caso appeso non e' la fine della suite\n" + out);
+  assert("...entro il tetto dichiarato, non dopo",
+    dt < 30000, `${dt} ms`);
 }
 
 /* ============================================================
@@ -227,6 +292,22 @@ for (const { label, file } of suiteFiles) {
   assert(`${label} — un crash a meta' non passa per un riepilogo pulito`,
     /code && !fail/.test(src),
     "l'handler deve dire che il riepilogo e' parziale quando il processo muore prima della fine");
+  /* ...e la registrazione deve stare a LIVELLO DI MODULO.
+   *
+   * Il controllo testuale qui sopra non distingue un handler registrato dal
+   * file da uno registrato dentro il corpo asincrono che dovrebbe sorvegliare:
+   * se quel corpo muore prima di arrivarci, l'handler non esiste, e il
+   * processo esce senza ne' riepilogo ne' "interrotto prima della fine" — le
+   * due righe che sono l'intero contratto. Nel caso peggiore non esce affatto:
+   * con dei figli vivi il loop resta pieno e il job va in timeout.
+   *
+   * E' esattamente la forma che questa guardia condanna, un piano piu' su, e
+   * l'unica differenza fra un file sano e uno rotto e' la profondita' di
+   * parentesi in cui la riga sta. Percio' si conta, invece di cercarla. */
+  assert(`${label} — l'handler exit e' registrato a livello di modulo`,
+    SG.topLevelOccurrences(src, 'process.on("exit"').length >= 1,
+    "registrato dentro l'IIFE asincrona: se il corpo muore prima di arrivarci " +
+    "non c'e' nessun handler, e il file esce muto");
 }
 
 /* Il salto della parita' deve chiudere l'oracolo.
@@ -254,6 +335,66 @@ if (fs.existsSync(PARITY_HARNESS)) {
     /let bailed = false;/.test(src) && /bailed = true;/.test(src) &&
     /if \(bailed\) return;/.test(src),
     "senza, un crash a meta' run non stampa nessun riepilogo");
+}
+
+/* ============================================================
+ * 4 — un verdetto stampato e mai consegnato
+ *
+ * L'altra meta' del contratto d'uscita: non basta pronunciare il verdetto, il
+ * processo deve poi USCIRE. Misurato: con un interprete vivo e muto al posto
+ * di python, harness.js stampava "PARITA' NON VERIFICATA" e i casi non
+ * eseguiti, e restava vivo oltre i 75 s — `close()` chiedeva (`stdin.end()` +
+ * `unref()`) senza poter uccidere, e funzionava solo perche' l'oracolo vero
+ * esce sull'EOF di stdin. Stessa causa, seconda faccia: un caso che si appende
+ * con l'oracolo VERO non fa mai arrivare il ramo "morta a meta'", perche' quel
+ * ramo e' nell'handler `exit` e node non esce.
+ *
+ * Sono guardie sorgente perche' riprodurle qui vorrebbe dire far partire un
+ * python muto e aspettarne il non ritorno; le due riproduzioni stanno nel
+ * commit che le chiude.
+ * ============================================================ */
+
+console.log("\n── il verdetto viene anche consegnato ──");
+{
+  const oracleSrc = fs.readFileSync(
+    path.join(__dirname, "..", "parity", "oracle.js"), "utf8");
+  const oracleCode = SG.stripComments(oracleSrc);
+  assert("parity/oracle.js — close() puo' uccidere, non solo chiedere",
+    /close\([^)]*\)\s*\{[\s\S]{0,900}?\.kill\(/.test(oracleCode),
+    "`stdin.end()` + `unref()` e' una richiesta: un interprete che non esce " +
+    "resta vivo, e `unref()` non stacca stdout/stderr");
+  assert("...e l'apertura fallita chiude il processo che ha aperto",
+    /catch \(err\) \{\s*o\.close\(\);\s*throw err;/.test(oracleCode),
+    "in harness.js `oracle` e' ancora undefined li', quindi il suo " +
+    "`if (oracle) oracle.close()` non scatta");
+
+  const harnessCode = SG.stripComments(
+    fs.readFileSync(PARITY_HARNESS, "utf8"));
+  assert("parity/harness.js — ogni caso gira sotto un tetto di tempo",
+    /withTimeout\(c\.run\(/.test(harnessCode) &&
+    /caseTimeoutMs/.test(harnessCode),
+    "un caso che si appende con l'oracolo vivo non fa mai uscire node, " +
+    "e il ramo `morta a meta'` sta in un handler exit");
+
+  const ci = path.join(__dirname, "..", "..", ".github", "workflows", "ci.yml");
+  if (fs.existsSync(ci)) {
+    // I job, non le chiavi di `on:`: si parte dal blocco `jobs:` e si taglia
+    // sulle sue chiavi di primo livello.
+    const ciSrc = fs.readFileSync(ci, "utf8");
+    const jobsAt = ciSrc.search(/^jobs:$/m);
+    const jobs = jobsAt < 0 ? []
+      : ciSrc.slice(jobsAt).split(/^  (?=[\w-]+:$)/m).slice(1);
+    assert("ci.yml — la CI ha i due job attesi", jobs.length === 2,
+      `trovati ${jobs.length}: se sono cambiati, e' questa guardia a essere ` +
+      `diventata muta`);
+    for (const job of jobs) {
+      const name = job.slice(0, job.indexOf(":"));
+      assert(`ci.yml — il job ${name} ha un timeout-minutes`,
+        /^\s*timeout-minutes:\s*\d+/m.test(job),
+        "col default di 360 minuti una suite appesa e' sei ore di runner e " +
+        "un job 'cancelled' al posto del rosso pulito");
+    }
+  }
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

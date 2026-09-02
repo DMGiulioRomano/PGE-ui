@@ -32,11 +32,28 @@ function assert(label, cond, extra) {
 const uncaught = [];
 process.on("uncaughtException", (e) => { uncaught.push(e); });
 
+/* Gli interpreti finti tengono vivo il loop con un `setInterval`: e' cio' che
+ * li rende utili (un oracolo che non risponde), ed e' anche il motivo per cui
+ * un'uscita anomala di questo file diventerebbe un job appeso invece di un
+ * verdetto. Si tengono quindi in una lista, e il `finally` in fondo li uccide
+ * comunque vada. */
+const spawned = [];
 function fakeInterpreter() {
-  return spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
-               { stdio: ["pipe", "pipe", "pipe"] });
+  const p = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+                  { stdio: ["pipe", "pipe", "pipe"] });
+  spawned.push(p);
+  return p;
+}
+function killSpawned() {
+  for (const p of spawned) { try { p.kill("SIGKILL"); } catch {} }
 }
 
+/* Il corpo e' asincrono; l'handler `exit` sta FUORI, a livello di modulo.
+ * Dentro, un'eccezione prima della sua registrazione lo farebbe non esistere:
+ * il file uscirebbe senza riepilogo e senza "interrotto prima della fine", e
+ * con i figli ancora vivi non uscirebbe affatto — un job in timeout, cioe' il
+ * modo peggiore di rompersi, riprodotto dentro il file che lo condanna. */
+let bodyDone = false;
 (async () => {
 
 /* La corsa: `close` ed `error` del processo sono consegnati in modo asincrono,
@@ -108,14 +125,27 @@ console.log("\n── guardia sorgente: il listener sta sullo stream ──");
          "rilanciare qui scambierebbe un EPIPE non gestito con un rigetto non gestito");
 }
 
+  bodyDone = true;
+})().catch(e => {
+  /* Senza questo catch e' una unhandled rejection: `uncaughtException` qui
+     sopra la ingoierebbe, e il file resterebbe appeso sui figli vivi. */
+  fail++;
+  console.error("FAIL  il corpo della suite e' morto a meta'\n      " +
+    (e && e.stack ? e.stack : String(e)));
+}).finally(killSpawned);
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file: cosi'
 // una sezione appesa dopo continua a contare, invece di stampare FAIL e uscire
 // 0. Il vincolo e' verificato da test-suite-harness.js (#132).
 process.on("exit", (code) => {
+  killSpawned();
+  if (!bodyDone) {
+    fail++;
+    console.error("FAIL  il corpo della suite non e' arrivato in fondo: " +
+      "i suoi assert non hanno contato");
+  }
   console.log(`\n${"─".repeat(50)}`);
   console.log(`${pass} passed, ${fail} failed`);
   if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
   if (fail > 0) process.exitCode = 1;
 });
-
-})();

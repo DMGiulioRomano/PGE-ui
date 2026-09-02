@@ -203,6 +203,10 @@ async function parity({ suite, why, cases }) {
   remaining = cases.map(c => c.label);
   const strict = truthy(process.env.PGE_PARITY_STRICT);
   const root = engineRoot();
+  // Il tetto per caso: generoso (le bisezioni sul motore fanno centinaia di
+  // domande), ma finito. Serve a distinguere "lento" da "appeso", non a
+  // misurare le prestazioni.
+  const caseTimeoutMs = Number(process.env.PGE_PARITY_CASE_TIMEOUT_MS) || 120000;
 
   const bar = "─".repeat(60);
   console.log(`\n${bar}\nparita' · ${suite}`);
@@ -280,6 +284,16 @@ async function parity({ suite, why, cases }) {
   }
 
   /* --- esecuzione -------------------------------------------------------- */
+  /* Il timer si arma solo per la durata del caso e si spegne comunque vada:
+     lasciarlo acceso terrebbe vivo il loop dopo il verdetto. */
+  function withTimeout(p, ms, why) {
+    let t;
+    return Promise.race([
+      Promise.resolve(p).finally(() => clearTimeout(t)),
+      new Promise((_, rej) => { t = setTimeout(() => rej(new Error(why)), ms); }),
+    ]);
+  }
+
   /* Informativo, non un'asserzione: si vede sempre e non entra nel conteggio.
      `righe` può essere una stringa, un array, o mancare del tutto. */
   /* `righe == null`, non la falsita': `note("banda int/float", 0)` deve stampare
@@ -307,7 +321,14 @@ async function parity({ suite, why, cases }) {
       else { fail++; console.error("FAIL  " + label + (extra ? "\n      " + extra : "")); }
     };
     try {
-      await c.run(ask, assert, ctx);
+      /* Un caso che si appende non deve diventare un job in timeout: il ramo
+         "morta a meta'" dell'handler `exit` non arriva mai se node non esce, e
+         con l'oracolo VERO vivo il loop non si svuota da solo. Con la corsa,
+         un'attesa che non si chiude diventa un caso che non ha girato, con il
+         suo nome — e la suite prosegue fino al verdetto. */
+      await withTimeout(c.run(ask, assert, ctx), caseTimeoutMs,
+        `il caso non si e' chiuso entro ${caseTimeoutMs} ms ` +
+        `(PGE_PARITY_CASE_TIMEOUT_MS lo cambia)`);
     } catch (err) {
       // Un guasto dentro un caso non e' un assert fallito: il caso non ha
       // girato. Va contato fra i non eseguiti, o il totale mentirebbe.

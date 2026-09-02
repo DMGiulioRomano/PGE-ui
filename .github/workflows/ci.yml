@@ -8,6 +8,14 @@ jobs:
   node:
     name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures · parity)
     runs-on: ubuntu-latest
+    # Tetto al job. Non e' cintura in piu': una suite che si appende invece di
+    # dare un verdetto — un oracolo di parita' che non esce, un caso che non si
+    # chiude — con il default (360 minuti) diventa sei ore di runner e un job
+    # "cancelled", cioe' un rosso che non dice niente al posto di quello pulito
+    # che era appena stato scritto sullo schermo. I fix stanno a monte
+    # (oracle.close() che uccide, un tetto per caso in harness.js); questa e'
+    # la rete che non dipende da loro.
+    timeout-minutes: 15
     steps:
       - name: checkout PGE-ui
         uses: actions/checkout@v4
@@ -78,6 +86,9 @@ jobs:
   python:
     name: python tests (render_pipeline · audio_pipeline · engine render)
     runs-on: ubuntu-latest
+    # Stesso motivo del job node, e qui il venv del motore rende il passo di
+    # parita' piu' lento: 25 minuti, non 15.
+    timeout-minutes: 25
     steps:
       - name: checkout PGE-ui
         uses: actions/checkout@v4

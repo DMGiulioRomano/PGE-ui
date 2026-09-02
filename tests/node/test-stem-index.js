@@ -86,6 +86,12 @@ function mkBackendWithRender(events) {
   return window.PGEBackend.create({ baseUrl: "http://x" });
 }
 
+/* Il corpo e' asincrono; l'handler `exit` sta FUORI, a livello di modulo.
+ * Registrato dentro, un'eccezione prima di quella riga lo fa non esistere: il
+ * file esce senza riepilogo E senza "interrotto prima della fine", cioe' le due
+ * righe che sono l'intero contratto. Misurato rinominando un simbolo di
+ * backend.js: exit 1 e nessun verdetto. */
+let bodyDone = false;
 console.log("\n── a stem present in one format only ──");
 (async () => {
   DISK = ["proj__stream1.wav", "proj__stream2.aif"];
@@ -221,13 +227,26 @@ console.log("\n── a stem present in one format only ──");
            "restava ritagliato sulla misura di prima");
   }
 
-  // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
-  // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
-  // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
-  process.on("exit", (code) => {
-    console.log(`\n${"─".repeat(50)}`);
-    console.log(`${pass} passed, ${fail} failed`);
-    if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
-    if (fail > 0) process.exitCode = 1;
-  });
-})();
+  bodyDone = true;
+})().catch(e => {
+  /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e
+     nessun riepilogo. */
+  fail++;
+  console.error("FAIL  il corpo della suite e' morto a meta'\n      " +
+    (e && e.stack ? e.stack : String(e)));
+});
+
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file: cosi'
+// una sezione appesa dopo continua a contare, invece di stampare FAIL e uscire
+// 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  if (!bodyDone) {
+    fail++;
+    console.error("FAIL  il corpo della suite non e' arrivato in fondo: " +
+      "i suoi assert non hanno contato");
+  }
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});
