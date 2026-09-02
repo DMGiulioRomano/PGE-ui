@@ -583,3 +583,238 @@ def test_gunicorn_has_enough_threads_for_concurrent_stems():
     m = re.search(r'"threads":\s*(\d+)', src)
     assert m, '"threads" non trovato nella config gunicorn di server.py'
     assert int(m.group(1)) >= 32
+
+
+# ---------------------------------------------------------------------------
+# Workspace — la cartella dei progetti e' scollegata dal checkout del motore
+#
+# `--root` resta la sorgente del motore (src/main.py, .venv, csound/); il
+# workspace e' dove vivono configs/ output/ cache/, cioe' il lavoro dell'autore.
+# Senza workspace le due cose coincidono, che e' il comportamento storico.
+# refs/ NON segue ancora: il sottoprocesso gira con cwd=root e col renderer
+# numpy i sample si risolvono su ./refs/ del motore (PythonGranularEngine#235).
+# PGE-ui #147
+# ---------------------------------------------------------------------------
+
+def _engine_stub(root: Path):
+    """Il minimo che make_app si aspetta da un checkout del motore."""
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "main.py").write_text("# stub\n")
+    (root / "refs").mkdir(exist_ok=True)
+    return root
+
+
+def test_workspace_absent_means_root(tmp_path):
+    """Il default non cambia: senza workspace tutto resta dentro il motore."""
+    import server
+    _engine_stub(tmp_path)
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+
+    h = client.get("/health").get_json()
+    assert h["workspace"] == str(tmp_path)
+    assert h["configs"] == str(tmp_path / "configs")
+    assert h["output"] == str(tmp_path / "output")
+    assert h["cache"] == str(tmp_path / "cache")
+    assert client.get("/workspace").get_json()["isRoot"] is True
+
+
+def test_workspace_moves_configs_output_cache_but_not_refs(tmp_path):
+    """Le tre directory seguono il workspace; refs/ resta al motore.
+
+    E' il nodo aperto dell'issue: finche' il motore non ha --samples-dir, i
+    sample si risolvono su ./refs/ del cwd del sottoprocesso, che e' root.
+    Spostare refs/ senza spostare quella risoluzione darebbe una cartella di
+    sample che nessuno legge."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "brani"
+    ws.mkdir()
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    h = client.get("/health").get_json()
+
+    assert h["root"] == str(root)
+    assert h["workspace"] == str(ws)
+    assert h["configs"] == str(ws / "configs")
+    assert h["output"] == str(ws / "output")
+    assert h["cache"] == str(ws / "cache")
+    assert h["refs"] == str(root / "refs")          # dal motore, non dal workspace
+    assert client.get("/workspace").get_json()["isRoot"] is False
+
+
+def test_workspace_creates_its_subdirs(tmp_path):
+    """Un workspace nuovo e' una cartella vuota: le sottodirectory le fa il
+    bridge, altrimenti il primo salvataggio fallirebbe su una cartella che non
+    c'e'."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "brani"
+    ws.mkdir()
+
+    server.make_app(root, render_timeout=600.0, workspace=ws)
+
+    assert (ws / "configs").is_dir()
+    assert (ws / "output").is_dir()
+    assert (ws / "cache").is_dir()
+    # E il motore non guadagna una configs/ che non gli serve piu'.
+    assert not (root / "configs").exists()
+
+
+def test_projects_and_file_io_read_the_workspace(tmp_path):
+    """L'elenco progetti e la lettura/scrittura dei file passano dal workspace,
+    non dal motore. E' il punto dell'issue: un brano proprio non deve piu'
+    finire dentro il checkout del motore."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    (root / "configs").mkdir()
+    (root / "configs" / "del_motore.yml").write_text("duration: 1\n")
+    ws = tmp_path / "brani"
+    (ws / "configs").mkdir(parents=True)
+    (ws / "configs" / "mio.yml").write_text("duration: 2\n")
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+
+    names = [f["name"] for f in client.get("/projects").get_json()["files"]]
+    assert names == ["mio.yml"]                    # non del_motore.yml
+    assert client.get("/file?kind=projects&name=mio.yml").get_data(as_text=True) == "duration: 2\n"
+    assert client.get("/file?kind=projects&name=del_motore.yml").status_code == 404
+
+    client.put("/file?kind=projects&name=nuovo.yml", data="duration: 3\n")
+    assert (ws / "configs" / "nuovo.yml").exists()
+    assert not (root / "configs" / "nuovo.yml").exists()
+
+
+def test_workspace_switch_at_runtime(tmp_path):
+    """POST /workspace commuta a caldo e risponde con l'elenco nuovo.
+
+    L'elenco viaggia nella risposta perche' cambiare cartella invalida quello
+    che il browser ha in mano: e' un rimpiazzo, non un merge."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    a = tmp_path / "a"; (a / "configs").mkdir(parents=True)
+    (a / "configs" / "primo.yml").write_text("duration: 1\n")
+    b = tmp_path / "b"; (b / "configs").mkdir(parents=True)
+    (b / "configs" / "secondo.yml").write_text("duration: 2\n")
+
+    client = server.make_app(root, render_timeout=600.0, workspace=a).test_client()
+    assert [f["name"] for f in client.get("/projects").get_json()["files"]] == ["primo.yml"]
+
+    r = client.post("/workspace", json={"path": str(b)})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["workspace"] == str(b)
+    assert [f["name"] for f in body["projects"]] == ["secondo.yml"]
+
+    # e le altre route seguono, senza riavviare il bridge
+    assert [f["name"] for f in client.get("/projects").get_json()["files"]] == ["secondo.yml"]
+    assert client.get("/health").get_json()["cache"] == str(b / "cache")
+
+
+def test_workspace_empty_path_returns_to_root(tmp_path):
+    """Campo svuotato = torna al default (workspace sul motore)."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "brani"; ws.mkdir()
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    body = client.post("/workspace", json={"path": "  "}).get_json()
+
+    assert body["workspace"] == str(root)
+    assert body["isRoot"] is True
+
+
+def test_workspace_refuses_a_path_that_does_not_exist(tmp_path):
+    """Le *sotto*directory si creano, il workspace no: un percorso digitato
+    male e' un refuso, e un refuso non deve seminare cartelle sul disco. E lo
+    stato non si muove — la risposta dice ancora dove siamo."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "brani"; ws.mkdir()
+    missing = tmp_path / "refuso"
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    r = client.post("/workspace", json={"path": str(missing)})
+
+    assert r.status_code == 400
+    body = r.get_json()
+    assert body["ok"] is False
+    assert "non esiste" in body["error"]
+    assert body["workspace"] == str(ws)            # invariato
+    assert not missing.exists()                    # e nessuna cartella fabbricata
+    assert client.get("/health").get_json()["configs"] == str(ws / "configs")
+
+
+def test_workspace_refuses_a_file(tmp_path):
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    f = tmp_path / "non_una_cartella.txt"
+    f.write_text("x")
+
+    client = server.make_app(root, render_timeout=600.0).test_client()
+    r = client.post("/workspace", json={"path": str(f)})
+
+    assert r.status_code == 400
+    assert "non e' una directory" in r.get_json()["error"]
+
+
+def test_workspace_refused_while_a_render_is_running(tmp_path):
+    """Commutare a render in corso manderebbe gli stem in una cartella e il
+    manifest di cache in un'altra. La route rifiuta con 409 finche' il
+    sottoprocesso e' vivo."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    # Un finto motore che stampa una riga e poi resta li': serve un processo
+    # vivo, non un render vero.
+    (root / "src" / "main.py").write_text(
+        "import sys, time\n"
+        "print('[CACHE] stream1: DIRTY', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    # Finto venv: il generatore di /render si limita a controllare che il
+    # binario esista, e con questo evitiamo di costruire un venv vero.
+    venv_bin = root / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(sys.executable)
+
+    ws = tmp_path / "brani"; ws.mkdir()
+    altro = tmp_path / "altro"; altro.mkdir()
+    app = server.make_app(root, render_timeout=600.0, workspace=ws)
+    client = app.test_client()
+
+    resp = client.post("/render", json={
+        "yamlBasename": "prova", "yamlContent": "duration: 1\n", "streams": [],
+    })
+    chunks = resp.response          # generatore: avanza solo quando lo tiriamo
+    try:
+        next(chunks)                # riga "$ …" — il processo non e' ancora partito
+        next(chunks)                # prima riga del sottoprocesso: ora si'
+        r = client.post("/workspace", json={"path": str(altro)})
+        assert r.status_code == 409
+        assert "render in corso" in r.get_json()["error"]
+        assert client.get("/health").get_json()["workspace"] == str(ws)
+    finally:
+        client.post("/render/cancel")
+        for _ in range(200):        # drena senza rischiare un loop infinito
+            try:
+                next(chunks)
+            except StopIteration:
+                break
+        resp.close()
+
+    # A render finito la commutazione passa.
+    assert client.post("/workspace", json={"path": str(altro)}).status_code == 200
+
+
+def test_render_pins_the_workspace_paths_for_its_whole_life(tmp_path):
+    """I path si fissano all'inizio della route, non dentro il generatore.
+
+    Guardia sul sorgente: rileggerli a valle significherebbe, su un cambio di
+    workspace a meta' stream, stem in una cartella e manifest in un'altra."""
+    src = (Path(__file__).resolve().parents[2] / "server.py").read_text()
+    assert "ws_refs, ws_output, ws_cache = refs, output, cache" in src
+    body = src[src.index("def render():"):]
+    body = body[:body.index("# --------- static UI file serving ---------")]
+    gen = body[body.index("def event_stream():"):]
+    for name in ("cache=cache", "refs=refs", "output=output"):
+        assert name not in gen, f"{name}: il generatore rilegge il path invece del valore fissato"

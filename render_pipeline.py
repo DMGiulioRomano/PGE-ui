@@ -100,6 +100,14 @@ class RenderState:
     def is_cancelled(self) -> bool:
         return self.cancelled
 
+    def is_running(self) -> bool:
+        """C'e' un sottoprocesso vivo. Serve a /workspace, che deve rifiutare
+        il cambio di cartella mentre un render sta scrivendo stem e manifest
+        (PGE-ui #147). `poll()` e' la verita': `self.proc` resta valorizzato
+        finche' la route non chiama clear()."""
+        proc = self.proc
+        return proc is not None and proc.poll() is None
+
     def clear(self):
         with self.lock:
             self.proc = None

@@ -29,9 +29,16 @@ Then in the browser:
 The server speaks JSON-lines (NDJSON) for the /render endpoint so the browser
 can read events incrementally. All other endpoints are plain JSON.
 
+The engine checkout (--root) and the folder your pieces live in (--workspace)
+are two different things: --root is engine source (src/main.py, .venv, csound/),
+--workspace holds configs/ output/ cache/. Without --workspace they coincide,
+which is the historical behavior. refs/ still comes from the engine — see #147.
+
 Endpoints:
     GET  /health                — sanity check + resolved paths
     GET  /config                — same payload as /health
+    GET  /workspace             — current workspace + its projects
+    POST /workspace             — switch workspace ({"path": …}; empty = --root)
     GET  /envelope-keys         — valid --plot-envelopes names (from engine src)
     GET  /media                 — list refs/ contents with durations
     GET  /projects              — list configs/*.yml
@@ -440,13 +447,47 @@ def _ensure_venv_events(root: Path):
 # App factory
 # -------------------------------------------------------------------------
 
-def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
-    refs    = root / "refs"
-    configs = root / "configs"
-    output  = root / "output"
-    cache   = root / "cache"
-    for p in (output, cache):
-        p.mkdir(parents=True, exist_ok=True)
+def make_app(root: Path, render_timeout: float = 600.0,
+             workspace: Path = None) -> Flask:
+    """`root` e' la sorgente del motore (src/main.py, .venv, csound/), il
+    workspace e' la cartella di lavoro dell'autore: configs/ output/ cache/.
+
+    Workspace assente = workspace sul root, cioe' il comportamento storico —
+    un brano e' un file dentro il checkout del motore e /render lo riscrive
+    li'. Passarne uno diverso disaccoppia le due cose: lavorare a un pezzo
+    proprio non sporca piu' il repo del motore, e il rollback torna a essere
+    il git della propria cartella. #147
+
+    refs/ NON si sposta ancora: il sottoprocesso gira con cwd=root e col
+    renderer numpy i sample si risolvono su ./refs/ del motore. Serve un
+    --samples-dir lato motore (PythonGranularEngine#235); finche' non c'e', i
+    sample restano quelli del motore e solo le altre tre directory seguono il
+    workspace."""
+    ws      = None
+    refs    = None
+    configs = None
+    output  = None
+    cache   = None
+
+    def _set_workspace(path):
+        """Punta le directory di lavoro a `path`, creando le sottodirectory se
+        mancano — un workspace nuovo e' una cartella vuota.
+
+        Le cartelle prima dello stato: un mkdir che fallisce (permessi, disco)
+        non deve lasciare il bridge su un workspace a meta', con configs/ nuova
+        e output/ vecchia."""
+        nonlocal ws, refs, configs, output, cache
+        target = Path(path).expanduser().resolve()
+        subs = {name: target / name for name in ("configs", "output", "cache")}
+        for p in subs.values():
+            p.mkdir(parents=True, exist_ok=True)
+        ws      = target
+        configs = subs["configs"]
+        output  = subs["output"]
+        cache   = subs["cache"]
+        refs    = root / "refs"     # vedi il docstring: legata al motore
+
+    _set_workspace(workspace or root)
 
     app = Flask(__name__)
     # CORS open — the browser is on the same machine, no security risk.
@@ -457,17 +498,22 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     # (seconds) after which a stuck subprocess is killed (0 disables). #43
     rs = RenderState()
 
-    BASES = {"media": refs, "projects": configs, "output": output, "cache": cache}
+    def _bases():
+        # Ricalcolata a ogni richiesta invece di essere una costante della
+        # closure: il workspace si commuta a caldo, e una mappa costruita una
+        # volta sola continuerebbe a puntare alle cartelle di prima. #147
+        return {"media": refs, "projects": configs, "output": output, "cache": cache}
 
     # --------- introspection / config ---------
 
     def _resolved_paths():
         return {
-            "root":    str(root),
-            "refs":    str(refs),
-            "configs": str(configs),
-            "output":  str(output),
-            "cache":   str(cache),
+            "root":      str(root),
+            "workspace": str(ws),
+            "refs":      str(refs),
+            "configs":   str(configs),
+            "output":    str(output),
+            "cache":     str(cache),
         }
 
     @app.get("/health")
@@ -572,6 +618,64 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     def config():
         return jsonify({"paths": _resolved_paths()})
 
+    def _workspace_payload(ok=True, error=None):
+        """Stato del workspace + elenco progetti. L'elenco viaggia con la
+        risposta perche' cambiare workspace invalida quello che il browser ha
+        in mano: e' un rimpiazzo, non un merge, e farlo in un giro solo evita
+        la finestra in cui la UI mostra i progetti di una cartella e i path di
+        un'altra."""
+        d = {
+            "ok": bool(ok),
+            "workspace": str(ws),
+            "isRoot": ws == root,
+            "paths": _resolved_paths(),
+            "projects": _project_entries(),
+        }
+        if error:
+            d["error"] = error
+        return d
+
+    @app.get("/workspace")
+    def get_workspace():
+        return jsonify(_workspace_payload())
+
+    @app.post("/workspace")
+    def set_workspace():
+        """Cambia la cartella di lavoro a caldo. Corpo: {"path": "..."};
+        vuoto o assente riporta al root del motore, cioe' al default.
+
+        La cartella deve esistere. Le *sotto*directory si creano, il workspace
+        no: un percorso digitato male e' un refuso, e un refuso non deve
+        seminare cartelle in giro per il disco. L'editor gira su file://,
+        quindi non c'e' file picker nativo — il percorso si digita e la
+        validazione sta qui.
+
+        Rifiutato durante un render, che sta leggendo configs/output/cache
+        mentre lo stream NDJSON e' in volo."""
+        if rs.is_running():
+            return jsonify(_workspace_payload(
+                ok=False, error="render in corso — riprova a render finito")), 409
+        body = request.get_json(force=True, silent=True) or {}
+        raw = (body.get("path") or "").strip()
+        try:
+            target = (Path(raw).expanduser() if raw else root).resolve()
+        except OSError as e:
+            return jsonify(_workspace_payload(ok=False, error=str(e))), 400
+        if not target.exists():
+            return jsonify(_workspace_payload(
+                ok=False,
+                error=f"non esiste: {target} — crea la cartella e riprova")), 400
+        if not target.is_dir():
+            return jsonify(_workspace_payload(
+                ok=False, error=f"non e' una directory: {target}")), 400
+        try:
+            _set_workspace(target)
+        except OSError as e:
+            return jsonify(_workspace_payload(
+                ok=False,
+                error=f"non posso creare configs/output/cache in {target}: {e}")), 400
+        return jsonify(_workspace_payload())
+
     @app.get("/envelope-keys")
     def envelope_keys():
         """Valid `--plot-envelopes` names, read from the engine source so the
@@ -606,16 +710,22 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
             })
         return jsonify({"path": str(refs), "files": files})
 
+    def _project_entries():
+        """I .yml del workspace. Condivisa fra /projects e /workspace: la
+        risposta al cambio di cartella porta con se' l'elenco nuovo, e le due
+        liste devono essere la stessa cosa."""
+        if not configs.exists():
+            return []
+        return [{"name": p.name, "mtime": p.stat().st_mtime}
+                for p in sorted(configs.iterdir())
+                if p.is_file() and p.suffix == ".yml"]
+
     @app.get("/projects")
     def list_projects():
         if not configs.exists():
             return jsonify({"path": str(configs), "files": [],
                             "error": "configs/ folder missing"})
-        files = []
-        for p in sorted(configs.iterdir()):
-            if p.is_file() and p.suffix == ".yml":
-                files.append({"name": p.name, "mtime": p.stat().st_mtime})
-        return jsonify({"path": str(configs), "files": files})
+        return jsonify({"path": str(configs), "files": _project_entries()})
 
     # --------- file read / write ---------
 
@@ -623,7 +733,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     def get_file():
         kind = request.args.get("kind")
         name = request.args.get("name", "")
-        base = BASES.get(kind)
+        base = _bases().get(kind)
         if not base: abort(400, "bad kind")
         path = safe_resolve(base, name)
         if not path or not path.exists():
@@ -634,7 +744,7 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     def put_file():
         kind = request.args.get("kind")
         name = request.args.get("name", "")
-        base = BASES.get(kind)
+        base = _bases().get(kind)
         if not base: abort(400, "bad kind")
         path = safe_resolve(base, name)
         if not path: abort(400, "bad name")
@@ -955,9 +1065,17 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
 
         output_stem = output / f"{basename}{out_ext}"
 
+        # Le tre directory si fissano QUI, non dentro il generatore: il
+        # workspace e' commutabile a caldo, e lo stream NDJSON vive per tutta
+        # la durata del render. Rilette a valle, un cambio a meta' manderebbe
+        # gli stem in una cartella e il manifest di cache in un'altra. La
+        # route /workspace rifiuta comunque il cambio a render in corso — qui
+        # si chiude la finestra fra la POST e lo spawn. #147
+        ws_refs, ws_output, ws_cache = refs, output, cache
+
         # Optional: wipe previous stems (current format only) if requested.
         if preclean:
-            for p in output.glob(f"{basename}__*{out_ext}"):
+            for p in ws_output.glob(f"{basename}__*{out_ext}"):
                 try: p.unlink()
                 except Exception: pass
 
@@ -983,9 +1101,9 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
             # Build the command using the engine venv python.
             cmd = build_render_command(
                 venv_py, root, yml, output_stem,
-                renderer=renderer, use_cache=use_cache, cache=cache,
+                renderer=renderer, use_cache=use_cache, cache=ws_cache,
                 visualize=visualize, page_duration=page_duration, reaper=reaper,
-                basename=basename, refs=refs, output=output, fmt=fmt,
+                basename=basename, refs=ws_refs, output=ws_output, fmt=fmt,
                 plot_envelopes=plot_envelopes, grain_json=grain_json,
                 show_voice_offsets=show_voice_offsets,
                 magnify=magnify, magnify_at=magnify_at,
@@ -1015,10 +1133,17 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                         yield json.dumps(ev) + "\n"
                 proc.wait()
                 ok = (proc.returncode == 0)
-                generated = [
-                    str(p.relative_to(root))
-                    for p in sorted(output.glob(f"{basename}__*{out_ext}"))
-                ]
+                # `generated` e' relativo al workspace quando gli stem ci
+                # vivono dentro; altrimenti resta assoluto (relative_to alza
+                # ValueError su un percorso fuori dal ramo). Il browser legge
+                # solo il basename di queste voci, ma il log del terminale le
+                # mostra: un percorso di comodo non deve diventare una bugia.
+                generated = []
+                for p in sorted(ws_output.glob(f"{basename}__*{out_ext}")):
+                    try:
+                        generated.append(str(p.relative_to(ws)))
+                    except ValueError:
+                        generated.append(str(p))
                 yield json.dumps({
                     "type": "done", "ok": ok,
                     "generated": generated,
@@ -1072,6 +1197,11 @@ def main():
                     help="path to the PythonGranularEngine repo root "
                          "(default: ../PythonGranularEngine, "
                          "i.e. cloned side-by-side with PGE-ui)")
+    ap.add_argument("--workspace", default=None,
+                    help="folder holding configs/ output/ cache/ — your own "
+                         "pieces, outside the engine checkout. Subdirectories "
+                         "are created if missing. Default: same as --root "
+                         "(historical behavior). refs/ still comes from --root")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default: 127.0.0.1, localhost only)")
     ap.add_argument("--render-timeout", type=float, default=600.0,
@@ -1094,7 +1224,22 @@ def main():
             f"    cd PGE-ui && python server.py\n"
         )
 
-    app = make_app(root, render_timeout=args.render_timeout)
+    workspace = None
+    if args.workspace:
+        workspace = Path(args.workspace).expanduser().resolve()
+        # Stessa regola della route POST /workspace: le sottodirectory si
+        # creano, il workspace no. Un refuso sulla riga di comando deve
+        # fermare il bridge, non fabbricare una cartella vuota e far sparire
+        # i progetti dell'autore.
+        if not workspace.is_dir():
+            sys.exit(
+                f"--workspace {workspace} non esiste (o non e' una directory).\n"
+                f"\n"
+                f"Crea la cartella e riprova: le sottodirectory configs/, "
+                f"output/ e cache/ le crea il bridge.\n"
+            )
+
+    app = make_app(root, render_timeout=args.render_timeout, workspace=workspace)
 
     def _check_cmd(cmd):
         try:
@@ -1120,12 +1265,14 @@ def main():
     except Exception:
         sf_ok = False
 
+    ws = workspace or root
     print(f"PGE bridge")
-    print(f"  root:    {root}")
-    print(f"  refs/:   {root / 'refs'}")
-    print(f"  configs/:{root / 'configs'}")
-    print(f"  output/: {root / 'output'}")
-    print(f"  cache/:  {root / 'cache'}")
+    print(f"  root:      {root}")
+    print(f"  workspace: {ws}" + ("" if workspace else "  (= root, default)"))
+    print(f"  refs/:     {root / 'refs'}   (dal motore — PythonGranularEngine#235)")
+    print(f"  configs/:  {ws / 'configs'}")
+    print(f"  output/:   {ws / 'output'}")
+    print(f"  cache/:    {ws / 'cache'}")
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")
