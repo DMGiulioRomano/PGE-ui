@@ -9,6 +9,7 @@ tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 import glob
 import json
 import os
+import signal
 import re
 import subprocess
 import sys
@@ -361,6 +362,48 @@ def test_kill_process_terminates():
     assert proc.poll() is None
     rp.kill_process(proc, grace=3.0)
     assert proc.poll() is not None           # dead
+
+
+def _sigterm_ignorer(seconds=30):
+    """Un processo che IGNORA SIGTERM: e' l'unico che distingue `terminate()`
+    dall'escalation a SIGKILL. Tutti i test qui sopra usano un processo che
+    muore al primo terminate, quindi togliendo l'escalation la suite restava
+    verde — mentre nel bridge vivo un main.py bloccato in una syscall terrebbe
+    un thread del worker (workers=1, threads=4) fino alla fine dei tempi."""
+    proc = subprocess.Popen([sys.executable, "-c",
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "print('ready', flush=True)\n"
+        f"time.sleep({seconds})\n"], stdout=subprocess.PIPE, text=True)
+    # Si aspetta che l'handler sia INSTALLATO: un terminate() spedito nella
+    # finestra di avvio dell'interprete lo ucciderebbe davvero, e il test
+    # misurerebbe l'escalation che non e' avvenuta.
+    assert proc.stdout.readline().strip() == "ready"
+    return proc
+
+
+def test_kill_process_escalates_to_sigkill():
+    proc = _sigterm_ignorer()
+    t0 = time.monotonic()
+    rp.kill_process(proc, grace=1.0)
+    # `kill_process` spedisce SIGKILL e torna: la raccolta del figlio la fa
+    # chi chiama (il ciclo di /render fa `proc.wait()`), quindi qui si attende
+    # come farebbe lui. Il segnale e' gia' partito — se non fosse partito,
+    # questa `wait` scadrebbe.
+    proc.wait(timeout=5)
+    assert proc.returncode == -signal.SIGKILL, proc.returncode
+    # La grazia si aspetta davvero, non si salta: e' l'uscita pulita a essere
+    # preferita quando il processo la concede.
+    assert 1.0 <= time.monotonic() - t0 < 6.0
+
+
+def test_watchdog_escalates_too():
+    """Il watchdog passa la stessa `grace` a kill_process: un main.py che
+    ignora SIGTERM non deve poter tenere il thread oltre il tetto."""
+    proc = _sigterm_ignorer()
+    rp.start_watchdog(proc, timeout=0.3, grace=1.0)
+    proc.wait(timeout=15)
+    assert proc.returncode == -signal.SIGKILL, proc.returncode
 
 
 def test_kill_process_safe_on_dead():

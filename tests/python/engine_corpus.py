@@ -25,8 +25,14 @@ config rinominata o rimossa si fa sentire, e vale per tutta la suite.
 import glob
 import os
 
+# `PGE_ENGINE_ROOT` prima del fratello calcolato da `__file__`: e' la stessa
+# variabile che il Makefile passa alla meta' node e alla parita', e che il
+# README documenta. Solo la meta' python la ignorava, quindi
+# `make tests-python ROOT=/path/to/engine` — il ROOT= che il Makefile stesso
+# suggerisce — non arrivava fin qui e il corpus spariva in uno skip verde.
 ENGINE_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../..", "PythonGranularEngine")
+    os.environ.get("PGE_ENGINE_ROOT")
+    or os.path.join(os.path.dirname(__file__), "../../..", "PythonGranularEngine")
 )
 CONFIGS_DIR = os.path.join(ENGINE_ROOT, "configs")
 ENGINE_PRESENT = os.path.isdir(CONFIGS_DIR)
@@ -68,9 +74,19 @@ def skip_reason():
 
 def status_line():
     """Riga di riepilogo: quanto verificheranno davvero i test sul corpus."""
-    if not ENGINE_PRESENT:
+    if ENGINE_PRESENT:
+        return f"engine fixtures: corpus {len(CONFIGS)} config (motore in {ENGINE_ROOT})"
+    if REQUIRE_ENGINE:
+        # Proprio la configurazione della CI, ed e' l'unico momento in cui
+        # qualcuno legge questa riga: prima diceva "skippato (None)" — la
+        # parola sbagliata (il gate ha fatto rosso, non si e' saltato niente) e
+        # `None` dove va il motivo, perche' `skip_reason()` torna None quando
+        # e' REQUIRE_ENGINE a decidere.
         return (
-            f"engine fixtures: corpus skippato ({skip_reason()}); "
-            "PGE_REQUIRE_ENGINE_FIXTURES=1 lo rende un errore"
+            f"engine fixtures: nessun motore in {ENGINE_ROOT} — errore, non "
+            "skip (PGE_REQUIRE_ENGINE_FIXTURES=1)"
         )
-    return f"engine fixtures: corpus {len(CONFIGS)} config (motore in {ENGINE_ROOT})"
+    return (
+        f"engine fixtures: corpus skippato ({skip_reason()}); "
+        "PGE_REQUIRE_ENGINE_FIXTURES=1 lo rende un errore"
+    )

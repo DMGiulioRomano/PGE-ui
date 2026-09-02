@@ -59,16 +59,26 @@ serve: $(VENV_BIN)/pip
 # fatto. Quando invece il motore c'e', i confronti girano e contano — e in CI
 # (dove il motore viene fatto il checkout) un caso saltato e' un errore, vedi
 # tests/parity/harness.js.
-tests: tests-node tests-python
-	@if [ -d "$(ENGINE_ROOT)/src/pge" ]; then \
-	  $(MAKE) --no-print-directory tests-parity; \
+# I tre target girano TUTTI, e l'esito si accumula: `tests: tests-node
+# tests-python` era una dipendenza make, quindi una suite node rossa faceva
+# sparire pytest E la parita' — chi lancia `make tests` per avere il censimento
+# ne riceveva un terzo. Dentro tests-node e tests-parity l'accumulo c'era gia',
+# fra i tre target no.
+tests:
+	@rc=0; \
+	$(MAKE) --no-print-directory tests-node   || rc=1; \
+	$(MAKE) --no-print-directory tests-python || rc=1; \
+	if [ -d "$(ENGINE_ROOT)/src/pge" ]; then \
+	  $(MAKE) --no-print-directory tests-parity || rc=1; \
 	else \
 	  echo ""; \
 	  echo "parita' saltata: nessun motore in $(ENGINE_ROOT)"; \
 	  echo "  clona PythonGranularEngine accanto a PGE-ui, oppure: make tests ROOT=/path/to/engine"; \
-	fi
-	@echo ""
-	@echo "All tests passed."
+	fi; \
+	echo ""; \
+	if [ $$rc -eq 0 ]; then echo "All tests passed."; \
+	else echo "Qualcosa e' rosso: il censimento qui sopra e' completo."; fi; \
+	exit $$rc
 
 # Stessa regola di `tests-parity`, e per la stessa ragione: `|| exit 1` fermava
 # il ciclo alla prima suite rossa, e con venti file significa vedere un
@@ -81,8 +91,13 @@ tests-node:
 	  node "$$f" || rc=1; \
 	done; exit $$rc
 
+# `PGE_ENGINE_ROOT` passata anche qui: senza, `make tests-python ROOT=/path`
+# — il ROOT= che l'help di questo Makefile suggerisce — non arrivava a pytest,
+# ed `engine_corpus.py` ricadeva sul fratello calcolato da `__file__`. Un
+# corpus che sparisce in uno skip verde, cioe' la #132 nell'unica meta' che
+# non la rispettava.
 tests-python:
-	$(VENV_BIN)/python -m pytest tests/python/ -v
+	PGE_ENGINE_ROOT="$(ENGINE_ROOT)" $(VENV_BIN)/python -m pytest tests/python/ -v
 
 # js-yaml sta in tests/node/node_modules (unico package.json del repo): le
 # suite di parita' che serializzano uno stream lo caricano da li'.
