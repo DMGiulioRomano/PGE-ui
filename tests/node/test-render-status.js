@@ -173,6 +173,10 @@ console.log("\n── staleReason: due assi indipendenti ──");
     [3,             3,      null,          "stem reso con semantica 3, motore a 3"],
     [2,             null,   null,          "motore ignoto: il giallo sarebbe ineliminabile"],
   ];
+  // Il corpus e' cablato qui sopra, quindi svuotarlo lascerebbe l'etichetta a
+  // dire «i quattro incroci» su zero confronti. Una riga davanti al ciclo.
+  assert("la tabella degli incroci ha davvero quattro righe", M.length === 4,
+    `${M.length}`);
   const bad = M.filter(([r, e, atteso]) =>
     RS.staleReason("a", "a", { rendered: r, engine: e }) !== atteso);
   assert("i quattro incroci rendered x engine",
@@ -317,8 +321,11 @@ console.log("\n── la catena dal motore al pallino ──");
    * l'editor prima di lanciare `make serve` resta senza asse per tutta la
    * sessione: `staleReason` esce dal ramo `engine == null` e nessun pallino lo
    * dice, mentre backend.js continua a REGISTRARE la versione a ogni render. */
+  // `refreshEngineSem()` compare 4 volte per 3 chiamate: la quarta e' la
+  // definizione (`async function refreshEngineSem() {`). Con `>= 3` la guardia
+  // passava con DUE call site — e due sono gia' l'asse mezzo spento.
   assert("app richiede la versione del motore in tre punti, non solo al boot",
-    (appSrc.match(/refreshEngineSem\(\)/g) || []).length >= 3,
+    (appSrc.match(/(?<!function )refreshEngineSem\(\)/g) || []).length >= 3,
     "boot, cambio progetto e inizio render: con uno solo l'asse muore " +
     "silenziosamente quando il bridge parte dopo l'editor");
   assert("...e il render l'aspetta prima di partire",

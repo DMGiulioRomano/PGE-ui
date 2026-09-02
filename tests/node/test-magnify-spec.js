@@ -227,6 +227,10 @@ assert("sendable ritorna i byte che finiscono in argv",
   const TRIM_ONLY = ["\u00a0", "\u1680", "\u2000", "\u2001", "\u2002", "\u2003",
     "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200a",
     "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff"];
+  // Stesso presidio della tabella in test-render-status.js: il corpus e'
+  // cablato, e svuotarlo lascerebbe l'etichetta a contare `0 * 3` SPEC.
+  assert("il corpus dei code point non-ASCII non e' vuoto",
+    TRIM_ONLY.length >= 19, `${TRIM_ONLY.length}`);
   const bad = [];
   for (const c of TRIM_ONLY) {
     for (const spec of [c + "t=14,zoom=10", "t=12" + c, "t=" + c + "12"]) {

@@ -177,6 +177,31 @@ console.log("\n── applyTracks reorders data.streams into visual order ──
          JSON.stringify(out.streams.map(s => s.id)));
   assert("a pure reorder still writes no ui_tracks", out._extra === undefined);
   assert("input untouched", eq(d.streams.map(s => s.id), ["stream1", "stream2", "stream3"]));
+
+  /* I bordi di `reorderTracks`, che il solo caso in-range qui sopra non
+     esercita. Misurato togliendo insieme clamp e guardie: a discriminare e'
+     la guardia su `srcIdx` — fuori range `splice` estrae `undefined` e lo
+     infila come corsia fra le altre. Il clamp su `dstIdx` invece NON
+     discrimina, perche' `splice` clampa gia' per conto suo: le due asserzioni
+     sui bordi restano come pin del contratto (una destinazione fuori corsia si
+     ferma al bordo), non come guardia su quella riga. Dirlo qui e' meglio che
+     lasciar credere il contrario. */
+  const three = T.deriveTracks(d);
+  const past  = T.reorderTracks(three, 0, 99);
+  assert("una destinazione oltre l'ultima corsia si ferma in fondo",
+         eq(past.map(t => t.id), ["stream2", "stream3", "stream1"]),
+         JSON.stringify(past.map(t => t.id)));
+  const neg = T.reorderTracks(three, 2, -5);
+  assert("...e una negativa si ferma in cima",
+         eq(neg.map(t => t.id), ["stream3", "stream1", "stream2"]),
+         JSON.stringify(neg.map(t => t.id)));
+  assert("un srcIdx fuori range non muove niente",
+         T.reorderTracks(three, 7, 0) === three &&
+         T.reorderTracks(three, -1, 0) === three,
+         "senza la guardia lo splice estrae undefined e infila una corsia " +
+         "vuota fra le altre");
+  assert("src === dst e' un no-op che non churna la history",
+         T.reorderTracks(three, 1, 1) === three);
 }
 
 console.log("\n── group leaves the source lane standing, empty ──");
@@ -292,6 +317,27 @@ console.log("\n── moving a clip between lanes ──");
   const byAnchor = T.moveStreams(tr, ["stream1", "stream3"], 0, { anchor: "stream3" });
   assert("the delta is measured from the anchor, and clamps on the top clip",
          byAnchor === tr, JSON.stringify(shape(byAnchor)));
+
+  /* ...e senza clamp, che e' il caso che DISTINGUE l'ancora da `moving[0]`.
+     Sopra il delta finisce clampato al soffitto in entrambe le letture, quindi
+     sostituire `opts.anchor` con `moving[0]` lasciava la suite verde: la regola
+     DAW che CLAUDE.md descrive per un paragrafo non aveva un'asserzione che la
+     vedesse. Qui l'ancora e' SOTTO il resto della selezione e il delta e'
+     positivo: con l'ancora vera (stream4, lane 3 → 2) il delta e' -1 e la
+     coppia SALE; con `moving[0]` (stream2, lane 1 → 2) sarebbe +1 e la coppia
+     scenderebbe, aprendo una quinta corsia. */
+  const four = T.deriveTracks(data(["stream1", "stream2", "stream3", "stream4"]));
+  const anchored = T.moveStreams(four, ["stream2", "stream4"], 2, { anchor: "stream4" });
+  assert("l'ancora decide il delta anche quando non c'e' clamp",
+         eq(shape(anchored), ["stream1:stream1:stream1+stream2",
+                              "stream2:stream2:",
+                              "stream3:stream3:stream3+stream4",
+                              "stream4:stream4:"]),
+         JSON.stringify(shape(anchored)));
+  assert("...e con `moving[0]` al suo posto il risultato sarebbe un altro",
+         !eq(shape(anchored),
+             shape(T.moveStreams(four, ["stream2", "stream4"], 2, { anchor: "stream2" }))),
+         "il caso non discrimina: la regola DAW resta senza un test che la veda");
 }
 
 console.log("\n── paste lands in the original's lane ──");
