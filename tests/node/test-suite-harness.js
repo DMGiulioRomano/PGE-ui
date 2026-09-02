@@ -278,13 +278,13 @@ assert("le suite di tests/parity/ sono nel presidio",
   `trovate ${paritySuites.length}: se sono sparite, e' la guardia a essere ` +
   `diventata muta, non la parita' a essere finita`);
 for (const f of paritySuites) {
-  const src = fs.readFileSync(path.join(PARITY_DIR, f), "utf8");
+  const src = SG.codeOf(path.join(PARITY_DIR, f));
   assert(`parity/${f} — nessuna uscita brutale`, !src.includes(HARD_EXIT),
     "il verdetto e' di harness.js: uscire di qui lo salta, riepilogo compreso");
 }
 
 for (const { label, file } of suiteFiles) {
-  const src = fs.readFileSync(file, "utf8");
+  const src = SG.codeOf(file);
   assert(`${label} — nessun gate di uscita posizionale`, !src.includes(HARD_EXIT),
     "usa l'handler `exit` invece di uscire in una riga in fondo al file");
   assert(`${label} — registra il verdetto in un handler exit`,
@@ -320,7 +320,7 @@ for (const { label, file } of suiteFiles) {
  * riprodurlo qui vorrebbe dire far partire un oracolo e aspettarne il non
  * ritorno. */
 if (fs.existsSync(PARITY_HARNESS)) {
-  const src = fs.readFileSync(PARITY_HARNESS, "utf8");
+  const src = SG.codeOf(PARITY_HARNESS);
   assert("parity/harness.js — bail chiude l'oracolo prima di lanciare",
     /function bail\([^)]*\)\s*\{[\s\S]{0,80}?if \(oracle\) oracle\.close\(\);/.test(src),
     "un salto dopo l'apertura lascia vivo il processo python e la suite si appende");
@@ -369,7 +369,7 @@ console.log("\n── il verdetto viene anche consegnato ──");
     "`if (oracle) oracle.close()` non scatta");
 
   const harnessCode = SG.stripComments(
-    fs.readFileSync(PARITY_HARNESS, "utf8"));
+    SG.codeOf(PARITY_HARNESS));
   assert("parity/harness.js — ogni caso gira sotto un tetto di tempo",
     /withTimeout\(c\.run\(/.test(harnessCode) &&
     /caseTimeoutMs/.test(harnessCode),

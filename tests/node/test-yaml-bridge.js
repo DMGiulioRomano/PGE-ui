@@ -8,6 +8,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // Shim: provide window.jsyaml so yaml-bridge.js can load without a browser.
 global.window = { jsyaml: require("js-yaml") };
@@ -977,9 +978,9 @@ ${body}
    che i test node non eseguono. Sono esattamente le righe la cui assenza fa
    mentire l'avviso, nelle due direzioni opposte. */
 {
-  const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
-  const yeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
-  const beSrc   = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
+  const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+  const yeSrc   = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
+  const beSrc   = SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"));
   const calls = (appSrc.match(/clearDeviationProbabilityLegacy/g) || []).length;
   assert("wiring — app.jsx spegne il flag a entrambi i punti di scrittura (Save e render)",
     calls === 2, `chiamate trovate: ${calls}`);
@@ -1402,7 +1403,7 @@ if (ENGINE_PRESENT) {
 console.log("\n── per-stream serializer unified on bridge (#42) ──");
 
 global.React = {};                                    // satisfies `const {…} = React`
-const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
+const yeSrc = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
 // The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
 // declarations) into this scope; we call them directly rather than re-declaring

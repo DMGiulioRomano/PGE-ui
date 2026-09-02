@@ -20,6 +20,7 @@
  * =========================================================================== */
 
 const path = require("path");
+const SG   = require("./source-guard.js");
 const { spawn } = require("child_process");
 const { Oracle } = require(path.join(__dirname, "..", "parity", "oracle.js"));
 
@@ -115,7 +116,7 @@ console.log("\n── ...e quando invece il client l'ha gia' saputo ──");
 console.log("\n── guardia sorgente: il listener sta sullo stream ──");
 {
   const fs = require("fs");
-  const src = fs.readFileSync(path.join(__dirname, "..", "parity", "oracle.js"), "utf8");
+  const src = SG.codeOf(path.join(__dirname, "..", "parity", "oracle.js"));
   assert("proc.stdin ha un listener error instradato in _die",
          /proc\.stdin\.on\("error",[\s\S]{0,60}?_die\(/.test(src), "senza, EPIPE e' non gestito");
   assert("la write e' protetta anche dal fallimento sincrono",

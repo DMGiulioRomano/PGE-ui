@@ -19,6 +19,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 global.window = {};
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/tracks.js"), "utf8"));
@@ -390,12 +391,12 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
   assert("an unknown old id changes nothing", eq(shape(T.renameStreamId(tr, "zzz", "q")), shape(tr)));
 }
 
-  const tlSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+  const tlSrc  = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
   // Guards that assert the ABSENCE of a pattern read the code with comments
   // stripped: a comment explaining why the pattern is gone would otherwise
   // keep the guard red forever.
   const tlCode = tlSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
 
   // The defect the track layer removes: onReorder was called from inside a
   // setDragOver updater. React may replay an updater, applying the move twice.
@@ -452,7 +453,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          /ids\.map\(x => x === oldId \? newId : x\)/.test(appSrc) &&
          /setWaveforms\(drop\); setSpectrograms\(drop\); setGrainData\(drop\)/.test(appSrc));
   assert("the Inspector field is wired to it", /onRename=\{\(name\) =>/.test(appSrc) &&
-         /onRename/.test(fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8")));
+         /onRename/.test(SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"))));
 
   // Alt is sampled during the drag, so the highlight and the outcome agree.
   assert("the extract modifier is read while dragging, not at release",
@@ -460,7 +461,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          !/extract: !!\(ev && ev\.altKey\)/.test(tlCode));
   assert("and a pending extract is drawn differently from a join",
          /drop-extract/.test(tlSrc) &&
-         /drop-extract/.test(fs.readFileSync(path.join(__dirname, "../../styles/editor.css"), "utf8")));
+         /drop-extract/.test(SG.codeOf(path.join(__dirname, "../../styles/editor.css"))));
 
   // The two parallel maps that made lane i == stream i: heads and lanes are
   // now driven by the track list, and neither may be keyed on a stream again.
@@ -507,7 +508,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          !/analyserFor=/.test(appSrc));
   // Alt+arrow moves the selection a lane at a time. Three things have to stay
   // true together, and each is a real defect if it slips.
-  const spSrc = fs.readFileSync(path.join(__dirname, "../../src/components/SettingsPanel.jsx"), "utf8");
+  const spSrc = SG.codeOf(path.join(__dirname, "../../src/components/SettingsPanel.jsx"));
   assert("the lane move goes through matchShortcut on a rebindable tweak",
          /shortcutMoveLaneUp/.test(appSrc) && /shortcutMoveLaneDown/.test(appSrc) &&
          /matchShortcut\(e, tweaks\.shortcutMoveLaneUp/.test(appSrc));
@@ -530,7 +531,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
 
   assert("tracks.js is loaded before the components that use it",
          (() => {
-           const html = fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8");
+           const html = SG.codeOf(path.join(__dirname, "../../PGE Editor.html"));
            return html.indexOf("src/lib/tracks.js") !== -1 &&
                   html.indexOf("src/lib/tracks.js") < html.indexOf("src/components/Timeline.jsx");
          })());

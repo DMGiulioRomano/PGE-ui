@@ -27,6 +27,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 /* --- localStorage finto ---------------------------------------------------- */
 let store = {};
@@ -79,8 +80,8 @@ global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8"));
 
-const BACKEND_SRC = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
-const APP_SRC     = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+const BACKEND_SRC = SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"));
+const APP_SRC     = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
 
 let pass = 0, fail = 0;
 function assert(label, cond, extra) {

@@ -105,7 +105,23 @@ function stripComments(src) { return scan(src, { blankStrings: false }); }
 /** Il sorgente senza commenti ne' contenuto di stringhe/regex, stessa lunghezza. */
 function maskLiterals(src) { return scan(src, { blankStrings: true }); }
 
-function codeOf(file) { return stripComments(fs.readFileSync(file, "utf8")); }
+/* Il commento non e' fatto allo stesso modo in ogni linguaggio, e uno scanner
+ * JS su un HTML riconoscerebbe cose che li' non sono commenti. Lo strip si
+ * sceglie quindi dall'estensione, e per HTML/CSS resta volutamente minimo:
+ * togliere il commento e basta. */
+function stripHtmlComments(src) {
+  return src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+function stripBlockComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+}
+
+function codeOf(file) {
+  const src = fs.readFileSync(file, "utf8");
+  if (/\.html?$/i.test(file)) return stripHtmlComments(src);
+  if (/\.css$/i.test(file)) return stripBlockComments(src);
+  return stripComments(src);
+}
 function maskOf(file) { return maskLiterals(fs.readFileSync(file, "utf8")); }
 
 /**
@@ -143,5 +159,6 @@ function topLevelOccurrences(src, needle) {
 }
 
 module.exports = {
-  stripComments, maskLiterals, codeOf, maskOf, depthAt, topLevelOccurrences,
+  stripComments, stripHtmlComments, stripBlockComments,
+  maskLiterals, codeOf, maskOf, depthAt, topLevelOccurrences,
 };

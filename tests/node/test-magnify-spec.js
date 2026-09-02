@@ -14,6 +14,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 global.window = {};
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/magnify-spec.js"), "utf8"));
@@ -246,10 +247,10 @@ assert("sendable ritorna i byte che finiscono in argv",
 
 console.log("\n── cablaggio ──");
 
-const rbSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/RenderButton.jsx"), "utf8");
-const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
-const htmlSrc = fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8");
-const cssSrc  = fs.readFileSync(path.join(__dirname, "../../styles/render-ui.css"), "utf8");
+const rbSrc   = SG.codeOf(path.join(__dirname, "../../src/components/RenderButton.jsx"));
+const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+const htmlSrc = SG.codeOf(path.join(__dirname, "../../PGE Editor.html"));
+const cssSrc  = SG.codeOf(path.join(__dirname, "../../styles/render-ui.css"));
 
 assert("l'HTML carica magnify-spec.js", /src\/lib\/magnify-spec\.js/.test(htmlSrc));
 assert("magnify-spec.js è caricato prima dei componenti",

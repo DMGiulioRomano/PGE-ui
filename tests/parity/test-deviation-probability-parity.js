@@ -165,6 +165,16 @@ parity({
         });
         assert(`${CORPUS.length} valori, stesso ramo di classificazione`,
           bad.length === 0, bad.join("\n      "));
+        /* Il presidio contro il passaggio a vuoto, gemello di `nonFinite >= 4`
+           in test-magnify-parity.js: il ciclo qui sopra fa `return` su ogni
+           `mode === null`, quindi con l'oracolo che non riesce a chiedere il
+           caso resterebbe verde avendo confrontato zero valori — con
+           l'etichetta che continua a dire quanti erano. */
+        const classified = answers.filter(r => r.ok && r.value.mode !== null).length;
+        assert(`...e i valori confrontati sono davvero ${classified}, non zero`,
+          classified > 0,
+          "nessun valore del corpus ha ricevuto un `mode`: il confronto non e' " +
+          "avvenuto, e senza questa riga il caso sarebbe verde lo stesso");
       },
     },
     {
@@ -183,6 +193,11 @@ parity({
         });
         assert(`${objs.length} valori strutturati, stesso verdetto envelope-like`,
           bad.length === 0, bad.join("\n      "));
+        // Stesso presidio del caso precedente, stesso `return` da coprire.
+        const classified = answers.filter(r => r.ok && r.value.mode !== null).length;
+        assert(`...e i verdetti confrontati sono ${classified}, non zero`,
+          classified > 0,
+          "nessun valore strutturato ha ricevuto un `mode`");
       },
     },
     {

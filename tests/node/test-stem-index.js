@@ -21,6 +21,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // Fake disk + the /stems shape server.py serves from it.
 let DISK = [];                                   // ["proj__stream1.wav", …]
@@ -126,10 +127,10 @@ console.log("\n── a stem present in one format only ──");
     // Un render riscrive lo stem: la durata vecchia sarebbe peggio che nessuna,
     // perche' taglierebbe il disegno sulla misura di prima. Dimenticarla
     // riporta all'ipotesi "stem lungo quanto la clip", vera appena dopo.
-    const tlSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+    const tlSrc = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
     assert("uno stem appena scritto dimentica la durata vecchia",
            /function _markStemFresh\(key\) \{[\s\S]*?delete stemDurIndex\[key\];/.test(
-             fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8")));
+             SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"))));
     assert("il waveform e' mappato sul tempo, non stirato sulla clip",
            /const kOf = \(x\) => \(x \/ W\) \* sp \* n;/.test(tlSrc)
            && !/Math\.floor\(\(x \/ W\) \* n\)/.test(tlSrc));
@@ -139,8 +140,8 @@ console.log("\n── a stem present in one format only ──");
 
   console.log("\n── a clip that cannot sound says so (source guard) ──");
   {
-    const engSrc = fs.readFileSync(path.join(__dirname, "../../src/lib/audio-engine.js"), "utf8");
-    const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+    const engSrc = SG.codeOf(path.join(__dirname, "../../src/lib/audio-engine.js"));
+    const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
     assert("play() rejections are no longer swallowed",
            !/\.play\(\)\.catch\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/.test(engSrc));
     assert("the <audio> element's error is listened for",

@@ -475,13 +475,37 @@ def _op_classify_deviation_probability(args):
     value = args["value"]
 
     out = {"mode": None, "mode_error": None, "gate": None, "gate_error": None}
+
+    # `mode_error` significa UNA cosa sola: il motore rifiuta questo corpo. Se
+    # ci finisse anche il guasto dell'oracolo — il simbolo rinominato — la
+    # suite leggerebbe l'assenza del giudice come un verdetto del giudice:
+    # `mode: null` fa uscire in silenzio i due casi sulla classificazione (le
+    # etichette continuano a dire «24 valori» mentre i valori confrontati sono
+    # zero), e `mode_error != null` rende `engineRejects` vero per OGNI corpo,
+    # quindi l'asserzione sui falsi positivi inverte il proprio significato.
+    # Il simbolo e' privato ed e' fra i pinnati (PythonGranularEngine#246),
+    # cioe' esattamente il genere che si rinomina senza pensarci: e' l'evento
+    # che questa cartella esiste per intercettare, e non deve poter essere muto.
+    classify = getattr(gf.GateFactory, "_classify_deviation_probability", None)
+    if classify is None:
+        raise OracleError(
+            "GateFactory._classify_deviation_probability non esiste piu': "
+            "il simbolo e' pinnato da questa op (vedi tests/parity/README.md)")
     try:
-        out["mode"] = gf.GateFactory._classify_deviation_probability(value).value
+        mode = classify(value)
     except Exception as exc:
         out["mode_error"] = _fmt_exc(exc)
+    else:
+        if not hasattr(mode, "value"):
+            raise OracleError(
+                "_classify_deviation_probability non torna piu' un enum: "
+                f"{type(mode).__name__}")
+        out["mode"] = mode.value
 
     param_key = args.get("param_key")
     if param_key is not None:
+        if not hasattr(gf.GateFactory, "create_gate"):
+            raise OracleError("GateFactory.create_gate non esiste piu'")
         try:
             gate = gf.GateFactory.create_gate(
                 deviation_probability=value,

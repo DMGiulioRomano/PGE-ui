@@ -11,6 +11,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // render-status.js calls window.PGEBackend.fingerprintStream, so load backend.js
 // first under the same minimal browser shims as test-fingerprint.js.
@@ -235,11 +236,16 @@ console.log("\n── il pallino dice PERCHE' e' giallo ──");
  * ------------------------------------------------------------------------- */
 console.log("\n── la catena dal motore al pallino ──");
 {
-  const backendSrc = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const backendSrc = SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"));
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
 
+  /* Il ramo `GET \/semantics-version` dell'alternanza che c'era qui era una
+     tautologia: nel sorgente la route compare solo come stringa, quindi quel
+     ramo poteva matchare unicamente un commento — e con il sorgente letto
+     grezzo bastava un commento di rimando a tenere verde la guardia dopo che
+     la chiamata era sparita. */
   assert("backend chiede la versione al bridge",
-    /GET \/semantics-version|"\/semantics-version"/.test(backendSrc),
+    /"\/semantics-version"/.test(backendSrc),
     "semanticsVersion() non chiama piu' la route: il numero non arriva");
   assert("backend espone semanticsVersion",
     /semanticsVersion\s*[,}]/.test(backendSrc));
@@ -464,7 +470,7 @@ let reentrancyDone = false;
   // insieme, o una `return` sul percorso buono lascerebbe la guardia alzata.
   assert("`running` si riabbassa nello stesso finally che azzera `cancelAbort`",
     /finally\s*\{\s*cancelAbort = null;\s*running = false;\s*\}/
-      .test(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8")),
+      .test(SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"))),
     "separarli fa vivere la guardia piu' del giro che descrive");
 
   reentrancyDone = true;
