@@ -415,19 +415,29 @@
           if (Object.keys(localFps).length) {
             const existing = await this.loadCache(opts.yamlBasename);
             this._persistFp(opts.yamlBasename, { ...existing, ...localFps });
-            // ...e la semantica con cui il motore li ha appena scritti. Chiesta
-            // qui e non presa da chi chiama: e' una proprieta' del motore che
-            // ha reso. SENZA `refresh` di proposito — il numero di questo render
-            // e' quello che `refreshEngineSem` ha appena riletto e messo nella
-            // cella (app.jsx lo attende prima di partire), quindi qui si prende
-            // quello: rileggere adesso potrebbe cadere su un'altra risposta e i
-            // due lati registrerebbero versioni diverse dello stesso giro.
+            // ...e la semantica con cui il motore li ha appena scritti. E' il
+            // CHIAMANTE a fissarla, con `opts.semanticsVersion`: la riempie col
+            // valore che `refreshEngineSem()` gli ha appena restituito, cosi' i
+            // due lati leggono letteralmente la stessa variabile invece di due
+            // letture che si spera coincidano. Prima si prendeva la cella
+            // condivisa `_semantics` senza `refresh`, contando sul fatto che
+            // nessuno la riscrivesse a meta' giro — ma i tre punti di rilettura
+            // (boot, cambio progetto, inizio render) non sono mutuamente
+            // esclusivi col render in volo: cambiare progetto mentre rende, con
+            // il motore mosso nel frattempo, registrava la versione NUOVA su
+            // stem scritti leggendo la VECCHIA.
+            //
+            // Il ripiego sulla cella resta per un chiamante che non passa il
+            // campo: assente significherebbe "non lo so", e li' sarebbe una
+            // bugia che cancella le voci di stem appena resi.
             //
             // Col numero ignoto la voce si CANCELLA, non si salta: saltarla
             // lascerebbe in piedi la versione di un render precedente, e uno
             // stem appena reso apparirebbe giallo appena il numero si sapesse.
             // Assente vuol dire "non lo so", che e' la verita'.
-            const sem = await semanticsVersion();
+            const sem = opts.semanticsVersion === undefined
+              ? await semanticsVersion()
+              : (Number.isInteger(opts.semanticsVersion) ? opts.semanticsVersion : null);
             const prev = await this.loadSemantics(opts.yamlBasename);
             const next = { ...prev };
             for (const id of Object.keys(localFps)) {

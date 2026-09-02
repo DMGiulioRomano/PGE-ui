@@ -170,8 +170,23 @@ console.log("\n── i tre punti di rilettura chiedono davvero una rilettura (s
 {
   assert("app.jsx passa refresh:true, non si accontenta della cache",
          /backend\.semanticsVersion\(\{\s*refresh:\s*true\s*\}\)/.test(APP_SRC));
-  assert("run() invece NON rilegge: il numero del render e' quello gia' letto",
-         /const sem = await semanticsVersion\(\);/.test(BACKEND_SRC));
+  // `run()` non rilegge, e non prende nemmeno la cella condivisa: il numero
+  // del giro glielo passa il chiamante. Una rilettura di qualcun altro a meta'
+  // render non puo' quindi cambiarlo sotto — e' la sola invariante su cui
+  // poggia tutto il disegno, e stava scritta come garantita senza esserlo.
+  assert("run() non rilegge la versione",
+         !/const sem = await semanticsVersion\(\{/.test(BACKEND_SRC));
+  assert("...e prende quella del giro da chi chiama",
+         /opts\.semanticsVersion === undefined/.test(BACKEND_SRC),
+         "con la cella condivisa i due lati sono due letture che si spera " +
+         "coincidano, non la stessa variabile");
+  assert("app.jsx passa a run() il numero che ha appena letto",
+         /semOfThisRun = await refreshEngineSem\(\)/.test(APP_SRC) &&
+         /semanticsVersion:\s*semOfThisRun/.test(APP_SRC),
+         "passare `engineSemRef.current` sarebbe di nuovo una cella condivisa");
+  assert("...e lo usa anche per gli stream-done, invece del ref",
+         /setRenderedSem\([\s\S]{0,200}?semOfThisRun/.test(APP_SRC),
+         "il ref lo riscrive chiunque rilegga, render in volo compreso");
   assert("refreshEngineSem e' chiamata in tre punti",
          (APP_SRC.match(/refreshEngineSem\(\)/g) || []).length >= 4);   // 1 def + 3 usi
 }
@@ -229,6 +244,63 @@ console.log("\n── un render parziale non cancella le versioni degli altri st
   const now = sem("proj");
   assert("lo stem reso prende la versione di adesso", now && now.stream1 === 3, JSON.stringify(now));
   assert("quello non toccato tiene la sua", now && now.stream2 === 1, JSON.stringify(now));
+}
+
+/* Il numero deve restare lo stesso per tutto UN giro, ed e' il chiamante a
+ * fissarlo: la cella `_semantics` e' unica e condivisa, e i tre punti di
+ * rilettura (boot, cambio progetto, inizio render) non sono mutuamente
+ * esclusivi col render in volo — l'effetto sul cambio progetto non ha una
+ * guardia su `renderStatus.running`. Cliccare un altro progetto mentre il
+ * render gira, con il motore mosso nel frattempo, faceva registrare la
+ * versione NUOVA su stem che il motore aveva appena scritto leggendo la
+ * VECCHIA: pallino verde su stem che rifara' diversi, cioe' il fallimento per
+ * cui l'asse esiste. */
+console.log("\n── la versione di un render la fissa il chiamante ──");
+{
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = false; SEM_VERSION = 3;
+  const semOfThisRun = await backend.semanticsVersion({ refresh: true });
+
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  // ...e a meta' giro qualcun altro rilegge: il motore e' stato bumpato.
+  SEM_VERSION = 9;
+  await backend.semanticsVersion({ refresh: true });
+
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }],
+      semanticsVersion: semOfThisRun },
+    () => {});
+
+  const now = sem("proj");
+  assert("lo stem porta la versione con cui il motore l'ha scritto",
+         now && now.stream1 === 3,
+         `${JSON.stringify(now)} — 9 e' il numero di DOPO: quello stem e' ` +
+         `stato scritto leggendo lo YAML alla 3`);
+}
+
+console.log("\n── senza il campo si ripiega sulla cella, non sul silenzio ──");
+{
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = false; SEM_VERSION = 7;
+  await backend.semanticsVersion({ refresh: true });
+
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }] },
+    () => {});
+
+  // Un chiamante che non lo passa non deve cancellare la voce: assente
+  // significherebbe "non lo so", che li' sarebbe una bugia.
+  assert("il campo assente non e' un numero ignoto",
+         (sem("proj") || {}).stream1 === 7, JSON.stringify(sem("proj")));
 }
 
 console.log("\n── col numero ignoto la voce si CANCELLA, non resta indietro ──");

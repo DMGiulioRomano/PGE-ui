@@ -1604,7 +1604,13 @@ function App() {
     // chiamare `run()`, cosi' gli `stream-done` la trovano gia' nel ref — e
     // l'ordine stato-poi-attesa non toglie niente a quell'intento, perche' il
     // consumatore legge `engineSemRef.current`, non lo stato.
-    await refreshEngineSem();
+    /* Il numero di QUESTO giro, letto una volta sola e passato a mano ai due
+       consumatori: `run()` (che lo registra in fondo) e l'handler degli
+       `stream-done` qui sotto. La cella condivisa e il ref sono riscritti da
+       chiunque rilegga — e l'effetto sul cambio progetto non ha una guardia
+       su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
+       numero di DOPO su stem scritti leggendo quello di PRIMA. */
+    const semOfThisRun = await refreshEngineSem();
 
     let cacheHits = 0;
     let generated = 0;
@@ -1634,6 +1640,7 @@ function App() {
       preclean: renderOptions.preclean,
       streams: data.streams,
       outputFormat: tweaks.outputFormat || "wav",
+      semanticsVersion: semOfThisRun,
     };
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
@@ -1667,7 +1674,7 @@ function App() {
         // indietro, perche' una versione vecchia su uno stem nuovo e' peggio di
         // nessuna versione.
         setRenderedSem(m => {
-          const sem = engineSemRef.current;
+          const sem = semOfThisRun;
           if (sem !== null) return { ...m, [e.streamId]: sem };
           if (!(e.streamId in m)) return m;
           const next = { ...m };

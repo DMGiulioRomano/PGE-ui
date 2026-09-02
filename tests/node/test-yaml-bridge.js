@@ -1403,7 +1403,10 @@ if (ENGINE_PRESENT) {
 console.log("\n── per-stream serializer unified on bridge (#42) ──");
 
 global.React = {};                                    // satisfies `const {…} = React`
-const yeSrc = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
+// Sorgente GREZZO, non `SG.codeOf`: qui non si cerca niente, si ESEGUE la
+// testa del file — e il taglio e' su un commento marcatore, che uno strip dei
+// commenti fa sparire, mandando in eval anche il JSX.
+const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
 // The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
 // declarations) into this scope; we call them directly rather than re-declaring

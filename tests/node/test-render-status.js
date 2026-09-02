@@ -302,12 +302,14 @@ console.log("\n── la catena dal motore al pallino ──");
   // sull'evento del singolo stream, leggendo il REF e non lo stato.
   assert("app aggiorna la versione dello stem appena reso",
     /setLastRenderedFps/.test(appSrc) &&
-    /setRenderedSem\([\s\S]{0,300}?engineSemRef\.current[\s\S]{0,200}?e\.streamId\]/.test(appSrc),
+    /setRenderedSem\([\s\S]{0,300}?semOfThisRun[\s\S]{0,200}?e\.streamId\]/.test(appSrc),
     "senza questa riga uno stem appena renderizzato torna giallo subito");
-  assert("...leggendo il ref, non lo stato catturato quando onRender fu definita",
-    !/setRenderedSem\([\s\S]{0,300}?\[e\.streamId\]:\s*engineSem\b/.test(appSrc),
-    "gli stream-done arrivano dentro un await gia' in volo: lo stato li' e' " +
-    "quello di prima della rilettura che onRender fa all'inizio");
+  assert("...leggendo il numero fissato per QUESTO giro, non una cella condivisa",
+    !/setRenderedSem\([\s\S]{0,300}?\[e\.streamId\]:\s*engineSem\b/.test(appSrc) &&
+    !/setRenderedSem\([\s\S]{0,300}?engineSemRef\.current/.test(appSrc),
+    "lo stato e' quello di prima della rilettura che runRender fa all'inizio; " +
+    "il ref invece lo riscrive chiunque rilegga, render in volo compreso — " +
+    "e i tre punti di rilettura non sono esclusivi col render in corso");
 
   /* La versione del motore si richiede in TRE punti, e questa e' la guardia che
    * tiene in vita l'asse. Con la sola chiamata al boot — effetto con dipendenze
