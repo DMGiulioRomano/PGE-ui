@@ -85,10 +85,13 @@ _PB_FIELDS = ("min_val", "max_val", "min_range", "max_range",
               "default_jitter", "variation_mode")
 _PB_DEFAULTS = {"min_range": 0.0, "max_range": 0.0,
                 "default_jitter": 0.0, "variation_mode": "additive"}
-# Used only if pitch_unit.py can't be parsed (older/odd engine): the nominal
-# EDO presets and the ±3-octave factor, matching pitch_unit.py.
-_PITCH_PRESET_DIVISIONS = {"semitones": 12, "cents": 1200,
-                           "quarter_tone": 24, "eighth_tone": 48}
+# Nessuna tabella di ripiego qui: una lettura che fallisce dice "non lo so"
+# (None / chiave assente) e il fallback statico e' quello di yaml-bridge.js,
+# che CLAUDE.md nomina come l'unico posto e che test-bounds-parity.js verifica
+# contro il motore. Numeri trascritti qui sarebbero un secondo insieme,
+# invisibile a quella verifica (col motore vero i due lati coincidono) e
+# applicato SOPRA il fallback statico perche' arriva etichettato come verita'
+# del motore.
 
 
 def _ast_literal(node):
@@ -189,7 +192,7 @@ def _find_value_bounds_method(classdef):
 
 def _parse_edo_factor(tree):
     """The ±N·divisions octave factor from EdoUnit.value_bounds
-    (`bound = 3.0 * self.divisions`). Defaults to 3.0 if not found."""
+    (`bound = 3.0 * self.divisions`), or None if it can't be read."""
     for node in ast.walk(tree):
         if not (isinstance(node, ast.ClassDef) and node.name == "EdoUnit"):
             continue
@@ -205,12 +208,12 @@ def _parse_edo_factor(tree):
                             and isinstance(b, ast.Attribute)
                             and b.attr == "divisions"):
                         return float(a.value)
-    return 3.0
+    return None
 
 
 def _parse_ratio_bounds(tree):
-    """{min, max, rangeMax} from RatioUnit.value_bounds. Defaults to the known
-    [0.001, 8] / rangeMax 2 if not found."""
+    """{min, max, rangeMax} from RatioUnit.value_bounds, or None if it can't
+    be read."""
     for node in ast.walk(tree):
         if not (isinstance(node, ast.ClassDef) and node.name == "RatioUnit"):
             continue
@@ -223,7 +226,7 @@ def _parse_ratio_bounds(tree):
                 if rec is not None and isinstance(rec.get("min_val"), (int, float)):
                     return {"min": rec["min_val"], "max": rec["max_val"],
                             "rangeMax": rec["max_range"]}
-    return {"min": 0.001, "max": 8.0, "rangeMax": 2.0}
+    return None
 
 
 def _parse_pitch_presets(tree):
@@ -252,12 +255,18 @@ def _parse_pitch_bounds(src_text):
     ±(edoFactor·divisions); ratio is read from RatioUnit. Shape mirrors the
     UI's window.PGE_BOUNDS.pitch."""
     tree = ast.parse(src_text)
+    out = {}
     edo_factor = _parse_edo_factor(tree)
-    presets = _parse_pitch_presets(tree) or dict(_PITCH_PRESET_DIVISIONS)
-    out = {"edoFactor": edo_factor, "ratio": _parse_ratio_bounds(tree)}
-    for name, div in presets.items():
-        bound = edo_factor * div
-        out[name] = {"min": -bound, "max": bound, "rangeMax": bound}
+    ratio = _parse_ratio_bounds(tree)
+    if ratio is not None:
+        out["ratio"] = ratio
+    # Le unita' EDO dipendono dal fattore: senza, non c'e' niente da calcolare
+    # e la chiave non si scrive — il chiamante tiene il suo fallback.
+    if edo_factor is not None:
+        out["edoFactor"] = edo_factor
+        for name, div in _parse_pitch_presets(tree).items():
+            bound = edo_factor * div
+            out[name] = {"min": -bound, "max": bound, "rangeMax": bound}
     return out
 
 

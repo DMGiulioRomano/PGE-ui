@@ -98,6 +98,25 @@ assert("pitch.ratio ← engine (rangeMax)", out.pitch.ratio.rangeMax === 3);
 assert("pitch.edoFactor ← engine", out.pitch.edoFactor === 4);
 assert("pitch unit absent from raw keeps fallback (cents)", out.pitch.cents.max === baseCentsMax);
 
+/* Il bridge NON deve mandare numeri quando non ha letto niente: `edoFactor`,
+ * `ratio` e la tabella dei preset avevano tre ripieghi trascritti in
+ * engine_introspect.py, che arrivavano qui etichettati come verita' del
+ * motore e vincevano sul fallback statico. Ora quelle chiavi mancano, ed e'
+ * questo lato a dover trattare l'assenza come "non lo so" — la parita' non
+ * puo' vederlo, perche' col motore vero i due lati coincidono. */
+{
+  const baseEdo   = window.PGE_BOUNDS.pitch.edoFactor;
+  const baseRatio = window.PGE_BOUNDS.pitch.ratio.min;
+  const partial = B.mergeEngineBounds(window.PGE_BOUNDS, { params: {}, pitch: {} });
+  assert("pitch vuoto → edoFactor resta quello statico",
+    partial.pitch.edoFactor === baseEdo,
+    `${partial.pitch.edoFactor} contro ${baseEdo}`);
+  assert("pitch vuoto → ratio resta quello statico",
+    partial.pitch.ratio.min === baseRatio);
+  assert("pitch vuoto → le unita' EDO restano quelle statiche",
+    partial.pitch.cents.max === baseCentsMax);
+}
+
 console.log("\n── fallback preserved, base not mutated ──");
 assert("key without engine data keeps fallback (scatter)", out.scatter.max === baseScatterMax);
 assert("mergeEngineBounds does NOT mutate base", window.PGE_BOUNDS.density.max === baseDensityMax);

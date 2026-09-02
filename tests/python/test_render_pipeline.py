@@ -652,6 +652,67 @@ def test_engine_parameter_bounds_missing_returns_empty(tmp_path):
     assert server.engine_parameter_bounds(tmp_path / "nope") == {}
 
 
+def test_engine_parameter_bounds_pitch_unknown_says_so(tmp_path):
+    """Una lettura fallita non deve diventare un numero.
+
+    CLAUDE.md dichiara di questo modulo che ogni lettura torna vuoto/None per
+    un motore che non ha la cosa, e che ogni chiamante deve leggerlo come "non
+    lo so", mai come un valore. Per la meta' `pitch` era falso: tre ripieghi
+    (`return 3.0`, il record ratio, la tabella dei preset) restituivano i
+    numeri del motore di oggi trascritti qui, e `mergeEngineBounds` li applica
+    SOPRA il fallback statico perche' arrivano etichettati come verita' del
+    motore. Il verso e' quello sbagliato: un `ratio.min` trascritto contro un
+    motore che ne pretendesse un altro ammette un valore che il motore
+    rifiuta.
+
+    Il sabotaggio qui e' un refactor plausibile — due classi rinominate — che
+    per l'AST e' semplicemente una lettura fallita.
+    """
+    import server
+    _stub_parameter_files(tmp_path)
+    pu = tmp_path / "src" / "parameters" / "pitch_unit.py"
+    src = pu.read_text(encoding="utf-8")
+    src = src.replace("class EdoUnit:", "class EdoPitchUnit:")
+    src = src.replace("class RatioUnit:", "class FrequencyRatioUnit:")
+    src = src.replace("EdoUnit(", "EdoPitchUnit(").replace("RatioUnit()", "FrequencyRatioUnit()")
+    pu.write_text(src, encoding="utf-8")
+
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert "edoFactor" not in pitch, pitch
+    assert "ratio" not in pitch, pitch
+    for name in ("semitones", "cents", "quarter_tone", "eighth_tone"):
+        assert name not in pitch, pitch
+
+
+def test_engine_parameter_bounds_pitch_partial_reads(tmp_path):
+    """Le letture sono indipendenti: cio' che si sa resta, il resto sparisce."""
+    import server
+    _stub_parameter_files(tmp_path)
+    pu = tmp_path / "src" / "parameters" / "pitch_unit.py"
+    src = pu.read_text(encoding="utf-8")
+    src = src.replace("class RatioUnit:", "class FrequencyRatioUnit:")
+    pu.write_text(src, encoding="utf-8")
+
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert "ratio" not in pitch, pitch
+    assert pitch["edoFactor"] == 3.0
+    assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}
+
+
+def test_engine_introspect_has_no_transcribed_engine_numbers():
+    """Il fallback dichiarato sta in un posto solo, e non e' questo modulo.
+
+    CLAUDE.md nomina `yaml-bridge.js` come l'unico posto dei fallback statici
+    ("If you add a UI clamp, add its fallback in yaml-bridge.js"), e
+    `test-bounds-parity.js` verifica che quello non ammetta valori che il
+    motore rifiuta. Un secondo insieme di numeri qui sarebbe invisibile a
+    quella verifica — col motore vero i due lati coincidono — e sopravvivrebbe
+    proprio al caso in cui serve accorgersene: il motore che si muove.
+    """
+    import engine_introspect
+    assert not hasattr(engine_introspect, "_PITCH_PRESET_DIVISIONS")
+
+
 def test_bounds_endpoint(tmp_path):
     import server
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
