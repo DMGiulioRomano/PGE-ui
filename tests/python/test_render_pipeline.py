@@ -7,6 +7,7 @@ tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 """
 
 import glob
+import json
 import os
 import re
 import subprocess
@@ -934,6 +935,132 @@ def test_semantics_version_endpoint(tmp_path):
     body = client.get("/semantics-version").get_json()
     assert body["ok"] is True
     assert body["version"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Le due difese di /render: il confine di fiducia di una route che SCRIVE un
+# file, e il filtro dei nomi envelope.
+#
+# Nessuna delle due aveva un'asserzione: sabotandole la suite restava verde
+# (136 passed), mentre sul bridge vivo la prima dava HTTP 200 e un file scritto
+# fuori da configs/, e la seconda mandava in argv un `--plot-envelopes` con un
+# nome ignoto, che fa uscire il motore con 1 portandosi via l'audio.
+# ---------------------------------------------------------------------------
+
+def _render_root(tmp_path, fake_python=False):
+    """Una root minima per make_app; con `fake_python` anche un finto
+    `.venv/bin/python` che esce subito, cosi' /render costruisce e stampa la
+    argv senza avere il motore."""
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    for d in ("configs", "refs", "output", "cache"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    if fake_python:
+        vb = tmp_path / ".venv" / "bin"
+        vb.mkdir(parents=True, exist_ok=True)
+        py = vb / "python"
+        py.write_text("#!/bin/sh\nexit 0\n")
+        py.chmod(0o755)
+    return tmp_path
+
+
+@pytest.mark.parametrize("basename", [
+    "../evil",           # traversal esplicito
+    "..",                # la directory sopra
+    "a/b",               # separatore
+    "a\\b",              # separatore di Windows: `\` non e' `/`
+    ".hidden",           # punto iniziale
+    "",                  # vuoto
+    "\x00nul",           # NUL: ValueError dal filesystem, non un 500
+])
+def test_render_rejects_bad_basename(tmp_path, basename):
+    """Il basename di /render diventa un path e un file scritto: e' un confine
+    di fiducia, e passa per `safe_resolve` come tutte le altre route invece di
+    riscrivere la regola piu' debole."""
+    import server
+    root = _render_root(tmp_path)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    before = sorted(p.name for p in (root / "configs").iterdir())
+    r = client.post("/render", json={"yamlBasename": basename,
+                                     "yamlContent": "streams: []\n"})
+    assert r.status_code == 400, f"{basename!r} → {r.status_code}"
+    assert sorted(p.name for p in (root / "configs").iterdir()) == before
+    # e niente scritto fuori da configs/
+    assert not (root / "evil.yml").exists()
+    assert not (root.parent / "evil.yml").exists()
+
+
+def test_render_accepts_an_ordinary_basename(tmp_path):
+    """La guardia non deve essere cosi' stretta da rifiutare i nomi veri: senza
+    questo, `abort(400)` incondizionato passerebbe il test qui sopra."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+    r = client.post("/render", json={"yamlBasename": "PGE_test",
+                                     "yamlContent": "streams: []\n"})
+    assert r.status_code == 200
+    r.get_data()                      # consuma lo stream NDJSON
+    assert (root / "configs" / "PGE_test.yml").exists()
+
+
+def _argv_line(client, payload):
+    """La riga `$ …` che /render stampa: e' la argv che parte davvero."""
+    r = client.post("/render", json=payload)
+    assert r.status_code == 200
+    for raw in r.get_data(as_text=True).splitlines():
+        ev = json.loads(raw)
+        if ev.get("type") == "log" and str(ev.get("line", "")).startswith("$ "):
+            return ev["line"]
+    raise AssertionError("nessuna riga argv nello stream NDJSON")
+
+
+def test_render_filters_unknown_envelope_names(tmp_path):
+    """Un nome ignoto in `--plot-envelopes` fa `sys.exit(1)` nel motore e si
+    porta via l'audio gia' reso. L'insieme valido vive nei sorgenti del motore,
+    quindi il filtro e' qui e non nella UI — ed e' meta' della sezione "Score
+    options that can kill a render", finora senza un'asserzione."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    _stub_envelope_extractor_pge(root)          # volume, pan, pitch, voice_pitch_offset
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["volume", "nome_che_non_esiste"],
+    })
+    assert "--plot-envelopes" in line, line
+    assert "nome_che_non_esiste" not in line, line
+    assert "volume" in line.split("--plot-envelopes", 1)[1], line
+
+
+def test_render_drops_the_flag_when_nothing_survives(tmp_path):
+    """Tutti i nomi ignoti: il flag non parte affatto. `--plot-envelopes` senza
+    valore, o con una lista vuota, e' l'altro modo di far uscire il motore."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    _stub_envelope_extractor_pge(root)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["boh", "nemmeno"],
+    })
+    assert "--plot-envelopes" not in line, line
+
+
+def test_render_without_engine_keys_drops_the_flag(tmp_path):
+    """Motore che precede la feature: nessuna chiave valida, quindi il flag non
+    si manda — un motore vecchio non deve vedere un'opzione che non conosce."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["volume"],
+    })
+    assert "--plot-envelopes" not in line, line
 
 
 def test_semantics_version_endpoint_without_engine(tmp_path):

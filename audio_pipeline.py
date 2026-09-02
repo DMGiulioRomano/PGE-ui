@@ -29,6 +29,11 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
         return None
     if name.startswith("."):
         return None
+    # Il NUL non e' traversal ma non e' nemmeno un nome: `open()` alza
+    # ValueError, che senza gestione e' un 500 al posto di un 400. Rifiutarlo
+    # qui lo rende un nome cattivo come gli altri, per ogni route.
+    if "\x00" in name:
+        return None
     return base / name
 
 

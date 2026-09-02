@@ -655,7 +655,14 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         basename = opts.get("yamlBasename") or opts.get("projectBasename")
         if not basename:
             abort(400, "yamlBasename required")
-        if "/" in basename or ".." in basename:
+        # Il basename diventa un path E un file scritto: e' il confine di
+        # fiducia di una route che scrive. Passa per `safe_resolve` come tutte
+        # le altre route invece di riscriverne una versione piu' debole — la
+        # regola scritta due volte divergeva gia': qui non erano rifiutati il
+        # separatore di Windows, il punto iniziale, e il NUL faceva 500
+        # (ValueError dal filesystem) invece di 400.
+        yml = safe_resolve(configs, f"{basename}.yml")
+        if yml is None:
             abort(400, "bad basename")
 
         renderer = opts.get("renderer", "numpy")
@@ -701,7 +708,6 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         # (cache/<basename>.json), so a random temp name would orphan the manifest
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
-        yml = configs / f"{basename}.yml"
         if yaml_content:
             yml.write_text(yaml_content, encoding="utf-8")
         elif not yml.exists():
