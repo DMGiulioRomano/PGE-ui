@@ -80,9 +80,14 @@ exists):
   verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
   guards them against taking it back with a brutal exit.
 
-Both `tests-node` and `tests-parity` **accumulate** failures rather than stopping
-at the first red file: with twenty-odd suites, `|| exit 1` meant seeing one
-failure per run instead of the whole census.
+All three **accumulate** failures rather than stopping at the first red: with
+twenty-odd suites, `|| exit 1` meant seeing one failure per run instead of the
+whole census. That holds *between* the targets too — `tests: tests-node
+tests-python` was a make dependency, so one red node suite made pytest **and**
+parity disappear, and whoever ran `make tests` for the census got a third of
+it. `make tests-python ROOT=…` also reaches pytest now (`PGE_ENGINE_ROOT`):
+only that half ignored the `ROOT=` this Makefile's own help suggests, and the
+corpus vanished into a green skip.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
 checks out the sibling engine and builds its venv. The node job checks it out
@@ -157,6 +162,30 @@ already counted a failure, so a suite whose second case hung printed
 runner for it (fake oracle in the require cache, a fake engine root), so the
 probe needs no sibling checkout.
 
+**The handler must be registered at module level, and that is checked
+structurally.** A textual check can't tell a handler registered by the file
+from one registered inside the async body it is supposed to watch: if that body
+dies first, the handler doesn't exist and the file exits with neither the
+summary nor `interrotto prima della fine` — the two lines that are the whole
+contract. Three suites had it inside the IIFE. The guard now counts the
+bracket depth of the `process.on("exit"` occurrence (`tests/node/source-guard.js`
+reads the source as *code*: comments stripped, strings kept, and a masked copy
+of the same length for the depth walk), because that depth is the only
+difference between a healthy file and a broken one.
+
+**And the verdict has to be delivered, not only printed.** `Oracle.close()`
+kills the python if it doesn't leave on its own — `stdin.end()` + `unref()` was
+a request, and `unref()` doesn't detach stdout/stderr, so a mute interpreter
+left node alive long after the right verdict had been printed. Each parity case
+runs under a time cap (`PGE_PARITY_CASE_TIMEOUT_MS`, 120 s) because with a live
+oracle the loop never empties on its own, so a hanging case would be a job
+timeout instead of a named failure. Both CI jobs carry `timeout-minutes` as the
+net that doesn't depend on either fix. `test-suite-harness.js` has two probes
+for it: one kills the runner *between* cases (no waiting), the other holds an
+open handle the way a real oracle would — the earlier single probe closed the
+fake oracle before hanging, i.e. it tested the branch in the one configuration
+where the defect cannot exist.
+
 There is no linter or typechecker — `test-jsx-parse.js` is the whole static net,
 and it only proves a component parses. UI verification is manual (open
 `PGE Editor.html`, Settings → local backend, test connection, render).
@@ -180,6 +209,36 @@ fallback).
 
 `POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`. `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
 
+**Not every `[CACHE]` line is a stream, and the shape doesn't say which.** The
+engine prints `[CACHE] Manifest: <path>` on every `--cache` render and
+`[CACHE] GC: rimossi N stream orfani` when the GC removes something; both match
+the per-stream regex. What discriminates is therefore the **set of ids the
+request declares** (`state["ids"]`, from `opts["streams"]`), not a list of
+reserved prefixes — the next `[CACHE] Something:` upstream would come back in
+through the same door. Absent/empty set = a request that doesn't declare its
+streams: no filter, historical behaviour. The probe in
+`tests/python/test_render_pipeline.py` reads the `[CACHE]` literals **out of
+the engine sources** instead of transcribing them: the six older assertions ran
+on lines copied from this module's docstring, which is exactly why `Manifest`
+and `GC` slipped through for so long.
+
+The stream id in the summary path line is **not** constrained to `\w`:
+`renameStream` advertises letters, digits, `.`, `_` and `-`, and only the
+*last* DIRTY stream of a round depends on that line (the others are closed by
+the next `[CACHE]`), so an id with `-` or `.` never got its `stream-done` —
+🟡 after a render that did exactly what the dot asked, and two renders needed
+per edit. The comparison is on the `__<id>` suffix, so there is no separator
+position to guess.
+
+On the browser side the two writes have different rules, deliberately: the
+`stream-done` handler marks the stem index **only for a declared stream** (the
+event comes from a parsed log line, not from a file), while the `done` fallback
+does not validate — `generated` is the list of files the server found on disk,
+so even a deleted stream's stem exists and the index must know. That fallback's
+"already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
+fills the index from `/stems` on every project open, so "already handled" used
+to mean "was on disk", and from the second render on the fallback was dead.
+
 **One `run()` at a time, and the guard lives on both sides.** `cancelAbort` in
 `backend.js` is a single closure variable: two overlapping `run()`s and the
 second overwrites the first's `AbortController`, so Cancel kills one and the
@@ -191,10 +250,16 @@ problem) and must be raised **before** any await — `runRender` awaits
 second entry. `run()` refuses re-entry on its own too, because the invariant
 has to be enforced in the file that suffers it: the refusal *returns*
 `{ok:false, configWritten:false}` rather than throwing (the caller has no
-try/catch, and `run()` never throws) and emits no `done` event, which would
-tear down the UI of the render still in flight. `test-render-status.js` pins
-both sides — the caller by source guard, `run()` by running two overlapping
-renders and pressing Cancel.
+try/catch, and `run()` never throws) and emits no `done` event. That last
+reason used to be written as "it would tear down the UI of the render still in
+flight", and that was false: `runRender` clears log, progress and state
+*before* calling `run()` and tears down unconditionally on return, so there is
+no UI to tear down. The real reason is that `done` is the event of a render
+that **finished**: emitting it here would make the caller record the outcome
+(and the generated-stem count) of a round that never started, and would say so
+to anyone else listening on the stream. The refusal is the return value's job.
+`test-render-status.js` pins both sides — the caller by source guard, `run()`
+by running two overlapping renders and pressing Cancel.
 
 ### Score options that can kill a render
 
@@ -275,7 +340,13 @@ Two rules when touching it:
 Deliberate divergences are listed in `tests/parity/README.md` **and asserted by
 the suites**, so a divergence that disappears makes a test speak instead of
 leaving a stale comment. The README also records the engine commit the pacts
-were written against — the datum that tells "we broke it" from "the engine moved".
+were written against — the datum that tells "we broke it" from "the engine
+moved" — and that line is now **checked**: a parity case requires the recorded
+SHA to be an ancestor of the commit the run actually compared against. Falling
+behind is legitimate (the pacts still hold, and the run notes by how much);
+not existing is not. It has no shallow-clone escape hatch — the first version
+had one and a `deadbeef…` SHA sailed through it — so CI checks the engine out
+with `fetch-depth: 300`.
 
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
@@ -283,6 +354,17 @@ bridge and the oracle can use it. It reads the envelope keys, the parameter
 bounds and `VARIATION_SEMANTICS_VERSION`; each returns an empty/`None` result for
 an engine that doesn't have the thing, and every caller must treat that as "don't
 know", never as a value.
+
+That was **false for the `pitch` half** until this round: three fallbacks
+(`edoFactor`, the ratio record, the EDO preset table) returned today's engine
+numbers transcribed here, so a plausible refactor upstream — two renamed
+classes, an AST read that simply fails — produced a full payload with no sign
+it was a fallback. And the direction is the wrong one: `mergeEngineBounds`
+applies them *over* the static fallback because they arrive labelled as engine
+truth, so a transcribed `ratio.min` against a stricter engine admits a value
+the engine rejects — exactly what `test-bounds-parity.js` prevents for the
+static fallback. Parity can't see it: with the real engine the two sides agree.
+There is **one** place for static fallbacks and it is `yaml-bridge.js`.
 
 **Every one of those readings goes through `_assigned_value`**, which recognizes
 both `NAME = …` (`ast.Assign`) and `NAME: T = …` (`ast.AnnAssign`), because the
@@ -353,11 +435,31 @@ the field is left verbatim, and the count comes back as `skipped` for the toast.
 
 ### Fingerprint parity
 
-The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) ignores `color/mute/solo/onset` plus `durationImplicit/durationUnresolved/deviationProbabilityLegacy`. Key non-obvious exclusions:
+The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) has **two** exclusion lists, and they don't have the same reach:
+
+- `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`.
+- `FP_IGNORE_DEEP` — editor-only fields injected at parse, excluded at **any** depth because they live nested by construction: `statePositions`, `_curveRaw` (both under `grain.envelope`).
+
+Key non-obvious exclusions:
 
 - `onset`: moving a clip on the timeline doesn't change the rendered audio.
 - `duration*` flags: provenance of the length, not the length itself.
 - `deviationProbabilityLegacy`: provenance (which spelling), not content — reopening a pre-v7 project shouldn't mark every stem stale.
+- `statePositions` / `_curveRaw`: they mirror data already encoded in the serialized states and curve, so hashing them would double-count — and would have marked every already-rendered multistate stem stale the day the preservation shipped.
+
+**"First level" means the YAML's, not the JS object's**, and the two differ:
+`serializeStream` splices `_extra` *into* the level of the block that holds it.
+So `stream._extra.mute` comes out as a top-level `mute:` (excluded, like the
+stream's own), while `grain._extra.mute` comes out as `grain: {mute: …}` —
+which the engine hashes, because its own filter is a dict comprehension over
+`stream_dict.items()`, i.e. the first level alone. One list filtering at every
+depth was therefore a divergence in the **wrong** direction: a nested homonym
+moved the engine's hash and not the UI's, and the dot stayed 🟢 on a stem the
+engine was about to rewrite. `test-fingerprint.js` pins both halves and
+`test-fingerprint-parity.js` asks the engine (the case needs an `_extra` that
+already exists on both sides — merely appearing moves the hash via the key
+itself, so it wouldn't discriminate). An `_extra` left empty by the filter
+drops out entirely: in the YAML it isn't distinguishable from an absent one.
 
 The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
 
@@ -380,13 +482,35 @@ property of the sibling checkout, not of the editor's session: a `git checkout`
 or a pull next door changes it while the page stays open, and a cell memoized
 for the session turns that into 🟢 on stems the engine will redo differently,
 until a reload. So freshness lives in the callers: `refreshEngineSem` (app.jsx —
-boot, project change, render start) asks `semanticsVersion({refresh: true})`;
-`run()` reads the cell without the flag. That split is also what keeps **one**
-render coherent: a re-read stores exactly what it returns — the failure `null`
-included — so the ref app.jsx fills before starting and the number `backend.js`
-records at the end cannot be two different answers. It is the same decision
-`engine_introspect` takes one level down (mtime invalidation, pinned by
-`test_engine_semantics_version_sees_a_live_bump`).
+boot, project change, render start) asks `semanticsVersion({refresh: true})`.
+It is the same decision `engine_introspect` takes one level down (mtime
+invalidation, pinned by `test_engine_semantics_version_sees_a_live_bump`).
+
+**And the number of one render is fixed by the caller, not read twice.**
+`runRender` reads it once and hands it to both consumers: `run()` takes it as
+`opts.semanticsVersion` and records it at the end, and the `stream-done`
+handler uses the same constant. The `_semantics` cell used to be the shared
+source for both, on the assumption that nobody would rewrite it mid-round — but
+the three re-read sites are not mutually exclusive with a render in flight (the
+project-change effect has no `renderStatus.running` guard). Clicking another
+project mid-render, with the engine moved next door, recorded the **new**
+number on stems the engine had just written reading the **old** one: 🟢 on
+stems it will redo differently, the very failure the axis exists for. It needs
+the conjunction, so it is narrow — but it is the one invariant the whole design
+rests on, and it was written as guaranteed. `run()` still falls back to the
+cell when the field is absent: absent would mean "don't know", and there it
+would be a lie that deletes the entries of stems just rendered.
+
+**The engine has a third axis in its own hash: `renderer_type`.** It sits
+beside the semantics version and for the same reason — something a stem depends
+on that the YAML text doesn't state. The UI has no axis for it, and that is
+fine while the backend is *one*: `app.jsx` hardcodes `renderer: "numpy"` and
+`server.py` defaults to the same (a source guard in `test-render-status.js`
+pins the pair, and a parity case pins that three backends really give three
+hashes). The day the choice reaches Settings — the engine has three — the dot
+goes green on stems the engine will rewrite: PGE #222 again, on a different
+axis. That guard is the reminder that the axis has to be built, not just an
+option added.
 
 Two rules hold it up:
 
@@ -662,6 +786,15 @@ Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), 
 ## Security stance of `server.py`
 
 Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`).
+
+**One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
+boundary of a route that *writes a file*, and it used to re-implement the check
+inline — weaker, and already divergent: no `\`, no leading dot, and a NUL gave
+500 (a `ValueError` from the filesystem) instead of 400. It goes through
+`safe_resolve` like every other route, and `safe_resolve` rejects the NUL for
+all of them. Both this and the `--plot-envelopes` name filter (whose valid set
+lives in engine source, hence server-side) now have tests: sabotaging either
+used to leave the suite green.
 
 ## Conventions
 

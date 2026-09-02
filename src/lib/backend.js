@@ -65,22 +65,61 @@
   // key, not what it says. Reopening a pre-v7 project must not mark every stem
   // stale over a key name — the healed value is hashed, so the migration still
   // marks stale exactly what it changes.
-  const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
-                             "durationImplicit", "durationUnresolved",
-                             "deviationProbabilityLegacy"]);
+  // Le due liste NON hanno la stessa portata, e prima erano una sola.
+  //
+  // `FP_IGNORE_TOP` sono campi PER STREAM: il colore della clip, mute/solo, la
+  // posizione sulla timeline, la provenienza della durata e della grafia di
+  // `deviation_probability`. Il motore esclude i suoi (`solo`, `mute`) con una
+  // dict-comprehension sul solo primo livello, quindi escluderli anche in
+  // profondita' era una divergenza nel verso sbagliato: un `grain.mute` — o una
+  // chiave omonima dentro `_extra`, cioe' una chiave del motore che l'editor
+  // non modella — muove l'hash del motore e non muoveva questo, e il pallino
+  // restava verde su uno stem che il motore stava per riscrivere. Un render di
+  // meno, che e' l'errore che questo asse esiste per non fare.
+  //
+  // `FP_IGNORE_DEEP` sono invece campi dell'EDITOR iniettati al parse, e vivono
+  // annidati per costruzione (`grain.envelope.statePositions`,
+  // `grain.envelope._curveRaw`): rispecchiano dati gia' codificati negli stati
+  // e nella curva serializzati, quindi hasharli conterebbe due volte — e
+  // marcherebbe stale ogni stem multistate gia' reso.
+  const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
+                                  "durationImplicit", "durationUnresolved",
+                                  "deviationProbabilityLegacy"]);
+  const FP_IGNORE_DEEP = new Set(["statePositions", "_curveRaw"]);
 
-  function canonicalJSON(v, ignore) {
+  function canonicalJSON(v, ignore, deep) {
     if (v === null || v === undefined) return "null";
     if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
     if (typeof v === "string") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, ignore)).join(",") + "]";
+    if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, deep, deep)).join(",") + "]";
     const keys = Object.keys(v).filter(k => !ignore.has(k)).sort();
-    return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalJSON(v[k], ignore)).join(",") + "}";
+    return "{" + keys.map(k => JSON.stringify(k) + ":" +
+      canonicalJSON(v[k], deep, deep)).join(",") + "}";
   }
 
+  /* Il primo livello e' quello dello YAML, non quello dell'oggetto JS, e i due
+     non coincidono: `serializeStream` splicia `_extra` NEL livello del blocco
+     che lo contiene, quindi `stream._extra.mute` esce come un `mute:` di primo
+     livello — che il motore filtra — mentre `grain._extra.mute` esce come
+     `grain: {mute: …}`, che il motore hasha eccome (la sua e' una
+     dict-comprehension sul solo primo livello). Percio' `FP_IGNORE_TOP` vale
+     sulle chiavi dello stream E su quelle del suo `_extra`, e basta. */
   function fingerprintStream(stream, format) {
-    const json = canonicalJSON(stream, FP_IGNORE) + `|fmt:${format || "aiff"}`;
-    return fnv1a(json);
+    const top = new Set([...FP_IGNORE_TOP, ...FP_IGNORE_DEEP]);
+    const keys = Object.keys(stream || {}).filter(k => !top.has(k)).sort();
+    const parts = [];
+    for (const k of keys) {
+      // `_extra` e' lo stesso livello YAML dello stream, quindi ci si applica
+      // la lista del primo livello...
+      const body = canonicalJSON(stream[k], k === "_extra" ? top : FP_IGNORE_DEEP,
+                                 FP_IGNORE_DEEP);
+      // ...e se dopo il filtro non resta niente, la voce sparisce del tutto:
+      // un `_extra` di soli nomi esclusi non e' distinguibile, nello YAML, da
+      // un `_extra` assente — e per il motore infatti non lo e'.
+      if (k === "_extra" && body === "{}") continue;
+      parts.push(JSON.stringify(k) + ":" + body);
+    }
+    return fnv1a("{" + parts.join(",") + "}" + `|fmt:${format || "aiff"}`);
   }
 
   // fetch with an AbortController timeout so a hung server.py can't leave a
@@ -291,9 +330,17 @@
            e un throw diventerebbe una unhandled rejection. `configWritten:
            false` e' la verita' su QUESTA chiamata — non ha fatto il POST,
            quindi non ha riscritto il config, quindi non spegne l'avviso di
-           migrazione di `dephase`. Nessun evento `done`: la teardown dello
-           stato la fa il chiamante col valore di ritorno, ed emetterlo qui
-           spegnerebbe la UI del render ancora in volo. */
+           migrazione di `dephase`.
+
+           Nessun evento `done`, e la ragione scritta qui prima era falsa:
+           diceva che spegnerebbe la UI del render in volo, ma `runRender`
+           azzera log, progresso e stato PRIMA di chiamare `run()` e fa la
+           teardown incondizionata al ritorno, quindi non c'e' una UI da
+           spegnere. La ragione vera e' che `done` e' l'evento di un render
+           FINITO: emetterlo qui farebbe registrare al chiamante l'esito (e il
+           conto degli stem generati) di un giro che non e' mai partito, e lo
+           direbbe a chiunque altro ascolti lo stream. Il rifiuto lo dice il
+           valore di ritorno, che e' la sede giusta. */
         if (running) {
           const msg = "render already in progress";
           onEvent && onEvent({ type: "log", line: `[ERROR] ${msg}` });

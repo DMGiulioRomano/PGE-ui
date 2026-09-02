@@ -68,6 +68,7 @@ const MUTATIONS = [
   { label: "deviationProbability", side: "both", mut: s => { s.deviationProbability = 50; } },
   { label: "una chiave sconosciuta in _extra (PGE-ui #115)", side: "both",
     mut: s => { s._extra = { chiave_futura: "a" }; } },
+
   { label: "voices", side: "both", mut: s => { s.voices = { num: 3, scatter: 0.2 }; } },
   { label: "un envelope al posto di uno scalare", side: "both",
     mut: s => { s.density = null; s.densityEnv = [[0, 10], [1, 40]]; } },
@@ -306,6 +307,57 @@ parity({
             "restare indietro non rompe i patti, ma la riga serve a distinguere " +
             "«abbiamo sbagliato noi» da «il motore e' cambiato»");
         }
+      },
+    },
+    {
+      /* Il livello a cui le chiavi escluse si escludono.
+       *
+       * Il motore filtra `solo`/`mute` con una dict-comprehension su
+       * `stream_dict.items()`, cioe' sul SOLO primo livello; la UI filtrava a
+       * ogni profondita'. `serializeStream` splicia `_extra` nel livello del
+       * blocco che lo contiene, quindi `grain._extra.mute` esce come
+       * `grain: {mute: …}` — che il motore hasha eccome, mentre la UI lo
+       * buttava: verde su uno stem che il motore stava per riscrivere, cioe' un
+       * render di MENO.
+       *
+       * Il confronto non passa dal corpus perche' l'`_extra` dev'essere gia'
+       * presente in entrambi i termini: comparire e basta muove l'hash per la
+       * chiave stessa, e il caso non discriminerebbe. */
+      label: "le chiavi escluse si escludono al primo livello, non a ogni profondita'",
+      run: async (ask, assert, ctx) => {
+        const withExtra = (extra) => {
+          const s = base();
+          s.grain = { ...s.grain, _extra: extra };
+          return s;
+        };
+        const senza = withExtra({ chiave_futura: 1 });
+        const con   = withExtra({ chiave_futura: 1, mute: true });
+        const [a, b] = await ask([
+          { op: "fingerprint", args: { stream: yamlDict(senza) } },
+          { op: "fingerprint", args: { stream: yamlDict(con) } },
+        ]);
+        if (!a.ok || !b.ok) throw new Error(a.error || b.error);
+
+        assert("il motore hasha un `mute` annidato",
+          a.value.hex !== b.value.hex,
+          "se il motore avesse cominciato a filtrare in profondita', la UI " +
+          "puo' tornare a farlo: e' questa riga a doverlo dire");
+        assert("...e la UI lo hasha allo stesso modo",
+          fingerprintStream(senza, "wav") !== fingerprintStream(con, "wav"),
+          "filtrarlo qui e' un render di meno, il verso sbagliato");
+
+        // ...mentre al PRIMO livello lo escludono entrambi.
+        const muto = base(); muto.mute = true;
+        const [c, d] = await ask([
+          { op: "fingerprint", args: { stream: yamlDict(base()) } },
+          { op: "fingerprint", args: { stream: yamlDict(muto) } },
+        ]);
+        if (!c.ok || !d.ok) throw new Error(c.error || d.error);
+        assert("il mute dello stream resta fuori da entrambi gli hash",
+          c.value.hex === d.value.hex &&
+          fingerprintStream(base(), "wav") === fingerprintStream(muto, "wav"),
+          `motore ${c.value.hex === d.value.hex}, ui ` +
+          `${fingerprintStream(base(), "wav") === fingerprintStream(muto, "wav")}`);
       },
     },
     {

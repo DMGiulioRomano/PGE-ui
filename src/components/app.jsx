@@ -278,6 +278,11 @@ function App() {
     const backend = window.PGEBackend.current;
     if (!backend || !backend.semanticsVersion) return null;
     let v = null;
+    // Il catch e' difensivo, non atteso: `semanticsVersion` ha il proprio
+    // try/catch e non lancia mai (backend.js). Resta perche' qui si chiama
+    // attraverso `window.PGEBackend.current`, cioe' un'implementazione del
+    // contratto e non quella funzione: un rigetto non gestito dentro un
+    // effetto sarebbe peggio della riga.
     try { v = await backend.semanticsVersion({ refresh: true }); } catch { v = null; }
     const n = Number.isInteger(v) ? v : null;
     engineSemRef.current = n;
