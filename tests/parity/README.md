@@ -59,7 +59,7 @@ Le operazioni dell'oracolo:
 
 | op | risponde con | mirror che verifica |
 |---|---|---|
-| `fingerprint` | `StreamCacheManager.compute_fingerprint` (con `semantics` opzionale, che rimpiazza la costante per la durata della chiamata) | `backend.fingerprintStream` |
+| `fingerprint` | `StreamCacheManager.compute_fingerprint` (con `semantics` opzionale, che rimpiazza la costante per la durata della chiamata, e `renderer`, il backend che sta dentro l'hash accanto ad essa — default `numpy`, come cabla la UI) | `backend.fingerprintStream` |
 | `parse_magnify_spec` | i target di `--magnify-at`, o l'errore | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
@@ -136,6 +136,21 @@ Se il commit del run è più recente e la parità è caduta, il sospetto princip
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
 run. Se invece è lo stesso, la modifica è di questo repo.
 
+## Il livello a cui le chiavi escluse si escludono
+
+Il motore filtra `solo`/`mute` con una dict-comprehension su
+`stream_dict.items()`: il **solo primo livello**. La UI ora fa lo stesso, e il
+primo livello che conta è quello dello **YAML**, non quello dell'oggetto JS —
+`serializeStream` splicia `_extra` nel livello del blocco che lo contiene,
+quindi `stream._extra.mute` esce come un `mute:` di primo livello (escluso da
+entrambi) mentre `grain._extra.mute` esce come `grain: {mute: …}` (hashato da
+entrambi). Prima la UI filtrava a ogni profondità, e il secondo caso muoveva
+l'hash del motore e non il suo: un render di meno, il verso sbagliato.
+
+Il caso di parità usa un `_extra` **già presente in entrambi i termini**:
+comparire e basta muove l'hash per la chiave stessa, quindi un confronto contro
+la base non discriminerebbe niente.
+
 ## Divergenze dichiarate
 
 La parità non è identità. Alcune differenze sono volute, e ogni suite le
@@ -145,6 +160,7 @@ commento.
 | dove | differenza | perché |
 |---|---|---|
 | fingerprint | `onset` muove l'hash del motore, non quello della UI | spostare una clip sulla timeline non cambia l'audio dello stem |
+| fingerprint | `renderer_type` è nell'hash del motore e non ha un asse nella UI | oggi il backend è cablato su entrambi i lati (`app.jsx` e il default di `server.py`, pinnati da una guardia sorgente); il giorno che diventa una scelta serve un asse come quello della semantica |
 | magnify-spec | SPEC vuoto: valido per la UI, rifiutato dal motore | nella UI "campo vuoto" significa "nessun target", e il flag non parte |
 | magnify-spec | `stream=` vuoto: rifiutato dalla UI, accettato dal motore | la UI è più stretta; una lente su nessuno stream è un refuso |
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
