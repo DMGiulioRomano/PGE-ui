@@ -253,5 +253,95 @@ parity({
           `${JSON.stringify(plain.value)} poi ${JSON.stringify(again.value)}`);
       },
     },
+    {
+      /* La riga del README smette di essere una nota.
+       *
+       * «Ha due letture: abbiamo sbagliato noi, oppure il motore e' cambiato»:
+       * a distinguerle serve il commit registrato nel README, e nessun test lo
+       * guardava — uno SHA con un refuso non avrebbe fatto parlare nessuno, e
+       * quello scritto era 41 commit indietro, cioe' la risposta era sempre "il
+       * motore e' cambiato". Qui si pretende che sia un ANTENATO del commit
+       * contro cui il run ha confrontato: restare indietro e' legittimo (i patti
+       * valgono ancora), non esistere no. */
+      label: "il commit registrato nel README e' nella storia di questo motore",
+      run: async (ask, assert, ctx) => {
+        const fs = require("fs");
+        const path = require("path");
+        const { spawnSync } = require("child_process");
+
+        const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+        const m = readme.match(/^`([0-9a-f]{7,40})`$/m);
+        assert("il README dichiara uno SHA del motore, in forma leggibile",
+          !!m, "atteso uno SHA fra backtick su una riga sua");
+        if (!m) return;
+        const recorded = m[1];
+
+        const git = (...args) => spawnSync("git", ["-C", ctx.engineRoot, ...args],
+          { encoding: "utf8" });
+        /* Nessuna via di fuga sullo "shallow", ed e' la prima versione di
+           questo caso ad averne avuta una: il clone qui E' shallow (262 commit
+           disponibili), quindi l'eccezione se lo mangiava e uno SHA
+           `deadbeef…` passava verde. Un oggetto assente e' un fallimento con
+           due letture, ed entrambe vanno guardate — per questo il messaggio le
+           nomina tutte e due. La CI clona il motore con abbastanza storia
+           perche' la seconda non capiti (fetch-depth nel workflow). */
+        const depth = git("rev-list", "--count", "HEAD").stdout.trim() || "?";
+        const known = git("cat-file", "-e", recorded + "^{commit}").status === 0;
+        assert("quel commit esiste nella storia del motore",
+          known,
+          `${recorded} non e' un oggetto di ${ctx.engineRoot}. O lo SHA nel ` +
+          `README e' sbagliato (refuso, storia riscritta), o il checkout e' ` +
+          `troppo corto per vederlo (${depth} commit disponibili): approfondisci ` +
+          "il clone, non allentare questa riga.");
+        if (!known) return;
+        const isAncestor = git("merge-base", "--is-ancestor", recorded, "HEAD").status === 0;
+        assert("lo SHA del README e' un antenato del commit del run",
+          isAncestor,
+          `${recorded} non e' antenato di ${(ctx.commit && ctx.commit.short) || "HEAD"}: ` +
+          "il README punta a una storia diversa da quella contro cui i patti girano");
+
+        const behind = git("rev-list", "--count", `${recorded}..HEAD`).stdout.trim();
+        if (behind && behind !== "0") {
+          ctx.note(`il README e' ${behind} commit indietro rispetto al motore di questo run`,
+            "restare indietro non rompe i patti, ma la riga serve a distinguere " +
+            "«abbiamo sbagliato noi» da «il motore e' cambiato»");
+        }
+      },
+    },
+    {
+      /* Il TERZO asse: il backend che ha prodotto lo stem.
+       *
+       * `renderer_type` e' entrato nel fingerprint del motore accanto alla
+       * semantica, ed e' la stessa classe di dipendenza — qualcosa da cui lo
+       * stem dipende e che il testo YAML non dice. Oggi non morde: la UI cabla
+       * `renderer: "numpy"` e il bridge ha lo stesso default (pinnato dalla
+       * guardia sorgente in test-render-status.js). Il giorno in cui la scelta
+       * del backend arriva nelle Settings — il motore ne ha tre — il pallino
+       * torna verde su stem che il motore riscrivera': PGE #222 daccapo, su un
+       * asse diverso. Questa sonda esiste perche' quel giorno il conto sia gia'
+       * stato fatto. */
+      label: "il backend e' un terzo asse dentro l'hash del motore",
+      run: async (ask, assert, ctx) => {
+        const s = base();
+        const backends = ["numpy", "csound", "supercollider"];
+        const answers = await ask(backends.map(r => ({
+          op: "fingerprint", args: { stream: yamlDict(s), renderer: r } })));
+        for (const [i, r] of answers.entries()) {
+          if (!r.ok) throw new Error(`renderer=${backends[i]}: ${r.error}`);
+        }
+        const hexes = answers.map(r => r.value.hex);
+        assert(`${backends.length} backend, ${new Set(hexes).size} hash distinti`,
+          new Set(hexes).size === backends.length,
+          backends.map((b, i) => `${b}: ${hexes[i]}`).join("\n      "));
+
+        // ...e la UI non ce l'ha, come non ha la semantica: divergenza voluta,
+        // elencata nel README. Il fingerprint JS non prende nemmeno il backend
+        // come argomento — se un domani lo prendesse, questa riga parlerebbe.
+        assert("il fingerprint della UI non conosce il backend (divergenza voluta)",
+          fingerprintStream.length <= 2,
+          `fingerprintStream ha ${fingerprintStream.length} parametri: se ora ` +
+          "prende il renderer, l'asse va costruito e questa nota va aggiornata");
+      },
+    },
   ],
 });

@@ -38,6 +38,12 @@ jobs:
           repository: DMGiulioRomano/PythonGranularEngine
           path: PythonGranularEngine
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+          # Abbastanza storia perche' la parita' possa verificare che il commit
+          # registrato in tests/parity/README.md sia davvero un antenato di
+          # quello contro cui gira. Col default (1 solo commit) quel caso
+          # fallirebbe sempre, e allentarlo lo renderebbe muto — che e' come
+          # era nato.
+          fetch-depth: 300
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -111,6 +117,12 @@ jobs:
           repository: DMGiulioRomano/PythonGranularEngine
           path: PythonGranularEngine
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+          # Abbastanza storia perche' la parita' possa verificare che il commit
+          # registrato in tests/parity/README.md sia davvero un antenato di
+          # quello contro cui gira. Col default (1 solo commit) quel caso
+          # fallirebbe sempre, e allentarlo lo renderebbe muto — che e' come
+          # era nato.
+          fetch-depth: 300
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

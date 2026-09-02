@@ -115,13 +115,22 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`cce323447f0be5d798173ddaae632bc2f27fac0a`
-(«Merge pull request #238 from DMGiulioRomano/claude/issue-222-resolution-mcaeyy»)
+`e57ccecc5453549aa9f507b7079337fb63a099f1`
+(«fix(build): allinea la versione del pacchetto al tag (v9.0.2)»)
+
+Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
+che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
+confrontato. Uno SHA con un refuso, o rimasto indietro rispetto a un motore che
+nel frattempo ha riscritto la storia, adesso fa parlare qualcuno — prima nessun
+test la guardava, e con 41 commit di deriva la risposta a «abbiamo sbagliato noi
+o è cambiato il motore?» era sempre la seconda.
 
 La cartella è nata contro `2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
-(PythonGranularEngine v7.2.0); fra i due commit il motore ha portato
+(PythonGranularEngine v7.2.0); fra quello e `cce3234` il motore ha portato
 `VARIATION_SEMANTICS_VERSION` da 2 a 3 — il primo cambiamento che questi test
-hanno intercettato, e la ragione della sezione qui sotto.
+hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` e il
+commit qui sopra è entrato `renderer_type` nel fingerprint del motore (`bcc2c84`):
+un terzo asse, oggi tenuto a bada da un backend cablato su entrambi i lati.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del

@@ -265,6 +265,13 @@ def _op_fingerprint(args):
         stream       dict dello stream come appare nello YAML (snake_case)
         samples_dir  opzionale, per risolvere la durata di uno stream che
                      non dichiara `duration`
+        renderer     opzionale, str|None: il backend che produce gli stem
+                     ('numpy' | 'csound' | 'supercollider'). E' il TERZO asse
+                     dentro l'hash del motore, accanto alla semantica: qualcosa
+                     da cui lo stem dipende e che il testo YAML non dice.
+                     Costruire il manager senza passarlo vuol dire chiedere
+                     ogni fingerprint in una configurazione in cui il prodotto
+                     non gira mai.
         semantics    opzionale, int: rimpiazza VARIATION_SEMANTICS_VERSION per
                      la durata della chiamata. Serve a una domanda sola —
                      "quel numero e' davvero dentro l'hash?" — che dal solo
@@ -288,6 +295,7 @@ def _op_fingerprint(args):
     mgr = scm.StreamCacheManager(
         cache_path=os.path.join(tempfile.gettempdir(), "pge-parity-unused.json"),
         samples_dir=args.get("samples_dir"),
+        renderer_type=args.get("renderer", "numpy"),
     )
     semantics = args.get("semantics")
     if semantics is None:

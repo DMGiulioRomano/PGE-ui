@@ -315,6 +315,28 @@ console.log("\n── la catena dal motore al pallino ──");
     "il ref invece lo riscrive chiunque rilegga, render in volo compreso — " +
     "e i tre punti di rilettura non sono esclusivi col render in corso");
 
+  /* Il TERZO asse dell'hash del motore, tenuto a bada da un valore cablato.
+   *
+   * `renderer_type` sta nel fingerprint del motore accanto alla semantica
+   * (`tests/parity/test-fingerprint-parity.js` lo verifica: tre backend, tre
+   * hash). La UI non ha un asse per lui, e va bene finche' il backend e' UNO:
+   * app.jsx lo cabla e il bridge ha lo stesso default. Se i due divergessero,
+   * o se la scelta arrivasse nelle Settings — il motore ha tre backend — il
+   * pallino tornerebbe verde su stem che il motore riscrivera', cioe' PGE #222
+   * su un asse diverso. Questa guardia e' il promemoria che quel giorno
+   * l'asse va costruito, non un'opzione da aggiungere e basta. */
+  assert("app.jsx cabla un solo backend",
+    /renderer:\s*"numpy"/.test(appSrc) &&
+    !/renderer:\s*(tweaks|renderOptions|opts)\./.test(appSrc),
+    "se il backend diventa una scelta, serve un asse come quello della " +
+    "semantica: il motore lo ha dentro il proprio fingerprint");
+  {
+    const srvSrc = SG.codeOf(path.join(__dirname, "../../server.py"));
+    assert("...e il bridge ha lo stesso default",
+      /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc),
+      "i due lati devono concordare: chi rende e chi hasha sono lo stesso giro");
+  }
+
   /* La versione del motore si richiede in TRE punti, e questa e' la guardia che
    * tiene in vita l'asse. Con la sola chiamata al boot — effetto con dipendenze
    * vuote, e `serverDown` che non torna mai a falso senza reload — chi apre
