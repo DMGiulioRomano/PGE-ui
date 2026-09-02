@@ -21,9 +21,29 @@ import threading
 #
 # Note: [CACHE] lines appear one per stream as each starts.
 # The absolute path lines appear all together at the end (summary block).
+#
+# Ma non tutte le righe `[CACHE]` sono stream, e la forma non le distingue:
+# il motore stampa `[CACHE] Manifest: <path>` a ogni render con --cache e
+# `[CACHE] GC: rimossi N stream orfani: [...]` quando la GC rimuove qualcosa.
+# Entrambe passano questo regex, e da sole valgono due stream inventati per
+# giro — barra 3/2, un toast che dichiara una cache mai avvenuta, e due voci
+# fantasma nell'indice stem persistito del browser, da cui `ownsStem` risponde
+# `true` per un file mai esistito. A discriminare non e' quindi la riga ma
+# l'insieme degli id che la richiesta dichiara (`state["ids"]`): una lista di
+# prefissi riservati lascerebbe rientrare il prossimo `[CACHE] Qualcosa:` a
+# monte dalla stessa porta. La sonda in tests/python/test_render_pipeline.py
+# chiede le righe ai sorgenti del motore invece di trascriverle.
 _RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
-# Matches absolute path ending in __<streamId>.<aif|wav|flac>
-_RE_STEM_PATH  = re.compile(r"^\s+.+__(\w+)\.(aif|aiff|wav|flac)\s*$", re.IGNORECASE)
+# Matches absolute path ending in __<streamId>.<aif|wav|flac>.
+#
+# L'id NON e' vincolato a `\w`: il charset che `renameStream` (app.jsx)
+# pubblicizza sono lettere, cifre, `.`, `_` e `-`, quindi `\w` escludeva `.` e
+# `-`. Solo l'ULTIMO stream DIRTY del giro dipende da questa riga (gli altri li
+# chiude la riga `[CACHE]` successiva), e per lui il `stream-done` non
+# arrivava mai: pallino giallo dopo un render che aveva fatto esattamente cio'
+# che il pallino chiedeva. Il confronto con lo stream in corso, sotto, e' la
+# vera discriminante — qui basta riconoscere la riga.
+_RE_STEM_PATH  = re.compile(r"^\s+(.+__.+)\.(?:aif|aiff|wav|flac)\s*$", re.IGNORECASE)
 
 
 def parse_render_line(line: str, state: dict) -> list:
@@ -35,6 +55,13 @@ def parse_render_line(line: str, state: dict) -> list:
     m = _RE_CACHE_LINE.match(line)
     if m:
         sid   = m.group(1)
+        # Un id che la richiesta non ha dichiarato non e' uno stream: e' una
+        # riga di servizio del motore (Manifest, GC) che ha la stessa forma.
+        # `ids` assente = richiesta che non dichiara gli stream: nessun
+        # insieme, nessun filtro, comportamento storico.
+        ids = state.get("ids")
+        if ids is not None and sid not in ids:
+            return events
         dirty = m.group(2).strip().upper() == "DIRTY"
         total = state.get("total", 0)
         idx   = state.get("index", 0)
@@ -57,12 +84,14 @@ def parse_render_line(line: str, state: dict) -> list:
     m2 = _RE_STEM_PATH.match(line)
     if m2:
         prev = state.get("streamId")
-        if prev:
-            sid = m2.group(1)
-            if sid == prev:
-                events.append({"type": "stream-done",
-                                "streamId": prev, "cached": False})
-                state["streamId"] = None
+        # Il confronto e' sul suffisso e non su un gruppo catturato: sia il
+        # basename sia l'id possono contenere `__`, quindi non c'e' una
+        # posizione del separatore da indovinare — c'e' un solo id che questa
+        # riga puo' chiudere, ed e' quello in corso.
+        if prev and m2.group(1).endswith("__" + prev):
+            events.append({"type": "stream-done",
+                            "streamId": prev, "cached": False})
+            state["streamId"] = None
     return events
 
 

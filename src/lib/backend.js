@@ -325,6 +325,14 @@
         // sulla RISPOSTA, non sul body: `!res.ok || !res.body` e' un throw solo,
         // ma un 200 senza body e' comunque un server che ha gia' scritto.
         let configWritten = false;
+        // Gli id che hanno gia' ricevuto il loro `stream-done` in QUESTO giro.
+        // Il fallback di `done` chiedeva la stessa cosa a `stemIndex`, che pero'
+        // `loadCache` riempie da /stems a ogni apertura di progetto: li'
+        // "gia' gestito" voleva dire "esisteva su disco", quindi dal secondo
+        // render in poi il fallback era morto — e il fallback e' l'unica rete
+        // dell'ultimo stream DIRTY del giro, il solo che dipende dalla riga di
+        // path stampata in fondo.
+        const doneThisRun = new Set();
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -364,8 +372,14 @@
                     if (!stem.startsWith(prefix)) continue;
                     const streamId = stem.slice(prefix.length);
                     if (!streamId) continue;
+                    if (doneThisRun.has(streamId)) continue;  // already handled, this run
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
-                    if (stemIndex[key]) continue;  // already handled
+                    doneThisRun.add(streamId);
+                    // Qui l'id NON si valida contro `opts.streams`: `generated`
+                    // e' la lista dei file che il server ha trovato su disco,
+                    // quindi anche lo stem di uno stream cancellato esiste
+                    // davvero, e l'indice deve saperlo — e' esattamente la
+                    // domanda a cui `ownsStem` risponde.
                     _markStemFresh(key);
                     const s = (opts.streams || []).find(x => x.id === streamId);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
@@ -374,12 +388,23 @@
                   _persistStemIndex();
                 }
                 if (ev.type === "stream-done") {
-                  _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
-                  _persistStemIndex();
-                  // freeze the browser-side fingerprint for this stream so the
-                  // UI can mark it fresh (and detect later edits as stale).
+                  // Un solo `if (s)` per entrambe le scritture. L'evento arriva
+                  // da una riga di log parsata, non da un file: il motore
+                  // stampa righe `[CACHE]` di servizio (Manifest, GC) che ne
+                  // hanno la forma, e ognuna valeva una voce fantasma
+                  // nell'indice — da cui `ownsStem` rispondeva `true` per un
+                  // file mai esistito, bruciando quel nome per `allocStreamIds`
+                  // e per `renameStream`. Il fingerprint sotto gia' pretendeva
+                  // uno stream dichiarato; l'indice no.
                   const s = (opts.streams || []).find(x => x.id === ev.streamId);
-                  if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
+                  if (s) {
+                    _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
+                    _persistStemIndex();
+                    doneThisRun.add(ev.streamId);
+                    // freeze the browser-side fingerprint for this stream so the
+                    // UI can mark it fresh (and detect later edits as stale).
+                    localFps[s.id] = fingerprintStream(s, opts.outputFormat);
+                  }
                 }
               } catch (parseErr) {
                 onEvent && onEvent({ type: "log", line: `[warn] bad json line: ${line.slice(0,80)}` });

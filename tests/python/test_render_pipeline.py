@@ -6,6 +6,8 @@ These don't need the engine repo (no main.py is spawned). The kill/watchdog
 tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 """
 
+import glob
+import os
 import re
 import subprocess
 import sys
@@ -14,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import engine_corpus
 import render_pipeline as rp
 
 
@@ -76,6 +79,136 @@ def test_parse_render_line_stem_path_other_stream_no_done():
     evs = rp.parse_render_line("    /abs/output/PGE_test__streamX.aif", state)
     assert _types(evs) == ["log"]            # path is for a different stream
     assert state["streamId"] == "stream1"
+
+
+# ---------------------------------------------------------------------------
+# Il corpus non e' piu' trascritto da un docstring: le righe le stampa il
+# motore, e l'insieme degli id lo dichiara la richiesta.
+#
+# `[CACHE] Manifest: <path>` esce a OGNI render con --cache (pge/cli.py), e
+# `[CACHE] GC: rimossi N stream orfani` quando la GC rimuove qualcosa: due
+# righe che non sono stream e che `_RE_CACHE_LINE` leggeva come tali,
+# inventando stream `Manifest` e `GC` in ogni giro.
+# ---------------------------------------------------------------------------
+
+def _ids_state(ids, total=None, **over):
+    """Lo `state` che costruisce /render: gli id dichiarati dalla richiesta."""
+    st = {"streamId": None, "index": 0,
+          "total": len(ids) if total is None else total,
+          "ids": set(ids)}
+    st.update(over)
+    return st
+
+
+def test_parse_render_line_ignores_manifest_line():
+    state = _ids_state({"stream1"})
+    evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
+    assert _types(evs) == ["log"]
+    assert state["index"] == 0            # non consuma un posto nella barra
+    assert state["streamId"] is None
+
+
+def test_parse_render_line_ignores_gc_line():
+    state = _ids_state({"stream1"})
+    evs = rp.parse_render_line(
+        "[CACHE] GC: rimossi 2 stream orfani: ['proj__old1', 'proj__old2']", state)
+    assert _types(evs) == ["log"]
+    assert state["index"] == 0
+
+
+def test_parse_render_line_ghost_does_not_close_pending_dirty():
+    """Un fantasma non deve nemmeno chiudere lo stream in corso."""
+    state = _ids_state({"stream1"})
+    rp.parse_render_line("[CACHE] stream1: DIRTY", state)
+    evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
+    assert _types(evs) == ["log"]
+    assert state["streamId"] == "stream1"   # ancora in corso
+
+
+def test_parse_render_line_without_ids_keeps_legacy_behaviour():
+    """Richiesta che non dichiara gli stream: nessun insieme, nessun filtro."""
+    state = {"streamId": None, "total": 0, "index": 0}
+    evs = rp.parse_render_line("[CACHE] stream1: clean", state)
+    assert _types(evs) == ["log", "stream-start", "stream-done"]
+
+
+@pytest.mark.parametrize("sid", ["bass-1", "voce.2", "a_b", "S1", "x.y-z_1"])
+def test_parse_render_line_stem_path_closes_ids_outside_word_charset(sid):
+    r"""Il charset degli id e' quello di `renameStream` (app.jsx: lettere,
+    cifre, `.`, `_`, `-`), non `\w`: con `-` o `.` l'ultimo stream DIRTY del
+    giro non riceveva mai il suo `stream-done`."""
+    state = _ids_state({sid})
+    rp.parse_render_line(f"[CACHE] {sid}: DIRTY", state)
+    evs = rp.parse_render_line(f"    /abs/output/PGE_test__{sid}.wav", state)
+    assert _types(evs) == ["log", "stream-done"]
+    assert evs[1] == {"type": "stream-done", "streamId": sid, "cached": False}
+    assert state["streamId"] is None
+
+
+def test_parse_render_line_stem_path_still_discriminates():
+    """Allargare la regex non deve chiudere lo stream sbagliato."""
+    state = _ids_state({"bass-1", "voce.2"})
+    rp.parse_render_line("[CACHE] bass-1: DIRTY", state)
+    evs = rp.parse_render_line("    /abs/output/PGE_test__voce.2.wav", state)
+    assert _types(evs) == ["log"]
+    assert state["streamId"] == "bass-1"
+
+
+# --- la sonda: le righe [CACHE] chieste al motore, non trascritte -----------
+
+_RE_CACHE_LITERAL = re.compile(r"""(?P<q>["'])\[CACHE\](?P<body>.*?)(?P=q)""")
+_RE_INTERP = re.compile(r"\{[^{}]*\}")
+
+
+def _engine_cache_literals():
+    """Ogni literal `[CACHE] …` nei sorgenti del motore, con il suo file."""
+    src = os.path.join(engine_corpus.ENGINE_ROOT, "src")
+    out = []
+    for path in sorted(glob.glob(os.path.join(src, "**", "*.py"), recursive=True)):
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for m in _RE_CACHE_LITERAL.finditer(text):
+            out.append((os.path.relpath(path, engine_corpus.ENGINE_ROOT),
+                        m.group("body")))
+    return out
+
+
+def test_no_engine_cache_line_invents_a_stream():
+    """Nessuna riga `[CACHE]` del motore deve produrre uno stream che la
+    richiesta non ha dichiarato.
+
+    Il corpus lo sceglie il motore: le sei asserzioni sopra girano su righe
+    scritte a mano (la trascrizione del docstring di questo modulo), ed e'
+    esattamente per questo che `Manifest` e `GC` ci passavano in mezzo. Qui le
+    righe si leggono dai sorgenti del motore e ogni interpolazione diventa un
+    nome che la richiesta non conosce: se il parser ne ricava uno stream, la
+    riga sta inventando.
+    """
+    err = engine_corpus.corpus_error()
+    assert err is None, err
+    reason = engine_corpus.skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    lines = _engine_cache_literals()
+    assert lines, (
+        "nessun literal [CACHE] nei sorgenti del motore: la sonda gira a vuoto "
+        f"(cercato in {engine_corpus.ENGINE_ROOT}/src)"
+    )
+    literal_prefixed = [b for _, b in lines if not b.lstrip().startswith("{")]
+    assert literal_prefixed, (
+        "nessuna riga [CACHE] con prefisso letterale nel corpus: il caso "
+        "interessante (Manifest:, GC:) non c'e', la sonda non discrimina"
+    )
+
+    for path, body in lines:
+        rendered = "[CACHE]" + _RE_INTERP.sub("zzGHOSTzz", body)
+        state = _ids_state({"stream1", "bass-1"})
+        evs = rp.parse_render_line(rendered, state)
+        assert _types(evs) == ["log"], (
+            f"{path} stampa {rendered!r}, che il parser legge come uno stream: "
+            f"{evs[1:]}"
+        )
 
 
 # ---------------------------------------------------------------------------
