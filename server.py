@@ -475,7 +475,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
 
         Le cartelle prima dello stato: un mkdir che fallisce (permessi, disco)
         non deve lasciare il bridge su un workspace a meta', con configs/ nuova
-        e output/ vecchia."""
+        e output/ vecchia.
+
+        Stato di processo, e regge perche' gunicorn qui gira con "workers": 1
+        (vedi la config in fondo al file): con piu' worker la commutazione a
+        caldo ne toccherebbe uno solo, e le richieste successive vedrebbero il
+        workspace vecchio o quello nuovo a seconda di chi risponde."""
         nonlocal ws, refs, configs, output, cache
         target = Path(path).expanduser().resolve()
         subs = {name: target / name for name in ("configs", "output", "cache")}
@@ -1298,6 +1303,10 @@ def main():
 
     _StandaloneApp(app, {
         "bind": f"{args.host}:{args.port}",
+        # Uno solo, e non e' un dettaglio di prestazioni: il workspace
+        # commutabile a caldo (#147) e' stato di processo, e con piu' worker
+        # una POST /workspace ne cambierebbe uno mentre gli altri continuano a
+        # servire le cartelle di prima.
         "workers": 1,
         "worker_class": "gthread",
         # Ogni <audio> in riproduzione tiene occupato un thread per tutta la

@@ -12,10 +12,10 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
 ~/projects/
 ├── PythonGranularEngine/        ← the renderer (pure CLI, untouched)
 │   ├── src/main.py
-│   ├── configs/*.yml
-│   ├── refs/*.wav
-│   ├── output/                  ← rendered .aif files land here
-│   └── cache/                   ← per-stream fingerprints
+│   ├── refs/*.wav               ← samples (always from here, for now)
+│   ├── configs/*.yml            ┐
+│   ├── output/                  ├ default workspace: pass --workspace to
+│   └── cache/                   ┘ keep these three next to your own work
 │
 └── PGE-ui/                      ← this repo
     ├── PGE Editor.html          ← open this in a browser
@@ -44,6 +44,12 @@ git clone https://github.com/DMGiulioRomano/PGE-ui
 
 (They can also be anywhere else — just pass `--root /path/to/engine` to `server.py`.)
 
+Your own pieces don't have to live inside the engine checkout: `--workspace
+/path/to/brani` puts `configs/ output/ cache/` wherever you keep your work, so
+editing a composition stops dirtying the engine repo and `git` rollback becomes
+your own. Sample files (`refs/`) still come from the engine — see
+[Workspace](#workspace) below.
+
 ### 2) Set up the engine
 
 Follow `PythonGranularEngine/README.md`: install system deps (csound, sox, python ≥ 3.12) and run `make setup` inside that repo to create its venv.
@@ -63,18 +69,22 @@ pip install -r requirements.txt
 make serve
 # or directly:
 python server.py --root ../PythonGranularEngine
+# with your own project folder:
+make serve WORKSPACE=~/brani
+python server.py --root ../PythonGranularEngine --workspace ~/brani
 ```
 
 You'll see:
 
 ```
 PGE bridge
-  root:    /Users/you/projects/PythonGranularEngine
-  refs/:   .../refs
-  configs/:.../configs
-  output/: .../output
-  cache/:  .../cache
-  listen:  http://127.0.0.1:7878
+  root:      /Users/you/projects/PythonGranularEngine
+  workspace: /Users/you/brani
+  refs/:     .../PythonGranularEngine/refs   (from the engine)
+  configs/:  /Users/you/brani/configs
+  output/:   /Users/you/brani/output
+  cache/:    /Users/you/brani/cache
+  listen:    http://127.0.0.1:7878
 ```
 
 ### 5) Open the editor
@@ -84,10 +94,31 @@ Open `PGE Editor.html` in any browser (Chrome, Firefox, Safari — all work, bec
 In the editor:
 
 1. On launch the editor probes `server.py` (`http://localhost:7878` by default), lists the real contents of `refs/` and `configs/`, and auto-opens the last project (or the first on disk).
-2. **⚙ gear icon** (top-right) → **Server** to change the URL or run **"test connection"**.
+2. **⚙ gear icon** (top-right) → **Server** to change the URL or run **"test connection"**, → **Workspace** to point the editor at another project folder without restarting the bridge.
 3. Hit **Render**. The split-button's progress bar, the per-clip status dots, and the **log** terminal all stream live output from `python src/main.py`.
 
 If the server isn't running the editor shows a "start server.py" notice — there is no offline/in-browser mode.
+
+---
+
+## Workspace
+
+`--root` is engine *source* (`src/main.py`, `.venv`, `csound/`). `--workspace` is
+where the work lives: `configs/`, `output/`, `cache/`. Leave it out and the two
+coincide, which is what the bridge always did — your pieces end up inside the
+engine checkout, and `/render` rewrites them there.
+
+- Missing **sub**directories are created; the workspace folder itself is not — a
+  mistyped path is refused instead of scattered across the disk.
+- It can also be switched while the bridge runs: **⚙ → Workspace**, type a path,
+  *usa questa cartella*. The editor reloads the project list and the stem index
+  (they describe the previous folder), so unsaved edits to the open project are
+  lost. Refused mid-render.
+- **`refs/` still comes from `--root`.** The render subprocess runs with its
+  working directory on the engine repo, and the numpy renderer resolves samples
+  against `./refs/` there. Samples will follow the workspace once the engine
+  grows `--samples-dir`
+  ([PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)).
 
 ---
 

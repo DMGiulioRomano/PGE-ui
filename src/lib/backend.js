@@ -10,6 +10,9 @@
  *   window.PGEBackend.create(opts) — factory (returns the local backend)
  *
  * Contract (every backend implements):
+ *   workspace()                   → Promise<{ ok, workspace, isRoot, paths, projects }>
+ *   setWorkspace(path)            → lo stesso, oppure { ok:false, error } (percorso
+ *                                   invalido / render in corso). "" torna al --root
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
  *   fs.chooseDir(kind)            → Promise<{ path } | null>
  *   fs.readFile(kind, name)       → Promise<string>
@@ -496,6 +499,54 @@
       return { ok: checks.every(c => c.ok), checks };
     }
 
+    /* ---- workspace (#147) ------------------------------------------------
+     * La cartella che contiene configs/ output/ cache/, indipendente dal
+     * checkout del motore. L'autorita' e' il server: l'editor gira su file://
+     * e non ha ne' un file picker nativo ne' modo di sapere se un percorso
+     * esiste, quindi il percorso si digita, il server valida e risponde con
+     * l'elenco progetti nuovo. */
+    async function workspace() {
+      try { return await jget("/workspace"); }
+      catch (e) { return { ok: false, error: e.message }; }
+    }
+
+    async function setWorkspace(path) {
+      let res, body;
+      try {
+        res = await fetchWithTimeout(baseUrl + "/workspace", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: path || "" }),
+        });
+        body = await res.json().catch(() => null);
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+      // Un 400 (percorso inesistente) o un 409 (render in corso) sono
+      // risposte, non guasti: il messaggio del server e' esattamente quello
+      // che il campo in Settings deve mostrare, quindi niente throw.
+      if (!res.ok || !body || body.ok !== true) {
+        return { ...(body || {}), ok: false,
+                 error: (body && body.error) || `HTTP ${res.status}` };
+      }
+      // L'indice degli stem parla della output/ di PRIMA. Tenerlo darebbe una
+      // clip col pallino verde e nessun audio dietro: un 404 che l'elemento
+      // <audio> segnala non facendo mai partire `canplay`, cioe' in silenzio.
+      // Svuotarlo e' senza costi — loadCache rilegge /stems dal disco al primo
+      // progetto caricato, e la mappa delle durate si ricostruisce con lui.
+      //
+      // Le impronte in `pge-local-fp` restano: sono chiavate sul basename e
+      // dicono "com'era lo stream quando l'ho renderizzato". Un progetto
+      // omonimo in un'altra cartella con contenuto diverso ha impronta diversa
+      // (quindi stale, che e' la direzione giusta); con contenuto identico
+      // l'audio sarebbe identico — i sample vengono comunque dal motore.
+      stemIndex = {};
+      for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
+      _persistStemIndex();
+      cachedConfig = null;      // /health portava le path di prima
+      return body;
+    }
+
     // Valid `--plot-envelopes` names, sourced from the engine (issue #31) so the
     // render-options filter isn't hardcoded. Returns [] for an older server.py
     // without the endpoint, or an older engine without the constant — the UI
@@ -521,7 +572,8 @@
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys, bounds };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose,
+             setup, envelopeKeys, bounds, workspace, setWorkspace };
   }
 
   window.PGEBackend = {

@@ -1747,6 +1747,72 @@ function App() {
     setDirty(false);
   }
 
+  /* Cambio di workspace (#147): la cartella con configs/ output/ cache/.
+   *
+   * Non e' un merge, e' un rimpiazzo. Tutto quello che il browser ha in mano
+   * — elenco progetti, indice degli stem, peaks, spettrogrammi, grani,
+   * impronte dell'ultimo render — descrive la cartella di prima; tenerne un
+   * pezzo significa una clip col pallino verde e nessun audio dietro. Il
+   * server e' l'autorita': valida il percorso, commuta e risponde con
+   * l'elenco progetti nuovo, in un giro solo. */
+  async function onWorkspaceChange(path) {
+    const backend = window.PGEBackend.current;
+    if (!backend.setWorkspace) {
+      return { ok: false, error: "server.py senza endpoint /workspace — aggiornalo" };
+    }
+    const res = await backend.setWorkspace(path);
+    if (!res || res.ok !== true) return res || { ok: false, error: "cambio rifiutato" };
+
+    // backend.setWorkspace ha gia' svuotato l'indice degli stem; qui cade il
+    // resto dello stato per-stream, che e' React.
+    setWaveforms({});
+    setSpectrograms({});
+    setGrainData({});
+    setLastRenderedFps({});
+    grainLoadedRef.current = new Set();
+    grainRegenRef.current = new Set();
+    stemRevRef.current = {};
+    if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
+
+    // I campi informativi in Settings vanno riscritti a forza: qui le path
+    // sono cambiate davvero, mentre _syncPathsFromServer scrive solo i vuoti.
+    const paths = res.paths || {};
+    if (paths.refs)    setTweak("mediaPath",    paths.refs);
+    if (paths.configs) setTweak("projectsPath", paths.configs);
+    if (paths.output)  setTweak("outputPath",   paths.output);
+
+    // refs/ non segue ancora il workspace (PythonGranularEngine#235), quindi
+    // oggi la media list tornerebbe identica: la ricarichiamo lo stesso perche'
+    // il giorno che seguira' questo e' il punto che deve accorgersene.
+    await refreshMedia();
+    await refreshProjects();
+
+    const files = res.projects || [];
+    if (!files.length) {
+      // Nessun .yml: il progetto in memoria resta aperto ed e' quello che un
+      // Salva scriverebbe qui — cioe' il modo di portarsi un brano nella
+      // cartella nuova. Detto, non subito.
+      pushToast({ kind: "warn", title: "workspace senza progetti",
+                  message: `${res.workspace} — nessun .yml. Salva per portarci quello aperto`,
+                  duration: 6000 });
+    } else {
+      // L'omonimo vince sul primo della lista, come al boot.
+      const target = files.some(f => f.name === activeProject) ? activeProject : files[0].name;
+      bootLoadedRef.current = true;   // la selezione l'abbiamo fatta noi
+      await onProjectSelect(target);
+      // E qui l'indice degli stem si riempie dalla output/ nuova. Non si puo'
+      // lasciare all'effetto su [activeProject]: due cartelle possono avere un
+      // progetto omonimo, e in quel caso `activeProject` non cambia, l'effetto
+      // non riparte e ogni clip resterebbe ⚪ con gli stem sul disco.
+      const cache = await backend.render.loadCache(target.replace(/\.yml$/, ""));
+      setLastRenderedFps(cache || {});
+      pushToast({ kind: "info", title: "workspace",
+                  message: `${res.workspace} · ${files.length} progetti`, duration: 3000 });
+    }
+    logToTerminal(`[workspace] ${res.workspace} · ${files.length} progetti · configs ${paths.configs}`, "ok");
+    return res;
+  }
+
   async function onChooseMediaFolder() {
     const backend = window.PGEBackend.current;
     try {
@@ -1945,7 +2011,8 @@ function App() {
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)}
                      tweaks={tweaks} setTweak={setTweak}
-                     serverDown={serverDown} />
+                     serverDown={serverDown}
+                     onWorkspaceChange={onWorkspaceChange} />
 
       {previewSample && MediaPreview ? (
         <MediaPreview sample={previewSample}

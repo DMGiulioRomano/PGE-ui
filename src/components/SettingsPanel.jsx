@@ -4,7 +4,7 @@
 
 const { useState: useStateSP, useRef: useRefSP, useEffect: useEffectSP } = React;
 
-function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
+function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspaceChange }) {
   const { Icon } = window.PGE;
   const currentBackendKind = "local";  // single backend now
   const ref = useRefSP(null);
@@ -12,6 +12,14 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
   const [setupLog, setSetupLog] = useStateSP([]);
   const [setupRunning, setSetupRunning] = useStateSP(false);
   const setupLogRef = useRefSP(null);
+  // Workspace (#147). Il campo e' libero — l'editor gira su file://, non c'e'
+  // file picker nativo — e l'autorita' e' il server: il valore mostrato viene
+  // da GET /workspace all'apertura, non da una preferenza salvata qui, cosi'
+  // una sola verita' invece di due che possono divergere.
+  const [wsPath, setWsPath] = useStateSP("");
+  const [wsInfo, setWsInfo] = useStateSP(null);
+  const [wsStatus, setWsStatus] = useStateSP({ state: "idle", message: "" });
+  const [wsBusy, setWsBusy] = useStateSP(false);
 
   useEffectSP(() => {
     if (!open) return;
@@ -30,6 +38,23 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
     }
   }, [setupLog]);
 
+  // Il workspace vive nel server (e sopravvive a un reload della pagina, non
+  // alla sua chiusura): si rilegge a ogni apertura del pannello invece di
+  // fidarsi di un valore in memoria.
+  useEffectSP(() => {
+    if (!open) return;
+    const backend = window.PGEBackend?.current;
+    if (!backend?.workspace) return;
+    let dead = false;
+    backend.workspace().then(info => {
+      if (dead || !info || info.ok === false) return;
+      setWsInfo(info);
+      setWsPath(info.workspace || "");
+      setWsStatus({ state: "idle", message: "" });
+    });
+    return () => { dead = true; };
+  }, [open]);
+
   if (!open) return null;
 
   async function runSetup() {
@@ -43,6 +68,25 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
       }
     });
     setSetupRunning(false);
+  }
+
+  async function applyWorkspace(path) {
+    if (!onWorkspaceChange) return;
+    setWsBusy(true);
+    setWsStatus({ state: "testing", message: "cambio cartella…" });
+    const res = await onWorkspaceChange(path);
+    setWsBusy(false);
+    if (!res || res.ok !== true) {
+      // Il messaggio arriva dal server ("non esiste: …", "render in corso"):
+      // e' l'unico che sa perche' il percorso non va bene.
+      setWsStatus({ state: "err", message: (res && res.error) || "cambio rifiutato" });
+      return;
+    }
+    setWsInfo(res);
+    setWsPath(res.workspace || "");
+    const n = (res.projects || []).length;
+    setWsStatus({ state: "ok",
+                  message: `${res.workspace} · ${n} progett${n === 1 ? "o" : "i"}` });
   }
 
   async function pingServer() {
@@ -131,6 +175,50 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
         ) : null}
 
         <div className="sp-section">
+          <div className="sp-sec-head">Workspace</div>
+          <div className="sp-row">
+            <span className="sp-k" title="cartella che contiene configs/ output/ cache/">cartella</span>
+            <input className="sp-input mono" value={wsPath}
+                   placeholder="(= root del motore)"
+                   onChange={(e) => setWsPath(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === "Enter") applyWorkspace(wsPath); }} />
+          </div>
+          <div className="sp-row">
+            <span className="sp-k"></span>
+            <div className="sp-btns">
+              <button className="sp-btn" onClick={() => applyWorkspace(wsPath)} disabled={wsBusy}>
+                {wsBusy ? "cambio…" : "usa questa cartella"}
+              </button>
+              <button className="sp-btn" onClick={() => applyWorkspace("")} disabled={wsBusy}
+                      title="torna alla cartella del motore (--root)">al motore</button>
+            </div>
+          </div>
+          {wsStatus.state !== "idle" ? (
+            <div className={"sp-status sp-status-" + wsStatus.state}>
+              <span className="sp-dot" /> <span className="mono">{wsStatus.message}</span>
+            </div>
+          ) : null}
+          <div className="sp-hint">
+            I brani vivono qui: <span className="mono">configs/</span>,{" "}
+            <span className="mono">output/</span> e <span className="mono">cache/</span>.
+            Le sottocartelle mancanti le crea il server; la cartella no — un percorso
+            digitato male viene rifiutato invece di essere creato. Fuori dal checkout
+            del motore, il rollback di un progetto torna a essere il proprio git.
+            {wsInfo && wsInfo.isRoot ? " Ora coincide col repo del motore (default)." : ""}
+          </div>
+          <div className="sp-hint">
+            I sample restano quelli del motore (<span className="mono">refs/</span>): il
+            render gira con la working directory sul repo del motore e il renderer numpy
+            li risolve li'. Seguiranno il workspace quando il motore avra'{" "}
+            <span className="mono">--samples-dir</span>.
+          </div>
+          <div className="sp-hint">
+            Cambiare cartella ricarica progetti, media e stem: le modifiche non salvate
+            del progetto aperto vanno perse. Rifiutato mentre un render e' in corso.
+          </div>
+        </div>
+
+        <div className="sp-section">
           <div className="sp-sec-head">Paths</div>
           <div className="sp-row">
             <span className="sp-k">media folder</span>
@@ -150,9 +238,9 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown }) {
                    onChange={(e) => setTweak("outputPath", e.target.value)} />
           </div>
           <div className="sp-hint">
-            These paths are resolved by <span className="mono">server.py</span> at launch
-            (via <span className="mono">--root</span>). The fields above are informational;
-            edit them on the server side, not here.
+            Specchio delle path risolte da <span className="mono">server.py</span>: media
+            da <span className="mono">--root</span>, progetti e output dal Workspace qui
+            sopra. Campi informativi — si cambiano di la', o al lancio del server.
           </div>
         </div>
 
