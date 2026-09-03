@@ -4,9 +4,11 @@
  * Extracted from app.jsx (#44) so it can be unit-tested in node like
  * yaml-bridge.js. No React, no DOM. Reads window.PGEEnv (envelope-loops.js) at
  * IIFE time, window.PGEDeviationProb (deviation-probability.js) and
- * window.PGE_OUTPUT_SR (yaml-bridge.js, the engine sample rate behind the
- * 'samples' factor) at call time — load all three first, or the grain-unit
- * helpers return NaN. Attaches to window.PGEEnvUtils.
+ * window.PGE_OUTPUT_SR (the engine sample rate behind the 'samples' factor —
+ * published as a static fallback by yaml-bridge.js and overwritten with the
+ * engine's own by window.PGEBounds.apply at boot) at call time — load all
+ * three first, or the grain-unit helpers return NaN.
+ * Attaches to window.PGEEnvUtils.
  *
  * Field shapes handled: standard breakpoints [t, v], compact loop blocks, and
  * the object form {type, points}. The stream-level helpers walk every
@@ -572,9 +574,16 @@
   // grainDurationUnitError.
   //
   // Il sample rate NON è un parametro: è la config globale del motore, letta a
-  // chiamata da window.PGE_OUTPUT_SR (yaml-bridge.js, primo caricato). Un
-  // argomento qui sarebbe un contratto che nessuno può onorare — la CLI del
-  // motore fissa output_sr a DEFAULT_OUTPUT_SR, quindi il render è sempre lì.
+  // chiamata da window.PGE_OUTPUT_SR. Un argomento qui sarebbe un contratto che
+  // nessuno può onorare — la CLI del motore non espone output_sr, passa
+  // DEFAULT_OUTPUT_SR e basta, quindi il render è sempre lì.
+  //
+  // Letta a chiamata e non catturata: al boot window.PGEBounds.apply sovrascrive
+  // il fallback statico di yaml-bridge.js con il numero letto dai sorgenti del
+  // motore (GET /bounds → output_sr). Catturarlo qui congelerebbe il letterale
+  // — e questo è il lettore in cui sbagliarlo costa di più: il fattore non
+  // stringe un clamp, RISCRIVE duration/duration_range nello YAML
+  // (convertGrainDurationUnit).
   function grainUnitFactor(unit) {
     if (unit === "samples") return 1 / window.PGE_OUTPUT_SR;
     if (unit === "milliseconds") return 1e-3;

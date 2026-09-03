@@ -88,8 +88,8 @@ from render_pipeline import (
 # engine_introspect.py (#133): the parity oracle imports it with the standard
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
-from engine_introspect import (engine_envelope_keys, engine_parameter_bounds,
-                              engine_semantics_version)
+from engine_introspect import (engine_envelope_keys, engine_output_sr,
+                              engine_parameter_bounds, engine_semantics_version)
 
 
 def _ensure_venv_events(root: Path):
@@ -326,8 +326,28 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     def bounds():
         """Engine parameter clamps (min/max/range + pitch), parsed from the
         engine source so the UI's bounds aren't hardcoded. Empty dict = an
-        engine without these files; the UI then keeps its static fallback."""
-        return jsonify({"ok": True, "bounds": engine_parameter_bounds(root)})
+        engine without these files; the UI then keeps its static fallback.
+
+        Porta anche `output_sr` (`DEFAULT_OUTPUT_SR`), che non e' un bound ma
+        ne genera uno: il minimo di `grain_duration` e' 1 campione, cioe'
+        `1/output_sr`, un override dinamico che l'AST dei bound non vede — e la
+        stessa costante regge la conversione di `grain.duration_unit: samples`,
+        che riscrive i valori nello YAML. Viaggia di qui invece che su una
+        route sua perche' e' esattamente la domanda che questa route serve:
+        i clamp che il motore impone.
+
+        E' condizionato al proprio None, non alla presenza dei bound: un motore
+        con `constants.py` e senza `parameter_definitions.py` e' strano, ma il
+        sample rate lo sappiamo lo stesso e tacerlo lo farebbe ricadere sul
+        letterale trascritto in yaml-bridge.js — cioe' proprio la cosa che
+        questa lettura toglie di mezzo. La composizione sta qui e non dentro
+        `engine_parameter_bounds` perche' le due letture hanno cache diverse:
+        i bound a vita, il sample rate invalidato sull'mtime."""
+        payload = dict(engine_parameter_bounds(root))
+        sr = engine_output_sr(root)
+        if sr is not None:
+            payload["output_sr"] = sr
+        return jsonify({"ok": True, "bounds": payload})
 
     @app.get("/semantics-version")
     def semantics_version():

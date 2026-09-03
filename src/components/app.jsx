@@ -392,6 +392,15 @@ function App() {
         // Pull the engine's parameter clamps so the UI's bounds + envelope
         // auto-fit track the engine instead of the static fallback. Best-effort:
         // an older server.py / engine returns {} and the fallback stays.
+        //
+        // Lo stesso payload porta `output_sr` (DEFAULT_OUTPUT_SR), e apply()
+        // lo installa su window.PGE_OUTPUT_SR. Non e' un dettaglio dei bound:
+        // e' il fattore con cui envelope-utils converte
+        // `grain.duration_unit: samples`, e quella conversione riscrive
+        // duration/duration_range nello YAML. Se questo giro non avviene la UI
+        // resta sul letterale statico di yaml-bridge.js — giusto finche' il
+        // motore non muove il sample rate, ed e' l'unico punto in cui il
+        // numero vero entra nella pagina.
         if (window.PGEBounds && window.PGEBackend.current.bounds) {
           window.PGEBackend.current.bounds()
             .then(raw => { if (raw && Object.keys(raw).length) window.PGEBounds.apply(raw); })

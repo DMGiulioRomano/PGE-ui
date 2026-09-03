@@ -297,6 +297,29 @@ The per-param "remove" button must serialize the off state as `false` or absent 
 
 `GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` under `src/pge/parameters/` (falling back to pre-#162 flat `src/parameters/`). Returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param and whether it reads `min_val/max_val` or `min_range/max_range`. `window.PGE_BOUNDS` in `yaml-bridge.js` is the **static fallback** (used on `file://` / server down).
 
+**The same payload carries `output_sr`** — the engine's `DEFAULT_OUTPUT_SR`
+(`pge/shared/constants.py`), AST-read by `engine_introspect.engine_output_sr`
+with the mtime-invalidated cache the semantics version uses, and for the same
+reason (a `git pull` next door under a live `make serve`). It rides on `/bounds`
+because it *is* a clamp question: the real `grain_duration` minimum is one
+sample, `1/output_sr`, an override the bounds AST can't see. `apply()` installs
+it on `window.PGE_OUTPUT_SR` — the impure half, deliberately, so
+`mergeEngineBounds` stays pure — and the literal in `yaml-bridge.js` is the
+**static fallback**, like `window.PGE_BOUNDS` beside it.
+
+That number has four readers and only one of them is the clamp: `grainUnitFactor`
+in `envelope-utils.js` uses `1/sr` as the `grain.duration_unit: samples` factor,
+and `convertGrainDurationUnit` with that factor **rewrites** `duration` /
+`duration_range` in the YAML. So a stale sample rate doesn't tighten a knob, it
+writes wrong durations — and the direction is the bad one: engine at 44100 with
+the UI on 48000 gives `1/48000 < 1/44100`, i.e. a grain shorter than a real
+sample. `test-bounds-parity.js` pins all three links (imported constant, the
+bridge's AST read, the static literal) and requires the literal to **equal** the
+engine's, not merely be no wider: here the inequality has no safe direction.
+The floor is `1/sr` outright and not `Math.min(base.min, 1/sr)` — the two agree
+only while the declared min sits above one sample, and with a payload carrying
+`output_sr` and no params the `Math.min` kept the floor of the *old* sample rate.
+
 A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose `max_val` is `null` because the real cap is the **chosen sample's duration**. `loopEnvMax` in `envelope-utils.js` drives the EnvelopeEditor `hardMax` + Inspector scalar clamp from that duration, unit-aware (`loop_unit || time_mode`: seconds → `sample_dur`, normalized → `1`), falling back to the static cap only when the duration is unknown.
 
 Loop-window semantics: with a loop active the engine confines the grain read position to `[loop_start, loop_end)` via modular wrap. A loop straddling the file end is expressible **only** via `loop_dur` (`loop_start + loop_dur > sample_dur`); `loop_end` stays bound to `[0, sample_dur]`. `loopBoundsError` in `envelope-utils.js` mirrors the static degenerate-window check (`loop_end <= loop_start`).
@@ -351,9 +374,17 @@ with `fetch-depth: 300`.
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
 bridge and the oracle can use it. It reads the envelope keys, the parameter
-bounds and `VARIATION_SEMANTICS_VERSION`; each returns an empty/`None` result for
-an engine that doesn't have the thing, and every caller must treat that as "don't
-know", never as a value.
+bounds, `VARIATION_SEMANTICS_VERSION` and `DEFAULT_OUTPUT_SR`; each returns an
+empty/`None` result for an engine that doesn't have the thing, and every caller
+must treat that as "don't know", never as a value. For the sample rate that
+extends to values that aren't sample rates: `0` or a negative reads as unknown,
+because the UI divides by it and `1/0` is an `Infinity` that silently switches
+off every clamp downstream.
+
+**No engine constant is transcribed by hand in this repo any more**, and the
+last one to go was the one nobody was watching: `OUTPUT_SR = 48000` in
+`yaml-bridge.js`. It is still written there, but as a declared static fallback
+that parity requires to equal the engine's — see the `/bounds` section above.
 
 That was **false for the `pitch` half** until this round: three fallbacks
 (`edoFactor`, the ratio record, the EDO preset table) returned today's engine

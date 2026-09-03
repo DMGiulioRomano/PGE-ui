@@ -167,7 +167,7 @@ commento.
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
-| bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST |
+| bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |
 
@@ -192,8 +192,9 @@ in `cf386e6` (PGE #222) — e la decisione presa non è stata «aggiorna il nume
   (`loadSemantics` in `backend.js`), letta dal motore via
   `GET /semantics-version` → `engine_introspect.engine_semantics_version`;
 - e con la UI che legge il numero da sola, trascriverlo qui non serviva più: era
-  l'ultima costante del motore ricopiata in questo repo, cioè lo stesso specchio
-  che questa cartella esiste per chiudere.
+  una costante del motore ricopiata in questo repo, cioè lo stesso specchio
+  che questa cartella esiste per chiudere. (Ne restava **una**, e non era
+  innocua: vedi la sezione qui sotto sul sample rate.)
 
 Al posto di `ATTESA`, la suite pretende i due fatti da cui quella decisione
 dipende: che il lettore AST del bridge — l'unica strada per cui il numero
@@ -212,6 +213,49 @@ ha bisogno del numero: dirlo qui rimetterebbe in questo repo la costante che
 `ATTESA` ci aveva già messo una volta. Quel giallo si spegne da solo al primo
 giro, anche a vuoto, perché il motore emette `stream-done` anche per gli stream
 che salta (`cached: true`).
+
+## Il sample rate, l'ultima costante ricopiata (e la peggiore)
+
+Chiusa la versione di semantica ne restava **una**, e il fatto che nessuno la
+guardasse è esattamente ciò che la rendeva pericolosa: `OUTPUT_SR = 48000` in
+`src/lib/yaml-bridge.js`, cioè `DEFAULT_OUTPUT_SR` di
+`pge/shared/constants.py`. Il commento accanto diceva «una sola copia: se il
+motore la muove, si muove qui» — una promessa che nessun test pretendeva.
+
+Ha **due** lettori, e il secondo è quello che conta:
+
+- `grainDur.min = 1/sr`: il minimo di `grain_duration` è 1 campione (PGE #158),
+  l'override dinamico della tabella qui sopra;
+- `grainUnitFactor` (`envelope-utils.js`): `1/sr` è il fattore di
+  `grain.duration_unit: samples`, e `convertGrainDurationUnit` con quel fattore
+  **riscrive** `duration`/`duration_range` nello YAML. Un sample rate sbagliato
+  non stringe una manopola: scrive durate sbagliate su disco.
+
+E il verso è quello brutto. Con il motore a 44100 e la UI ferma a 48000,
+`1/48000 < 1/44100`: la UI ammette un grano **più corto di un campione vero** —
+la stessa forma del difetto `durationRange` che questa cartella ha trovato al
+primo giro, e altrettanto invisibile, perché niente lo interrogava.
+
+Ora il numero arriva dal motore per la stessa strada dei bound: `GET /bounds`
+porta `output_sr` (`engine_introspect.engine_output_sr`, lettura AST, cache
+invalidata sull'mtime come la versione di semantica), e
+`window.PGEBounds.apply` lo installa su `window.PGE_OUTPUT_SR` prima che
+qualcuno lo legga. Il letterale in `yaml-bridge.js` resta il **fallback
+statico**, come `window.PGE_BOUNDS`: vale su `file://` e col bridge giù.
+
+`test-bounds-parity.js` pretende i tre anelli — la costante importata, la
+lettura AST del bridge, e il letterale statico, che qui deve essere **uguale**
+al numero del motore e non solo «non più largo». La disuguaglianza non ha un
+verso sicuro: un `sr` statico più alto dà un min più piccolo (permissivo, il
+verso brutto) e insieme una conversione `samples` troppo corta, che è sbagliata
+e basta.
+
+Una nota sul pavimento: era scritto `Math.min(base.min, 1/sr)`, ed è stato
+sostituito da `1/sr`. I due coincidono finché il min dichiarato dal motore sta
+sopra un campione (oggi 0.002 s = 96 campioni a 48 kHz), ma il vincolo ha un
+verso solo — sotto un campione non c'è niente da rendere — e con il payload che
+porta il solo `output_sr` il `Math.min` teneva il pavimento derivato dal sample
+rate **vecchio**, cioè faceva rientrare il difetto dalla porta di servizio.
 
 ## Aggiungere un caso
 

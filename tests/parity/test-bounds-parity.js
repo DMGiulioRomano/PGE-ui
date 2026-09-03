@@ -302,5 +302,83 @@ parity({
           `statico=${STATIC.pitch.edoFactor} motore=${raw.value.pitch.edoFactor}`);
       },
     },
+    {
+      /* Il sample rate: l'ultima costante del motore che questo repo teneva
+       * ricopiata a mano, e la piu' pericolosa delle due che ne restavano.
+       *
+       * `DEFAULT_OUTPUT_SR` non e' un bound, ma ne genera uno (il minimo di
+       * `grain_duration` e' 1 campione, `1/sr`) e soprattutto e' il fattore con
+       * cui `grainUnitFactor` converte `grain.duration_unit: samples` —
+       * `convertGrainDurationUnit` con quel fattore RISCRIVE `duration` e
+       * `duration_range` nello YAML. Un clamp sbagliato stringe o allarga una
+       * manopola; qui un numero sbagliato scrive durate sbagliate su disco.
+       *
+       * Tre anelli, tre asserzioni, la stessa forma della catena della
+       * semantica: la costante vera (import), la lettura AST del bridge (la
+       * sola via per cui il numero arriva alla UI) e il fallback statico di
+       * yaml-bridge.js.
+       *
+       * Sul fallback si pretende l'UGUAGLIANZA e non il "non piu' largo" degli
+       * altri clamp, perche' qui il verso sicuro non e' ovvio e cambia segno a
+       * seconda del lettore: un `sr` statico piu' ALTO del motore da' un min
+       * piu' PICCOLO (1/48000 < 1/44100), cioe' la UI ammette un grano piu'
+       * corto di un campione vero — permissiva, il verso brutto; ma lo stesso
+       * `sr` piu' alto rende la conversione `samples` troppo corta, che e' un
+       * valore sbagliato e basta, in nessuna direzione utile. Un numero solo,
+       * nessuna banda. */
+      label: "il sample rate del motore, e il fallback statico che lo copia",
+      run: async (ask, assert, ctx) => {
+        const r = await ask("constants");
+        if (!r.ok) throw new Error(r.error);
+        const c = r.value;
+
+        assert("il motore dichiara DEFAULT_OUTPUT_SR",
+          Number.isInteger(c.default_output_sr) && c.default_output_sr > 0,
+          `default_output_sr=${JSON.stringify(c.default_output_sr)} ` +
+          `err=${c.default_output_sr_error || "-"}`);
+
+        assert("la lettura AST del bridge da' lo stesso numero della costante",
+          c.default_output_sr_ast === c.default_output_sr,
+          `ast=${JSON.stringify(c.default_output_sr_ast)} ` +
+          `import=${JSON.stringify(c.default_output_sr)} ` +
+          `err=${c.default_output_sr_ast_error || "-"}`);
+
+        assert("il fallback statico di yaml-bridge.js e' il numero del motore",
+          window.PGE_OUTPUT_SR === c.default_output_sr,
+          `statico=${window.PGE_OUTPUT_SR} motore=${c.default_output_sr} — ` +
+          `aggiorna OUTPUT_SR in src/lib/yaml-bridge.js`);
+
+        /* E che il fallback sia davvero il pavimento di grainDur: senza questa
+         * riga si potrebbe togliere l'override e la prima resterebbe verde. */
+        assert("il min statico di grainDur e' 1 campione a quel sample rate",
+          Math.abs(STATIC.grainDur.min - 1 / c.default_output_sr) < 1e-15,
+          `statico=${STATIC.grainDur.min} atteso=${1 / c.default_output_sr}`);
+
+        /* L'anello che chiude la catena: col payload del motore in mano, il
+         * numero installato e' quello del motore e non il letterale. Si prova
+         * con un sample rate che il motore non ha, altrimenti i due lati
+         * coincidono e l'assert non discrimina (lo stesso ragionamento della
+         * sentinella qui sopra). */
+        const other = c.default_output_sr === 44100 ? 48000 : 44100;
+        const prev = window.PGE_OUTPUT_SR;
+        try {
+          const merged = B.mergeEngineBounds(STATIC, { output_sr: other });
+          assert("mergeEngineBounds prende il sample rate dal payload, non da window",
+            Math.abs(merged.grainDur.min - 1 / other) < 1e-15,
+            `min=${merged.grainDur.min} atteso=${1 / other} (window=${prev})`);
+          B.apply({ output_sr: other });
+          assert("apply() installa il sample rate del motore su window",
+            window.PGE_OUTPUT_SR === other,
+            `window=${window.PGE_OUTPUT_SR} atteso=${other}`);
+        } finally {
+          window.PGE_OUTPUT_SR = prev;
+          window.PGE_BOUNDS = JSON.parse(JSON.stringify(STATIC));
+        }
+
+        ctx.note(`sample rate del motore: ${c.default_output_sr} Hz`,
+          `min di grain_duration = 1/${c.default_output_sr} = ` +
+          `${1 / c.default_output_sr} s; stesso fattore per duration_unit: samples`);
+      },
+    },
   ],
 });

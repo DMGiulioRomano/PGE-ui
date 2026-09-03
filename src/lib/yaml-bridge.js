@@ -44,9 +44,23 @@
   // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
   // globale, non per-stream, e nemmeno esposta dalla CLI — la strada del render
   // passa sempre di qui. La definizione sta in questo modulo perché è il primo
-  // caricato: bounds.js (minimo di grain_duration a 1 campione) ed
-  // envelope-utils.js (fattore di grain.duration_unit: samples) la leggono da
-  // window. Una sola copia: se il motore la muove, si muove qui.
+  // caricato: bounds.js (minimo di grain_duration a 1 campione), envelope-utils.js
+  // (fattore di grain.duration_unit: samples), Inspector.jsx e app.jsx (testo)
+  // lo leggono da window a ogni uso.
+  //
+  // Questo letterale è il FALLBACK STATICO, esattamente come window.PGE_BOUNDS
+  // qui sotto: vale su file:// o col bridge giù. Col bridge acceso il numero
+  // arriva dal motore — GET /bounds porta `output_sr` (engine_introspect legge
+  // DEFAULT_OUTPUT_SR dai sorgenti) e window.PGEBounds.apply() lo installa qui
+  // sopra, prima che qualcuno lo legga.
+  //
+  // Trascritto e basta era giusto solo finché il motore non lo muoveva, e nel
+  // verso brutto: `grainDur.min = 1/OUTPUT_SR`, quindi con il motore a 44100 e
+  // questa riga ferma a 48000 la UI ammette un grano più corto di un campione
+  // vero. Peggio ancora la conversione `samples` di envelope-utils, che con
+  // quel fattore riscrive i valori nello YAML. tests/parity/test-bounds-parity.js
+  // pretende ora che questo letterale sia il numero del motore: se il motore lo
+  // muove, il test lo dice invece di lasciarlo sbagliato in silenzio.
   const OUTPUT_SR = 48000;
   window.PGE_OUTPUT_SR = OUTPUT_SR;
 

@@ -312,6 +312,102 @@ def engine_parameter_bounds(root: Path) -> dict:
     return out
 
 
+def _source_stamp(candidates):
+    """Il timbro (path, mtime_ns, size) dei sorgenti da cui una lettura dipende.
+
+    Serve alle letture la cui cache si invalida sull'mtime invece che a vita.
+    Un file assente entra nel timbro con `(path, None, None)`, cosi' che anche
+    la sua COMPARSA invalidi: un motore aggiornato sotto un `make serve` acceso
+    puo' aggiungere il file, non solo cambiarlo."""
+    stamps = []
+    for src in candidates:
+        try:
+            st = src.stat()
+            stamps.append((str(src), st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamps.append((str(src), None, None))
+    return tuple(stamps)
+
+
+def _read_int_constant(candidates, name):
+    """Il primo `name = <int>` di modulo trovato fra i candidati, o None.
+
+    `_assigned_value` copre anche la grafia annotata; `bool` e' escluso perche'
+    e' un `int` in Python e nessuna di queste costanti lo e'. Si scorre solo
+    `tree.body`: sono costanti di modulo, e cercarle piu' in fondo prenderebbe
+    un'omonima dentro una funzione."""
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in tree.body:
+            value = _assigned_value(node, name)
+            if value is None:
+                continue
+            val = _ast_literal(value)
+            if isinstance(val, int) and not isinstance(val, bool):
+                return val
+            # Il nome c'e' ma non e' un intero letterale (un'espressione, un
+            # `None`): questo file ha gia' risposto, e la risposta e' "non lo
+            # so". Si passa al layout successivo invece di leggere oltre —
+            # un'omonima piu' in basso nello stesso modulo non sarebbe la
+            # costante.
+            break
+    return None
+
+
+_OUTPUT_SR_CACHE: dict = {}
+
+
+def engine_output_sr(root: Path):
+    """`DEFAULT_OUTPUT_SR` del motore (`shared/constants.py`), o None.
+
+    E' il sample rate a cui il motore rende, e la CLI non lo espone: non c'e'
+    flag, `cli.py` passa `DEFAULT_OUTPUT_SR` e basta, quindi il render sta
+    sempre li'. Per la UI e' un numero load-bearing due volte:
+
+      - `grain.duration_unit: samples` converte campioni -> secondi con
+        `1/output_sr` (`grainUnitFactor` in envelope-utils.js), e quella
+        conversione RISCRIVE i valori nello YAML. Un sample rate sbagliato non
+        stringe un clamp: scrive durate sbagliate.
+      - il minimo di `grain_duration` e' 1 campione, cioe' `1/output_sr`
+        (PGE #158), un override dinamico che l'AST dei bound non vede.
+
+    Trascritto a mano in `yaml-bridge.js` restava giusto solo finche' il motore
+    non lo muoveva, e nel verso brutto: con un motore a 44100 e la UI ferma a
+    48000, `1/48000 < 1/44100` — la UI ammette un grano piu' corto di un
+    campione vero, che e' esattamente il difetto di `durationRange` chiuso in
+    questa stessa PR. Ora il numero arriva da qui e il letterale in
+    `yaml-bridge.js` resta il solo fallback statico (`file://`, bridge giu'),
+    con la parita' a pretendere che i due coincidano.
+
+    None = un motore senza la costante: chi chiama tiene il proprio fallback,
+    non si inventa un numero.
+
+    Cache invalidata sull'mtime, come `engine_semantics_version` e per la
+    stessa ragione: il dato cambia sotto un `make serve` acceso (un `git pull`
+    nel repo fratello), e una cache a vita lo servirebbe vecchio a una pagina
+    appena aperta."""
+    candidates = (
+        root / "src" / "pge" / "shared" / "constants.py",
+        root / "src" / "shared" / "constants.py",
+    )
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _OUTPUT_SR_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    sr = _read_int_constant(candidates, "DEFAULT_OUTPUT_SR")
+    # Un sample rate non positivo non e' "sconosciuto", e' assurdo: passarlo
+    # avanti farebbe un `1/0` (Infinity) o un fattore negativo dentro la
+    # conversione dei campioni. Vale None come una costante assente.
+    if sr is not None and sr <= 0:
+        sr = None
+    _OUTPUT_SR_CACHE[key] = (stamp, sr)
+    return sr
+
+
 _SEMANTICS_CACHE: dict = {}
 
 
@@ -346,38 +442,16 @@ def engine_semantics_version(root: Path):
         root / "src" / "pge" / "rendering" / "stream_cache_manager.py",
         root / "src" / "rendering" / "stream_cache_manager.py",
     )
-    stamps = []
-    for src in candidates:
-        try:
-            st = src.stat()
-            stamps.append((str(src), st.st_mtime_ns, st.st_size))
-        except OSError:
-            stamps.append((str(src), None, None))
     # Una voce sola per root, non una per stato dei sorgenti: la chiave e' la
     # root e il timbro sta nel valore. Con il timbro dentro la chiave ogni
     # salvataggio del motore ne aggiungeva una invece di sostituirla, e sotto un
     # `make serve` durante lo sviluppo del motore il dizionario cresceva a ogni
     # salvataggio.
     key = str(root)
-    stamp = tuple(stamps)
+    stamp = _source_stamp(candidates)
     cached = _SEMANTICS_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1]
-    version = None
-    for src in candidates:
-        try:
-            tree = ast.parse(src.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        for node in tree.body:
-            value = _assigned_value(node, "VARIATION_SEMANTICS_VERSION")
-            if value is None:
-                continue
-            val = _ast_literal(value)
-            if isinstance(val, int) and not isinstance(val, bool):
-                version = val
-            break
-        if version is not None:
-            break
+    version = _read_int_constant(candidates, "VARIATION_SEMANTICS_VERSION")
     _SEMANTICS_CACHE[key] = (stamp, version)
     return version

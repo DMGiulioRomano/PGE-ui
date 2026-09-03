@@ -981,6 +981,141 @@ def test_semantics_version_endpoint(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Sample rate del motore — engine_output_sr + /bounds (#133)
+#
+# DEFAULT_OUTPUT_SR e' l'ultima costante del motore che questo repo teneva
+# ricopiata a mano (`OUTPUT_SR` in yaml-bridge.js). Non e' un bound ma ne
+# genera uno — il minimo di grain_duration e' 1 campione, cioe' 1/output_sr
+# (PGE #158) — e soprattutto e' il fattore con cui la UI converte
+# `grain.duration_unit: samples`, conversione che RISCRIVE i valori nello YAML.
+# Un numero sbagliato qui non stringe una manopola: scrive durate sbagliate.
+# ---------------------------------------------------------------------------
+
+def _stub_constants(root, body, layout="pge"):
+    d = (root / "src" / "pge" / "shared") if layout == "pge" \
+        else (root / "src" / "shared")
+    d.mkdir(parents=True, exist_ok=True)
+    # L'import pesante e' li' apposta: il parser non deve eseguire niente.
+    (d / "constants.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_output_sr_parses_source(tmp_path):
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 44100\n")
+    assert server.engine_output_sr(tmp_path) == 44100
+
+
+def test_engine_output_sr_annotated(tmp_path):
+    """Grafia annotata, come per la versione di semantica: e' house style nel
+    motore, e filtrare su `ast.Assign` la perderebbe in silenzio."""
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR: int = 96000\n")
+    assert server.engine_output_sr(tmp_path) == 96000
+
+
+def test_engine_output_sr_legacy_layout(tmp_path):
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 22050\n", layout="flat")
+    assert server.engine_output_sr(tmp_path) == 22050
+
+
+def test_engine_output_sr_missing_is_none(tmp_path):
+    """Assente = "non lo so", e chi chiama tiene il proprio fallback statico.
+    Mai un numero inventato: sarebbe indistinguibile da una lettura riuscita."""
+    import server
+    assert server.engine_output_sr(tmp_path / "nope") is None
+    _stub_constants(tmp_path, "SECONDS_PER_MILLISECOND = 1e-3\n")
+    assert server.engine_output_sr(tmp_path) is None
+
+
+@pytest.mark.parametrize("body", [
+    "DEFAULT_OUTPUT_SR = 0\n",
+    "DEFAULT_OUTPUT_SR = -48000\n",
+    "DEFAULT_OUTPUT_SR = True\n",
+    "DEFAULT_OUTPUT_SR = 48000.0\n",
+    "DEFAULT_OUTPUT_SR = SOMETHING\n",
+    "DEFAULT_OUTPUT_SR = None\n",
+])
+def test_engine_output_sr_rejects_nonsense(tmp_path, body):
+    """Un sample rate non positivo non e' "sconosciuto", e' assurdo, e va
+    trattato come assente invece di viaggiare: la UI ci fa `1/sr`, quindi uno
+    zero diventa Infinity e un negativo un fattore col segno sbagliato — un min
+    che nessun confronto fa piu' scattare, cioe' ogni clamp a valle spento in
+    silenzio. Il bool e' escluso perche' in Python e' un int."""
+    import server
+    _stub_constants(tmp_path, body)
+    assert server.engine_output_sr(tmp_path) is None
+
+
+def test_engine_output_sr_sees_a_live_bump(tmp_path):
+    """Cache invalidata sull'mtime, come la versione di semantica: il caso e' un
+    `git pull` nel repo fratello sotto un `make serve` acceso. Con una cache a
+    vita una pagina appena aperta riceverebbe il sample rate vecchio."""
+    import os
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 48000\n")
+    assert server.engine_output_sr(tmp_path) == 48000
+
+    src = tmp_path / "src" / "pge" / "shared" / "constants.py"
+    src.write_text("DEFAULT_OUTPUT_SR = 44100\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert server.engine_output_sr(tmp_path) == 44100
+
+
+def test_bounds_endpoint_carries_output_sr(tmp_path):
+    """La route che la UI interroga davvero. `output_sr` viaggia su /bounds e
+    non su una route sua perche' e' la stessa domanda: i clamp che il motore
+    impone."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 44100\n")
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["ok"] is True
+    assert body["bounds"]["output_sr"] == 44100
+
+
+def test_bounds_endpoint_omits_unknown_output_sr(tmp_path):
+    """Chiave assente, non `null`: `resolveOutputSr` scarta i non-numeri e
+    ricade sul fallback statico, ma la differenza fra "non lo so" e "zero" deve
+    essere visibile gia' nel payload."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["ok"] is True
+    assert "output_sr" not in body["bounds"]
+
+
+def test_bounds_endpoint_reports_sr_without_parameter_definitions(tmp_path):
+    """Il sample rate non e' condizionato alla presenza dei bound: un motore con
+    `constants.py` e senza `parameter_definitions.py` e' strano, ma il numero lo
+    sappiamo lo stesso e tacerlo rimanderebbe la UI al letterale trascritto —
+    cioe' proprio la cosa che questa lettura toglie di mezzo."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 96000\n")
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["bounds"]["output_sr"] == 96000
+    assert not body["bounds"].get("params")
+
+
+# ---------------------------------------------------------------------------
 # Le due difese di /render: il confine di fiducia di una route che SCRIVE un
 # file, e il filtro dei nomi envelope.
 #

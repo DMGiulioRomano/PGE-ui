@@ -694,14 +694,33 @@ def _op_constants(args):
     # Lo stesso numero, ma letto come lo legge il bridge: AST del sorgente,
     # senza importare niente del motore. E' l'unica via per cui quel numero
     # arriva alla UI, quindi e' quella che va confrontata con la costante vera.
-    # Prima era trascritto a mano in test-fingerprint-parity.js, ed era l'ultima
-    # costante del motore ricopiata in questo repo.
+    # Prima era trascritto a mano in test-fingerprint-parity.js.
     try:
         out["variation_semantics_version_ast"] = (
             _introspect("constants").engine_semantics_version(ENGINE.root))
     except OracleError as exc:
         out["variation_semantics_version_ast"] = None
         out["variation_semantics_version_ast_error"] = str(exc)
+
+    # Il sample rate di output, importato e letto dall'AST come sopra. E' la
+    # costante che restava ricopiata a mano in yaml-bridge.js dopo che la
+    # versione di semantica ha smesso di esserlo: `grainDur.min = 1/sr`, e
+    # soprattutto `grainUnitFactor` converte `duration_unit: samples` con lo
+    # stesso `1/sr` e RISCRIVE i valori nello YAML. La UI ora la legge da
+    # /bounds; il letterale resta come fallback statico, e questa op e' cio'
+    # che pretende che i due coincidano.
+    try:
+        const = ENGINE.module("pge.shared.constants")
+        out["default_output_sr"] = const.DEFAULT_OUTPUT_SR
+    except OracleError as exc:
+        out["default_output_sr"] = None
+        out["default_output_sr_error"] = str(exc)
+    try:
+        out["default_output_sr_ast"] = (
+            _introspect("constants").engine_output_sr(ENGINE.root))
+    except OracleError as exc:
+        out["default_output_sr_ast"] = None
+        out["default_output_sr_ast_error"] = str(exc)
 
     try:
         td = ENGINE.module("pge.envelopes.time_distribution")
