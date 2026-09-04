@@ -341,7 +341,7 @@ by running two overlapping renders and pressing Cancel.
 
 Two options exit 1 (taking audio with them): unknown `--plot-envelopes` name, malformed `--magnify-at` SPEC. Both are filtered before reaching argv, but in different places:
 
-- **Envelope names** → filtered *server-side* (`server.py` intersects them with `engine_envelope_keys(root)`) because the valid set lives in engine source.
+- **Envelope names** → filtered *server-side* (`server.py` intersects them with `engine_envelope_keys(root)`) because the valid set lives in engine source. That AST read is the **only** bridge between `ENVELOPE_COLORS` and the UI — there is no static fallback list, `backend.envelopeKeys()` returns `[]` and the filter hides — so a rename upstream used to make the whole filter vanish silently instead of failing. `tests/parity/test-bounds-parity.js` now points it at the real file: the AST read must equal the imported keys *in source order* (the popover draws them in that order), and `PLOT_ENVELOPE_KEYS` — the set `cli.py` actually validates against — must still be `frozenset(ENVELOPE_COLORS)`, since the day the engine narrows one without the other the server filter becomes wider than the engine and a name gets through to `exit 1`.
 - **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing. The grammar mirrors Python's `float()`, not JS's `Number()` — they disagree on `0x10`, `1_000`, `inf` — and the strip is ASCII-only, a subset of Python's `str.strip()`, so the residual divergence is guaranteed safe-direction (JS `trim()` eats U+FEFF, `str.strip()` doesn't — that one killed renders). `tests/parity/test-magnify-parity.js` checks the whole corpus against the engine.
 
   **`error()` and `sendable()` answer different questions, and both live in the module.** `error(spec)` is the red text under the field; `sendable(spec)` returns *the bytes that reach argv*, or `null` when the flag must not be sent at all (empty SPEC, separators only, bad grammar). `app.jsx` and `RenderButton.buildCommand` both call `sendable` — when the gate was a copy in `app.jsx` it stayed on `.trim()` while the module moved to the ASCII strip, and the popover showed red on a SPEC that then went out cleaned. The tests call it too, so removing the empty-SPEC guard is red instead of silent.
@@ -434,7 +434,8 @@ with the engine. Those pacts used to live only in prose. They are now executable
 (`fingerprint` — optionally with the semantics version swapped, to ask whether
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
-`parameter_bounds`, `constants`);
+`parameter_bounds`, `constants` — the last one carrying the name registries and
+the constants the mirrors copy whole, `ENVELOPE_COLORS` included);
 `tests/parity/oracle.js` is the node client (one python process per suite);
 `tests/parity/harness.js` runs the suites and, crucially, **counts and names the
 cases that did not run** when the engine is absent — a skipped parity case is a
@@ -560,14 +561,16 @@ the field is left verbatim, and the count comes back as `skipped` for the toast.
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) has **two** exclusion lists, and they don't have the same reach:
 
 - `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`.
-- `FP_IGNORE_DEEP` — editor-only fields injected at parse, excluded at **any** depth because they live nested by construction: `statePositions`, `_curveRaw` (both under `grain.envelope`).
+- `FP_IGNORE_DEEP` — excluded at **any** depth because it lives nested by construction: `_curveRaw` (under `grain.envelope`). It used to hold `statePositions` too; see below.
 
 Key non-obvious exclusions:
 
 - `onset`: moving a clip on the timeline doesn't change the rendered audio.
 - `duration*` flags: provenance of the length, not the length itself.
 - `deviationProbabilityLegacy`: provenance (which spelling), not content — reopening a pre-v7 project shouldn't mark every stem stale.
-- `statePositions` / `_curveRaw`: they mirror data already encoded in the serialized states and curve, so hashing them would double-count — and would have marked every already-rendered multistate stem stale the day the preservation shipped.
+- `_curveRaw`: it cannot move on its own. `parseGrainEnvelope` **derives** `curve` from it (`rescaleCurveY`, a linear `*(n-1)`), so a drift too small for `curveMatchesRaw`'s 1e-9 to notice — and therefore re-emitted verbatim into the YAML, moving the engine's hash — still lands in `curve`, which is hashed. That premise is what makes the exclusion safe, and it is pinned by a parity case (a reparse whose curve drifts must move **both** hashes) rather than asserted in a comment.
+
+**The criterion is not "editor-only field", it is "does it reach the YAML"** — and getting that wrong cost a real green dot. `statePositions` was excluded on the same "they mirror the serialized states" reasoning, which is simply false for it: `serializeGrainEnvelope` splices it *into* `states` (`[[pos, name], …]`), so the engine hashes it, and its own comment in `yaml-bridge.js` says the positions are thresholds in value-space — i.e. they change the rendered audio. Edit them in the Raw tab (the only path that writes them; no component does) and `states` stays a list of the same names: the engine's hash moved, the UI's did not, 🟢 on a stem the engine was about to rewrite *differently*. It is hashed now. The cost is one extra render for every already-rendered multistate stem with non-uniform positions — the safe direction, self-clearing on the first pass, like the semantics axis. `tests/parity/test-fingerprint-parity.js` measures both halves against the engine; `tests/node/test-fingerprint.js` used to pin the wrong assumption (`ignores grain.envelope.statePositions`), which is exactly the internally-perfect-and-divergent mirror `tests/parity/` exists to close.
 
 **"First level" means the YAML's, not the JS object's**, and the two differ:
 `serializeStream` splices `_extra` *into* the level of the block that holds it.
