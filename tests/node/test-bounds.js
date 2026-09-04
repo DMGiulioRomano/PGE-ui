@@ -81,7 +81,7 @@ assert("grainDur ← grain_duration.value",   out.grainDur.max === 5);
 // ne porta uno, quindi vince il fallback statico, ed è quello il numero atteso.
 // Che il fallback sia poi il numero GIUSTO lo pretende la parità — questa suite
 // gira senza motore e non ha modo di saperlo. Due domande, due posti.
-assert("grainDur.min floored to 1 sample despite engine 0.002",
+assert("grainDur.min floored to 1 sample despite the engine's declared min",
   Math.abs(out.grainDur.min - 1 / window.PGE_OUTPUT_SR) < 1e-12, String(out.grainDur.min));
 assert("static fallback grainDur.min is 1 sample",
   Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / window.PGE_OUTPUT_SR) < 1e-12,
@@ -229,9 +229,26 @@ console.log("\n── la catena che porta il sample rate dal motore alla UI ─�
   const srvSrc  = SG.codeOf(path.join(__dirname, "../../server.py"));
   const introSrc = SG.codeOf(path.join(__dirname, "../../engine_introspect.py"));
 
-  assert("app.jsx chiede /bounds al boot e passa il payload ad apply()",
-    /\.bounds\(\)\s*\n?\s*\.then\(/.test(appSrc) &&
+  assert("app.jsx chiede /bounds e passa il payload ad apply()",
+    /await backend\.bounds\(\)/.test(appSrc) &&
     /window\.PGEBounds\.apply\(raw\)/.test(appSrc));
+  /* ...da TRE punti, non dal solo boot, ed e' la stessa regola dell'asse
+     semantica accanto. L'effetto di boot ha dipendenze vuote e sta dentro il
+     `try` del /health: col solo call site di li', un `git checkout` nel repo
+     fratello non arriva piu' in pagina — e `engine_introspect` invalida la
+     propria cache sull'mtime proprio per farcelo arrivare. Il lettore che
+     paga di piu' non e' un clamp: e' `grainUnitFactor`, che con quel sample
+     rate RISCRIVE duration/duration_range nello YAML. */
+  assert("refreshEngineBounds e' chiamata in tre punti",
+    (appSrc.match(/refreshEngineBounds\(\)/g) || []).length >= 4,   // 1 def + 3 usi
+    "col solo boot il numero del motore entra in pagina una volta e mai piu'");
+  /* E al render NON si aspetta: il render non consuma i clamp — li consuma
+     l'editor, dopo — quindi un await qui sarebbe un giro di rete davanti al
+     motore per un dato che a nessuno serve subito. La versione di semantica e'
+     l'altro caso, e infatti la' l'await c'e' (test-semantics-store.js). */
+  assert("...ma il render non l'aspetta, a differenza della semantica",
+    !/await refreshEngineBounds\(\)/.test(appSrc),
+    "aggiunge un round trip davanti al motore per un dato che serve dopo");
   assert("apply() installa il sample rate su window, non solo i bound",
     /window\.PGE_OUTPUT_SR\s*=\s*sr/.test(bndSrc));
   assert("server.py mette output_sr nel payload di /bounds",

@@ -289,6 +289,37 @@ function App() {
     setEngineSem(n);
     return n;
   }
+
+  /* I clamp del motore (`GET /bounds`), richiesti al bridge.
+   *
+   * Tre call site come `refreshEngineSem`, e per la stessa ragione — con un
+   * lettore in piu' a renderla piu' urgente, non meno. Questo payload porta
+   * anche `output_sr`, e `PGEBounds.apply` lo installa su
+   * `window.PGE_OUTPUT_SR`: da li' lo legge `grainUnitFactor`
+   * (envelope-utils.js), cioe' il fattore con cui `convertGrainDurationUnit`
+   * RISCRIVE `duration`/`duration_range` nello YAML. Un numero vecchio non
+   * stringe una manopola, scrive durate sbagliate su disco.
+   *
+   * Col solo call site di boot — effetto a dipendenze vuote, dentro il `try`
+   * del `/health` — chi apriva l'editor prima di `make serve` restava sul
+   * letterale statico di yaml-bridge.js per tutta la sessione; e un
+   * `git checkout` nel repo fratello sotto un `make serve` acceso non arrivava
+   * mai in pagina, benche' `engine_introspect` invalidi la sua cache
+   * sull'mtime apposta per farcelo arrivare.
+   *
+   * `apply()` e' idempotente per lo stesso payload: `mergeEngineBounds` non
+   * muta `base` e riscrive ogni chiave che il motore dichiara con lo stesso
+   * valore, quindi richiamarla non accumula. Best-effort: un server.py o un
+   * motore senza quei file rispondono `{}` e il fallback statico resta. */
+  async function refreshEngineBounds() {
+    const backend = window.PGEBackend.current;
+    if (!window.PGEBounds || !backend || !backend.bounds) return null;
+    try {
+      const raw = await backend.bounds();
+      if (raw && Object.keys(raw).length) return window.PGEBounds.apply(raw);
+    } catch { /* bridge giu' o route assente: il fallback statico resta */ }
+    return null;
+  }
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -397,15 +428,9 @@ function App() {
         // lo installa su window.PGE_OUTPUT_SR. Non e' un dettaglio dei bound:
         // e' il fattore con cui envelope-utils converte
         // `grain.duration_unit: samples`, e quella conversione riscrive
-        // duration/duration_range nello YAML. Se questo giro non avviene la UI
-        // resta sul letterale statico di yaml-bridge.js — giusto finche' il
-        // motore non muove il sample rate, ed e' l'unico punto in cui il
-        // numero vero entra nella pagina.
-        if (window.PGEBounds && window.PGEBackend.current.bounds) {
-          window.PGEBackend.current.bounds()
-            .then(raw => { if (raw && Object.keys(raw).length) window.PGEBounds.apply(raw); })
-            .catch(() => {});
-        }
+        // duration/duration_range nello YAML. Primo dei tre punti in cui si
+        // chiede — vedi refreshEngineBounds.
+        refreshEngineBounds();
         // La versione di semantica del motore, per sapere se gli stem gia' su
         // disco sono stati scritti con la lettura di adesso. Best-effort: un
         // server.py senza la route o un motore senza la costante danno null, e
@@ -530,8 +555,12 @@ function App() {
       setLastRenderedFps(cache || {});
     });
     // Con le versioni registrate si rilegge anche quella del motore: se al boot
-    // il bridge era giu', questo e' il primo momento in cui puo' arrivare.
+    // il bridge era giu', questo e' il primo momento in cui puo' arrivare. E
+    // con essa i clamp, che dallo stesso payload prendono il sample rate: le
+    // due letture invecchiano insieme, per lo stesso `git pull` nel repo
+    // fratello.
     refreshEngineSem();
+    refreshEngineBounds();
     if (backend.render.loadSemantics) {
       backend.render.loadSemantics(basename).then(sem => setRenderedSem(sem || {}));
     } else {
@@ -1625,6 +1654,12 @@ function App() {
        su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
        numero di DOPO su stem scritti leggendo quello di PRIMA. */
     const semOfThisRun = await refreshEngineSem();
+    // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
+    // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
+    // giro di rete davanti al motore per un dato che a nessuno serve subito.
+    // La versione di semantica invece si aspetta eccome: la registrano gli
+    // `stream-done` di questo stesso giro.
+    refreshEngineBounds();
 
     let cacheHits = 0;
     let generated = 0;
