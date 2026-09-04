@@ -12,8 +12,9 @@ page) can reach it.
 
 Two directories, not one. `--root` is engine source (`src/main.py`, `.venv`,
 `csound/`); `--workspace` is the folder holding `configs/`, `output/` and
-`cache/` — the work itself. Omit it and they coincide, which is the historical
-behavior. `refs/` still comes from `--root`. See **Workspace** below.
+`cache/` — the work itself, `refs/` included where the engine has
+`--samples-dir`. Omit it and they coincide, which is the historical behavior.
+See **Workspace** below.
 
 ---
 
@@ -66,8 +67,9 @@ GET  /media_peaks/<file>         — waveform peaks for a refs/ media file
 GET  /media_spectrogram/<file>   — STFT spectrogram for a refs/ media file
 ```
 
-The `kind` parameter is one of `media | projects | output | cache`. `media`
-resolves against the engine's `refs/`; the other three against the workspace.
+The `kind` parameter is one of `media | projects | output | cache`. All four
+resolve against the workspace — `media` against the engine's `refs/` instead,
+when the engine has no `--samples-dir` (see **Workspace**).
 Path traversal is rejected; derived audio artifacts (WAV/peaks/spectrogram) are
 cached under `cache/` and never written into `refs/`.
 
@@ -93,7 +95,7 @@ make serve WORKSPACE=~/brani
 | --- | --- |
 | `src/main.py`, `.venv/`, `csound/`, `logs/` | `--root` (engine source) |
 | `configs/`, `output/`, `cache/` | `--workspace` (defaults to `--root`) |
-| `refs/` | `--root`, still — see below |
+| `refs/` | `--workspace` too, on an engine with `--samples-dir`; `--root` otherwise — see below |
 
 Missing **sub**directories are created on startup; the workspace folder itself
 is not. A mistyped `--workspace` stops the bridge rather than fabricating an
@@ -123,13 +125,21 @@ firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
 that survives: they describe the YAML that was rendered, not the files on disk,
 so a same-named project with different content reads stale — the safe direction.
 
-**`refs/` doesn't move yet.** The subprocess runs with `cwd=root` and the numpy
-renderer resolves samples against `./refs/` there, so samples still come from the
-engine. Closing
-[PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)
-(`--samples-dir`) is what completes the split. `_ensure_venv_events` and the
-csound paths (`--orc-path`, `--incdir`, `--log-dir`) stay bound to `--root` on
-purpose: that is engine code, not the author's work.
+**`refs/` moves with the other three, where the engine allows it** (#148). The
+subprocess still runs with `cwd=root`, and without
+[`--samples-dir`](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)
+the engine resolves samples against `./refs/` relative to that cwd — in both
+renderers, since the sample's *duration* is resolved before a renderer exists and
+`--ssdir` only covers csound's render-time lookup. `build_render_command` sends
+`--samples-dir <refs>` for both renderers on every render (inert on an engine
+that doesn't know the flag: unknown flags are ignored), and `_set_workspace` asks
+`engine_supports_samples_dir(root)` before binding `refs` under the workspace —
+on an older engine it stays at `root/refs`, because a samples folder the editor
+lists and the render never reads is a disagreement that only shows up as a failed
+render. `GET/POST /workspace` carry `samplesFollowWorkspace` so Settings can say
+which of the two is in force. `_ensure_venv_events` and the csound paths
+(`--orc-path`, `--incdir`, `--log-dir`) stay bound to `--root` on purpose: that
+is engine code, not the author's work.
 
 ---
 
@@ -191,12 +201,14 @@ python engine.
 ~/projects/
 ├── PythonGranularEngine/        ← --root points here (engine source)
 │   ├── src/main.py              ← bridge invokes this
-│   ├── refs/*.wav               ← Media panel (always from here, for now)
-│   ├── configs/*.yml            ┐ the default workspace, when --workspace
-│   ├── output/                  ├ is omitted: pass one and these three
-│   └── cache/                   ┘ live in your own folder instead
+│   ├── refs/*.wav               ┐ the default workspace, when --workspace
+│   ├── configs/*.yml            │ is omitted: pass one and these four
+│   ├── output/                  ├ live in your own folder instead
+│   └── cache/                   ┘ (refs/ only where the engine has
+│                                  --samples-dir; otherwise it stays here)
 │
 ├── brani/                       ← --workspace points here
+│   ├── refs/*.wav               ← Media panel (--samples-dir)
 │   ├── configs/*.yml            ← Projects panel
 │   ├── output/                  ← rendered stems land here; /output/ serves from here
 │   └── cache/                   ← /cache_manifest reads here
@@ -207,4 +219,4 @@ python engine.
     └── …
 ```
 
-The browser editor is opened as a `file://` URL and lives entirely in this repo. Engine *source* is never modified — with a workspace of your own, the engine checkout isn't written to at all beyond reading `refs/`.
+The browser editor is opened as a `file://` URL and lives entirely in this repo. Engine *source* is never modified — with a workspace of your own, the engine checkout isn't written to at all (and on an engine with `--samples-dir`, isn't read from either, beyond the engine's own code).
