@@ -32,7 +32,7 @@ const window = loadUiLibs(["yaml-bridge.js", "backend.js"], {
   fetch: () => Promise.reject(new Error("nessuna rete nei test")),
 });
 const { fingerprintStream } = window.PGEBackend;
-const { serializeStream } = window.PGEYaml;
+const { serializeStream, parseStream } = window.PGEYaml;
 
 /* Lo stesso stream di base di test-fingerprint.js, meno i campi che quel test
  * usa per il ramo a durata implicita. */
@@ -165,6 +165,109 @@ parity({
         const declared = MUTATIONS.filter(m => m.side === "engineOnly" || m.side === "uiOnly");
         ctx.note(`${declared.length} divergenza/e dichiarata/e, verificate una a una qui sopra`,
           declared.map(m => `${m.label} → ${m.side}`));
+      },
+    },
+    {
+      label: "i campi di preservazione del multistate: il criterio e' lo YAML",
+      run: async (ask, assert) => {
+        /* `statePositions` e `_curveRaw` (#59) sono iniettati al parse per
+         * riemettere le posizioni esplicite e la curva verbatim. Erano esclusi
+         * ENTRAMBI dall'hash della UI "perche' rispecchiano dati gia' codificati
+         * negli stati e nella curva". Nessuno l'aveva chiesto al motore, ed era
+         * vero di uno solo.
+         *
+         * `serializeGrainEnvelope` splicia le posizioni DENTRO `states`
+         * (`[[pos, name], …]`): arrivano nello YAML, il motore le hasha, e il
+         * commento in yaml-bridge.js dice che sono soglie in value-space, cioe'
+         * cambiano l'audio. Con l'esclusione, modificarle nel tab Raw lasciava
+         * `states` una lista degli stessi nomi: hash del motore mosso, hash
+         * della UI fermo, pallino verde su uno stem che il motore stava per
+         * riscrivere diverso. E' il punto 3 della issue #134, quello che diceva
+         * "da verificare, non da assumere".
+         *
+         * Gli stream qui nascono da `parseStream`, non a mano: e' la forma che
+         * l'editor produce davvero (dal tab Raw), ed e' anche cio' che rende
+         * misurabile la premessa di `_curveRaw` qui sotto. */
+        const yaml = (positions, curveY) =>
+          `stream_id: s1\nduration: 10\nsample: x.wav\ndensity: 20\n` +
+          `grain:\n  duration: 0.1\n  envelope:\n` +
+          `    states: [[${positions[0]}, hanning], [${positions[1]}, gaussian], ` +
+          `[${positions[2]}, hanning]]\n` +
+          `    curve: [[0, 0], [1, ${curveY}]]\n` +
+          `pointer: {speed_ratio: 1}\npitch: {semitones: 0}\npan: 0\nvolume: 0\n`;
+        const st = (positions, curveY) => parseStream(yaml(positions, curveY), 0, { samples: [] });
+
+        const rif  = st([0, 0.5, 1], 1);          // posizioni uniformi
+        const mos  = st([0, 0.8, 1], 1);          // una posizione spostata
+        const mos2 = st([0, 0.2, 1], 1);          // e spostata altrove
+        const der  = st([0, 0.5, 1], "1.0000000000001"); // deriva sotto il 1e-9 di curveMatchesRaw
+
+        const [a, b, c, d] = await ask([rif, mos, mos2, der].map(x => ({
+          op: "fingerprint", args: { stream: yamlDict(x) } })));
+        for (const r of [a, b, c, d]) if (!r.ok) throw new Error(`oracolo: ${r.error}`);
+        const ui = x => fingerprintStream(x, "wav");
+
+        assert("una posizione spostata muove l'hash del motore",
+          b.value.hex !== a.value.hex);
+        assert("...e adesso muove anche quello della UI",
+          ui(mos) !== ui(rif),
+          `${ui(mos)} === ${ui(rif)} — l'editor mostrerebbe verde su uno stem che il motore rifa'`);
+        assert("due posizioni diverse restano due hash diversi, da entrambi i lati",
+          ui(mos) !== ui(mos2) && b.value.hex !== c.value.hex);
+
+        /* `_curveRaw` resta fuori dall'hash della UI, e questa e' la premessa
+         * che lo giustifica: non puo' muoversi da solo. `parseGrainEnvelope`
+         * DERIVA `curve` da lui (rescaleCurveY, lineare), quindi una deriva
+         * troppo piccola perche' `curveMatchesRaw` la noti — e che percio'
+         * viene riemessa verbatim nello YAML, muovendo l'hash del motore —
+         * finisce comunque dentro `curve`, che la UI hasha. Se il parse
+         * smettesse di derivarla, questo assert cade e `_curveRaw` va hashato
+         * come le posizioni. */
+        assert("il motore vede la deriva di _curveRaw (riemessa verbatim)",
+          d.value.hex !== a.value.hex);
+        assert("e la UI pure, perche' passa da curve: _curveRaw resta ridondante",
+          ui(der) !== ui(rif),
+          "la premessa dell'esclusione di _curveRaw non regge piu': va hashato");
+      },
+    },
+    {
+      label: "le posizioni che NON arrivano nello YAML non arrivano nell'hash",
+      run: async (ask, assert) => {
+        /* L'altra meta' del criterio, e il bordo che lo rende una domanda per
+         * il serializer invece che una lista di nomi. Le posizioni arrivano
+         * nello YAML solo finche' sono allineate agli stati: dopo un edit
+         * strutturale (uno stato aggiunto, la copia rimasta corta)
+         * `serializeGrainEnvelope` le ignora e scrive quelle uniformi.
+         *
+         * Due stream cosi' producono lo STESSO dict — quindi il motore, che
+         * vede solo quello, non puo' distinguerli. Se la UI li distinguesse
+         * sarebbe giallo su uno stem fresco: verso sicuro, ma una seconda
+         * divergenza dalla derivata del motore, e qui sopra la lista delle
+         * divergenze dichiarate ne ammette una sola (`onset`). Questo caso e'
+         * cio' che tiene la lista lunga uno. */
+        const withPositions = (positions) => {
+          const s = base();
+          s.grain = { ...(s.grain || {}), duration: 0.1, envelope: {
+            states: ["hanning", "gaussian", "hanning", "bartlett"],
+            curve: [[0, 0], [1, 3]],
+            statePositions: positions,   // tre posizioni, quattro stati: stale
+          } };
+          return s;
+        };
+        const a = withPositions([0, 0.2, 1]), b = withPositions([0, 0.9, 1]);
+
+        assert("stale: il serializer scrive lo stesso YAML",
+          serializeStream(a) === serializeStream(b));
+
+        const [ra, rb] = await ask([a, b].map(x => ({
+          op: "fingerprint", args: { stream: yamlDict(x) } })));
+        for (const r of [ra, rb]) if (!r.ok) throw new Error(`oracolo: ${r.error}`);
+
+        assert("stale: il motore non puo' distinguerli, e infatti non lo fa",
+          ra.value.hex === rb.value.hex, `${ra.value.hex} !== ${rb.value.hex}`);
+        assert("stale: e nemmeno la UI, che hasha cio' che arriva nello YAML",
+          fingerprintStream(a, "wav") === fingerprintStream(b, "wav"),
+          "la UI marca stale uno stem che il motore considera fresco");
       },
     },
     {

@@ -249,16 +249,36 @@
     return true;
   }
 
+  // Does `statePositions` reach the YAML? One spelling of the rule, two
+  // callers: `serializeGrainEnvelope` below, which emits the positions, and
+  // `fingerprintStream` (backend.js), which hashes exactly what reaches the
+  // YAML — the criterion #134 settled. Without the shared predicate the hash
+  // would carry a second copy of the length guard, and the day they drift the
+  // dot stops meaning what it says.
+  //
+  // The multistate branch splices the positions into `states` only while they
+  // are aligned with it; stale after a structural edit (an added state leaves
+  // the array one short) it falls back to uniform i/(n-1) and the field never
+  // reaches the engine. Every other branch re-emits the object verbatim,
+  // positions included — so there the answer is yes. #59
+  function statePositionsReachYaml(env) {
+    if (!env || typeof env !== "object" || Array.isArray(env)) return false;
+    if (!("statePositions" in env)) return false;
+    if ("from" in env && "to" in env) return true;                 // verbatim
+    if (!("states" in env) || !Array.isArray(env.states)) return true; // verbatim
+    return Array.isArray(env.statePositions) &&
+           env.statePositions.length === env.states.length;
+  }
+
   function serializeGrainEnvelope(env) {
     if (!env || typeof env === "string" || Array.isArray(env)) return env;
     if ("from" in env && "to" in env) return env;
     if ("states" in env && Array.isArray(env.states)) {
       const n = env.states.length;
       // Re-emit the explicit engine positions the editor preserved at parse;
-      // fall back to uniform i/(n-1) when absent or stale after a structural
-      // edit (statePositions length no longer matches the states). #59
-      const positions = (Array.isArray(env.statePositions) && env.statePositions.length === n)
-        ? env.statePositions : null;
+      // fall back to uniform i/(n-1) when they don't reach the YAML — absent,
+      // or stale after a structural edit. #59
+      const positions = statePositionsReachYaml(env) ? env.statePositions : null;
       const engineStates = env.states.map((name, i) =>
         [positions ? positions[i] : (n === 1 ? 0.0 : i / (n - 1)), name]
       );
@@ -294,9 +314,13 @@
         // explicit engine positions when they diverge so serialize re-emits
         // them (lossless no-op save, stable per-stream cache). The engine uses
         // positions as thresholds in value-space, so forcing uniform spacing
-        // would also change the rendered audio. Excluded from the UI
-        // fingerprint (backend.js FP_IGNORE) so this preservation alone never
-        // marks an already-rendered stem stale. #59
+        // would also change the rendered audio — which is exactly why the UI
+        // fingerprint HASHES this field (#134). It used to say the opposite
+        // here, and that sentence was the whole defect: the positions reach the
+        // YAML spliced into `states`, the engine hashes them, and excluding
+        // them left the dot green on a stem the engine was about to rewrite
+        // differently. `statePositionsReachYaml` above is the one rule both
+        // sides read. #59
         if (positions.some((p, i) => p !== (n === 1 ? 0 : i / (n - 1)))) {
           out.statePositions = positions;
         }
@@ -999,9 +1023,17 @@
 
   // Ignore only fields that don't (and shouldn't) reach the YAML: UI-only color,
   // the samples list, and the editor-only multistate preservation fields
-  // statePositions/_curveRaw (#59) — their data is already encoded in the
-  // serialized states/curve, so diffing them would double-count (and flag noise
-  // after a curve/structure edit leaves the raw copy stale).
+  // statePositions/_curveRaw (#59). The reason is the round trip's own, and NOT
+  // the "their data is already encoded in the serialized states/curve" that
+  // used to be written here: that sentence is false for statePositions (they
+  // are the data, spliced into `states`) and it is what kept them out of the
+  // fingerprint, where it cost a wrong green dot — see #134 and backend.js.
+  // What holds here is narrower: serialize normalizes a stale copy (positions
+  // whose length no longer matches the states, a verbatim curve the editor has
+  // since edited), so the re-parse legitimately comes back without it and
+  // diffing would raise "YAML lossy round-trip" on noise. The two questions are
+  // different — "did the text keep my state" vs "must the engine redo this
+  // stem" — so the two lists are allowed to differ, and here they do.
   // NOTE: solo/mute are intentionally NOT ignored here — they now round-trip
   // through the YAML (#63). This diverges from backend FP_IGNORE, which still
   // excludes them: serializing solo/mute changes WHICH streams render, not a
@@ -1247,6 +1279,7 @@
     computeDuration,
     allocStreamIds,
     roundTripDiff,
+    statePositionsReachYaml,
     DEVIATION_PROB_IMPLICIT,
   };
 })();

@@ -13,14 +13,17 @@
  * che l'AST non sa leggere — passava senza far fallire niente e la UI si
  * teneva il fallback statico credendo di avere i bound del motore.
  *
- * Le quattro domande di questa suite:
+ * Le cinque domande di questa suite:
  *
  *   1. il parser AST legge gli STESSI valori che il motore usa importato;
  *   2. ogni parametro nominato in ENGINE_PARAM_MAP esiste nel registro;
  *   3. i clamp che la UI finisce per usare sono quelli del motore, salvo le
  *      eccezioni dichiarate;
  *   4. il fallback statico — quello di `file://` e del server spento — non
- *      ammette valori che il motore rifiuta.
+ *      ammette valori che il motore rifiuta;
+ *   5. e la stessa domanda per l'ALTRA lettura AST del bridge, quella di
+ *      `/envelope-keys`: e' l'unico ponte fra `ENVELOPE_COLORS` e la UI, e
+ *      finora nessun test l'aveva mai puntata sul file vero.
  *
  * Run: node tests/parity/test-bounds-parity.js
  * =========================================================================== */
@@ -418,6 +421,60 @@ parity({
           `${declared * c.default_output_sr} campioni a ${c.default_output_sr} Hz — ` +
           `il motore lo sostituisce con 1, e il commento in bounds.js cita ` +
           `questo numero`);
+      },
+    },
+    {
+      label: "le chiavi degli envelope: l'altra lettura AST del bridge",
+      run: async (ask, assert, ctx) => {
+        /* Il gemello dimenticato di /bounds (issue #137, ultimo punto).
+         *
+         *     ENVELOPE_COLORS  →  engine_introspect (AST)  →  GET /envelope-keys
+         *                      →  il filtro della popover di render
+         *
+         * e in mezzo `server.py` interseca i nomi richiesti con quella stessa
+         * lettura prima di comporre argv, perche' un nome ignoto fa uscire il
+         * motore con 1 — l'audio compreso. Come per i bound, ogni anello aveva
+         * il suo test e nessuno leggeva il file vero: `test_render_pipeline.py`
+         * scrive un finto `envelope_extractor.py` in `tmp_path`, cioe' verifica
+         * il parser, non la parita'. Un rename nel motore lasciava tutto verde,
+         * `keys: []`, e il filtro spariva dalla popover in silenzio.
+         *
+         * Qui non c'e' un fallback statico da controllare (`backend.envelopeKeys`
+         * torna `[]` e la UI nasconde il filtro), quindi le domande sono due:
+         * che la lettura AST dica quello che dice il motore importato, e che il
+         * registro da cui il bridge legge sia davvero quello contro cui la CLI
+         * valida. */
+        const c = (await ask("constants", {})).value;
+        const imported = c.envelope_colors_keys;
+        const fromAst = c.envelope_colors_keys_ast;
+
+        assert("il motore dichiara ENVELOPE_COLORS",
+          Array.isArray(imported) && imported.length > 0,
+          c.envelope_keys_error || JSON.stringify(imported));
+
+        /* Ordine incluso: l'endpoint restituisce l'ordine del sorgente e la
+         * popover disegna le caselle in quell'ordine, quindi confrontare gli
+         * insiemi lascerebbe fuori meta' di cio' che l'utente vede. */
+        assert("la lettura AST del bridge da' le stesse chiavi, nello stesso ordine",
+          Array.isArray(fromAst) && JSON.stringify(fromAst) === JSON.stringify(imported),
+          (c.envelope_colors_keys_ast_error ? `${c.envelope_colors_keys_ast_error} — ` : "") +
+          `ast=${JSON.stringify(fromAst)} importato=${JSON.stringify(imported)}`);
+
+        /* Il registro giusto. `cli.py` valida `--plot-envelopes` contro
+         * PLOT_ENVELOPE_KEYS, non contro ENVELOPE_COLORS; oggi il primo e'
+         * `frozenset(ENVELOPE_COLORS)`, ed e' quel «oggi» a rendere legittimo
+         * che il bridge legga il dict. Se il motore restringesse la validazione
+         * senza toccare il dict, il filtro del bridge diventerebbe piu' largo
+         * del motore — cioe' un nome che passa il filtro e fa uscire il render
+         * con 1, esattamente il difetto che quell'endpoint esiste per evitare. */
+        const plot = c.plot_envelope_keys;
+        assert("PLOT_ENVELOPE_KEYS e' ancora l'insieme di ENVELOPE_COLORS",
+          Array.isArray(plot) &&
+          JSON.stringify(plot) === JSON.stringify([...(imported || [])].sort()),
+          `plot=${JSON.stringify(plot)}`);
+
+        ctx.note(`${(imported || []).length} nomi plottabili, letti dal motore`,
+          (imported || []).join(", "));
       },
     },
   ],

@@ -64,7 +64,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
-| `constants` | i registri di nomi che i mirror ricopiano interi | tutti |
+| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free) | tutti |
 
 ## Come si lancia
 
@@ -150,6 +150,84 @@ l'hash del motore e non il suo: un render di meno, il verso sbagliato.
 Il caso di parità usa un `_extra` **già presente in entrambi i termini**:
 comparire e basta muove l'hash per la chiave stessa, quindi un confronto contro
 la base non discriminerebbe niente.
+
+## I campi di preservazione del multistate
+
+`statePositions` e `_curveRaw` (#59) sono iniettati al parse per riemettere le
+posizioni esplicite e la curva verbatim. Erano esclusi **entrambi** dall'hash
+della UI, con la stessa motivazione: «rispecchiano dati gia' codificati negli
+stati e nella curva». Vera di uno, falsa dell'altro, e nessuno l'aveva chiesta
+al motore — e' il punto 3 della issue #134, quello scritto *da verificare, non
+da assumere*.
+
+Il criterio non e' «campo dell'editor», e' **arriva nello YAML**: cio' che ci
+arriva lo hasha il motore.
+
+- `statePositions` ci arriva, spliciato dentro `states` (`[[pos, name], …]`),
+  e le posizioni sono soglie in value-space: cambiano l'audio. Con
+  l'esclusione, modificarle nel tab Raw — l'unica strada che le scrive, nessun
+  componente lo fa — lasciava `states` una lista degli stessi nomi: hash del
+  motore mosso, hash della UI fermo, pallino verde su uno stem che il motore
+  stava per riscrivere diverso. Ora e' hashato. Prezzo: un render di troppo per
+  ogni stem multistate gia' reso con posizioni non uniformi — verso sicuro, e
+  si spegne da solo al primo giro.
+- `_curveRaw` ci arriva pure, ma non puo' muoversi da solo: `parseGrainEnvelope`
+  **deriva** `curve` da lui (`rescaleCurveY`, lineare), quindi una deriva troppo
+  piccola perche' il 1e-9 di `curveMatchesRaw` la noti — e percio' riemessa
+  verbatim, muovendo l'hash del motore — finisce comunque in `curve`, che e'
+  hashata. Resta escluso, e la premessa e' un caso di parita' invece che un
+  commento: se il parse smettesse di derivare `curve`, il test parla.
+
+Il criterio, preso alla lettera, e' una domanda per il **serializer**, non una
+terza lista di nomi: la stessa chiave, nello stesso posto, a volte esce e a
+volte no. `statePositions` arriva nello YAML solo finche' e' allineato a
+`states`; rimasto stale dopo un edit strutturale (uno stato aggiunto, la copia
+corta) il serializer lo ignora e scrive posizioni uniformi, e due stream che
+differiscono solo li' serializzano lo stesso identico YAML. Il motore non puo'
+distinguerli: se la UI lo facesse sarebbe giallo su uno stem fresco — verso
+sicuro, ma una **seconda** divergenza dalla derivata del motore, e la lista qui
+sotto ne ammette una sola. Percio' la regola sta scritta una volta,
+`statePositionsReachYaml` in `yaml-bridge.js`, con due chiamanti: il serializer
+che emette le posizioni e `canonicalJSON` in `backend.js`, che salta la chiave
+esattamente quando il serializer la salterebbe. Il caso di parita' misura
+entrambe le meta' contro il motore, e i sabotaggi cadono da tutte e due le
+parti: una guardia che non scatta mai rimette #134, una che scatta sempre rende
+muto un edit vero.
+
+Vale la pena notare cosa non era bastato: `tests/node/test-fingerprint.js`
+fissava l'assunzione sbagliata (`ignores grain.envelope.statePositions`), verde
+e sicura di se'. Lo specchio internamente perfetto e divergente dall'originale,
+cioe' esattamente cio' che questa cartella esiste per chiudere.
+
+## Le chiavi degli envelope, il gemello dimenticato di /bounds
+
+`ENVELOPE_COLORS` → `engine_introspect` (AST) → `GET /envelope-keys` → il filtro
+della popover di render, e in mezzo `server.py` che interseca i nomi richiesti
+con quella stessa lettura prima di comporre argv: un nome ignoto fa uscire il
+motore con 1, audio compreso.
+
+Stessa forma dei bound, stesso buco: ogni anello aveva il suo test e nessuno
+leggeva il file vero (`test_render_pipeline.py` scrive un finto
+`envelope_extractor.py` in `tmp_path`, cioe' verifica il parser). Un rename
+upstream lasciava tutto verde con `keys: []`, e il filtro spariva dalla popover
+in silenzio. Qui non c'e' un fallback statico da controllare, quindi le domande
+sono due, e stanno in `test-bounds-parity.js`:
+
+- la lettura AST del bridge da' le stesse chiavi del modulo importato, **nello
+  stesso ordine** — l'endpoint restituisce l'ordine del sorgente e la popover
+  disegna le caselle in quell'ordine;
+- `PLOT_ENVELOPE_KEYS` — l'insieme contro cui `cli.py` valida davvero — e'
+  ancora `frozenset(ENVELOPE_COLORS)`. Se il motore restringesse la validazione
+  senza toccare il dict, il filtro del bridge diventerebbe piu' largo del
+  motore: un nome che passa il filtro e uccide il render.
+
+Una nota sull'asimmetria fra i due lati: l'oracolo importa un solo modulo
+(`pge.rendering.envelope_extractor`), mentre `engine_envelope_keys` prova tre
+candidati per reggere ogni annata del motore. E' voluta, e va nella direzione
+giusta — il bridge deve funzionare ovunque, la parita' deve dire la verita' su
+*questo* checkout: su un layout vecchio il caso cade nominando «il motore
+dichiara ENVELOPE_COLORS», invece di confrontare due letture di cui una ha
+ripiegato.
 
 ## Divergenze dichiarate
 

@@ -23,7 +23,7 @@ eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8"));
 
 const { fingerprintStream } = window.PGEBackend;
-const { applyStreamPatch } = window.PGEYaml;
+const { applyStreamPatch, serializeStream } = window.PGEYaml;
 
 let pass = 0, fail = 0;
 function assert(label, cond, extra) {
@@ -117,12 +117,19 @@ assert("output format affects fingerprint", fp(base(), "aiff") !== fp(base(), "w
     JSON.stringify({ a: fp(a), b: fp(b) }));
 }
 
-console.log("\n── multistate envelope preservation fields are fingerprint-inert (#59) ──");
+console.log("\n── i campi di preservazione del multistate (#59): il criterio e' lo YAML ──");
 {
-  // statePositions / _curveRaw are editor-only fields injected at parse to
-  // round-trip explicit positions + the verbatim curve. They must not move the
-  // fingerprint (or every already-rendered multistate stem would read stale),
-  // while a real edit to a window name or the curve still must.
+  // statePositions / _curveRaw sono iniettati al parse per far tornare indietro
+  // le posizioni esplicite e la curva verbatim. Erano esclusi entrambi
+  // dall'hash "perche' rispecchiano dati gia' codificati negli stati e nella
+  // curva". Vero di uno, falso dell'altro, e il criterio giusto non e' "campo
+  // dell'editor" ma ARRIVA NELLO YAML: cio' che ci arriva lo hasha il motore.
+  //
+  // `statePositions` ci arriva: `serializeGrainEnvelope` lo splicia dentro
+  // `states` (`[[pos, name], …]`). Escluderlo voleva dire pallino verde su uno
+  // stem che il motore riscrive — e riscrive DIVERSO, perche' le posizioni sono
+  // soglie in value-space. Misurato contro il motore in
+  // tests/parity/test-fingerprint-parity.js.
   const ms = () => ({
     id: "s1", duration: 10, sample: "x.wav",
     grain: { duration: 0.1, envelope: { states: ["hanning", "bartlett", "blackman"], curve: [[0, 0], [1, 2]] } },
@@ -130,9 +137,23 @@ console.log("\n── multistate envelope preservation fields are fingerprint-in
   const fpMs = fp(ms());
   {
     const s = ms(); s.grain.envelope.statePositions = [0, 0.2, 0.9];
-    assert("ignores grain.envelope.statePositions", fp(s) === fpMs, "fp changed");
+    assert("detects grain.envelope.statePositions", fp(s) !== fpMs, "fp unchanged");
   }
   {
+    // …e due posizioni diverse restano due fingerprint diversi: se l'hash le
+    // vedesse solo come "presenti" (una chiave in piu') l'edit nel tab Raw da
+    // 0.2 a 0.9 tornerebbe muto, che e' il difetto di prima con un passo in meno.
+    const a = ms(); a.grain.envelope.statePositions = [0, 0.2, 0.9];
+    const b = ms(); b.grain.envelope.statePositions = [0, 0.7, 0.9];
+    assert("e posizioni diverse danno fingerprint diversi", fp(a) !== fp(b), "fp uguale");
+  }
+  {
+    // `_curveRaw` resta fuori, ma non perche' sia "dell'editor": perche' non
+    // puo' muoversi da solo. `parseGrainEnvelope` DERIVA `curve` da lui
+    // (rescaleCurveY, lineare), quindi una deriva troppo piccola per il 1e-9 di
+    // `curveMatchesRaw` finisce comunque in `curve`, che e' hashata. La premessa
+    // e' pretesa dal motore in test-fingerprint-parity.js; qui si fissa il verso
+    // che vale senza motore.
     const s = ms(); s.grain.envelope._curveRaw = [[0, 0], [1, 1]];
     assert("ignores grain.envelope._curveRaw", fp(s) === fpMs, "fp changed");
   }
@@ -143,6 +164,59 @@ console.log("\n── multistate envelope preservation fields are fingerprint-in
   {
     const s = ms(); s.grain.envelope.curve = [[0, 0], [1, 1.5]];
     assert("detects grain.envelope.curve edit", fp(s) !== fpMs, "fp unchanged");
+  }
+  {
+    // La premessa di `_curveRaw`, dal lato che non ha bisogno del motore: una
+    // curva che deriva sotto la tolleranza di `curveMatchesRaw` muove `curve` e
+    // quindi l'hash. Se un domani il parse smettesse di derivarla, questo
+    // assert cade e `_curveRaw` va hashato come le posizioni.
+    const y = (cy) => `stream_id: s1\nduration: 10\nsample: x.wav\n` +
+      `grain:\n  duration: 0.1\n  envelope:\n` +
+      `    states: [[0, hanning], [0.5, bartlett], [1, blackman]]\n` +
+      `    curve: [[0, 0], [1, ${cy}]]\n`;
+    const p0 = window.PGEYaml.parseStream(y("1"), 0, { samples: [] });
+    const p1 = window.PGEYaml.parseStream(y("1.0000000000001"), 0, { samples: [] });
+    assert("una deriva sotto 1e-9 in _curveRaw passa comunque per curve",
+      p0.grain.envelope._curveRaw[1][1] !== p1.grain.envelope._curveRaw[1][1] &&
+      fp(p0) !== fp(p1), "fingerprint uguale");
+  }
+  {
+    /* Il bordo del criterio, e il motivo per cui non e' una lista di nomi.
+       «Arriva nello YAML» e' una domanda per il serializer: le posizioni
+       arrivano SOLO finche' sono allineate agli stati. Dopo un edit
+       strutturale (uno stato in piu') la copia resta corta, il serializer la
+       ignora e scrive quelle uniformi — due stream cosi' danno lo stesso
+       identico YAML, quindi lo stesso hash del motore, e devono dare lo stesso
+       hash anche qui. Hasharle li' sarebbe giallo su uno stem fresco: verso
+       sicuro, ma una seconda divergenza dalla derivata del motore, e la lista
+       delle divergenze dichiarate ha un elemento solo. */
+    const stale = (p) => {
+      const s = ms(); s.grain.envelope.states = [...s.grain.envelope.states, "bartlett"];
+      s.grain.envelope.statePositions = p; return s;
+    };
+    const a = stale([0, 0.2, 0.9]), b = stale([0, 0.7, 0.9]);
+    assert("posizioni stale: stesso YAML",
+      serializeStream(a) === serializeStream(b), "YAML diverso");
+    assert("...e quindi stesso fingerprint", fp(a) === fp(b),
+      "giallo su uno stem che il motore considera fresco");
+    /* E il verso opposto, che e' quello che regge tutto il resto: quando le
+       posizioni arrivano davvero, muoverle muove l'hash. Senza questo, un
+       `positionsAreDropped` che rispondesse sempre "si'" passerebbe l'assert
+       qui sopra e rimetterebbe in piedi il difetto di #134. */
+    const live = (p) => { const s = ms(); s.grain.envelope.statePositions = p; return s; };
+    assert("posizioni allineate: YAML diverso e fingerprint diverso",
+      serializeStream(live([0, 0.2, 1])) !== serializeStream(live([0, 0.9, 1])) &&
+      fp(live([0, 0.2, 1])) !== fp(live([0, 0.9, 1])), "hash fermo");
+    /* Il ramo verbatim: senza `states` il serializer riemette l'oggetto com'e',
+       posizioni comprese, quindi il motore le hasha e noi pure. E' il caso che
+       una guardia scritta come "salta statePositions se la lunghezza non
+       combacia" sbaglierebbe, perche' li' non c'e' nessuna lunghezza con cui
+       combaciare. */
+    const verb = (p) => ({ id: "s1", duration: 10, sample: "x.wav",
+      grain: { duration: 0.1, envelope: { points: [[0, 0]], statePositions: p } } });
+    assert("envelope senza states: le posizioni escono verbatim e si hashano",
+      serializeStream(verb([0, 0.2])) !== serializeStream(verb([0, 0.9])) &&
+      fp(verb([0, 0.2])) !== fp(verb([0, 0.9])), "hash fermo su un campo che esce");
   }
 }
 
