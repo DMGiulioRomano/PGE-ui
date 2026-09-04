@@ -44,9 +44,21 @@ def _resolve_audio(base: Path, fname: str) -> "Path | None":
     """Resolve an audio source under `base` by its stem, accepting any of the
     known audio extensions (the browser may request `name.aif` for a `name.wav`
     on disk, or vice versa). Rejects traversal via safe_resolve. Returns the
-    first existing match, else None."""
-    stem = Path(fname).stem
-    for ext in _AUDIO_EXTS:
+    first existing match, else None.
+
+    L'estensione CHIESTA viene provata per prima, e non e' un dettaglio di
+    ordinamento: quando due render hanno lasciato sul disco lo stesso stem in
+    due formati, la lista fissa rispondeva sempre `.aif` — la clip suonava il
+    `.wav` appena reso (`/output`, estensione esatta) e mostrava il waveform
+    dell'`.aif` di un giro precedente (`/peaks`, che risolveva qui). Il
+    fallback resta: chi chiede un formato che sul disco non c'e' prende quello
+    che c'e', com'e' sempre stato."""
+    p = Path(fname)
+    stem, want = p.stem, p.suffix.lower()
+    exts = _AUDIO_EXTS
+    if want in _AUDIO_EXTS:
+        exts = (want,) + tuple(e for e in _AUDIO_EXTS if e != want)
+    for ext in exts:
         cand = safe_resolve(base, stem + ext)
         if cand is not None and cand.exists():
             return cand

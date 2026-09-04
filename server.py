@@ -551,29 +551,31 @@ def make_app(root: Path, render_timeout: float = 600.0,
     @app.get("/audio/<path:fname>")
     def serve_audio_as_wav(fname):
         """Serve a rendered stem as WAV, transcoding from .aif via sox if
-        needed. The transcoded WAV is cached next to the .aif so subsequent
-        requests are instant.
+        needed. The transcoded WAV is cached under cache/output_wav/ so
+        subsequent requests are instant.
+
+        Sotto cache/ e non accanto allo stem come prima: `output/` e' quello
+        che /stems inventaria, e un `<basename>__<sid>.transcoded.wav` li'
+        dentro passava per uno stem con l'id `<sid>.transcoded` — un id
+        fantasma nell'indice del browser, cioe' un nome bruciato per
+        `allocStreamIds`. Stessa scelta di /media_audio, che non ha mai scritto
+        dentro refs/.
 
         Firefox can't decode AIFF via Web Audio's decodeAudioData; this
         endpoint exists so the editor can play stems in any browser. The
         editor calls /audio/<basename>__<sid>.aif and gets back a WAV body
         without renaming on disk."""
-        # Find the source file regardless of requested extension.
-        stem = Path(fname).stem
-        # Look for any of .aif/.aiff/.wav/.flac/.mp3 under output/
-        source = None
-        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
-            cand = output / (stem + ext)
-            if cand.exists():
-                source = cand
-                break
+        # Una sola scrittura della regola, `_resolve_audio`: prima
+        # l'estensione chiesta, poi il fallback. La copia in linea qui non
+        # passava nemmeno da `safe_resolve`, e ignorava il formato richiesto.
+        source = _resolve_audio(output, fname)
         if source is None:
             abort(404)
 
         if source.suffix.lower() == ".wav":
             return send_file(str(source), mimetype="audio/wav", conditional=True)
 
-        wav_cache = output / (stem + ".transcoded.wav")
+        wav_cache = cache / "output_wav" / (source.name + ".wav")
         try:
             transcode_wav(source, wav_cache, timeout=30)
         except SoxNotFound:
@@ -593,20 +595,20 @@ def make_app(root: Path, render_timeout: float = 600.0,
         draw a waveform (a 8-min stereo stem is ~160 MB decoded; this is 16 KB).
         Cached on disk under cache/peaks/, regenerated only when the source is
         newer than the cache (same staleness rule as the WAV transcode above)."""
-        stem = Path(fname).stem
-        source = None
-        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
-            cand = safe_resolve(output, stem + ext)
-            if cand is not None and cand.exists():
-                source = cand
-                break
+        source = _resolve_audio(output, fname)
         if source is None:
             abort(404)
 
         peaks_dir = cache / "peaks"
         # Bucket count in the name so bumping PEAK_BUCKETS invalidates old
         # caches automatically (stale .f32 files just become orphaned).
-        cache_file = peaks_dir / (stem + f".{PEAK_BUCKETS}.f32")
+        #
+        # E il nome della SORGENTE, estensione compresa: senza suffisso i due
+        # formati dello stesso stem condividevano una voce sola, e `_is_fresh`
+        # la confrontava con la sorgente scelta. Bastava che l'altra fosse piu'
+        # vecchia perche' la cache risultasse fresca per sempre: il disegno
+        # restava quello di un render precedente e nessun render lo sbloccava.
+        cache_file = peaks_dir / (source.name + f".{PEAK_BUCKETS}.f32")
         try:
             peaks_file(source, cache_file)
         except ImportError:
@@ -623,13 +625,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
         width + uint32 height header, then width*height uint8 values. Mirrors
         /peaks (same stem resolution + staleness rule) but spectrogram instead
         of waveform peaks. Cached under cache/spec/."""
-        stem = Path(fname).stem
-        source = None
-        for ext in (".aif", ".aiff", ".wav", ".flac", ".mp3"):
-            cand = safe_resolve(output, stem + ext)
-            if cand is not None and cand.exists():
-                source = cand
-                break
+        source = _resolve_audio(output, fname)
         if source is None:
             abort(404)
 
@@ -638,8 +634,10 @@ def make_app(root: Path, render_timeout: float = 600.0,
             scale = "linear"
 
         spec_dir = cache / "spec"
-        # scale in the filename so linear/log cache side-by-side.
-        cache_file = spec_dir / (stem + f".{scale}.spec")
+        # scale in the filename so linear/log cache side-by-side; il nome della
+        # sorgente con la sua estensione per la stessa ragione di /peaks — due
+        # formati, due voci, altrimenti si invalidano a vicenda.
+        cache_file = spec_dir / (source.name + f".{scale}.spec")
         try:
             spectrogram_file(source, cache_file, scale)
         except ImportError:
@@ -665,7 +663,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
             return send_file(str(source), mimetype="audio/wav", conditional=True)
 
         wav_dir = cache / "media_wav"
-        wav_cache = wav_dir / (source.stem + ".wav")
+        wav_cache = wav_dir / (source.name + ".wav")
         try:
             transcode_wav(source, wav_cache, timeout=60)
         except SoxNotFound:
@@ -683,7 +681,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if source is None:
             abort(404)
         peaks_dir = cache / "peaks_media"
-        cache_file = peaks_dir / (source.stem + f".{PEAK_BUCKETS}.f32")
+        cache_file = peaks_dir / (source.name + f".{PEAK_BUCKETS}.f32")
         try:
             peaks_file(source, cache_file)
         except ImportError:
@@ -703,7 +701,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if source is None:
             abort(404)
         spec_dir = cache / "spec_media"
-        cache_file = spec_dir / (source.stem + ".spec")
+        cache_file = spec_dir / (source.name + ".spec")
         try:
             spectrogram_file(source, cache_file)
         except ImportError:
