@@ -1487,6 +1487,52 @@ def test_workspace_switch_moves_refs_too(tmp_path):
     assert (due / "refs").is_dir()
 
 
+@pytest.mark.parametrize("samples_dir", [True, False])
+def test_app_exposes_the_paths_the_banner_prints(tmp_path, samples_dir):
+    """`app.pge_paths()` / `app.pge_samples_follow()` sono cio' che il banner
+    d'avvio stampa, e vengono da _set_workspace.
+
+    Il banner riderivava la regola per conto suo (`(ws / "refs") if follow else
+    root / "refs"`): due scritture della stessa cosa, con la guardia di
+    sorgente attaccata a una sola. Ed e' la riga da cui l'autore impara dove
+    mettere i sample — una copia divergente li' si legge come verita'. Il test
+    tiene gli accessor allineati alle route su entrambe le vintage del motore.
+    """
+    import server
+    root = _engine_stub(tmp_path / "engine", samples_dir=samples_dir)
+    ws = tmp_path / "brani"
+    ws.mkdir()
+
+    app = server.make_app(root, render_timeout=600.0, workspace=ws)
+    client = app.test_client()
+
+    assert app.pge_samples_follow() is samples_dir
+    assert (client.get("/workspace").get_json()["samplesFollowWorkspace"]
+            is samples_dir)
+    health = client.get("/health").get_json()
+    for key, value in app.pge_paths().items():
+        assert health[key] == value, key
+    assert app.pge_paths()["refs"] == str(
+        (ws if samples_dir else root) / "refs")
+
+
+def test_app_paths_follow_a_hot_switch(tmp_path):
+    """E seguono la commutazione a caldo: sono la closure, non una copia presa
+    all'avvio (il banner li legge una volta, ma le route no)."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    uno = tmp_path / "uno"; uno.mkdir()
+    due = tmp_path / "due"; due.mkdir()
+
+    app = server.make_app(root, render_timeout=600.0, workspace=uno)
+    client = app.test_client()
+    assert app.pge_paths()["refs"] == str(uno / "refs")
+
+    assert client.post("/workspace", json={"path": str(due)}).status_code == 200
+    assert app.pge_paths()["refs"] == str(due / "refs")
+    assert app.pge_paths()["workspace"] == str(due)
+
+
 def test_workspace_creates_its_subdirs(tmp_path):
     """Un workspace nuovo e' una cartella vuota: le sottodirectory le fa il
     bridge, altrimenti il primo salvataggio fallirebbe su una cartella che non

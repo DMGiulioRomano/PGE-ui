@@ -238,6 +238,16 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     const beforeCsound = rp.slice(0, rp.indexOf('if renderer == "csound":'));
     assert("--samples-dir esce per entrambi i renderer",
            /cmd \+= \["--samples-dir", str\(refs\)\]/.test(beforeCsound));
+    // Il banner d'avvio stampa le path che make_app ha risolto: la regola di
+    // dove punta refs/ e' scritta una volta sola, in _set_workspace, e la
+    // guardia qui sopra tiene attaccata quella. Riderivata nel banner
+    // (`_refs = (ws / "refs") if _follow else …`) sarebbe una seconda copia
+    // che nessuno tiene ferma — e il banner e' la riga da cui l'autore impara
+    // dove mettere i sample. #148
+    assert("il banner non riscrive la regola di refs/",
+           /app\.pge_paths\(\)/.test(srv) &&
+           /app\.pge_samples_follow\(\)/.test(srv) &&
+           !/_refs\s*=\s*\(ws \/ "refs"\)/.test(srv));
   }
 
   console.log("\n── il resto dello stato per-stream cade con l'indice (source guard) ──");

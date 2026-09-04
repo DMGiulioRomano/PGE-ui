@@ -452,7 +452,8 @@ def make_app(root: Path, render_timeout: float = 600.0,
         except OSError as e:
             return jsonify(_workspace_payload(
                 ok=False,
-                error=f"non posso creare configs/output/cache in {target}: {e}")), 400
+                error=f"non posso creare le sottocartelle di lavoro "
+                      f"in {target}: {e}")), 400
         return jsonify(_workspace_payload())
 
     @app.get("/envelope-keys")
@@ -1023,6 +1024,16 @@ def make_app(root: Path, render_timeout: float = 600.0,
     def ui_static(filename):
         return send_from_directory(ui_dir, filename)
 
+    # Le path risolte e la risposta del motore, esposte sull'app perche' il
+    # banner di main() le STAMPI invece di riderivarle. Dove punta refs/ e' una
+    # regola sola — quella di _set_workspace, tenuta ferma da una guardia di
+    # sorgente in test-workspace.js — e una seconda scrittura sarebbe una copia
+    # che nessuna guardia tiene attaccata all'originale. Il banner e' proprio il
+    # posto dove una divergenza si legge come verita': e' la riga da cui
+    # l'autore impara dove mettere i sample. #148
+    app.pge_paths = _resolved_paths
+    app.pge_samples_follow = lambda: samples_follow_ws
+
     return app
 
 
@@ -1079,8 +1090,9 @@ def main():
             sys.exit(
                 f"--workspace {workspace} non esiste (o non e' una directory).\n"
                 f"\n"
-                f"Crea la cartella e riprova: le sottodirectory configs/, "
-                f"output/ e cache/ le crea il bridge.\n"
+                f"Crea la cartella e riprova: le sottodirectory (configs/, "
+                f"output/, cache/ e — su un motore con --samples-dir — refs/) "
+                f"le crea il bridge.\n"
             )
 
     app = make_app(root, render_timeout=args.render_timeout, workspace=workspace)
@@ -1109,19 +1121,22 @@ def main():
     except Exception:
         sf_ok = False
 
-    ws = workspace or root
+    # Le path del banner sono quelle che make_app ha gia' risolto, non una
+    # seconda derivazione: il banner deve dire la cartella che il render
+    # leggera' davvero, e l'unico che lo sa e' _set_workspace. Riscriverne la
+    # regola qui la sdoppierebbe, e il banner e' la riga da cui l'autore impara
+    # dove mettere i sample — una copia divergente si leggerebbe come verita'.
+    _paths  = app.pge_paths()
+    _follow = app.pge_samples_follow()
     print(f"PGE bridge")
     print(f"  root:      {root}")
-    print(f"  workspace: {ws}" + ("" if workspace else "  (= root, default)"))
-    # Stessa regola di _set_workspace, chiesta al motore: il banner deve dire
-    # la cartella che il render leggera' davvero, non quella che vorremmo.
-    _follow = engine_supports_samples_dir(root)
-    _refs = (ws / "refs") if _follow else (root / "refs")
-    print(f"  refs/:     {_refs}" + ("" if _follow else
+    print(f"  workspace: {_paths['workspace']}"
+          + ("" if workspace else "  (= root, default)"))
+    print(f"  refs/:     {_paths['refs']}" + ("" if _follow else
           "   (dal motore: --samples-dir non c'e' — PythonGranularEngine#235)"))
-    print(f"  configs/:  {ws / 'configs'}")
-    print(f"  output/:   {ws / 'output'}")
-    print(f"  cache/:    {ws / 'cache'}")
+    print(f"  configs/:  {_paths['configs']}")
+    print(f"  output/:   {_paths['output']}")
+    print(f"  cache/:    {_paths['cache']}")
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")
