@@ -7,9 +7,13 @@ full endpoint list, the NDJSON render protocol, troubleshooting and security.
 The bridge is `server.py` in this repo. It runs **from PGE-ui** and points at a
 separately-cloned `PythonGranularEngine` via `--root` (default
 `../PythonGranularEngine`) — it never copies itself into or mutates the engine
-repo, only reading/writing inside that repo's `refs/`, `configs/`, `output/`,
-`cache/`. It binds `127.0.0.1` only; CORS is open so the editor (a `file://`
+source. It binds `127.0.0.1` only; CORS is open so the editor (a `file://`
 page) can reach it.
+
+Two directories, not one. `--root` is engine source (`src/main.py`, `.venv`,
+`csound/`); `--workspace` is the folder holding `configs/`, `output/` and
+`cache/` — the work itself. Omit it and they coincide, which is the historical
+behavior. `refs/` still comes from `--root`. See **Workspace** below.
 
 ---
 
@@ -31,8 +35,10 @@ page) can reach it.
 
 ```
 # introspection / config
-GET  /health                     — sanity check + resolved repo paths
-GET  /config                     — resolved repo paths
+GET  /health                     — sanity check + resolved paths (root, workspace, …)
+GET  /config                     — the same resolved paths
+GET  /workspace                  — current workspace + its project list
+POST /workspace                  — switch it ({"path": …}; "" returns to --root)
 GET  /diagnose                   — system checks (sox, soxi, numpy, venv, …)
 
 # listing + file I/O
@@ -60,10 +66,70 @@ GET  /media_peaks/<file>         — waveform peaks for a refs/ media file
 GET  /media_spectrogram/<file>   — STFT spectrogram for a refs/ media file
 ```
 
-The `kind` parameter is one of `media | projects | output | cache` and is
-resolved against the repo's `refs / configs / output / cache` folders. Path
-traversal is rejected; derived audio artifacts (WAV/peaks/spectrogram) are
+The `kind` parameter is one of `media | projects | output | cache`. `media`
+resolves against the engine's `refs/`; the other three against the workspace.
+Path traversal is rejected; derived audio artifacts (WAV/peaks/spectrogram) are
 cached under `cache/` and never written into `refs/`.
+
+---
+
+## Workspace
+
+Before #147 the four working directories were derived from `--root` and nothing
+else, so every piece opened in the editor was a file *inside the engine
+checkout* — and `/render`, which writes the editor state to the canonical
+`configs/<basename>.yml` (see the NDJSON section), rewrote it there. Composing
+dirtied the engine repo, and rollback meant the engine's `git`.
+
+The engine was never the constraint: `src/main.py` takes absolute paths and
+`--cache-dir` is arbitrary. So:
+
+```bash
+python server.py --root ../PythonGranularEngine --workspace ~/brani
+make serve WORKSPACE=~/brani
+```
+
+| | comes from |
+| --- | --- |
+| `src/main.py`, `.venv/`, `csound/`, `logs/` | `--root` (engine source) |
+| `configs/`, `output/`, `cache/` | `--workspace` (defaults to `--root`) |
+| `refs/` | `--root`, still — see below |
+
+Missing **sub**directories are created on startup; the workspace folder itself
+is not. A mistyped `--workspace` stops the bridge rather than fabricating an
+empty folder and making the author's projects disappear from the list.
+
+**Switching at runtime.** `POST /workspace {"path": …}` commutes the four paths
+in place (they are process state, not closure constants — which is why the
+gunicorn config runs `workers: 1`); an empty path returns to `--root`. The
+response carries the new project list, because a switch invalidates what the
+browser holds: it is a replacement, not a merge. In the editor: **⚙ → Workspace**.
+
+Two refusals: a bad path (400 — missing, not a directory, or not a path at all:
+an embedded NUL or a `~unknownuser` are answers with a message, not 500s) and a
+render in flight (409). `/render` reads `configs`, `output` and `cache` while its
+NDJSON stream is open, and it also pins them at the start of the route so a
+switch can't split stems and cache manifest across two folders. The 409 covers
+the render from the *first instant of the stream*, not from the spawn: between
+the two sits the engine venv setup, minutes in which no subprocess exists yet
+and the render is nonetheless under way, with its paths already pinned.
+
+Browser-side, a successful switch drops the stem index, the on-disk stem
+durations, the peaks, the spectrograms, the grain sidecars and the recorded
+engine-semantics versions, then reloads the project list and reopens a project
+(same name if the new folder has one). Keeping any of it would mean a clip with a
+green dot and no audio behind it — the 404 an `<audio>` element reports by never
+firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
+that survives: they describe the YAML that was rendered, not the files on disk,
+so a same-named project with different content reads stale — the safe direction.
+
+**`refs/` doesn't move yet.** The subprocess runs with `cwd=root` and the numpy
+renderer resolves samples against `./refs/` there, so samples still come from the
+engine. Closing
+[PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)
+(`--samples-dir`) is what completes the split. `_ensure_venv_events` and the
+csound paths (`--orc-path`, `--incdir`, `--log-dir`) stay bound to `--root` on
+purpose: that is engine code, not the author's work.
 
 ---
 
@@ -100,9 +166,11 @@ python engine.
   csound or a missing dep. Open the log panel in the editor (`log` button in
   the topbar), or just look at the server's terminal for the full python
   output.
-- **Save writes to the wrong folder** — the bridge ALWAYS writes inside the
-  repo root passed to `--root`. There's no escaping that. If you want to
-  point at a different project, restart the bridge with a different `--root`.
+- **Save writes to the wrong folder** — projects are written inside the
+  workspace: `--workspace` if given, otherwise `--root`. Check the `configs/`
+  line the bridge prints at startup, or `GET /workspace`. To move, either
+  restart with a different `--workspace` or switch it live from **⚙ →
+  Workspace** in the editor.
 
 ---
 
@@ -121,10 +189,15 @@ python engine.
 
 ```
 ~/projects/
-├── PythonGranularEngine/        ← --root points here
+├── PythonGranularEngine/        ← --root points here (engine source)
 │   ├── src/main.py              ← bridge invokes this
+│   ├── refs/*.wav               ← Media panel (always from here, for now)
+│   ├── configs/*.yml            ┐ the default workspace, when --workspace
+│   ├── output/                  ├ is omitted: pass one and these three
+│   └── cache/                   ┘ live in your own folder instead
+│
+├── brani/                       ← --workspace points here
 │   ├── configs/*.yml            ← Projects panel
-│   ├── refs/*.wav               ← Media panel
 │   ├── output/                  ← rendered stems land here; /output/ serves from here
 │   └── cache/                   ← /cache_manifest reads here
 │
@@ -134,4 +207,4 @@ python engine.
     └── …
 ```
 
-The browser editor is opened as a `file://` URL and lives entirely in this repo. The engine repo is never modified — the bridge only reads + writes to it.
+The browser editor is opened as a `file://` URL and lives entirely in this repo. Engine *source* is never modified — with a workspace of your own, the engine checkout isn't written to at all beyond reading `refs/`.

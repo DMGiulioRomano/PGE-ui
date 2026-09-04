@@ -104,6 +104,10 @@ class RenderState:
     def __init__(self):
         self.proc = None
         self.cancelled = False
+        # Un render e' "in volo" da prima che il sottoprocesso esista: fra la
+        # POST e lo spawn ci puo' stare la creazione del venv del motore. Vedi
+        # enter() e is_running().
+        self.streaming = False
         self.lock = threading.Lock()
 
     def start(self, cmd, cwd):
@@ -129,9 +133,33 @@ class RenderState:
     def is_cancelled(self) -> bool:
         return self.cancelled
 
+    def enter(self):
+        """Il generatore NDJSON di /render e' partito. Si prende qui e non allo
+        spawn perche' fra i due c'e' la creazione del venv del motore: minuti in
+        cui non esiste ancora un sottoprocesso e il render e' comunque in volo,
+        coi path della cartella di lavoro gia' fissati. La rilascia clear()."""
+        with self.lock:
+            self.streaming = True
+
+    def is_running(self) -> bool:
+        """C'e' un render in volo. Serve a /workspace, che deve rifiutare il
+        cambio di cartella mentre un render sta scrivendo stem e manifest
+        (PGE-ui #147).
+
+        Due meta': la pretesa presa da enter(), che copre tutta la vita del
+        generatore — venv compreso — e il sottoprocesso vivo. La seconda non e'
+        ridondante: dice la verita' anche a chi costruisce un RenderState a
+        mano, e `poll()` e' piu' preciso di `self.proc`, che resta valorizzato
+        finche' la route non chiama clear()."""
+        if self.streaming:
+            return True
+        proc = self.proc
+        return proc is not None and proc.poll() is None
+
     def clear(self):
         with self.lock:
             self.proc = None
+            self.streaming = False
 
 
 def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache,

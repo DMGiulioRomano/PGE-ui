@@ -14,6 +14,7 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 make install          # pip install -r requirements.txt  (flask, flask-cors, gunicorn, numpy, soundfile)
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
+make serve WORKSPACE=~/brani                             # projects outside the engine repo
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there)
 make tests-parity     # only the JS↔engine parity suites
 ```
@@ -62,10 +63,13 @@ exists):
   positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
-  guards on the Timeline/app wiring), and `test-jsx-parse.js` (every `.jsx` file
-  parses — there is no build step, so a syntax error would only surface as a
-  blank editor, and the regex source guards stay green on a file that cannot
-  run).
+  guards on the Timeline/app wiring), and `test-workspace.js` (the
+  workspace switch: a successful one empties the stem index — it describes the
+  previous `output/` — a refused one changes nothing, plus source guards on the
+  server routes and the app/Settings wiring), and `test-jsx-parse.js` (every
+  `.jsx` file parses — there is no build step, so a syntax error would only
+  surface as a blank editor, and the regex source guards stay green on a file
+  that cannot run).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -199,7 +203,74 @@ and it only proves a component parses. UI verification is manual (open
 
 ### Two-repo split (deliberate)
 
-`PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it only reads/writes inside `refs/`, `configs/`, `output/`, `cache/`.
+`PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it reads `refs/` there and works inside `configs/`, `output/`, `cache/`, which since #147 can live in a workspace of their own (see below).
+
+### Workspace: the project folder is not the engine checkout (#147)
+
+`--root` is engine **source** (`src/main.py`, `.venv/`, `csound/`, `logs/`).
+`--workspace` is where the *work* lives: `configs/`, `output/`, `cache/`. Omit it
+and they coincide — the historical behavior, where every piece is a file inside
+the engine checkout and `/render` rewrites it there. `refs/` still comes from
+`--root`: the subprocess runs with `cwd=root` and the numpy renderer resolves
+samples against `./refs/`, so samples move only once the engine grows
+`--samples-dir` (PythonGranularEngine#235). `_ensure_venv_events` and the csound
+paths stay on `--root` on purpose — engine code, not the author's work.
+
+The four paths are **not** closure constants any more: `_set_workspace` rebinds
+them (`nonlocal`) and `_bases()` rebuilds the `kind`→folder map per request, so
+a `BASES = {…}` built once would go on serving the previous folders. Two
+consequences worth keeping in mind:
+
+- **`workers: 1` in the gunicorn config is load-bearing.** The workspace is
+  process state; with more workers a `POST /workspace` would switch one of them
+  and the others would keep answering from the old folders.
+- **`/render` pins the four paths at the top of the route**
+  (`ws_dir, ws_refs, ws_output, ws_cache`), not inside the NDJSON generator,
+  which outlives the request. A switch read mid-stream would put stems in one
+  folder and the cache manifest in another — and the `done` line would name the
+  stems under a folder that never held them.
+- **`POST /workspace` refuses with 409 from the first instant of the render
+  stream, not from the spawn.** `RenderState.enter()` is called at the top of
+  the generator and released by its outermost `finally`; `is_running()` is that
+  claim *or* a live subprocess. Watching only the subprocess left the switch
+  open for the whole engine-venv setup — minutes in which `rs.proc` is `None`
+  and the render is under way with its paths already pinned, so it would have
+  written stems and manifest into the previous folder while the browser showed
+  the new one. The release has to sit in the outermost `finally` for the two
+  exits the inner one doesn't see: the early return of a failed venv setup, and
+  the `GeneratorExit` of a client that leaves mid-stream. A claim left hanging
+  would 409 every switch for the life of the bridge.
+
+Creation rule: missing **sub**directories are created, the workspace folder
+itself is not — on the CLI a mistyped `--workspace` exits, over HTTP it 400s.
+Fabricating it would make an author's projects silently vanish from the list.
+
+A switch is a **replacement of browser state, not a merge**, which is why
+`POST /workspace` answers with the new project list in the same round trip.
+`backend.setWorkspace` empties the stem index (and the on-disk-duration map) and
+drops `cachedConfig`; `onWorkspaceChange` in `app.jsx` drops waveforms,
+spectrograms, grain data, the grain refs, `stemRevRef` and `lastRenderedFps`,
+reloads media + projects, then reopens a project and **calls `loadCache`
+itself** — two folders can hold a project of the same name, and there
+`activeProject` doesn't change, so the effect keyed on it never re-fires and
+every clip would read ⚪ with stems sitting on disk. The engine-semantics
+records (`pge-local-sem`) go with the index, and for the same reason: they are a
+statement about the *files* — "an engine that read the YAML this way wrote this
+stem" — i.e. about exactly what the index inventoried, the previous `output/`.
+Inherited into a new folder they assert a reading nobody observed there, and
+with identical YAML the fingerprint matches: 🟢 on stems an older engine wrote
+differently, which is the case the axis was added for (#133). Without a record
+the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
+first pass, even an empty one. What deliberately survives is `pge-local-fp`: it
+records what a stream looked like when it was rendered — a statement about the
+YAML, not about the files — so a same-named project with different content
+hashes differently (stale, the safe direction) and with identical content would
+render identical audio anyway.
+
+Settings shows the workspace field; the value comes from `GET /workspace` on
+every panel open, never from a saved preference — the server is the single
+authority, and a persisted copy would silently disagree with a bridge launched
+with `--workspace`.
 
 ### Backend abstraction (`backend.js`)
 
@@ -836,7 +907,7 @@ Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), 
 
 ## Security stance of `server.py`
 
-Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`).
+Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check

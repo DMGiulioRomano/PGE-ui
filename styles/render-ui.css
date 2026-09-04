@@ -742,6 +742,10 @@ body.pge-resizing-scope * { cursor: ns-resize !important; user-select: none !imp
   cursor: pointer;
 }
 .sp-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* .sp-row e' una griglia a due colonne: due bottoni sciolti diventerebbero
+   tre celle e il secondo finirebbe sotto l'etichetta. Raggruppati in un
+   figlio solo restano nella colonna dei valori. */
+.sp-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .sp-status {
   display: flex; align-items: center; gap: 6px;
