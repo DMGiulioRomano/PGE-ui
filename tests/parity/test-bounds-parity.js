@@ -391,9 +391,33 @@ parity({
           Math.abs(EU.grainDefaultDuration("milliseconds") - c.grain_duration_default * 1000) < 1e-9,
           String(EU.grainDefaultDuration("milliseconds")));
 
+        /* La premessa del pavimento secco.
+         *
+         * `mergeEngineBounds` mette `grainDur.min = 1/sr` e non
+         * `Math.min(base.min, 1/sr)`, perche' il motore SOSTITUISCE il min
+         * dichiarato — `get_parameter_bounds(..., output_sr=…)` ritorna
+         * `min_val = 1.0/output_sr`. Il commento sul posto aggiunge che i due
+         * coincidono comunque, «finche' il min dichiarato sta sopra un
+         * campione», e quello e' un fatto del motore: qui si pretende invece
+         * di ricopiarlo. Se un giorno il motore dichiarasse un min sotto il
+         * campione, la regola implementata resterebbe quella giusta ma la
+         * frase smetterebbe di descrivere il caso — e questa riga lo dice,
+         * invece di lasciarla invecchiare come e' gia' successo al numero. */
+        const pb = await ask("parameter_bounds", { source: "import" });
+        assert("l'op parameter_bounds risponde", pb.ok, pb.error);
+        const declared = pb.ok && pb.value.params.grain_duration
+          ? pb.value.params.grain_duration.min_val : null;
+        assert("il min dichiarato di grain_duration sta sopra un campione",
+          typeof declared === "number" && declared > 1 / c.default_output_sr,
+          `min_val=${JSON.stringify(declared)}, un campione=${1 / c.default_output_sr}`);
+
         ctx.note(`sample rate del motore: ${c.default_output_sr} Hz`,
           `min di grain_duration = 1/${c.default_output_sr} = ` +
           `${1 / c.default_output_sr} s; stesso fattore per duration_unit: samples`);
+        ctx.note(`min dichiarato di grain_duration: ${declared} s`,
+          `${declared * c.default_output_sr} campioni a ${c.default_output_sr} Hz — ` +
+          `il motore lo sostituisce con 1, e il commento in bounds.js cita ` +
+          `questo numero`);
       },
     },
   ],

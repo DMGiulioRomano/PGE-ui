@@ -126,9 +126,13 @@
     // quindi legge window.PGE_OUTPUT_SR ma non lo scrive: a installarlo è
     // apply().
     // Il pavimento e' `1/sr` e basta, non `Math.min(base.min, 1/sr)` come era
-    // scritto. I due coincidono finche' il min dichiarato dal motore sta SOPRA
-    // un campione (oggi `grain_duration.min_val` = 0.002 s, cioe' 96 campioni
-    // a 48 kHz), e il `Math.min` era quel caso scritto in forma indiretta. Ma
+    // scritto. Non e' un rafforzamento: e' la regola del motore, che
+    // SOSTITUISCE il min dichiarato invece di abbassarlo
+    // (`get_parameter_bounds(..., output_sr=…)` in parameter_definitions.py
+    // ritorna `min_val=1.0/output_sr`). I due coincidono finche' il min
+    // dichiarato sta SOPRA un campione — oggi `grain_duration.min_val` e'
+    // 0.001 s, cioe' 48 campioni a 48 kHz, e quella premessa e' pretesa da
+    // test-bounds-parity.js invece di essere ricopiata qui e basta. Ma
     // il vincolo ha un verso solo: sotto un campione non c'e' niente da
     // rendere, quindi un min dichiarato piu' BASSO non deve vincere — e il
     // `Math.min` gli faceva vincere, cioe' ammetteva una durata sub-campione.
