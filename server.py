@@ -407,7 +407,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
         raw = (body.get("path") or "").strip()
         try:
             target = (Path(raw).expanduser() if raw else root).resolve()
-        except OSError as e:
+        except (OSError, ValueError, RuntimeError) as e:
+            # Non solo OSError: un NUL nel testo alza ValueError dal filesystem
+            # e `~utentechenonesiste` alza RuntimeError da expanduser(). Senza
+            # gestione sono 500 al posto di 400 — cioe' una pagina HTML dove il
+            # campo in Settings si aspetta il messaggio del server, e la stessa
+            # svista che /render si e' gia' portata via passando da
+            # safe_resolve (che il NUL lo rifiuta per lo stesso motivo).
             return jsonify(_workspace_payload(ok=False, error=str(e))), 400
         if not target.exists():
             return jsonify(_workspace_payload(
@@ -851,13 +857,17 @@ def make_app(root: Path, render_timeout: float = 600.0,
 
         output_stem = output / f"{basename}{out_ext}"
 
-        # Le tre directory si fissano QUI, non dentro il generatore: il
+        # Le quattro path si fissano QUI, non dentro il generatore: il
         # workspace e' commutabile a caldo, e lo stream NDJSON vive per tutta
         # la durata del render. Rilette a valle, un cambio a meta' manderebbe
         # gli stem in una cartella e il manifest di cache in un'altra. La
         # route /workspace rifiuta comunque il cambio a render in corso — qui
         # si chiude la finestra fra la POST e lo spawn. #147
-        ws_refs, ws_output, ws_cache = refs, output, cache
+        #
+        # `ws` sta nella riga per la stessa ragione delle altre tre, anche se
+        # a valle serve solo a scrivere un percorso relativo: la riga `done`
+        # direbbe gli stem sotto una cartella che non li ha mai visti.
+        ws_dir, ws_refs, ws_output, ws_cache = ws, refs, output, cache
 
         # Optional: wipe previous stems (current format only) if requested.
         if preclean:
@@ -867,95 +877,111 @@ def make_app(root: Path, render_timeout: float = 600.0,
 
         def event_stream():
             """Generator: yields one NDJSON line per UI event."""
-            # Ensure engine venv exists before running main.py.
-            venv_py = root / ".venv" / "bin" / "python"
-            if not venv_py.exists():
-                yield json.dumps({"type": "log",
-                                  "line": "[VENV] engine venv missing — setting up…"}) + "\n"
-                setup_ok = True
-                for ev in _ensure_venv_events(root):
-                    yield json.dumps(ev) + "\n"
-                    if ev.get("type") == "venv-done":
-                        setup_ok = ev.get("ok", False)
-                if not setup_ok or not venv_py.exists():
-                    yield json.dumps({"type": "log",
-                                      "line": "[ERROR] venv setup failed — render aborted"}) + "\n"
-                    yield json.dumps({"type": "done", "ok": False,
-                                      "error": "venv setup failed"}) + "\n"
-                    return
-
-            # Build the command using the engine venv python.
-            cmd = build_render_command(
-                venv_py, root, yml, output_stem,
-                renderer=renderer, use_cache=use_cache, cache=ws_cache,
-                visualize=visualize, page_duration=page_duration, reaper=reaper,
-                basename=basename, refs=ws_refs, output=ws_output, fmt=fmt,
-                plot_envelopes=plot_envelopes, grain_json=grain_json,
-                show_voice_offsets=show_voice_offsets,
-                magnify=magnify, magnify_at=magnify_at,
-            )
-
-            yield json.dumps({"type": "log",
-                              "line": "$ " + " ".join(cmd)}) + "\n"
-            watchdog = None
+            # La pretesa si prende QUI, al primo istante del generatore, e non
+            # allo spawn: fra i due c'e' la creazione del venv del motore, che
+            # e' minuti in cui `rs.proc` e' ancora None. Li' POST /workspace
+            # passerebbe, e il render — che i path se li e' gia' fissati —
+            # scriverebbe stem e manifest nella cartella di prima mentre il
+            # browser mostra la nuova: pallino verde e nessun audio dietro,
+            # cioe' esattamente cio' che il 409 esiste per impedire.
+            #
+            # Rilasciata dal finally piu' esterno, che copre anche le due
+            # uscite che quello interno non vede: il ritorno anticipato del
+            # venv fallito e il GeneratorExit di un client che se ne va a
+            # meta' setup. Una pretesa appesa bloccherebbe /workspace per
+            # tutta la vita del bridge. #147
+            rs.enter()
             try:
-                proc = rs.start(cmd, root)
-                # Hard cap: kill a stuck main.py so it can't hold a worker
-                # thread forever (workers=1, threads=4). The kill closes the
-                # pipe → readline hits EOF → this loop ends normally. #43
-                watchdog = start_watchdog(proc, render_timeout)
-                # Gli id dichiarati dalla richiesta: e' l'unica cosa che
-                # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
-                # che il motore stampa a ogni render con --cache. Vuoto (o
-                # assente) significa "richiesta che non dichiara gli stream":
-                # nessun filtro, comportamento storico. Vedi render_pipeline.
-                req_streams = opts.get("streams") or []
-                stream_ids  = {str(s.get("id")) for s in req_streams
-                               if isinstance(s, dict) and s.get("id") is not None}
-                state = {"streamId": None, "total": len(req_streams), "index": 0,
-                         "ids": stream_ids or None}
-                # Read line-by-line and stream to client.
-                for raw in iter(proc.stdout.readline, ""):
-                    line = raw.rstrip("\n")
-                    if rs.is_cancelled():
-                        proc.terminate()
-                        yield json.dumps({"type": "log",
-                                          "line": "[ABORT] cancelled"}) + "\n"
-                        yield json.dumps({"type": "done", "ok": False}) + "\n"
-                        return
-                    for ev in parse_render_line(line, state):
+                # Ensure engine venv exists before running main.py.
+                venv_py = root / ".venv" / "bin" / "python"
+                if not venv_py.exists():
+                    yield json.dumps({"type": "log",
+                                      "line": "[VENV] engine venv missing — setting up…"}) + "\n"
+                    setup_ok = True
+                    for ev in _ensure_venv_events(root):
                         yield json.dumps(ev) + "\n"
-                proc.wait()
-                ok = (proc.returncode == 0)
-                # `generated` e' relativo al workspace quando gli stem ci
-                # vivono dentro; altrimenti resta assoluto (relative_to alza
-                # ValueError su un percorso fuori dal ramo). Il browser legge
-                # solo il basename di queste voci, ma il log del terminale le
-                # mostra: un percorso di comodo non deve diventare una bugia.
-                generated = []
-                for p in sorted(ws_output.glob(f"{basename}__*{out_ext}")):
-                    try:
-                        generated.append(str(p.relative_to(ws)))
-                    except ValueError:
-                        generated.append(str(p))
-                yield json.dumps({
-                    "type": "done", "ok": ok,
-                    "generated": generated,
-                    "returncode": proc.returncode,
-                }) + "\n"
-            except FileNotFoundError as e:
+                        if ev.get("type") == "venv-done":
+                            setup_ok = ev.get("ok", False)
+                    if not setup_ok or not venv_py.exists():
+                        yield json.dumps({"type": "log",
+                                          "line": "[ERROR] venv setup failed — render aborted"}) + "\n"
+                        yield json.dumps({"type": "done", "ok": False,
+                                          "error": "venv setup failed"}) + "\n"
+                        return
+
+                # Build the command using the engine venv python.
+                cmd = build_render_command(
+                    venv_py, root, yml, output_stem,
+                    renderer=renderer, use_cache=use_cache, cache=ws_cache,
+                    visualize=visualize, page_duration=page_duration, reaper=reaper,
+                    basename=basename, refs=ws_refs, output=ws_output, fmt=fmt,
+                    plot_envelopes=plot_envelopes, grain_json=grain_json,
+                    show_voice_offsets=show_voice_offsets,
+                    magnify=magnify, magnify_at=magnify_at,
+                )
+
                 yield json.dumps({"type": "log",
-                                  "line": f"[ERROR] {e}"}) + "\n"
-                yield json.dumps({"type": "done", "ok": False,
-                                  "error": str(e)}) + "\n"
-            except Exception as e:
-                yield json.dumps({"type": "log",
-                                  "line": f"[ERROR] {type(e).__name__}: {e}"}) + "\n"
-                yield json.dumps({"type": "done", "ok": False,
-                                  "error": str(e)}) + "\n"
+                                  "line": "$ " + " ".join(cmd)}) + "\n"
+                watchdog = None
+                try:
+                    proc = rs.start(cmd, root)
+                    # Hard cap: kill a stuck main.py so it can't hold a worker
+                    # thread forever (workers=1, threads=4). The kill closes the
+                    # pipe → readline hits EOF → this loop ends normally. #43
+                    watchdog = start_watchdog(proc, render_timeout)
+                    # Gli id dichiarati dalla richiesta: e' l'unica cosa che
+                    # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
+                    # che il motore stampa a ogni render con --cache. Vuoto (o
+                    # assente) significa "richiesta che non dichiara gli stream":
+                    # nessun filtro, comportamento storico. Vedi render_pipeline.
+                    req_streams = opts.get("streams") or []
+                    stream_ids  = {str(s.get("id")) for s in req_streams
+                                   if isinstance(s, dict) and s.get("id") is not None}
+                    state = {"streamId": None, "total": len(req_streams), "index": 0,
+                             "ids": stream_ids or None}
+                    # Read line-by-line and stream to client.
+                    for raw in iter(proc.stdout.readline, ""):
+                        line = raw.rstrip("\n")
+                        if rs.is_cancelled():
+                            proc.terminate()
+                            yield json.dumps({"type": "log",
+                                              "line": "[ABORT] cancelled"}) + "\n"
+                            yield json.dumps({"type": "done", "ok": False}) + "\n"
+                            return
+                        for ev in parse_render_line(line, state):
+                            yield json.dumps(ev) + "\n"
+                    proc.wait()
+                    ok = (proc.returncode == 0)
+                    # `generated` e' relativo al workspace quando gli stem ci
+                    # vivono dentro; altrimenti resta assoluto (relative_to alza
+                    # ValueError su un percorso fuori dal ramo). Il browser legge
+                    # solo il basename di queste voci, ma il log del terminale le
+                    # mostra: un percorso di comodo non deve diventare una bugia.
+                    generated = []
+                    for p in sorted(ws_output.glob(f"{basename}__*{out_ext}")):
+                        try:
+                            generated.append(str(p.relative_to(ws_dir)))
+                        except ValueError:
+                            generated.append(str(p))
+                    yield json.dumps({
+                        "type": "done", "ok": ok,
+                        "generated": generated,
+                        "returncode": proc.returncode,
+                    }) + "\n"
+                except FileNotFoundError as e:
+                    yield json.dumps({"type": "log",
+                                      "line": f"[ERROR] {e}"}) + "\n"
+                    yield json.dumps({"type": "done", "ok": False,
+                                      "error": str(e)}) + "\n"
+                except Exception as e:
+                    yield json.dumps({"type": "log",
+                                      "line": f"[ERROR] {type(e).__name__}: {e}"}) + "\n"
+                    yield json.dumps({"type": "done", "ok": False,
+                                      "error": str(e)}) + "\n"
+                finally:
+                    if watchdog is not None:
+                        watchdog.cancel()
             finally:
-                if watchdog is not None:
-                    watchdog.cancel()
                 rs.clear()
 
         # mimetype "application/x-ndjson" is what the browser LocalBackend reads.
