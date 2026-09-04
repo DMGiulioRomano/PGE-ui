@@ -296,6 +296,13 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /wsInfo\.paths && wsInfo\.paths\.refs/.test(sp));
     assert("e non trascrive la vecchia promessa",
            !/Seguiranno il workspace quando il motore/.test(sp));
+    // Anche lo specchio delle path nella sezione Paths lo chiede al server.
+    // Scritto come condizione da districare ("a meno che il motore non abbia
+    // --samples-dir, nel qual caso restano i suoi") diceva l'opposto di quel
+    // che succede, e lo diceva pure quando la risposta era gia' in mano. #148
+    assert("anche lo specchio delle path chiede al server invece di raccontare",
+           (sp.match(/samplesFollowWorkspace/g) || []).length >= 2 &&
+           !/a meno che\s+il motore non abbia/.test(sp.replace(/\s+/g, " ")));
   }
 
   bodyDone = true;

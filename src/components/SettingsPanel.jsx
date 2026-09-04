@@ -181,7 +181,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
         <div className="sp-section">
           <div className="sp-sec-head">Workspace</div>
           <div className="sp-row">
-            <span className="sp-k" title="cartella che contiene configs/ output/ cache/">cartella</span>
+            <span className="sp-k" title="cartella che contiene configs/ output/ cache/ — e refs/, su un motore con --samples-dir">cartella</span>
             <input className="sp-input mono" value={wsPath}
                    placeholder="(= root del motore)"
                    onChange={(e) => setWsPath(e.target.value)}
@@ -259,12 +259,21 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             <input className="sp-input mono" value={tweaks.outputPath || "output"}
                    onChange={(e) => setTweak("outputPath", e.target.value)} />
           </div>
+          {/* Anche qui la risposta e' quella del server, la stessa che decide
+              le due frasi nella sezione Workspace. Prima era una condizione da
+              districare, introdotta da un "a meno che ... non", che in italiano
+              vale "se": diceva quindi l'opposto di quel che succede, e lo
+              diceva anche quando la risposta era gia' arrivata. #148 */}
           <div className="sp-hint">
             Specchio delle path risolte da <span className="mono">server.py</span>:
-            progetti e output dal Workspace qui sopra, e con essi i media — a meno che
-            il motore non abbia <span className="mono">--samples-dir</span>, nel qual
-            caso restano i suoi. Campi informativi — si cambiano di la', o al lancio
-            del server.
+            progetti e output dal Workspace qui sopra
+            {wsInfo ? (wsInfo.samplesFollowWorkspace ? (
+              <>, e con essi i media.</>
+            ) : (
+              <>; i media no — questo motore non ha{" "}
+              <span className="mono">--samples-dir</span>, quindi restano i suoi.</>
+            )) : "."}{" "}
+            Campi informativi — si cambiano di la', o al lancio del server.
           </div>
         </div>
 
