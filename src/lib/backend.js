@@ -102,17 +102,43 @@
   // stem che verra' riscritto. `statePositions` ci arriva (spliciato dentro
   // `states`) ed e' uscito da questa lista; `_curveRaw` ci arriva pure, ma non
   // puo' muoversi senza muovere `curve`, che e' hashata — vedi sopra.
+  //
+  // «Arriva nello YAML» va preso alla lettera, ed e' percio' una domanda per il
+  // serializer, non per una lista di nomi: le posizioni stale (lunghezza != a
+  // quella di `states`) non ci arrivano, e infatti non si hashano — vedi
+  // `positionsAreDropped` qui sotto. Una lista di chiavi non puo' rispondere:
+  // la stessa chiave, nello stesso posto, a volte esce e a volte no.
   const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
                                   "durationImplicit", "durationUnresolved",
                                   "deviationProbabilityLegacy"]);
   const FP_IGNORE_DEEP = new Set(["_curveRaw"]);
+
+  /* Il criterio «arriva nello YAML» ha un caso in cui `statePositions` NON ci
+     arriva: `serializeGrainEnvelope` lo ignora e scrive posizioni uniformi
+     quando la sua lunghezza non combacia con quella di `states` — una copia
+     rimasta stale dopo un edit strutturale. Hasharlo anche li' vorrebbe dire
+     due stream che serializzano lo STESSO IDENTICO YAML con due fingerprint
+     diversi: giallo su uno stem che il motore considera fresco. Verso sicuro,
+     ma sarebbe una seconda divergenza dalla derivata del motore — e la lista
+     delle divergenze dichiarate ha un elemento solo, `onset`.
+     La regola non si ricopia qui: la scrive `yaml-bridge.js`, che e' il posto
+     che decide cosa esce, e questa e' la seconda chiamante. Senza il bridge
+     (non succede: si carica prima) si hasha tutto — un render di troppo invece
+     di uno di meno. */
+  function positionsAreDropped(v) {
+    if (!("statePositions" in v)) return false;
+    const reaches = window.PGEYaml && window.PGEYaml.statePositionsReachYaml;
+    return reaches ? !reaches(v) : false;
+  }
 
   function canonicalJSON(v, ignore, deep) {
     if (v === null || v === undefined) return "null";
     if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
     if (typeof v === "string") return JSON.stringify(v);
     if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, deep, deep)).join(",") + "]";
-    const keys = Object.keys(v).filter(k => !ignore.has(k)).sort();
+    const drop = positionsAreDropped(v);
+    const keys = Object.keys(v)
+      .filter(k => !ignore.has(k) && !(drop && k === "statePositions")).sort();
     return "{" + keys.map(k => JSON.stringify(k) + ":" +
       canonicalJSON(v[k], deep, deep)).join(",") + "}";
   }

@@ -231,6 +231,46 @@ parity({
       },
     },
     {
+      label: "le posizioni che NON arrivano nello YAML non arrivano nell'hash",
+      run: async (ask, assert) => {
+        /* L'altra meta' del criterio, e il bordo che lo rende una domanda per
+         * il serializer invece che una lista di nomi. Le posizioni arrivano
+         * nello YAML solo finche' sono allineate agli stati: dopo un edit
+         * strutturale (uno stato aggiunto, la copia rimasta corta)
+         * `serializeGrainEnvelope` le ignora e scrive quelle uniformi.
+         *
+         * Due stream cosi' producono lo STESSO dict — quindi il motore, che
+         * vede solo quello, non puo' distinguerli. Se la UI li distinguesse
+         * sarebbe giallo su uno stem fresco: verso sicuro, ma una seconda
+         * divergenza dalla derivata del motore, e qui sopra la lista delle
+         * divergenze dichiarate ne ammette una sola (`onset`). Questo caso e'
+         * cio' che tiene la lista lunga uno. */
+        const withPositions = (positions) => {
+          const s = base();
+          s.grain = { ...(s.grain || {}), duration: 0.1, envelope: {
+            states: ["hanning", "gaussian", "hanning", "bartlett"],
+            curve: [[0, 0], [1, 3]],
+            statePositions: positions,   // tre posizioni, quattro stati: stale
+          } };
+          return s;
+        };
+        const a = withPositions([0, 0.2, 1]), b = withPositions([0, 0.9, 1]);
+
+        assert("stale: il serializer scrive lo stesso YAML",
+          serializeStream(a) === serializeStream(b));
+
+        const [ra, rb] = await ask([a, b].map(x => ({
+          op: "fingerprint", args: { stream: yamlDict(x) } })));
+        for (const r of [ra, rb]) if (!r.ok) throw new Error(`oracolo: ${r.error}`);
+
+        assert("stale: il motore non puo' distinguerli, e infatti non lo fa",
+          ra.value.hex === rb.value.hex, `${ra.value.hex} !== ${rb.value.hex}`);
+        assert("stale: e nemmeno la UI, che hasha cio' che arriva nello YAML",
+          fingerprintStream(a, "wav") === fingerprintStream(b, "wav"),
+          "la UI marca stale uno stem che il motore considera fresco");
+      },
+    },
+    {
       label: "l'ordine delle chiavi non entra nell'hash, da nessuno dei due lati",
       run: async (ask, assert) => {
         const a = { stream_id: "s", duration: 5, sample: "x.wav",

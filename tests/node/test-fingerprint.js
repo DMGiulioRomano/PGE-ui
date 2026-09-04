@@ -23,7 +23,7 @@ eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8"));
 
 const { fingerprintStream } = window.PGEBackend;
-const { applyStreamPatch } = window.PGEYaml;
+const { applyStreamPatch, serializeStream } = window.PGEYaml;
 
 let pass = 0, fail = 0;
 function assert(label, cond, extra) {
@@ -179,6 +179,44 @@ console.log("\n── i campi di preservazione del multistate (#59): il criterio
     assert("una deriva sotto 1e-9 in _curveRaw passa comunque per curve",
       p0.grain.envelope._curveRaw[1][1] !== p1.grain.envelope._curveRaw[1][1] &&
       fp(p0) !== fp(p1), "fingerprint uguale");
+  }
+  {
+    /* Il bordo del criterio, e il motivo per cui non e' una lista di nomi.
+       «Arriva nello YAML» e' una domanda per il serializer: le posizioni
+       arrivano SOLO finche' sono allineate agli stati. Dopo un edit
+       strutturale (uno stato in piu') la copia resta corta, il serializer la
+       ignora e scrive quelle uniformi — due stream cosi' danno lo stesso
+       identico YAML, quindi lo stesso hash del motore, e devono dare lo stesso
+       hash anche qui. Hasharle li' sarebbe giallo su uno stem fresco: verso
+       sicuro, ma una seconda divergenza dalla derivata del motore, e la lista
+       delle divergenze dichiarate ha un elemento solo. */
+    const stale = (p) => {
+      const s = ms(); s.grain.envelope.states = [...s.grain.envelope.states, "bartlett"];
+      s.grain.envelope.statePositions = p; return s;
+    };
+    const a = stale([0, 0.2, 0.9]), b = stale([0, 0.7, 0.9]);
+    assert("posizioni stale: stesso YAML",
+      serializeStream(a) === serializeStream(b), "YAML diverso");
+    assert("...e quindi stesso fingerprint", fp(a) === fp(b),
+      "giallo su uno stem che il motore considera fresco");
+    /* E il verso opposto, che e' quello che regge tutto il resto: quando le
+       posizioni arrivano davvero, muoverle muove l'hash. Senza questo, un
+       `positionsAreDropped` che rispondesse sempre "si'" passerebbe l'assert
+       qui sopra e rimetterebbe in piedi il difetto di #134. */
+    const live = (p) => { const s = ms(); s.grain.envelope.statePositions = p; return s; };
+    assert("posizioni allineate: YAML diverso e fingerprint diverso",
+      serializeStream(live([0, 0.2, 1])) !== serializeStream(live([0, 0.9, 1])) &&
+      fp(live([0, 0.2, 1])) !== fp(live([0, 0.9, 1])), "hash fermo");
+    /* Il ramo verbatim: senza `states` il serializer riemette l'oggetto com'e',
+       posizioni comprese, quindi il motore le hasha e noi pure. E' il caso che
+       una guardia scritta come "salta statePositions se la lunghezza non
+       combacia" sbaglierebbe, perche' li' non c'e' nessuna lunghezza con cui
+       combaciare. */
+    const verb = (p) => ({ id: "s1", duration: 10, sample: "x.wav",
+      grain: { duration: 0.1, envelope: { points: [[0, 0]], statePositions: p } } });
+    assert("envelope senza states: le posizioni escono verbatim e si hashano",
+      serializeStream(verb([0, 0.2])) !== serializeStream(verb([0, 0.9])) &&
+      fp(verb([0, 0.2])) !== fp(verb([0, 0.9])), "hash fermo su un campo che esce");
   }
 }
 
