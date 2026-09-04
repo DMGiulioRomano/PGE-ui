@@ -196,8 +196,10 @@ def _peaks_app(tmp_path):
 
 
 def test_peaks_route_serves_the_requested_format(tmp_path):
-    import numpy as np
+    # numpy arriva dall'importorskip dentro _peaks_app: importarlo prima
+    # sarebbe un errore invece di uno skip dove lo stack audio non c'e'.
     app, ws = _peaks_app(tmp_path)
+    np = pytest.importorskip("numpy")
     client = app.test_client()
 
     wav = np.frombuffer(client.get("/peaks/proj__s1.wav").data, dtype="<f4")
@@ -234,8 +236,8 @@ def test_spectrogram_route_serves_the_requested_format(tmp_path):
 def test_peaks_route_falls_back_to_the_other_format(tmp_path):
     """Un progetto reso solo in aiff continua a disegnarsi col formato wav
     selezionato: la route ricade sull'unico file che c'e'."""
-    import numpy as np
     app, ws = _peaks_app(tmp_path)
+    np = pytest.importorskip("numpy")
     (ws / "output" / "proj__s1.wav").unlink()
     client = app.test_client()
     r = client.get("/peaks/proj__s1.wav")

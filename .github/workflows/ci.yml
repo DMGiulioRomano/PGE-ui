@@ -126,9 +126,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # numpy + soundfile sono dipendenze del bridge (requirements.txt), non
+      # extra: senza, /peaks e /spectrogram rispondono 500 e i test che le
+      # esercitano si SKIPPANO — verdi quanto uno che passa. E' il modo in cui
+      # la #153 e' rimasta invisibile alla CI: il difetto stava nella sorgente
+      # che quelle due route scelgono, e in CI nessuna delle due girava mai.
       - name: install bridge + test deps
         working-directory: PGE-ui
-        run: pip install flask flask-cors pytest PyYAML
+        run: pip install flask flask-cors pytest PyYAML numpy soundfile
       # Build the engine's own venv so test_engine_render runs (instead of
       # skipping on a missing .venv/main.py). numpy renderer needs numpy+soundfile.
       # Skipped implicitly when the checkout above didn't land the engine sources.
