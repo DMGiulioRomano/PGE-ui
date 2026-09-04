@@ -111,9 +111,10 @@ engine checkout, and `/render` rewrites them there.
 - Missing **sub**directories are created; the workspace folder itself is not — a
   mistyped path is refused instead of scattered across the disk.
 - It can also be switched while the bridge runs: **⚙ → Workspace**, type a path,
-  *usa questa cartella*. The editor reloads the project list and the stem index
-  (they describe the previous folder), so unsaved edits to the open project are
-  lost. Refused mid-render.
+  *usa questa cartella*. The editor reloads the project list and everything that
+  describes the previous `output/` — stem index, durations, peaks, grains, the
+  engine-semantics versions — so unsaved edits to the open project are lost.
+  Refused mid-render, from the first instant of the render stream.
 - **`refs/` still comes from `--root`.** The render subprocess runs with its
   working directory on the engine repo, and the numpy renderer resolves samples
   against `./refs/` there. Samples will follow the workspace once the engine

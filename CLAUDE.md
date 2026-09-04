@@ -224,11 +224,22 @@ consequences worth keeping in mind:
 - **`workers: 1` in the gunicorn config is load-bearing.** The workspace is
   process state; with more workers a `POST /workspace` would switch one of them
   and the others would keep answering from the old folders.
-- **`/render` pins `refs`/`output`/`cache` at the top of the route**
-  (`ws_refs, ws_output, ws_cache`), not inside the NDJSON generator, which
-  outlives the request. A switch read mid-stream would put stems in one folder
-  and the cache manifest in another. `POST /workspace` also refuses with 409
-  while a render is running (`RenderState.is_running`).
+- **`/render` pins the four paths at the top of the route**
+  (`ws_dir, ws_refs, ws_output, ws_cache`), not inside the NDJSON generator,
+  which outlives the request. A switch read mid-stream would put stems in one
+  folder and the cache manifest in another — and the `done` line would name the
+  stems under a folder that never held them.
+- **`POST /workspace` refuses with 409 from the first instant of the render
+  stream, not from the spawn.** `RenderState.enter()` is called at the top of
+  the generator and released by its outermost `finally`; `is_running()` is that
+  claim *or* a live subprocess. Watching only the subprocess left the switch
+  open for the whole engine-venv setup — minutes in which `rs.proc` is `None`
+  and the render is under way with its paths already pinned, so it would have
+  written stems and manifest into the previous folder while the browser showed
+  the new one. The release has to sit in the outermost `finally` for the two
+  exits the inner one doesn't see: the early return of a failed venv setup, and
+  the `GeneratorExit` of a client that leaves mid-stream. A claim left hanging
+  would 409 every switch for the life of the bridge.
 
 Creation rule: missing **sub**directories are created, the workspace folder
 itself is not — on the CLI a mistyped `--workspace` exits, over HTTP it 400s.
@@ -242,10 +253,19 @@ spectrograms, grain data, the grain refs, `stemRevRef` and `lastRenderedFps`,
 reloads media + projects, then reopens a project and **calls `loadCache`
 itself** — two folders can hold a project of the same name, and there
 `activeProject` doesn't change, so the effect keyed on it never re-fires and
-every clip would read ⚪ with stems sitting on disk. What deliberately survives
-is `pge-local-fp`: it records what a stream looked like when it was rendered, so
-a same-named project with different content hashes differently (stale, the safe
-direction) and with identical content would render identical audio anyway.
+every clip would read ⚪ with stems sitting on disk. The engine-semantics
+records (`pge-local-sem`) go with the index, and for the same reason: they are a
+statement about the *files* — "an engine that read the YAML this way wrote this
+stem" — i.e. about exactly what the index inventoried, the previous `output/`.
+Inherited into a new folder they assert a reading nobody observed there, and
+with identical YAML the fingerprint matches: 🟢 on stems an older engine wrote
+differently, which is the case the axis was added for (#133). Without a record
+the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
+first pass, even an empty one. What deliberately survives is `pge-local-fp`: it
+records what a stream looked like when it was rendered — a statement about the
+YAML, not about the files — so a same-named project with different content
+hashes differently (stale, the safe direction) and with identical content would
+render identical audio anyway.
 
 Settings shows the workspace field; the value comes from `GET /workspace` on
 every panel open, never from a saved preference — the server is the single
@@ -887,7 +907,7 @@ Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), 
 
 ## Security stance of `server.py`
 
-Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`.
+Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check

@@ -105,16 +105,23 @@ gunicorn config runs `workers: 1`); an empty path returns to `--root`. The
 response carries the new project list, because a switch invalidates what the
 browser holds: it is a replacement, not a merge. In the editor: **⚙ → Workspace**.
 
-Two refusals: a path that doesn't exist (400) and a render in flight (409) —
-`/render` reads `configs`, `output` and `cache` while its NDJSON stream is open,
-and it also pins them at the start of the route so a switch can't split stems
-and cache manifest across two folders.
+Two refusals: a bad path (400 — missing, not a directory, or not a path at all:
+an embedded NUL or a `~unknownuser` are answers with a message, not 500s) and a
+render in flight (409). `/render` reads `configs`, `output` and `cache` while its
+NDJSON stream is open, and it also pins them at the start of the route so a
+switch can't split stems and cache manifest across two folders. The 409 covers
+the render from the *first instant of the stream*, not from the spawn: between
+the two sits the engine venv setup, minutes in which no subprocess exists yet
+and the render is nonetheless under way, with its paths already pinned.
 
-Browser-side, a successful switch drops the stem index, the peaks, the
-spectrograms, the grain sidecars and the last-render fingerprints, then reloads
-the project list and reopens a project (same name if the new folder has one).
-Keeping any of it would mean a clip with a green dot and no audio behind it —
-the 404 an `<audio>` element reports by never firing `canplay`.
+Browser-side, a successful switch drops the stem index, the on-disk stem
+durations, the peaks, the spectrograms, the grain sidecars and the recorded
+engine-semantics versions, then reloads the project list and reopens a project
+(same name if the new folder has one). Keeping any of it would mean a clip with a
+green dot and no audio behind it — the 404 an `<audio>` element reports by never
+firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
+that survives: they describe the YAML that was rendered, not the files on disk,
+so a same-named project with different content reads stale — the safe direction.
 
 **`refs/` doesn't move yet.** The subprocess runs with `cwd=root` and the numpy
 renderer resolves samples against `./refs/` there, so samples still come from the
