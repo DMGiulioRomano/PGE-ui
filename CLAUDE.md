@@ -85,9 +85,14 @@ twenty-odd suites, `|| exit 1` meant seeing one failure per run instead of the
 whole census. That holds *between* the targets too — `tests: tests-node
 tests-python` was a make dependency, so one red node suite made pytest **and**
 parity disappear, and whoever ran `make tests` for the census got a third of
-it. `make tests-python ROOT=…` also reaches pytest now (`PGE_ENGINE_ROOT`):
-only that half ignored the `ROOT=` this Makefile's own help suggests, and the
-corpus vanished into a green skip.
+it. **All three targets now forward `ROOT=` as `PGE_ENGINE_ROOT`**, and all
+three readers honour it (`tests/node/test-yaml-bridge.js`,
+`tests/python/engine_corpus.py`, `tests/parity/harness.js`). Each half ignored
+it in turn, and the symptom was never a red: `make tests-{python,node}
+ROOT=/path` — the `ROOT=` this Makefile's own help suggests — skipped the corpus
+and printed green, i.e. #132 through the back door. `test-suite-harness.js`
+guards the three readers and the three recipes, and measures the node one by
+running it against an invented root.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
 checks out the sibling engine and builds its venv. The node job checks it out
@@ -295,7 +300,7 @@ The per-param "remove" button must serialize the off state as `false` or absent 
 
 ### Dynamic parameter bounds
 
-`GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` under `src/pge/parameters/` (falling back to pre-#162 flat `src/parameters/`). Returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` calls `window.PGEBounds.apply()` at boot. `bounds.js` (`mergeEngineBounds`, node-tested) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param and whether it reads `min_val/max_val` or `min_range/max_range`. `window.PGE_BOUNDS` in `yaml-bridge.js` is the **static fallback** (used on `file://` / server down).
+`GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` under `src/pge/parameters/` (falling back to pre-#162 flat `src/parameters/`). Returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` wraps the fetch in `refreshEngineBounds()` and calls it from **three** sites — boot, project change, render start — the same three as `refreshEngineSem`, and for the same reason (see below). `bounds.js` (`mergeEngineBounds`, node-tested) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param and whether it reads `min_val/max_val` or `min_range/max_range`. `window.PGE_BOUNDS` in `yaml-bridge.js` is the **static fallback** (used on `file://` / server down).
 
 **The same payload carries `output_sr`** — the engine's `DEFAULT_OUTPUT_SR`
 (`pge/shared/constants.py`), AST-read by `engine_introspect.engine_output_sr`
@@ -315,7 +320,22 @@ writes wrong durations — and the direction is the bad one: engine at 44100 wit
 the UI on 48000 gives `1/48000 < 1/44100`, i.e. a grain shorter than a real
 sample. `test-bounds-parity.js` pins all three links (imported constant, the
 bridge's AST read, the static literal) and requires the literal to **equal** the
-engine's, not merely be no wider: here the inequality has no safe direction.
+engine's, not merely be no wider: here the inequality has no safe direction. It
+also pins the *premise* of the floor: `mergeEngineBounds` sets
+`grainDur.min = 1/sr` flat, not `Math.min(base.min, 1/sr)`, because the engine
+**replaces** the declared min (`get_parameter_bounds(..., output_sr=…)` returns
+`min_val = 1.0/output_sr`); the two coincide only while the declared min stays
+above one sample (today `0.001` s = 48 samples at 48 kHz), and that's an engine
+fact the parity asserts rather than the comment transcribing it.
+
+**Three call sites, not one.** `refreshEngineBounds()` runs at boot, on project
+change and at render start. With the boot site alone — an effect with empty deps,
+inside the `/health` `try`, and `serverDown` never going back to false without a
+reload — the number entered the page once and never again: a `git checkout` next
+door under a live `make serve` stayed invisible, though `engine_introspect`
+invalidates on mtime precisely so it wouldn't. The render does **not** await it
+(unlike the semantics version, which its own `stream-done`s consume): the render
+doesn't read the clamps, the editor does, afterwards.
 The floor is `1/sr` outright and not `Math.min(base.min, 1/sr)` — the two agree
 only while the declared min sits above one sample, and with a payload carrying
 `output_sr` and no params the `Math.min` kept the floor of the *old* sample rate.
