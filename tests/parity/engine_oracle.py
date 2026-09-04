@@ -761,9 +761,18 @@ def _op_constants(args):
                                      "is_smart": bool(sp.is_smart),
                                      "schema": schema_name})
         out["deviation_probability_keys"] = declared
+        # Il default di `grain_duration`, in secondi. La UI lo ricopia
+        # (`GRAIN_DEFAULT_DURATION_SEC` in envelope-utils.js) per seminare la
+        # chiave quando l'utente accende la durata, e lo converte nell'unita' in
+        # vigore: e' un valore del motore come i bound, non una scelta
+        # dell'editor, quindi va confrontato e non creduto sulla parola.
+        out["grain_duration_default"] = next(
+            (sp.default for specs in psch.ALL_SCHEMAS.values() for sp in specs
+             if getattr(sp, "name", None) == "grain_duration"), None)
     except OracleError as exc:
         out["deviation_probability_keys"] = None
         out["deviation_probability_keys_error"] = str(exc)
+        out["grain_duration_default"] = None
 
     try:
         ns = _load_magnify_from_source()

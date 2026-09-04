@@ -375,6 +375,22 @@ parity({
           window.PGE_BOUNDS = JSON.parse(JSON.stringify(STATIC));
         }
 
+        /* E l'altra costante che envelope-utils ricopiava: il default di
+         * `grain_duration`. Non e' un bound ma un valore del motore, seminato
+         * nello YAML quando l'utente accende la chiave — quindi va confrontato
+         * qui come il sample rate, o «nessuna costante trascritta a mano»
+         * resta un'affermazione e non un fatto. */
+        const EU = loadUiLibs(["yaml-bridge.js", "envelope-loops.js",
+                               "deviation-probability.js", "envelope-utils.js"])
+          .PGEEnvUtils;
+        assert("il default di grain_duration e' quello dello schema del motore",
+          typeof c.grain_duration_default === "number" &&
+          Math.abs(EU.grainDefaultDuration("seconds") - c.grain_duration_default) < 1e-15,
+          `ui=${EU.grainDefaultDuration("seconds")} motore=${JSON.stringify(c.grain_duration_default)}`);
+        assert("e in millisecondi e' lo stesso valore convertito, non un secondo letterale",
+          Math.abs(EU.grainDefaultDuration("milliseconds") - c.grain_duration_default * 1000) < 1e-9,
+          String(EU.grainDefaultDuration("milliseconds")));
+
         ctx.note(`sample rate del motore: ${c.default_output_sr} Hz`,
           `min di grain_duration = 1/${c.default_output_sr} = ` +
           `${1 / c.default_output_sr} s; stesso fattore per duration_unit: samples`);

@@ -562,8 +562,14 @@
     return "";
   }
 
-  // Il default di grain.duration nello schema del motore, in secondi. Fuori da
+  // Il default di grain.duration nello schema del motore (`parameter_schema.py`,
+  // `ParameterSpec(name='grain_duration', default=...)`), in secondi. Fuori da
   // 'seconds' va convertito prima di essere scritto da qualunque parte.
+  //
+  // È un valore del motore ricopiato qui, non una scelta dell'editor, quindi
+  // `tests/parity/test-bounds-parity.js` lo confronta con lo schema vero a ogni
+  // run: se il motore lo muove il test parla, invece di lasciare l'editor a
+  // seminare un default che il motore non ha più.
   const GRAIN_DEFAULT_DURATION_SEC = 0.05;
 
   // Fattore unità→secondi, come Stream._pre_normalize_grain_params: 1/output_sr
