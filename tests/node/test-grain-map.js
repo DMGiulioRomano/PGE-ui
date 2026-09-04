@@ -7,6 +7,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // Shim: grain-map.js fa `window.PGEGrainMap = {...}` dentro una IIFE.
 global.window = {};
@@ -411,7 +412,7 @@ console.log("\n── readPositionAt: la posizione di lettura sotto il cursore �
 
   // Guardia: il readout non deve mai passare per setState (un re-render per
   // pixel di mouse), e non deve inventare un valore senza sidecar.
-  const tlSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+  const tlSrc = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
   assert("il readout scrive nel DOM per ref, non via state",
          /readoutRef\.current/.test(tlSrc) && !/setHoverX|setReadout/.test(tlSrc));
   // Il riquadro compare comunque: Position/End sono dati che abbiamo sempre.
@@ -422,7 +423,7 @@ console.log("\n── readPositionAt: la posizione di lettura sotto il cursore �
          !/if \(!data\) \{ el\.style\.display = "none"/.test(tlSrc));
   // Il readout non deve dipendere dal toggle del layer grani: il sidecar sta
   // su disco appena lo stream e' renderizzato, e il toggle riguarda il disegno.
-  const appSrc2 = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc2 = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
   assert("il sidecar mancante viene chiesto, non preteso dall'utente",
          /onNeedGrains\(s\.id\)/.test(tlSrc) && /function ensureGrainData/.test(appSrc2));
   assert("il caricamento mirato passa per la stessa mappa e gli stessi ref del blocco",

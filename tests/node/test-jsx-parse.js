@@ -13,11 +13,24 @@
 const fs     = require("fs");
 const path   = require("path");
 const parser = require("@babel/parser");
+const SG     = require("./source-guard.js");
 
 const dir = path.join(__dirname, "../../src/components");
 let pass = 0, fail = 0;
+function assert(label, cond, extra) {
+  if (cond) { pass++; console.log("  OK  " + label); }
+  else { fail++; console.error("FAIL  " + label + (extra ? "\n      " + extra : "")); }
+}
 
-const files = fs.readdirSync(dir).filter(f => f.endsWith(".jsx")).sort();
+// `readdirSync` su un path sbagliato LANCIA, e il modo realistico di avere
+// zero file e' proprio quello: senza questo catch il file usciva 1 tre righe
+// prima dell'assert che nomina il caso, quindi quel ramo era irraggiungibile.
+let files = [];
+try {
+  files = fs.readdirSync(dir).filter(f => f.endsWith(".jsx")).sort();
+} catch (e) {
+  console.error("      " + e.message);
+}
 console.log(`\n── ${files.length} components parse as JSX ──`);
 // Zero file e' un fallimento, non un verde: significa che il path e' sbagliato.
 // Registrato come assert normale, cosi' passa dall'handler come tutto il resto.
@@ -34,6 +47,25 @@ for (const f of files) {
     pass++; console.log("  OK  " + f);
   } catch (e) {
     fail++; console.error("FAIL  " + f + "\n      " + e.message);
+  }
+}
+
+/* Ogni `.jsx` dev'essere anche CARICATO da `PGE Editor.html`.
+ *
+ * Non c'e' build step: un componente nuovo, valido, che nessuno ha aggiunto
+ * all'HTML semplicemente non esiste a runtime — `window.PGE*` resta undefined e
+ * l'editor si rompe dove lo usa. CLAUDE.md lo dice ("A new JSX file must be
+ * added to PGE Editor.html"), e in una PR che rende eseguibili i patti quello
+ * restava prosa. Il materiale c'era gia': altre due suite leggono l'HTML. */
+{
+  const htmlPath = path.join(__dirname, "../../PGE Editor.html");
+  const html = SG.codeOf(htmlPath);     // senza <!-- --> : un commento non carica
+  const missing = files.filter(f => !html.includes(f));
+  if (files.length) {
+    assert(`ogni .jsx e' caricato da PGE Editor.html (${files.length})`,
+      missing.length === 0,
+      "questi non compaiono nell'HTML, quindi a runtime non esistono: " +
+      missing.join(", "));
   }
 }
 

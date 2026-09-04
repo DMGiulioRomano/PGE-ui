@@ -26,6 +26,10 @@ const fs   = require("fs");
 const path = require("path");
 
 let pass = 0, fail = 0;
+// Il corpo della suite e' un IIFE async: se muore a meta', i suoi assert non
+// contano e i contatori direbbero "0 failed" su una suite che non e' arrivata
+// in fondo. La bandiera lo dice all'handler `exit`.
+let bodyDone = false;
 function assert(label, cond, extra) {
   if (cond) { pass++; console.log("  OK  " + label); }
   else { fail++; console.error("FAIL  " + label + (extra ? "\n      " + extra : "")); }
@@ -222,13 +226,29 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /res && res\.error/.test(sp));
   }
 
-  // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
-  // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
-  // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
-  process.on("exit", (code) => {
-    console.log(`\n${"─".repeat(50)}`);
-    console.log(`${pass} passed, ${fail} failed`);
-    if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
-    if (fail > 0) process.exitCode = 1;
-  });
-})();
+  bodyDone = true;
+})().catch(e => {
+  /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e
+     nessun riepilogo. */
+  fail++;
+  console.error("FAIL  il corpo della suite e' morto a meta'\n      " +
+    (e && e.stack ? e.stack : String(e)));
+});
+
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file: cosi'
+// una sezione appesa dopo continua a contare, invece di stampare FAIL e uscire
+// 0. E la registrazione sta a livello di modulo, non dentro il corpo che deve
+// sorvegliare: registrata li' dentro, un corpo morto prima non avrebbe ne'
+// riepilogo ne' "interrotto". Il vincolo e' verificato da
+// test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  if (!bodyDone) {
+    fail++;
+    console.error("FAIL  il corpo della suite non e' arrivato in fondo: " +
+      "i suoi assert non hanno contato");
+  }
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

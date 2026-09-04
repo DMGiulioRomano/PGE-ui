@@ -6,6 +6,10 @@ These don't need the engine repo (no main.py is spawned). The kill/watchdog
 tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 """
 
+import glob
+import json
+import os
+import signal
 import re
 import subprocess
 import sys
@@ -14,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import engine_corpus
 import render_pipeline as rp
 
 
@@ -76,6 +81,136 @@ def test_parse_render_line_stem_path_other_stream_no_done():
     evs = rp.parse_render_line("    /abs/output/PGE_test__streamX.aif", state)
     assert _types(evs) == ["log"]            # path is for a different stream
     assert state["streamId"] == "stream1"
+
+
+# ---------------------------------------------------------------------------
+# Il corpus non e' piu' trascritto da un docstring: le righe le stampa il
+# motore, e l'insieme degli id lo dichiara la richiesta.
+#
+# `[CACHE] Manifest: <path>` esce a OGNI render con --cache (pge/cli.py), e
+# `[CACHE] GC: rimossi N stream orfani` quando la GC rimuove qualcosa: due
+# righe che non sono stream e che `_RE_CACHE_LINE` leggeva come tali,
+# inventando stream `Manifest` e `GC` in ogni giro.
+# ---------------------------------------------------------------------------
+
+def _ids_state(ids, total=None, **over):
+    """Lo `state` che costruisce /render: gli id dichiarati dalla richiesta."""
+    st = {"streamId": None, "index": 0,
+          "total": len(ids) if total is None else total,
+          "ids": set(ids)}
+    st.update(over)
+    return st
+
+
+def test_parse_render_line_ignores_manifest_line():
+    state = _ids_state({"stream1"})
+    evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
+    assert _types(evs) == ["log"]
+    assert state["index"] == 0            # non consuma un posto nella barra
+    assert state["streamId"] is None
+
+
+def test_parse_render_line_ignores_gc_line():
+    state = _ids_state({"stream1"})
+    evs = rp.parse_render_line(
+        "[CACHE] GC: rimossi 2 stream orfani: ['proj__old1', 'proj__old2']", state)
+    assert _types(evs) == ["log"]
+    assert state["index"] == 0
+
+
+def test_parse_render_line_ghost_does_not_close_pending_dirty():
+    """Un fantasma non deve nemmeno chiudere lo stream in corso."""
+    state = _ids_state({"stream1"})
+    rp.parse_render_line("[CACHE] stream1: DIRTY", state)
+    evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
+    assert _types(evs) == ["log"]
+    assert state["streamId"] == "stream1"   # ancora in corso
+
+
+def test_parse_render_line_without_ids_keeps_legacy_behaviour():
+    """Richiesta che non dichiara gli stream: nessun insieme, nessun filtro."""
+    state = {"streamId": None, "total": 0, "index": 0}
+    evs = rp.parse_render_line("[CACHE] stream1: clean", state)
+    assert _types(evs) == ["log", "stream-start", "stream-done"]
+
+
+@pytest.mark.parametrize("sid", ["bass-1", "voce.2", "a_b", "S1", "x.y-z_1"])
+def test_parse_render_line_stem_path_closes_ids_outside_word_charset(sid):
+    r"""Il charset degli id e' quello di `renameStream` (app.jsx: lettere,
+    cifre, `.`, `_`, `-`), non `\w`: con `-` o `.` l'ultimo stream DIRTY del
+    giro non riceveva mai il suo `stream-done`."""
+    state = _ids_state({sid})
+    rp.parse_render_line(f"[CACHE] {sid}: DIRTY", state)
+    evs = rp.parse_render_line(f"    /abs/output/PGE_test__{sid}.wav", state)
+    assert _types(evs) == ["log", "stream-done"]
+    assert evs[1] == {"type": "stream-done", "streamId": sid, "cached": False}
+    assert state["streamId"] is None
+
+
+def test_parse_render_line_stem_path_still_discriminates():
+    """Allargare la regex non deve chiudere lo stream sbagliato."""
+    state = _ids_state({"bass-1", "voce.2"})
+    rp.parse_render_line("[CACHE] bass-1: DIRTY", state)
+    evs = rp.parse_render_line("    /abs/output/PGE_test__voce.2.wav", state)
+    assert _types(evs) == ["log"]
+    assert state["streamId"] == "bass-1"
+
+
+# --- la sonda: le righe [CACHE] chieste al motore, non trascritte -----------
+
+_RE_CACHE_LITERAL = re.compile(r"""(?P<q>["'])\[CACHE\](?P<body>.*?)(?P=q)""")
+_RE_INTERP = re.compile(r"\{[^{}]*\}")
+
+
+def _engine_cache_literals():
+    """Ogni literal `[CACHE] …` nei sorgenti del motore, con il suo file."""
+    src = os.path.join(engine_corpus.ENGINE_ROOT, "src")
+    out = []
+    for path in sorted(glob.glob(os.path.join(src, "**", "*.py"), recursive=True)):
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for m in _RE_CACHE_LITERAL.finditer(text):
+            out.append((os.path.relpath(path, engine_corpus.ENGINE_ROOT),
+                        m.group("body")))
+    return out
+
+
+def test_no_engine_cache_line_invents_a_stream():
+    """Nessuna riga `[CACHE]` del motore deve produrre uno stream che la
+    richiesta non ha dichiarato.
+
+    Il corpus lo sceglie il motore: le sei asserzioni sopra girano su righe
+    scritte a mano (la trascrizione del docstring di questo modulo), ed e'
+    esattamente per questo che `Manifest` e `GC` ci passavano in mezzo. Qui le
+    righe si leggono dai sorgenti del motore e ogni interpolazione diventa un
+    nome che la richiesta non conosce: se il parser ne ricava uno stream, la
+    riga sta inventando.
+    """
+    err = engine_corpus.corpus_error()
+    assert err is None, err
+    reason = engine_corpus.skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    lines = _engine_cache_literals()
+    assert lines, (
+        "nessun literal [CACHE] nei sorgenti del motore: la sonda gira a vuoto "
+        f"(cercato in {engine_corpus.ENGINE_ROOT}/src)"
+    )
+    literal_prefixed = [b for _, b in lines if not b.lstrip().startswith("{")]
+    assert literal_prefixed, (
+        "nessuna riga [CACHE] con prefisso letterale nel corpus: il caso "
+        "interessante (Manifest:, GC:) non c'e', la sonda non discrimina"
+    )
+
+    for path, body in lines:
+        rendered = "[CACHE]" + _RE_INTERP.sub("zzGHOSTzz", body)
+        state = _ids_state({"stream1", "bass-1"})
+        evs = rp.parse_render_line(rendered, state)
+        assert _types(evs) == ["log"], (
+            f"{path} stampa {rendered!r}, che il parser legge come uno stream: "
+            f"{evs[1:]}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +364,48 @@ def test_kill_process_terminates():
     assert proc.poll() is not None           # dead
 
 
+def _sigterm_ignorer(seconds=30):
+    """Un processo che IGNORA SIGTERM: e' l'unico che distingue `terminate()`
+    dall'escalation a SIGKILL. Tutti i test qui sopra usano un processo che
+    muore al primo terminate, quindi togliendo l'escalation la suite restava
+    verde — mentre nel bridge vivo un main.py bloccato in una syscall terrebbe
+    un thread del worker (workers=1, threads=4) fino alla fine dei tempi."""
+    proc = subprocess.Popen([sys.executable, "-c",
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "print('ready', flush=True)\n"
+        f"time.sleep({seconds})\n"], stdout=subprocess.PIPE, text=True)
+    # Si aspetta che l'handler sia INSTALLATO: un terminate() spedito nella
+    # finestra di avvio dell'interprete lo ucciderebbe davvero, e il test
+    # misurerebbe l'escalation che non e' avvenuta.
+    assert proc.stdout.readline().strip() == "ready"
+    return proc
+
+
+def test_kill_process_escalates_to_sigkill():
+    proc = _sigterm_ignorer()
+    t0 = time.monotonic()
+    rp.kill_process(proc, grace=1.0)
+    # `kill_process` spedisce SIGKILL e torna: la raccolta del figlio la fa
+    # chi chiama (il ciclo di /render fa `proc.wait()`), quindi qui si attende
+    # come farebbe lui. Il segnale e' gia' partito — se non fosse partito,
+    # questa `wait` scadrebbe.
+    proc.wait(timeout=5)
+    assert proc.returncode == -signal.SIGKILL, proc.returncode
+    # La grazia si aspetta davvero, non si salta: e' l'uscita pulita a essere
+    # preferita quando il processo la concede.
+    assert 1.0 <= time.monotonic() - t0 < 6.0
+
+
+def test_watchdog_escalates_too():
+    """Il watchdog passa la stessa `grace` a kill_process: un main.py che
+    ignora SIGTERM non deve poter tenere il thread oltre il tetto."""
+    proc = _sigterm_ignorer()
+    rp.start_watchdog(proc, timeout=0.3, grace=1.0)
+    proc.wait(timeout=15)
+    assert proc.returncode == -signal.SIGKILL, proc.returncode
+
+
 def test_kill_process_safe_on_dead():
     proc = _sleeper(0)
     proc.wait()
@@ -346,6 +523,25 @@ def test_engine_envelope_keys_parses_source_in_order(tmp_path):
     import server
     _stub_score_visualizer(tmp_path)
     assert server.engine_envelope_keys(tmp_path) == ["volume", "pan", "pitch"]
+
+
+def test_engine_envelope_keys_annotated(tmp_path):
+    """`ENVELOPE_COLORS: Dict[str, str] = {...}` e' un AnnAssign, non un Assign.
+    Il motore ANNOTA gia' due costanti di modulo (GRANULAR_PARAMETERS,
+    PITCH_UNIT_PRESETS): una terza annotazione a monte non e' un'ipotesi di
+    stile, e qui costerebbe il filtro degli envelope name."""
+    import server
+    d = tmp_path / "src" / "pge" / "rendering"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "envelope_extractor.py").write_text(
+        "from typing import Dict\n"
+        "ENVELOPE_COLORS: Dict[str, str] = {\n"
+        "    'volume': '#000000',\n"
+        "    'pan': '#111111',\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    assert server.engine_envelope_keys(tmp_path) == ["volume", "pan"]
 
 
 def test_engine_envelope_keys_pge_layout(tmp_path):
@@ -500,6 +696,67 @@ def test_engine_parameter_bounds_missing_returns_empty(tmp_path):
     assert server.engine_parameter_bounds(tmp_path / "nope") == {}
 
 
+def test_engine_parameter_bounds_pitch_unknown_says_so(tmp_path):
+    """Una lettura fallita non deve diventare un numero.
+
+    CLAUDE.md dichiara di questo modulo che ogni lettura torna vuoto/None per
+    un motore che non ha la cosa, e che ogni chiamante deve leggerlo come "non
+    lo so", mai come un valore. Per la meta' `pitch` era falso: tre ripieghi
+    (`return 3.0`, il record ratio, la tabella dei preset) restituivano i
+    numeri del motore di oggi trascritti qui, e `mergeEngineBounds` li applica
+    SOPRA il fallback statico perche' arrivano etichettati come verita' del
+    motore. Il verso e' quello sbagliato: un `ratio.min` trascritto contro un
+    motore che ne pretendesse un altro ammette un valore che il motore
+    rifiuta.
+
+    Il sabotaggio qui e' un refactor plausibile — due classi rinominate — che
+    per l'AST e' semplicemente una lettura fallita.
+    """
+    import server
+    _stub_parameter_files(tmp_path)
+    pu = tmp_path / "src" / "parameters" / "pitch_unit.py"
+    src = pu.read_text(encoding="utf-8")
+    src = src.replace("class EdoUnit:", "class EdoPitchUnit:")
+    src = src.replace("class RatioUnit:", "class FrequencyRatioUnit:")
+    src = src.replace("EdoUnit(", "EdoPitchUnit(").replace("RatioUnit()", "FrequencyRatioUnit()")
+    pu.write_text(src, encoding="utf-8")
+
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert "edoFactor" not in pitch, pitch
+    assert "ratio" not in pitch, pitch
+    for name in ("semitones", "cents", "quarter_tone", "eighth_tone"):
+        assert name not in pitch, pitch
+
+
+def test_engine_parameter_bounds_pitch_partial_reads(tmp_path):
+    """Le letture sono indipendenti: cio' che si sa resta, il resto sparisce."""
+    import server
+    _stub_parameter_files(tmp_path)
+    pu = tmp_path / "src" / "parameters" / "pitch_unit.py"
+    src = pu.read_text(encoding="utf-8")
+    src = src.replace("class RatioUnit:", "class FrequencyRatioUnit:")
+    pu.write_text(src, encoding="utf-8")
+
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert "ratio" not in pitch, pitch
+    assert pitch["edoFactor"] == 3.0
+    assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}
+
+
+def test_engine_introspect_has_no_transcribed_engine_numbers():
+    """Il fallback dichiarato sta in un posto solo, e non e' questo modulo.
+
+    CLAUDE.md nomina `yaml-bridge.js` come l'unico posto dei fallback statici
+    ("If you add a UI clamp, add its fallback in yaml-bridge.js"), e
+    `test-bounds-parity.js` verifica che quello non ammetta valori che il
+    motore rifiuta. Un secondo insieme di numeri qui sarebbe invisibile a
+    quella verifica — col motore vero i due lati coincidono — e sopravvivrebbe
+    proprio al caso in cui serve accorgersene: il motore che si muove.
+    """
+    import engine_introspect
+    assert not hasattr(engine_introspect, "_PITCH_PRESET_DIVISIONS")
+
+
 def test_bounds_endpoint(tmp_path):
     import server
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -583,6 +840,420 @@ def test_gunicorn_has_enough_threads_for_concurrent_stems():
     m = re.search(r'"threads":\s*(\d+)', src)
     assert m, '"threads" non trovato nella config gunicorn di server.py'
     assert int(m.group(1)) >= 32
+
+
+# ---------------------------------------------------------------------------
+# Semantica del motore — engine_semantics_version + /semantics-version (#133)
+#
+# VARIATION_SEMANTICS_VERSION e' il numero con cui il motore dichiara COME
+# legge lo YAML. Entra nel suo fingerprint: quando cambia, ogni stem gia' su
+# disco e' stato scritto con una lettura diversa dello stesso testo. L'editor
+# lo legge di qui per non mostrare "renderizzato" su audio che il motore
+# rifara' diverso — e questa e' l'unica strada per cui quel numero lo
+# raggiunge, quindi None non e' un dettaglio: e' l'asse spento.
+# ---------------------------------------------------------------------------
+
+def _stub_stream_cache_manager(root, body, layout="pge"):
+    d = (root / "src" / "pge" / "rendering") if layout == "pge" \
+        else (root / "src" / "rendering")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "stream_cache_manager.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_semantics_version_parses_source(tmp_path):
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 7\n")
+    assert server.engine_semantics_version(tmp_path) == 7
+
+
+def test_engine_semantics_version_annotated(tmp_path):
+    """`VARIATION_SEMANTICS_VERSION: int = 7` e' un AnnAssign.
+
+    Il ripiego su None sarebbe MUTO e nel verso peggiore: None vuol dire
+    "motore ignoto", e per la regola di questo asse un motore ignoto non
+    pretende niente — cioe' l'asse si spegne e ogni stem torna verde proprio
+    mentre il motore sta per riscriverli. E l'innesco sarebbe l'evento che
+    l'asse sorveglia: un bump accompagnato da un'annotazione di tipo."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION: int = 7\n")
+    assert server.engine_semantics_version(tmp_path) == 7
+
+
+def test_engine_semantics_version_annotation_without_value(tmp_path):
+    """`VARIATION_SEMANTICS_VERSION: int` senza valore: non c'e' niente da
+    leggere, e None e' la risposta giusta (non un'eccezione)."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION: int\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_legacy_layout(tmp_path):
+    """Layout piatto pre-PGE #162: src/rendering/ invece di src/pge/rendering/."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n",
+                               layout="flat")
+    assert server.engine_semantics_version(tmp_path) == 2
+
+
+def test_engine_semantics_version_prefers_current_layout(tmp_path):
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n",
+                               layout="flat")
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 5\n")
+    assert server.engine_semantics_version(tmp_path) == 5
+
+
+def test_engine_semantics_version_missing_is_none(tmp_path):
+    """Un motore senza la costante, o senza il file. None e non 0: chi legge
+    deve poter distinguere "non lo so" da una versione, o marchierebbe stale
+    ogni stem di ogni progetto."""
+    import server
+    assert server.engine_semantics_version(tmp_path / "nope") is None
+    _stub_stream_cache_manager(tmp_path, "FINGERPRINT_IGNORE_KEYS = {'solo'}\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_non_literal_is_none(tmp_path):
+    """Se la costante smette di essere un letterale (calcolata, importata), il
+    parser AST non deve inventare: None, e l'editor non pretende niente."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 1 + int(x)\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_rejects_bool(tmp_path):
+    """`True` e' un int in Python. Non e' una versione."""
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = True\n")
+    assert server.engine_semantics_version(tmp_path) is None
+
+
+def test_engine_semantics_version_sees_a_live_bump(tmp_path):
+    """La cache si invalida sul mtime, e non e' pedanteria: il caso e' il motore
+    aggiornato sotto un `make serve` in corso. Con una cache a vita il bridge
+    continuerebbe a servire il numero vecchio fino al restart — cioe' proprio
+    l'evento che questa lettura esiste per intercettare resterebbe invisibile."""
+    import os
+    import server
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 2\n")
+    assert server.engine_semantics_version(tmp_path) == 2
+
+    src = tmp_path / "src" / "pge" / "rendering" / "stream_cache_manager.py"
+    src.write_text("VARIATION_SEMANTICS_VERSION = 3\n")
+    # mtime esplicito: su un filesystem a bassa risoluzione due scritture nello
+    # stesso istante sarebbero indistinguibili, e il test misurerebbe l'orologio
+    # invece della cache.
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert server.engine_semantics_version(tmp_path) == 3
+
+
+def test_engine_semantics_cache_keeps_one_entry_per_root(tmp_path):
+    """Il timbro sta nel valore, non nella chiave: altrimenti ogni salvataggio
+    del motore aggiungerebbe una voce invece di sostituirla, e sotto un
+    `make serve` durante lo sviluppo il dizionario crescerebbe a ogni Ctrl-S."""
+    import os
+    import engine_introspect as ei
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 1\n")
+    src = tmp_path / "src" / "pge" / "rendering" / "stream_cache_manager.py"
+    for i, v in enumerate((1, 2, 3, 4)):
+        src.write_text(f"VARIATION_SEMANTICS_VERSION = {v}\n")
+        st = src.stat()
+        os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + (i + 1) * 1_000_000_000))
+        assert ei.engine_semantics_version(tmp_path) == v
+    mine = [k for k in ei._SEMANTICS_CACHE if str(tmp_path) in str(k)]
+    assert len(mine) == 1, f"{len(mine)} voci per una sola root: {mine}"
+
+
+def test_semantics_version_endpoint(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 4\n")
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/semantics-version").get_json()
+    assert body["ok"] is True
+    assert body["version"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Sample rate del motore — engine_output_sr + /bounds (#133)
+#
+# DEFAULT_OUTPUT_SR e' l'ultima costante del motore che questo repo teneva
+# ricopiata a mano (`OUTPUT_SR` in yaml-bridge.js). Non e' un bound ma ne
+# genera uno — il minimo di grain_duration e' 1 campione, cioe' 1/output_sr
+# (PGE #158) — e soprattutto e' il fattore con cui la UI converte
+# `grain.duration_unit: samples`, conversione che RISCRIVE i valori nello YAML.
+# Un numero sbagliato qui non stringe una manopola: scrive durate sbagliate.
+# ---------------------------------------------------------------------------
+
+def _stub_constants(root, body, layout="pge"):
+    d = (root / "src" / "pge" / "shared") if layout == "pge" \
+        else (root / "src" / "shared")
+    d.mkdir(parents=True, exist_ok=True)
+    # L'import pesante e' li' apposta: il parser non deve eseguire niente.
+    (d / "constants.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_output_sr_parses_source(tmp_path):
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 44100\n")
+    assert server.engine_output_sr(tmp_path) == 44100
+
+
+def test_engine_output_sr_annotated(tmp_path):
+    """Grafia annotata, come per la versione di semantica: e' house style nel
+    motore, e filtrare su `ast.Assign` la perderebbe in silenzio."""
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR: int = 96000\n")
+    assert server.engine_output_sr(tmp_path) == 96000
+
+
+def test_engine_output_sr_legacy_layout(tmp_path):
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 22050\n", layout="flat")
+    assert server.engine_output_sr(tmp_path) == 22050
+
+
+def test_engine_output_sr_missing_is_none(tmp_path):
+    """Assente = "non lo so", e chi chiama tiene il proprio fallback statico.
+    Mai un numero inventato: sarebbe indistinguibile da una lettura riuscita."""
+    import server
+    assert server.engine_output_sr(tmp_path / "nope") is None
+    _stub_constants(tmp_path, "SECONDS_PER_MILLISECOND = 1e-3\n")
+    assert server.engine_output_sr(tmp_path) is None
+
+
+@pytest.mark.parametrize("body", [
+    "DEFAULT_OUTPUT_SR = 0\n",
+    "DEFAULT_OUTPUT_SR = -48000\n",
+    "DEFAULT_OUTPUT_SR = True\n",
+    "DEFAULT_OUTPUT_SR = 48000.0\n",
+    "DEFAULT_OUTPUT_SR = SOMETHING\n",
+    "DEFAULT_OUTPUT_SR = None\n",
+])
+def test_engine_output_sr_rejects_nonsense(tmp_path, body):
+    """Un sample rate non positivo non e' "sconosciuto", e' assurdo, e va
+    trattato come assente invece di viaggiare: la UI ci fa `1/sr`, quindi uno
+    zero diventa Infinity e un negativo un fattore col segno sbagliato — un min
+    che nessun confronto fa piu' scattare, cioe' ogni clamp a valle spento in
+    silenzio. Il bool e' escluso perche' in Python e' un int."""
+    import server
+    _stub_constants(tmp_path, body)
+    assert server.engine_output_sr(tmp_path) is None
+
+
+def test_engine_output_sr_sees_a_live_bump(tmp_path):
+    """Cache invalidata sull'mtime, come la versione di semantica: il caso e' un
+    `git pull` nel repo fratello sotto un `make serve` acceso. Con una cache a
+    vita una pagina appena aperta riceverebbe il sample rate vecchio."""
+    import os
+    import server
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 48000\n")
+    assert server.engine_output_sr(tmp_path) == 48000
+
+    src = tmp_path / "src" / "pge" / "shared" / "constants.py"
+    src.write_text("DEFAULT_OUTPUT_SR = 44100\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert server.engine_output_sr(tmp_path) == 44100
+
+
+def test_bounds_endpoint_carries_output_sr(tmp_path):
+    """La route che la UI interroga davvero. `output_sr` viaggia su /bounds e
+    non su una route sua perche' e' la stessa domanda: i clamp che il motore
+    impone."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 44100\n")
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["ok"] is True
+    assert body["bounds"]["output_sr"] == 44100
+
+
+def test_bounds_endpoint_omits_unknown_output_sr(tmp_path):
+    """Chiave assente, non `null`: `resolveOutputSr` scarta i non-numeri e
+    ricade sul fallback statico, ma la differenza fra "non lo so" e "zero" deve
+    essere visibile gia' nel payload."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["ok"] is True
+    assert "output_sr" not in body["bounds"]
+
+
+def test_bounds_endpoint_reports_sr_without_parameter_definitions(tmp_path):
+    """Il sample rate non e' condizionato alla presenza dei bound: un motore con
+    `constants.py` e senza `parameter_definitions.py` e' strano, ma il numero lo
+    sappiamo lo stesso e tacerlo rimanderebbe la UI al letterale trascritto —
+    cioe' proprio la cosa che questa lettura toglie di mezzo."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_constants(tmp_path, "DEFAULT_OUTPUT_SR = 96000\n")
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["bounds"]["output_sr"] == 96000
+    assert not body["bounds"].get("params")
+
+
+# ---------------------------------------------------------------------------
+# Le due difese di /render: il confine di fiducia di una route che SCRIVE un
+# file, e il filtro dei nomi envelope.
+#
+# Nessuna delle due aveva un'asserzione: sabotandole la suite restava verde
+# (136 passed), mentre sul bridge vivo la prima dava HTTP 200 e un file scritto
+# fuori da configs/, e la seconda mandava in argv un `--plot-envelopes` con un
+# nome ignoto, che fa uscire il motore con 1 portandosi via l'audio.
+# ---------------------------------------------------------------------------
+
+def _render_root(tmp_path, fake_python=False):
+    """Una root minima per make_app; con `fake_python` anche un finto
+    `.venv/bin/python` che esce subito, cosi' /render costruisce e stampa la
+    argv senza avere il motore."""
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    for d in ("configs", "refs", "output", "cache"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    if fake_python:
+        vb = tmp_path / ".venv" / "bin"
+        vb.mkdir(parents=True, exist_ok=True)
+        py = vb / "python"
+        py.write_text("#!/bin/sh\nexit 0\n")
+        py.chmod(0o755)
+    return tmp_path
+
+
+@pytest.mark.parametrize("basename", [
+    "../evil",           # traversal esplicito
+    "..",                # la directory sopra
+    "a/b",               # separatore
+    "a\\b",              # separatore di Windows: `\` non e' `/`
+    ".hidden",           # punto iniziale
+    "",                  # vuoto
+    "\x00nul",           # NUL: ValueError dal filesystem, non un 500
+])
+def test_render_rejects_bad_basename(tmp_path, basename):
+    """Il basename di /render diventa un path e un file scritto: e' un confine
+    di fiducia, e passa per `safe_resolve` come tutte le altre route invece di
+    riscrivere la regola piu' debole."""
+    import server
+    root = _render_root(tmp_path)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    before = sorted(p.name for p in (root / "configs").iterdir())
+    r = client.post("/render", json={"yamlBasename": basename,
+                                     "yamlContent": "streams: []\n"})
+    assert r.status_code == 400, f"{basename!r} → {r.status_code}"
+    assert sorted(p.name for p in (root / "configs").iterdir()) == before
+    # e niente scritto fuori da configs/
+    assert not (root / "evil.yml").exists()
+    assert not (root.parent / "evil.yml").exists()
+
+
+def test_render_accepts_an_ordinary_basename(tmp_path):
+    """La guardia non deve essere cosi' stretta da rifiutare i nomi veri: senza
+    questo, `abort(400)` incondizionato passerebbe il test qui sopra."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+    r = client.post("/render", json={"yamlBasename": "PGE_test",
+                                     "yamlContent": "streams: []\n"})
+    assert r.status_code == 200
+    r.get_data()                      # consuma lo stream NDJSON
+    assert (root / "configs" / "PGE_test.yml").exists()
+
+
+def _argv_line(client, payload):
+    """La riga `$ …` che /render stampa: e' la argv che parte davvero."""
+    r = client.post("/render", json=payload)
+    assert r.status_code == 200
+    for raw in r.get_data(as_text=True).splitlines():
+        ev = json.loads(raw)
+        if ev.get("type") == "log" and str(ev.get("line", "")).startswith("$ "):
+            return ev["line"]
+    raise AssertionError("nessuna riga argv nello stream NDJSON")
+
+
+def test_render_filters_unknown_envelope_names(tmp_path):
+    """Un nome ignoto in `--plot-envelopes` fa `sys.exit(1)` nel motore e si
+    porta via l'audio gia' reso. L'insieme valido vive nei sorgenti del motore,
+    quindi il filtro e' qui e non nella UI — ed e' meta' della sezione "Score
+    options that can kill a render", finora senza un'asserzione."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    _stub_envelope_extractor_pge(root)          # volume, pan, pitch, voice_pitch_offset
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["volume", "nome_che_non_esiste"],
+    })
+    assert "--plot-envelopes" in line, line
+    assert "nome_che_non_esiste" not in line, line
+    assert "volume" in line.split("--plot-envelopes", 1)[1], line
+
+
+def test_render_drops_the_flag_when_nothing_survives(tmp_path):
+    """Tutti i nomi ignoti: il flag non parte affatto. `--plot-envelopes` senza
+    valore, o con una lista vuota, e' l'altro modo di far uscire il motore."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    _stub_envelope_extractor_pge(root)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["boh", "nemmeno"],
+    })
+    assert "--plot-envelopes" not in line, line
+
+
+def test_render_without_engine_keys_drops_the_flag(tmp_path):
+    """Motore che precede la feature: nessuna chiave valida, quindi il flag non
+    si manda — un motore vecchio non deve vedere un'opzione che non conosce."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+
+    line = _argv_line(client, {
+        "yamlBasename": "PGE_test", "yamlContent": "streams: []\n",
+        "visualize": True, "plotEnvelopes": ["volume"],
+    })
+    assert "--plot-envelopes" not in line, line
+
+
+def test_semantics_version_endpoint_without_engine(tmp_path):
+    """Nessun motore sotto --root: la route risponde comunque, con null. La UI
+    la tratta come "non lo so" e i pallini restano quelli di prima."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/semantics-version").get_json()
+    assert body["ok"] is True
+    assert body["version"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
@@ -357,7 +358,7 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
   // `exponential` e `logarithmic` non hanno un ripiego lineare nel motore:
   // niente da allineare, e nessuna trip muta nello sweep sui parametri ordinari.
 
-  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
   const warn = (eeSrc.split("block.previewFallback ?")[1] || "").slice(0, 700);
   assert("il pannello ha un messaggio per previewFallback", warn.length > 0);
   assert("e non afferma che il motore la rende",

@@ -16,6 +16,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // yaml-bridge.js (window.PGEYaml.DEVIATION_PROB_IMPLICIT) and envelope-loops.js
 // (window.PGEEnv.isTypedEnv) must load first — deviation-probability.js reads
@@ -275,8 +276,8 @@ assert("lista mista buono+rotto → passa (mirror conservativo)",
    eseguono — ma sono esattamente le righe che, restando indietro, hanno reso
    false due dichiarazioni di CLAUDE.md. */
 console.log("\n── cablaggio UI ──");
-const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
-const eeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+const eeSrc   = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
 
 /* Il blocco graffato che apre a `from`, per brace matching. Le asserzioni sui
    rami di Delete lo usano al posto di una finestra fissa di caratteri: quella

@@ -44,9 +44,23 @@
   // Sample rate di output del motore (DEFAULT_OUTPUT_SR lato PGE): config
   // globale, non per-stream, e nemmeno esposta dalla CLI — la strada del render
   // passa sempre di qui. La definizione sta in questo modulo perché è il primo
-  // caricato: bounds.js (minimo di grain_duration a 1 campione) ed
-  // envelope-utils.js (fattore di grain.duration_unit: samples) la leggono da
-  // window. Una sola copia: se il motore la muove, si muove qui.
+  // caricato: bounds.js (minimo di grain_duration a 1 campione), envelope-utils.js
+  // (fattore di grain.duration_unit: samples), Inspector.jsx e app.jsx (testo)
+  // lo leggono da window a ogni uso.
+  //
+  // Questo letterale è il FALLBACK STATICO, esattamente come window.PGE_BOUNDS
+  // qui sotto: vale su file:// o col bridge giù. Col bridge acceso il numero
+  // arriva dal motore — GET /bounds porta `output_sr` (engine_introspect legge
+  // DEFAULT_OUTPUT_SR dai sorgenti) e window.PGEBounds.apply() lo installa qui
+  // sopra, prima che qualcuno lo legga.
+  //
+  // Trascritto e basta era giusto solo finché il motore non lo muoveva, e nel
+  // verso brutto: `grainDur.min = 1/OUTPUT_SR`, quindi con il motore a 44100 e
+  // questa riga ferma a 48000 la UI ammette un grano più corto di un campione
+  // vero. Peggio ancora la conversione `samples` di envelope-utils, che con
+  // quel fattore riscrive i valori nello YAML. tests/parity/test-bounds-parity.js
+  // pretende ora che questo letterale sia il numero del motore: se il motore lo
+  // muove, il test lo dice invece di lasciarlo sbagliato in silenzio.
   const OUTPUT_SR = 48000;
   window.PGE_OUTPUT_SR = OUTPUT_SR;
 
@@ -69,7 +83,15 @@
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
     // grain_duration.max_range = 1.0 (non max_val): Parameter._calculate_range
-    // taglia in silenzio quel che eccede, quindi il fallback dev'essere 1.
+    // taglia in silenzio quel che eccede, quindi il fallback dev'essere 1. Il
+    // 10 che c'era qui era il max_val di grainDur — il VALORE, non la banda —
+    // finito sulla riga sbagliata: con il bridge acceso /bounds lo correggeva,
+    // su file:// o server spento no. Adesso non puo' tornare senza farsi
+    // notare: tests/parity/test-bounds-parity.js pretende che nessun clamp
+    // statico sia piu' largo di quello del motore.
+    // Il valore 1 arriva da 876afc1 («il fallback statico di duration_range e'
+    // max_range, non max_val»), non da questo commento: chi lo cambia deve
+    // partire di li'.
     durationRange:{ min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal

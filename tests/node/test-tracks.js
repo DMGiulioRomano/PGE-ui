@@ -19,6 +19,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 global.window = {};
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/tracks.js"), "utf8"));
@@ -176,6 +177,31 @@ console.log("\n── applyTracks reorders data.streams into visual order ──
          JSON.stringify(out.streams.map(s => s.id)));
   assert("a pure reorder still writes no ui_tracks", out._extra === undefined);
   assert("input untouched", eq(d.streams.map(s => s.id), ["stream1", "stream2", "stream3"]));
+
+  /* I bordi di `reorderTracks`, che il solo caso in-range qui sopra non
+     esercita. Misurato togliendo insieme clamp e guardie: a discriminare e'
+     la guardia su `srcIdx` — fuori range `splice` estrae `undefined` e lo
+     infila come corsia fra le altre. Il clamp su `dstIdx` invece NON
+     discrimina, perche' `splice` clampa gia' per conto suo: le due asserzioni
+     sui bordi restano come pin del contratto (una destinazione fuori corsia si
+     ferma al bordo), non come guardia su quella riga. Dirlo qui e' meglio che
+     lasciar credere il contrario. */
+  const three = T.deriveTracks(d);
+  const past  = T.reorderTracks(three, 0, 99);
+  assert("una destinazione oltre l'ultima corsia si ferma in fondo",
+         eq(past.map(t => t.id), ["stream2", "stream3", "stream1"]),
+         JSON.stringify(past.map(t => t.id)));
+  const neg = T.reorderTracks(three, 2, -5);
+  assert("...e una negativa si ferma in cima",
+         eq(neg.map(t => t.id), ["stream3", "stream1", "stream2"]),
+         JSON.stringify(neg.map(t => t.id)));
+  assert("un srcIdx fuori range non muove niente",
+         T.reorderTracks(three, 7, 0) === three &&
+         T.reorderTracks(three, -1, 0) === three,
+         "senza la guardia lo splice estrae undefined e infila una corsia " +
+         "vuota fra le altre");
+  assert("src === dst e' un no-op che non churna la history",
+         T.reorderTracks(three, 1, 1) === three);
 }
 
 console.log("\n── group leaves the source lane standing, empty ──");
@@ -291,6 +317,27 @@ console.log("\n── moving a clip between lanes ──");
   const byAnchor = T.moveStreams(tr, ["stream1", "stream3"], 0, { anchor: "stream3" });
   assert("the delta is measured from the anchor, and clamps on the top clip",
          byAnchor === tr, JSON.stringify(shape(byAnchor)));
+
+  /* ...e senza clamp, che e' il caso che DISTINGUE l'ancora da `moving[0]`.
+     Sopra il delta finisce clampato al soffitto in entrambe le letture, quindi
+     sostituire `opts.anchor` con `moving[0]` lasciava la suite verde: la regola
+     DAW che CLAUDE.md descrive per un paragrafo non aveva un'asserzione che la
+     vedesse. Qui l'ancora e' SOTTO il resto della selezione e il delta e'
+     positivo: con l'ancora vera (stream4, lane 3 → 2) il delta e' -1 e la
+     coppia SALE; con `moving[0]` (stream2, lane 1 → 2) sarebbe +1 e la coppia
+     scenderebbe, aprendo una quinta corsia. */
+  const four = T.deriveTracks(data(["stream1", "stream2", "stream3", "stream4"]));
+  const anchored = T.moveStreams(four, ["stream2", "stream4"], 2, { anchor: "stream4" });
+  assert("l'ancora decide il delta anche quando non c'e' clamp",
+         eq(shape(anchored), ["stream1:stream1:stream1+stream2",
+                              "stream2:stream2:",
+                              "stream3:stream3:stream3+stream4",
+                              "stream4:stream4:"]),
+         JSON.stringify(shape(anchored)));
+  assert("...e con `moving[0]` al suo posto il risultato sarebbe un altro",
+         !eq(shape(anchored),
+             shape(T.moveStreams(four, ["stream2", "stream4"], 2, { anchor: "stream2" }))),
+         "il caso non discrimina: la regola DAW resta senza un test che la veda");
 }
 
 console.log("\n── paste lands in the original's lane ──");
@@ -390,12 +437,12 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
   assert("an unknown old id changes nothing", eq(shape(T.renameStreamId(tr, "zzz", "q")), shape(tr)));
 }
 
-  const tlSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+  const tlSrc  = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
   // Guards that assert the ABSENCE of a pattern read the code with comments
   // stripped: a comment explaining why the pattern is gone would otherwise
   // keep the guard red forever.
   const tlCode = tlSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
 
   // The defect the track layer removes: onReorder was called from inside a
   // setDragOver updater. React may replay an updater, applying the move twice.
@@ -452,7 +499,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          /ids\.map\(x => x === oldId \? newId : x\)/.test(appSrc) &&
          /setWaveforms\(drop\); setSpectrograms\(drop\); setGrainData\(drop\)/.test(appSrc));
   assert("the Inspector field is wired to it", /onRename=\{\(name\) =>/.test(appSrc) &&
-         /onRename/.test(fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8")));
+         /onRename/.test(SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"))));
 
   // Alt is sampled during the drag, so the highlight and the outcome agree.
   assert("the extract modifier is read while dragging, not at release",
@@ -460,7 +507,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          !/extract: !!\(ev && ev\.altKey\)/.test(tlCode));
   assert("and a pending extract is drawn differently from a join",
          /drop-extract/.test(tlSrc) &&
-         /drop-extract/.test(fs.readFileSync(path.join(__dirname, "../../styles/editor.css"), "utf8")));
+         /drop-extract/.test(SG.codeOf(path.join(__dirname, "../../styles/editor.css"))));
 
   // The two parallel maps that made lane i == stream i: heads and lanes are
   // now driven by the track list, and neither may be keyed on a stream again.
@@ -507,7 +554,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
          !/analyserFor=/.test(appSrc));
   // Alt+arrow moves the selection a lane at a time. Three things have to stay
   // true together, and each is a real defect if it slips.
-  const spSrc = fs.readFileSync(path.join(__dirname, "../../src/components/SettingsPanel.jsx"), "utf8");
+  const spSrc = SG.codeOf(path.join(__dirname, "../../src/components/SettingsPanel.jsx"));
   assert("the lane move goes through matchShortcut on a rebindable tweak",
          /shortcutMoveLaneUp/.test(appSrc) && /shortcutMoveLaneDown/.test(appSrc) &&
          /matchShortcut\(e, tweaks\.shortcutMoveLaneUp/.test(appSrc));
@@ -530,7 +577,7 @@ console.log("\n── renameStreamId: la rinomina non deve costare la chiave ─
 
   assert("tracks.js is loaded before the components that use it",
          (() => {
-           const html = fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8");
+           const html = SG.codeOf(path.join(__dirname, "../../PGE Editor.html"));
            return html.indexOf("src/lib/tracks.js") !== -1 &&
                   html.indexOf("src/lib/tracks.js") < html.indexOf("src/components/Timeline.jsx");
          })());

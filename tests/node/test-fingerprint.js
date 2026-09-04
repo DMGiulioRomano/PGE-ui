@@ -175,6 +175,42 @@ console.log("\n── _extra keys are audio-affecting: they enter the fingerprin
   const t = base(); t._extra = { some_future_engine_key: "a" };
   const u = base(); u._extra = { some_future_engine_key: "b" };
   assert("changing an _extra value changes the fingerprint", fp(t) !== fp(u));
+
+  /* Le OMONIME delle chiavi escluse, e il livello che conta.
+     `serializeStream` splicia `_extra` NEL livello del blocco che lo contiene:
+     `stream._extra.mute` esce come un `mute:` di primo livello, che il motore
+     filtra; `grain._extra.mute` esce come `grain: {mute: …}`, che il motore
+     hasha (la sua e' una dict-comprehension sul solo primo livello). La lista
+     qui filtrava a OGNI profondita', quindi il secondo caso spariva
+     dall'hash della UI e non da quello del motore: verde su uno stem che il
+     motore stava per riscrivere, cioe' un render di meno. */
+  const muto = base(); muto.mute = true;
+  assert("il mute dello stream resta fuori dall'hash", fp(muto) === fp0);
+  const mutoExtra = base(); mutoExtra._extra = { mute: "qualcosa" };
+  assert("...e cosi' un `mute` in _extra, che e' lo stesso livello YAML",
+    fp(mutoExtra) === fp0,
+    "il motore lo filtra: hasharlo qui sarebbe un render di troppo");
+
+  /* Il caso annidato va misurato su un `_extra` che esiste in ENTRAMBI i
+     termini: comparire e basta muove l'hash per la chiave `_extra` stessa,
+     quindi un confronto contro la base non discriminerebbe niente. */
+  const senza = base();
+  senza.grain = { ...senza.grain, _extra: { chiave_futura: 1 } };
+  const con = base();
+  con.grain = { ...con.grain, _extra: { chiave_futura: 1, mute: true } };
+  assert("un `mute` dentro grain._extra ENTRA nell'hash",
+    fp(senza) !== fp(con),
+    "esce come `grain: {mute: …}`, che il motore hasha (filtra il solo primo " +
+    "livello): escluderlo qui e' un render di meno, il verso sbagliato");
+  const senzaC = base();
+  senzaC.pointer = { ...senzaC.pointer, _extra: { chiave_futura: 1 } };
+  const conC = base();
+  conC.pointer = { ...conC.pointer, _extra: { chiave_futura: 1, color: "#f00" } };
+  assert("...e cosi' un `color` dentro pointer._extra", fp(senzaC) !== fp(conC));
+
+  // I due campi dell'editor restano esclusi ovunque: vivono annidati per
+  // costruzione, e sono l'unica ragione per cui il filtro in profondita'
+  // esiste. Li verifica la sezione multistate qui sopra.
 }
 
 console.log("\n── grain.read_direction (PGE #207) ──");

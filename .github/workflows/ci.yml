@@ -6,8 +6,16 @@ on:
 
 jobs:
   node:
-    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures)
+    name: node tests (yaml round-trip · envelope · fingerprint · render-status · history · engine fixtures · parity)
     runs-on: ubuntu-latest
+    # Tetto al job. Non e' cintura in piu': una suite che si appende invece di
+    # dare un verdetto — un oracolo di parita' che non esce, un caso che non si
+    # chiude — con il default (360 minuti) diventa sei ore di runner e un job
+    # "cancelled", cioe' un rosso che non dice niente al posto di quello pulito
+    # che era appena stato scritto sullo schermo. I fix stanno a monte
+    # (oracle.close() che uccide, un tetto per caso in harness.js); questa e'
+    # la rete che non dipende da loro.
+    timeout-minutes: 15
     steps:
       - name: checkout PGE-ui
         uses: actions/checkout@v4
@@ -30,9 +38,25 @@ jobs:
           repository: DMGiulioRomano/PythonGranularEngine
           path: PythonGranularEngine
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+          # Abbastanza storia perche' la parita' possa verificare che il commit
+          # registrato in tests/parity/README.md sia davvero un antenato di
+          # quello contro cui gira. Col default (1 solo commit) quel caso
+          # fallirebbe sempre, e allentarlo lo renderebbe muto — che e' come
+          # era nato.
+          fetch-depth: 300
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # L'oracolo di parita' gira su python, quindi la versione va fissata qui
+      # come il job python fissa la sua: senza, si userebbe il python3 che
+      # l'immagine del runner ha quel giorno. Non sarebbe rotto — con il motore
+      # presente la modalita' stretta fa uscire 1 e la CI diventa rossa con
+      # "l'oracolo non parte" — ma sarebbe un rosso per un motivo che non
+      # c'entra con la parita', deciso da un'immagine che cambia sotto di noi.
+      # Nessun venv del motore, che resta la proprieta' che conta.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       # PGE_REQUIRE_ENGINE_FIXTURES trasforma "motore assente" da SKIP a FAIL,
       # e lo si passa solo quando il checkout sopra ha riportato successo: un
       # checkout riuscito che non lascia i config dove i test li cercano non
@@ -44,10 +68,33 @@ jobs:
         env:
           PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: make tests-node
+      # Parita' JS↔motore (#133): le suite in tests/parity avviano
+      # tests/parity/engine_oracle.py, che importa dal motore e risponde a
+      # righe JSON. Nessuna delle sue op ha bisogno di numpy/soundfile, quindi
+      # il python3 del runner basta e il venv del motore non serve — che e' il
+      # motivo per cui questo passo sta qui e non nel job python.
+      #
+      # PGE_PARITY_STRICT come PGE_REQUIRE_ENGINE_FIXTURES sopra, e per la
+      # stessa ragione: se il checkout ha riportato successo, un caso di parita'
+      # saltato e' un fallimento. La decisione sta qui e non in harness.js
+      # perche' qui si sa se il checkout e' riuscito; il runner sa solo se
+      # trova i sorgenti, e un checkout riuscito che non li lascia dove i test
+      # li cercano e' proprio il caso che deve diventare rosso.
+      #
+      # Se invece il checkout fallisce — fork PR, token assente — la variabile
+      # resta vuota e le suite saltano rumorosamente uscendo 0, come le fixture.
+      - name: run parity suite (mirror JS ↔ engine)
+        working-directory: PGE-ui
+        env:
+          PGE_PARITY_STRICT: ${{ steps.engine.outcome == 'success' && '1' || '' }}
+        run: make tests-parity
 
   python:
     name: python tests (render_pipeline · audio_pipeline · engine render)
     runs-on: ubuntu-latest
+    # Stesso motivo del job node, e qui il venv del motore rende il passo di
+    # parita' piu' lento: 25 minuti, non 15.
+    timeout-minutes: 25
     steps:
       - name: checkout PGE-ui
         uses: actions/checkout@v4
@@ -70,6 +117,12 @@ jobs:
           repository: DMGiulioRomano/PythonGranularEngine
           path: PythonGranularEngine
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+          # Abbastanza storia perche' la parita' possa verificare che il commit
+          # registrato in tests/parity/README.md sia davvero un antenato di
+          # quello contro cui gira. Col default (1 solo commit) quel caso
+          # fallirebbe sempre, e allentarlo lo renderebbe muto — che e' come
+          # era nato.
+          fetch-depth: 300
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -95,3 +148,21 @@ jobs:
         env:
           PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: python -m pytest tests/python/ -v
+      # La parita' gira DUE volte in CI, e non per ridondanza: l'oracolo ha due
+      # strade per la grammatica di --magnify-at, e possono divergere. Il job
+      # node non costruisce il venv del motore, quindi li' vince sempre il ramo
+      # ast-slice; qui il venv c'e', `pickPython` lo preferisce, e a girare e' il
+      # ramo import — quello che il README chiama piu' fedele e che, fino a
+      # questo commit, nessuna CI esercitava mai. Il primo difetto finitoci
+      # dentro (il namespace senza le tre costanti) e' arrivato in main verde.
+      #
+      # Se il venv non e' stato costruito, `pickPython` ripiega su python3 e
+      # questo passo replica il job node: ridondante, mai sbagliato.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: run parity suite (ramo import, col venv del motore)
+        working-directory: PGE-ui
+        env:
+          PGE_PARITY_STRICT: ${{ steps.engine.outcome == 'success' && '1' || '' }}
+        run: make tests-parity

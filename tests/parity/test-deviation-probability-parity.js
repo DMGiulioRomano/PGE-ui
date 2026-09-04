@@ -1,0 +1,373 @@
+/* =============================================================================
+ * test-deviation-probability-parity.js — `window.PGEDeviationProb` contro
+ * GateFactory (issue #133).
+ *
+ * Il mirror fa due affermazioni sul motore, e finora nessuna era verificabile:
+ *
+ *   1. `mode()` replica l'ORDINE di `_classify_deviation_probability`: il ramo
+ *      envelope-like viene prima del ramo dict, quindi `{type, points}` e'
+ *      globale e non per-parametro. Un errore qui apre il pannello sbagliato.
+ *   2. `error()` e' la META' CONSERVATIVA del builder: segnala solo i corpi che
+ *      il motore rifiuta in ogni lettura. Meta' conservativa significa che
+ *      l'implicazione va in un verso solo — dove la UI parla il motore deve
+ *      rifiutare — e questa suite misura proprio quel verso.
+ *
+ * `isEnvValue` e' la regola del motore alla lettera (`'points' in obj`). Qui la
+ * si osserva dal fuori: un valore e' envelope-like se e solo se il motore lo
+ * classifica GLOBAL_ENV.
+ *
+ * Run: node tests/parity/test-deviation-probability-parity.js
+ * =========================================================================== */
+
+const { parity, loadUiLibs } = require("./harness.js");
+
+const window = loadUiLibs([
+  "yaml-bridge.js",          // PGEYaml.DEVIATION_PROB_IMPLICIT
+  "envelope-loops.js",       // PGEEnv.isBreakpoint / isBPGroup / isCompactBlock
+  "deviation-probability.js",
+]);
+const D = window.PGEDeviationProb;
+const IMPLICIT = window.PGEYaml.DEVIATION_PROB_IMPLICIT;
+
+/* off/implicit/global/perParam ↔ disabled/implicit/global|global_env/specific.
+ * La UI non distingue globale-numero da globale-envelope: sono lo stesso
+ * pannello. Il motore si', perche' costruisce due gate diversi. */
+const MODE_MAP = { disabled: "off", implicit: "implicit", global: "global",
+                   global_env: "global", specific: "perParam" };
+
+/* Il corpus. `js` e' cio' che l'editor tiene in memoria, `engine` cio' che
+ * finisce nello YAML: coincidono sempre tranne per l'1% implicito, che nello
+ * YAML e' `null` e in memoria e' la sentinella. */
+const CORPUS = [
+  { label: "chiave assente", js: undefined, engine: false },
+  { label: "false (off esplicito)", js: false, engine: false },
+  { label: "null → 1% implicito", js: IMPLICIT, engine: null },
+  { label: "true", js: true, engine: true },
+  { label: "numero 0", js: 0, engine: 0 },
+  { label: "numero 50", js: 50, engine: 50 },
+  { label: "numero 100", js: 100, engine: 100 },
+  { label: "numero negativo", js: -5, engine: -5 },
+  { label: "lista di breakpoint", js: [[0, 0], [1, 100]], engine: [[0, 0], [1, 100]] },
+  { label: "envelope tipizzato {type, points}",
+    js: { type: "cubic", points: [[0, 0], [1, 100]] },
+    engine: { type: "cubic", points: [[0, 0], [1, 100]] } },
+  { label: "dict con solo points",
+    js: { points: [[0, 0], [1, 100]] }, engine: { points: [[0, 0], [1, 100]] } },
+  // I due casi che separano `'points' in obj` da una sua approssimazione piu'
+  // larga. Senza di loro, allargare isEnvValue a `('points' in v) || ('type' in
+  // v)` lasciava la suite verde — proprio il difetto che l'intestazione di
+  // questo file nomina («un errore qui apre il pannello sbagliato»). Il motore
+  // li separa: senza `points` sono un dict per-parametro (SPECIFIC), con
+  // `points` un envelope globale.
+  { label: "dict con solo type (NON envelope-like)",
+    js: { type: "cubic" }, engine: { type: "cubic" } },
+  { label: "dict con solo interp (NON envelope-like)",
+    js: { interp: "step" }, engine: { interp: "step" } },
+  { label: "dict per-parametro", js: { volume: 50 }, engine: { volume: 50 } },
+  { label: "dict per-parametro con envelope",
+    js: { volume: [[0, 0], [1, 100]] }, engine: { volume: [[0, 0], [1, 100]] } },
+  { label: "dict per-parametro con chiave a null",
+    js: { volume: null }, engine: { volume: null } },
+  { label: "dict vuoto", js: {}, engine: {} },
+  { label: "dict con chiave sconosciuta", js: { foo: 50 }, engine: { foo: 50 } },
+  { label: "stringa (il motore la rifiuta)", js: "x", engine: "x" },
+  { label: "lista vuota", js: [], engine: [] },
+  { label: "points: null", js: { points: null }, engine: { points: null } },
+  { label: "points: []", js: { points: [] }, engine: { points: [] } },
+  { label: "blocco compatto nudo",
+    js: [[[0, 0], [100, 50]], 1.0, 4], engine: [[[0, 0], [100, 50]], 1.0, 4] },
+  { label: "BP group diretto",
+    js: [[[0, 0], [1, 100]], "cubic"], engine: [[[0, 0], [1, 100]], "cubic"] },
+];
+
+/* I corpi su cui il mirror NON puo' tacere.
+ *
+ * I due assert di questa suite sono unidirezionali — "nessun falso positivo" —
+ * e un mirror che non parla mai non ha falsi positivi: rendendo `error()` un
+ * `return null` la suite restava 7/0, con i corpi segnalati che scendevano da
+ * 35 a 0 dentro un'etichetta. Il conteggio non discrimina.
+ *
+ * Il verso mancante non si chiude con una soglia numerica — sarebbe un'altra
+ * costante trascritta, che drifta — ma con una LISTA: questi sono i corpi che
+ * la docstring di `error()` dichiara di intercettare («non possono essere un
+ * envelope in nessuna lettura»). Su ognuno si pretendono entrambe le cose: il
+ * motore rifiuta E la UI parla. Se `error()` ammutolisce, qui diventa rosso. */
+const MUST_FLAG = [
+  { label: "lista vuota", body: [] },
+  { label: "points: null", body: { points: null } },
+  { label: "points: []", body: { points: [] } },
+  { label: "points di spazzatura", body: { points: ["x"] } },
+  { label: "lista di spazzatura", body: ["x", "y"] },
+  // Solo sotto una chiave: al livello GLOBALE `{a: 1}` non e' un corpo
+  // malformato, e' un dict per-parametro con una chiave che il motore non
+  // consulta — lo classifica SPECIFIC e costruisce un NeverGate. Lo si e'
+  // scoperto scrivendo questo caso, che lo ha segnalato come "il motore lo
+  // costruisce": la lista era sbagliata, non il mirror.
+  { label: "dict senza points", body: { a: 1 }, only: "sotto volume" },
+];
+
+/* I corpi malformati sotto una chiave per-parametro (PGE #209). */
+const PER_PARAM_BODIES = [
+  { label: "numero", body: 50 },
+  { label: "null", body: null },
+  { label: "true", body: true },
+  { label: "lista di breakpoint", body: [[0, 0], [1, 100]] },
+  { label: "lista vuota", body: [] },
+  { label: "lista di spazzatura", body: ["x", "y"] },
+  { label: "lista mista", body: [[0, 1], "x"] },
+  { label: "dict senza points", body: { a: 1 } },
+  { label: "points: null", body: { points: null } },
+  { label: "points: []", body: { points: [] } },
+  { label: "points di spazzatura", body: { points: ["x"] } },
+  { label: "breakpoint dict", body: [{ t: 0, v: 0 }, { t: 1, v: 100 }] },
+  { label: "points di breakpoint dict", body: { points: [{ t: 0, v: 0 }, { t: 1, v: 100 }] } },
+  { label: "stringa", body: "x" },
+  { label: "blocco compatto", body: [[[0, 0], [100, 50]], 1.0, 4] },
+];
+
+parity({
+  suite: "deviation-probability",
+  why: "window.PGEDeviationProb.mode/isEnvValue/error  ↔  pge.parameters.gate_factory.GateFactory",
+  cases: [
+    {
+      label: "i modi del motore sono cinque e li conosciamo tutti",
+      run: async (ask, assert) => {
+        const c = (await ask("constants", {})).value;
+        assert("DeviationProbabilityMode === i cinque che MODE_MAP traduce",
+          JSON.stringify(c.deviation_probability_modes.slice().sort()) ===
+          JSON.stringify(Object.keys(MODE_MAP).sort()),
+          JSON.stringify(c.deviation_probability_modes));
+        assert("il campo che il motore nomina negli errori e' quello scritto nello YAML",
+          c.deviation_probability_field === "deviation_probability",
+          c.deviation_probability_field);
+      },
+    },
+    {
+      label: "mode(): stesso ramo, corpus per corpus",
+      run: async (ask, assert) => {
+        const answers = await ask(CORPUS.map(e => ({
+          op: "classify_deviation_probability", args: { value: e.engine } })));
+        const bad = [];
+        CORPUS.forEach((e, i) => {
+          const r = answers[i];
+          if (!r.ok) { bad.push(`${e.label}: oracolo ${r.error}`); return; }
+          const mine = D.mode(e.js);
+          if (r.value.mode === null) {
+            // Il motore rifiuta il valore prima ancora di classificarlo: la UI
+            // non ha un modo "errore", quindi qui non c'e' parita' da chiedere.
+            // Si pretende pero' che error() lo segnali — caso dopo.
+            return;
+          }
+          const theirs = MODE_MAP[r.value.mode];
+          if (mine !== theirs) {
+            bad.push(`${e.label}: ui=${mine} motore=${r.value.mode}→${theirs}`);
+          }
+        });
+        assert(`${CORPUS.length} valori, stesso ramo di classificazione`,
+          bad.length === 0, bad.join("\n      "));
+        /* Il presidio contro il passaggio a vuoto, gemello di `nonFinite >= 4`
+           in test-magnify-parity.js: il ciclo qui sopra fa `return` su ogni
+           `mode === null`, quindi con l'oracolo che non riesce a chiedere il
+           caso resterebbe verde avendo confrontato zero valori — con
+           l'etichetta che continua a dire quanti erano. */
+        const classified = answers.filter(r => r.ok && r.value.mode !== null).length;
+        assert(`...e i valori confrontati sono davvero ${classified}, non zero`,
+          classified > 0,
+          "nessun valore del corpus ha ricevuto un `mode`: il confronto non e' " +
+          "avvenuto, e senza questa riga il caso sarebbe verde lo stesso");
+      },
+    },
+    {
+      label: "isEnvValue e' 'points in obj', non una sua approssimazione",
+      run: async (ask, assert) => {
+        const objs = CORPUS.filter(e => e.js !== null && typeof e.js === "object");
+        const answers = await ask(objs.map(e => ({
+          op: "classify_deviation_probability", args: { value: e.engine } })));
+        const bad = [];
+        objs.forEach((e, i) => {
+          const r = answers[i];
+          if (!r.ok || r.value.mode === null) return;
+          const mine = D.isEnvValue(e.js);
+          const theirs = r.value.mode === "global_env";
+          if (mine !== theirs) bad.push(`${e.label}: ui=${mine} motore=${r.value.mode}`);
+        });
+        assert(`${objs.length} valori strutturati, stesso verdetto envelope-like`,
+          bad.length === 0, bad.join("\n      "));
+        // Stesso presidio del caso precedente, stesso `return` da coprire.
+        const classified = answers.filter(r => r.ok && r.value.mode !== null).length;
+        assert(`...e i verdetti confrontati sono ${classified}, non zero`,
+          classified > 0,
+          "nessun valore strutturato ha ricevuto un `mode`");
+      },
+    },
+    {
+      label: "error() globale: dove la UI parla il motore rifiuta",
+      run: async (ask, assert, ctx) => {
+        const answers = await ask(CORPUS.map(e => ({
+          op: "classify_deviation_probability",
+          args: { value: e.engine, param_key: "volume", duration: 10.0 } })));
+        const falsePositives = [], flagged = [], silentRejections = [];
+        CORPUS.forEach((e, i) => {
+          const r = answers[i];
+          if (!r.ok) throw new Error(`oracolo su ${e.label}: ${r.error}`);
+          const uiErr = D.error(e.js);
+          const engineRejects = r.value.mode_error !== null || r.value.gate_error !== null;
+          if (uiErr && !engineRejects) {
+            falsePositives.push(`${e.label}: ui=${JSON.stringify(uiErr)} — il motore lo costruisce (${r.value.gate})`);
+          } else if (uiErr) {
+            flagged.push(e.label);
+          } else if (engineRejects) {
+            silentRejections.push(`${e.label}: ${r.value.mode_error || r.value.gate_error}`);
+          }
+        });
+        assert(`nessun avviso su uno YAML che rende (${flagged.length} corpi segnalati)`,
+          falsePositives.length === 0, falsePositives.join("\n      "));
+        ctx.note(`la meta' conservativa: ${silentRejections.length} rifiuti che la UI lascia al motore`,
+          silentRejections);
+      },
+    },
+    {
+      label: "error() per-parametro: stesso verso, su ogni chiave viva",
+      run: async (ask, assert, ctx) => {
+        const reqs = [], meta = [];
+        for (const key of D.PARAM_KEYS) {
+          for (const b of PER_PARAM_BODIES) {
+            const value = {}; value[key] = b.body;
+            reqs.push({ op: "classify_deviation_probability",
+                        args: { value, param_key: key, duration: 10.0 } });
+            meta.push({ key, body: b, value });
+          }
+        }
+        const answers = await ask(reqs);
+        const falsePositives = [];
+        let flagged = 0, silent = 0;
+        answers.forEach((r, i) => {
+          const { key, body, value } = meta[i];
+          if (!r.ok) throw new Error(`oracolo su ${key}/${body.label}: ${r.error}`);
+          const uiErr = D.error(value);
+          const engineRejects = r.value.mode_error !== null || r.value.gate_error !== null;
+          if (uiErr && !engineRejects) {
+            falsePositives.push(`${key}: ${body.label} — ui=${uiErr.kind}/${uiErr.reason || ""} ma il motore costruisce ${r.value.gate}`);
+          } else if (uiErr) flagged++;
+          else if (engineRejects) silent++;
+        });
+        assert(`${reqs.length} coppie (chiave, corpo): nessun falso positivo (${flagged} segnalate)`,
+          falsePositives.length === 0, falsePositives.join("\n      "));
+        ctx.note(`${silent} corpi che il motore rifiuta e la UI lascia passare (meta' conservativa, per costruzione)`);
+      },
+    },
+    {
+      label: "i corpi che la UI deve segnalare: entrambi i lati parlano",
+      run: async (ask, assert) => {
+        // Globale e per-parametro: lo stesso corpo passa per due strade
+        // diverse nel motore, e il mirror deve reggerle entrambe.
+        const reqs = [], meta = [];
+        for (const m of MUST_FLAG) {
+          const positions = [
+            { where: "globale", value: m.body },
+            { where: "sotto volume", value: { volume: m.body } },
+          ].filter(pos => !m.only || m.only === pos.where);
+          for (const pos of positions) {
+            reqs.push({ op: "classify_deviation_probability",
+                        args: { value: pos.value, param_key: "volume", duration: 10.0 } });
+            meta.push({ ...m, ...pos });
+          }
+        }
+        const answers = await ask(reqs);
+
+        const uiMute = [], engineAccepts = [];
+        answers.forEach((r, i) => {
+          const { label, where, value } = meta[i];
+          if (!r.ok) throw new Error(`oracolo su ${label}/${where}: ${r.error}`);
+          const engineRejects = r.value.mode_error !== null || r.value.gate_error !== null;
+          if (!engineRejects) {
+            engineAccepts.push(`${label} (${where}): il motore lo costruisce (${r.value.gate})`);
+          } else if (D.error(value) === null) {
+            uiMute.push(`${label} (${where}): il motore rifiuta e la UI tace`);
+          }
+        });
+        assert(`${reqs.length} coppie (corpo, posizione): il motore le rifiuta tutte`,
+          engineAccepts.length === 0,
+          engineAccepts.join("\n      ") +
+          "\n      (se il motore ha smesso di rifiutarli, la lista MUST_FLAG va rivista)");
+        assert(`${reqs.length} coppie (corpo, posizione): la UI le segnala tutte`,
+          uiMute.length === 0, uiMute.join("\n      "));
+      },
+    },
+    {
+      label: "le liste di chiavi sono complete, non solo corrette",
+      run: async (ask, assert, ctx) => {
+        // Il caso dopo verifica che ogni chiave dichiarata dalla UI sia
+        // consultata dal motore: inclusione, non completezza. `PARAM_KEYS = []`
+        // lo lasciava verde («0 chiavi sempre vive, tutte consultate»). Qui la
+        // domanda e' rovesciata, e la risposta viene dal motore: ogni chiave che
+        // gli spec DICHIARANO dentro deviation_probability deve essere nota alla
+        // UI.
+        const c = (await ask("constants", {})).value;
+        const declared = c.deviation_probability_keys;
+        assert("il motore dichiara le sue chiavi (schema leggibile)",
+          Array.isArray(declared) && declared.length > 0,
+          c.deviation_probability_keys_error || JSON.stringify(declared));
+        if (!Array.isArray(declared) || !declared.length) return;
+
+        ctx.note(`${declared.length} chiavi dichiarate negli spec del motore`,
+          declared.map(d => `${d.key} (${d.schema}, is_smart=${d.is_smart})`));
+
+        // ALL_PARAM_KEYS e' la lista con cui envelope-utils cammina gli
+        // envelope: una chiave dichiarata che manchi li' e' un envelope che il
+        // resize non riscala.
+        const unknown = declared.filter(d => !D.ALL_PARAM_KEYS.includes(d.key));
+        assert("ALL_PARAM_KEYS conosce ogni chiave dichiarata dal motore",
+          unknown.length === 0,
+          unknown.map(d => `${d.key} (${d.schema}) non e' in ALL_PARAM_KEYS`).join("\n      "));
+
+        // PARAM_KEYS sono le SEMPRE vive: le dichiarate con is_smart, meno il
+        // gruppo esclusivo del verso, che e' condizionale al blocco `grain` e
+        // vive in liveParamKeys.
+        const CONDITIONAL = ["reverse", "read_direction"];
+        const alwaysLive = declared
+          .filter(d => d.is_smart && !CONDITIONAL.includes(d.key))
+          .map(d => d.key);
+        const missing = alwaysLive.filter(k => !D.PARAM_KEYS.includes(k));
+        assert(`PARAM_KEYS contiene le ${alwaysLive.length} dichiarate sempre vive`,
+          missing.length === 0,
+          missing.join(", ") + " — dichiarate con is_smart e non condizionali");
+
+        // E le condizionali stanno dove devono: in liveParamKeys, non qui.
+        const strayed = CONDITIONAL.filter(k => D.PARAM_KEYS.includes(k));
+        assert("e non le condizionali, che dipendono dal blocco grain",
+          strayed.length === 0, strayed.join(", "));
+      },
+    },
+    {
+      label: "le cinque PARAM_KEYS il motore le consulta davvero",
+      run: async (ask, assert) => {
+        // La lista non e' una copia di uno spec del motore: e' la lista delle
+        // chiavi che GateFactory guarda. Si verifica dal comportamento —
+        // scrivere la chiave cambia il gate, scriverne una inventata no.
+        const reqs = [], meta = [];
+        for (const key of D.PARAM_KEYS) {
+          const declared = {}; declared[key] = 100;
+          reqs.push({ op: "classify_deviation_probability",
+                      args: { value: declared, param_key: key, duration: 10.0 } });
+          meta.push({ key, kind: "declared" });
+          reqs.push({ op: "classify_deviation_probability",
+                      args: { value: { chiave_inventata: 100 }, param_key: key, duration: 10.0 } });
+          meta.push({ key, kind: "absent" });
+        }
+        const answers = await ask(reqs);
+        const bad = [];
+        for (let i = 0; i < answers.length; i += 2) {
+          const key = meta[i].key;
+          const declared = answers[i], absent = answers[i + 1];
+          if (!declared.ok || !absent.ok) { bad.push(`${key}: oracolo ko`); continue; }
+          if (declared.value.gate === absent.value.gate) {
+            bad.push(`${key}: dichiararla non cambia il gate (${declared.value.gate}) — non e' una chiave consultata`);
+          }
+        }
+        assert(`${D.PARAM_KEYS.length} chiavi sempre vive, tutte consultate dal motore`,
+          bad.length === 0, bad.join("\n      "));
+      },
+    },
+  ],
+});
