@@ -45,6 +45,7 @@ const store = {};
 global.localStorage = {
   getItem: (k) => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
+  removeItem: (k) => { delete store[k]; },
 };
 
 function jsonRes(status, body) {
@@ -119,6 +120,41 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            JSON.parse(store["pge-local-stems"] || "{}") &&
            Object.keys(JSON.parse(store["pge-local-stems"] || "{}")).length === 0,
            store["pge-local-stems"]);
+  }
+
+  console.log("\n── e con l'indice se ne vanno le versioni di semantica ──");
+  {
+    // Le due mappe persistite non hanno lo stesso destino, e la ragione e'
+    // cosa affermano. `pge-local-fp` parla dello YAML ("com'era lo stream
+    // quando l'ho renderizzato"): in una cartella nuova un omonimo diverso
+    // ha impronta diversa, quindi stale — la direzione giusta. `pge-local-sem`
+    // parla dei FILE ("lo stem l'ha scritto un motore che leggeva cosi'"):
+    // ereditata, afferma una lettura che nella output/ nuova nessuno ha
+    // osservato, e con lo YAML identico l'impronta combacia. Verde su stem
+    // scritti diversi, cioe' il caso per cui l'asse esiste (#133).
+    store["pge-local-fp"]  = JSON.stringify({ proj: { stream1: "abc" } });
+    store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
+    assert("le versioni ci sono, prima",
+           (await backend.render.loadSemantics("proj")).stream1 === 3);
+
+    const res = await backend.setWorkspace("/brani2");
+    assert("la commutazione riesce", res.ok === true);
+    assert("le versioni di semantica se ne vanno con l'indice",
+           Object.keys(await backend.render.loadSemantics("proj")).length === 0,
+           store["pge-local-sem"]);
+    assert("le impronte no: dicono dello YAML, non dei file",
+           (await backend.render.loadCache("proj")).stream1 === "abc");
+  }
+
+  console.log("\n── un cambio rifiutato lascia stare anche quelle ──");
+  {
+    store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
+    REFUSE = { status: 400, error: "non esiste: /refuso" };
+    await backend.setWorkspace("/refuso");
+    REFUSE = null;
+    assert("le versioni restano dove sono",
+           (await backend.render.loadSemantics("proj")).stream1 === 3);
+    delete store["pge-local-sem"];
   }
 
   console.log("\n── e /stems lo ripopola dalla cartella nuova ──");
@@ -206,6 +242,11 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /stemRevRef\.current = \{\}/.test(h));
     assert("invalida i buffer audio",
            /window\.PGEAudio\.engine\.invalidateAll\(\)/.test(h));
+    // La meta' in memoria di `pge-local-sem`: su un progetto omonimo
+    // `activeProject` non cambia, l'effetto su [activeProject] non riparte e
+    // lo stato resterebbe quello della cartella di prima.
+    assert("azzera anche le versioni di semantica in stato",
+           /setRenderedSem\(\{\}\)/.test(h));
     assert("ricarica progetti e media", /refreshProjects\(\)/.test(h) && /refreshMedia\(\)/.test(h));
     // Due cartelle possono avere un progetto omonimo: li' `activeProject` non
     // cambia e l'effetto su [activeProject] non riparte. Senza questa riga

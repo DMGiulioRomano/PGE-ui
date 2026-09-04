@@ -72,6 +72,10 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
 
   async function applyWorkspace(path) {
     if (!onWorkspaceChange) return;
+    // La guardia sta qui e non sui bottoni: quelli sono `disabled` durante il
+    // cambio, ma l'Invio nel campo no, e due giri sovrapposti significano due
+    // sequenze di ricarica (progetti, media, indice degli stem) intrecciate.
+    if (wsBusy) return;
     setWsBusy(true);
     setWsStatus({ state: "testing", message: "cambio cartella…" });
     const res = await onWorkspaceChange(path);

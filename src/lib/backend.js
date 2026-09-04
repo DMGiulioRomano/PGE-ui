@@ -696,9 +696,21 @@
       // omonimo in un'altra cartella con contenuto diverso ha impronta diversa
       // (quindi stale, che e' la direzione giusta); con contenuto identico
       // l'audio sarebbe identico — i sample vengono comunque dal motore.
+      //
+      // Le versioni di semantica in `pge-local-sem` NO, e la differenza sta in
+      // cosa affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
+      // scritto un motore che leggeva cosi'" — cioe' degli stessi file di cui
+      // l'indice qui sopra e' l'inventario, quelli della output/ di prima.
+      // Ereditate in una cartella nuova affermano una lettura che li' nessuno
+      // ha osservato, e con lo YAML identico l'impronta combacia: verde su
+      // stem che un motore piu' vecchio ha scritto diversi, cioe' il caso per
+      // cui l'asse e' stato aggiunto (#133). Senza record il pallino e' giallo
+      // — "stem di cui non so la lettura" — e si spegne al primo giro, anche a
+      // vuoto. Un render di troppo, mai uno di meno.
       stemIndex = {};
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();
+      try { localStorage.removeItem("pge-local-sem"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
       return body;
     }

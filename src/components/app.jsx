@@ -1941,6 +1941,11 @@ function App() {
     setSpectrograms({});
     setGrainData({});
     setLastRenderedFps({});
+    // La meta' in memoria di `pge-local-sem`, che setWorkspace ha appena
+    // buttato: senza questa riga, un progetto omonimo (dove `activeProject`
+    // non cambia e l'effetto su [activeProject] non riparte) continuerebbe a
+    // classificare con le versioni della cartella di prima.
+    setRenderedSem({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};
