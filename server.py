@@ -31,8 +31,9 @@ can read events incrementally. All other endpoints are plain JSON.
 
 The engine checkout (--root) and the folder your pieces live in (--workspace)
 are two different things: --root is engine source (src/main.py, .venv, csound/),
---workspace holds configs/ output/ cache/. Without --workspace they coincide,
-which is the historical behavior. refs/ still comes from the engine — see #147.
+--workspace holds configs/ output/ cache/ and — since #148, on an engine that
+has `--samples-dir` — refs/ too. Without --workspace they coincide, which is the
+historical behavior. See #147/#148.
 
 Endpoints:
     GET  /health                — sanity check + resolved paths
@@ -96,7 +97,8 @@ from render_pipeline import (
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
 from engine_introspect import (engine_envelope_keys, engine_output_sr,
-                              engine_parameter_bounds, engine_semantics_version)
+                              engine_parameter_bounds, engine_semantics_version,
+                              engine_supports_samples_dir)
 
 
 def _ensure_venv_events(root: Path):
@@ -201,16 +203,22 @@ def make_app(root: Path, render_timeout: float = 600.0,
     proprio non sporca piu' il repo del motore, e il rollback torna a essere
     il git della propria cartella. #147
 
-    refs/ NON si sposta ancora: il sottoprocesso gira con cwd=root e col
-    renderer numpy i sample si risolvono su ./refs/ del motore. Serve un
-    --samples-dir lato motore (PythonGranularEngine#235); finche' non c'e', i
-    sample restano quelli del motore e solo le altre tre directory seguono il
-    workspace."""
-    ws      = None
-    refs    = None
-    configs = None
-    output  = None
-    cache   = None
+    Anche refs/ segue il workspace, ma solo su un motore che ha
+    `--samples-dir` (PythonGranularEngine#235, PGE-ui #148): il bridge glielo
+    manda a ogni render, quindi i sample smettono di dover stare nel checkout
+    del motore. Su un motore piu' vecchio il flag viene ignorato in silenzio e
+    i sample si risolvono comunque su ./refs/ relativo al cwd del
+    sottoprocesso, che e' root — li' refs/ resta quella del motore, perche' una
+    cartella di sample che la UI elenca e il motore non legge sarebbe un
+    disaccordo che si scopre solo quando un render fallisce."""
+    ws       = None
+    refs     = None
+    configs  = None
+    output   = None
+    cache    = None
+    # refs/ segue il workspace? Deciso dal motore, non da una preferenza: e'
+    # la risposta di engine_supports_samples_dir sul checkout in --root.
+    samples_follow_ws = False
 
     def _set_workspace(path):
         """Punta le directory di lavoro a `path`, creando le sottodirectory se
@@ -220,20 +228,32 @@ def make_app(root: Path, render_timeout: float = 600.0,
         non deve lasciare il bridge su un workspace a meta', con configs/ nuova
         e output/ vecchia.
 
+        La capacita' del motore si richiede QUI e non a ogni lettura di `refs`:
+        cosi' le due meta' della risposta — dove punta la cartella e cosa il
+        bridge dichiara al browser — vengono dalla stessa domanda fatta una
+        volta. Un aggiornamento del motore sotto un `make serve` acceso cambia
+        la risposta al prossimo cambio di workspace, non a meta' di una
+        richiesta.
+
         Stato di processo, e regge perche' gunicorn qui gira con "workers": 1
         (vedi la config in fondo al file): con piu' worker la commutazione a
         caldo ne toccherebbe uno solo, e le richieste successive vedrebbero il
         workspace vecchio o quello nuovo a seconda di chi risponde."""
-        nonlocal ws, refs, configs, output, cache
+        nonlocal ws, refs, configs, output, cache, samples_follow_ws
         target = Path(path).expanduser().resolve()
-        subs = {name: target / name for name in ("configs", "output", "cache")}
+        follow = engine_supports_samples_dir(root)
+        names = ("configs", "output", "cache") + (("refs",) if follow else ())
+        subs = {name: target / name for name in names}
         for p in subs.values():
             p.mkdir(parents=True, exist_ok=True)
         ws      = target
         configs = subs["configs"]
         output  = subs["output"]
         cache   = subs["cache"]
-        refs    = root / "refs"     # vedi il docstring: legata al motore
+        # Su un motore senza il flag resta quella del motore: e' l'unica che
+        # il render leggera' davvero (vedi il docstring di make_app).
+        refs    = subs["refs"] if follow else root / "refs"
+        samples_follow_ws = follow
 
     _set_workspace(workspace or root)
 
@@ -376,6 +396,11 @@ def make_app(root: Path, render_timeout: float = 600.0,
             "ok": bool(ok),
             "workspace": str(ws),
             "isRoot": ws == root,
+            # Se i sample seguono il workspace o restano al motore: il browser
+            # non puo' dedurlo confrontando i path (con workspace == root le
+            # due cartelle coincidono comunque), e Settings ne ha bisogno per
+            # dire all'autore dove metterli. #148
+            "samplesFollowWorkspace": bool(samples_follow_ws),
             "paths": _resolved_paths(),
             "projects": _project_entries(),
         }
@@ -427,7 +452,8 @@ def make_app(root: Path, render_timeout: float = 600.0,
         except OSError as e:
             return jsonify(_workspace_payload(
                 ok=False,
-                error=f"non posso creare configs/output/cache in {target}: {e}")), 400
+                error=f"non posso creare le sottocartelle di lavoro "
+                      f"in {target}: {e}")), 400
         return jsonify(_workspace_payload())
 
     @app.get("/envelope-keys")
@@ -998,6 +1024,16 @@ def make_app(root: Path, render_timeout: float = 600.0,
     def ui_static(filename):
         return send_from_directory(ui_dir, filename)
 
+    # Le path risolte e la risposta del motore, esposte sull'app perche' il
+    # banner di main() le STAMPI invece di riderivarle. Dove punta refs/ e' una
+    # regola sola — quella di _set_workspace, tenuta ferma da una guardia di
+    # sorgente in test-workspace.js — e una seconda scrittura sarebbe una copia
+    # che nessuna guardia tiene attaccata all'originale. Il banner e' proprio il
+    # posto dove una divergenza si legge come verita': e' la riga da cui
+    # l'autore impara dove mettere i sample. #148
+    app.pge_paths = _resolved_paths
+    app.pge_samples_follow = lambda: samples_follow_ws
+
     return app
 
 
@@ -1016,10 +1052,11 @@ def main():
                          "(default: ../PythonGranularEngine, "
                          "i.e. cloned side-by-side with PGE-ui)")
     ap.add_argument("--workspace", default=None,
-                    help="folder holding configs/ output/ cache/ — your own "
+                    help="folder holding configs/ output/ cache/ — and refs/ "
+                         "too, on an engine with --samples-dir — your own "
                          "pieces, outside the engine checkout. Subdirectories "
                          "are created if missing. Default: same as --root "
-                         "(historical behavior). refs/ still comes from --root")
+                         "(historical behavior)")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default: 127.0.0.1, localhost only)")
     ap.add_argument("--render-timeout", type=float, default=600.0,
@@ -1053,8 +1090,9 @@ def main():
             sys.exit(
                 f"--workspace {workspace} non esiste (o non e' una directory).\n"
                 f"\n"
-                f"Crea la cartella e riprova: le sottodirectory configs/, "
-                f"output/ e cache/ le crea il bridge.\n"
+                f"Crea la cartella e riprova: le sottodirectory (configs/, "
+                f"output/, cache/ e — su un motore con --samples-dir — refs/) "
+                f"le crea il bridge.\n"
             )
 
     app = make_app(root, render_timeout=args.render_timeout, workspace=workspace)
@@ -1083,14 +1121,22 @@ def main():
     except Exception:
         sf_ok = False
 
-    ws = workspace or root
+    # Le path del banner sono quelle che make_app ha gia' risolto, non una
+    # seconda derivazione: il banner deve dire la cartella che il render
+    # leggera' davvero, e l'unico che lo sa e' _set_workspace. Riscriverne la
+    # regola qui la sdoppierebbe, e il banner e' la riga da cui l'autore impara
+    # dove mettere i sample — una copia divergente si leggerebbe come verita'.
+    _paths  = app.pge_paths()
+    _follow = app.pge_samples_follow()
     print(f"PGE bridge")
     print(f"  root:      {root}")
-    print(f"  workspace: {ws}" + ("" if workspace else "  (= root, default)"))
-    print(f"  refs/:     {root / 'refs'}   (dal motore — PythonGranularEngine#235)")
-    print(f"  configs/:  {ws / 'configs'}")
-    print(f"  output/:   {ws / 'output'}")
-    print(f"  cache/:    {ws / 'cache'}")
+    print(f"  workspace: {_paths['workspace']}"
+          + ("" if workspace else "  (= root, default)"))
+    print(f"  refs/:     {_paths['refs']}" + ("" if _follow else
+          "   (dal motore: --samples-dir non c'e' — PythonGranularEngine#235)"))
+    print(f"  configs/:  {_paths['configs']}")
+    print(f"  output/:   {_paths['output']}")
+    print(f"  cache/:    {_paths['cache']}")
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")

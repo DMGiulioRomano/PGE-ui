@@ -181,7 +181,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
         <div className="sp-section">
           <div className="sp-sec-head">Workspace</div>
           <div className="sp-row">
-            <span className="sp-k" title="cartella che contiene configs/ output/ cache/">cartella</span>
+            <span className="sp-k" title="cartella che contiene configs/ output/ cache/ — e refs/, su un motore con --samples-dir">cartella</span>
             <input className="sp-input mono" value={wsPath}
                    placeholder="(= root del motore)"
                    onChange={(e) => setWsPath(e.target.value)}
@@ -210,12 +210,39 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             del motore, il rollback di un progetto torna a essere il proprio git.
             {wsInfo && wsInfo.isRoot ? " Ora coincide col repo del motore (default)." : ""}
           </div>
-          <div className="sp-hint">
-            I sample restano quelli del motore (<span className="mono">refs/</span>): il
-            render gira con la working directory sul repo del motore e il renderer numpy
-            li risolve li'. Seguiranno il workspace quando il motore avra'{" "}
-            <span className="mono">--samples-dir</span>.
-          </div>
+          {/* Dove stanno i sample lo decide il motore, non una preferenza:
+              con --samples-dir (PythonGranularEngine#235) refs/ segue il
+              workspace, senza resta quella del motore — l'unica che il render
+              leggerebbe davvero. Finche' il server non ha risposto non si
+              dice niente: una delle due frasi sarebbe una scommessa. #148 */}
+          {wsInfo ? (
+            wsInfo.samplesFollowWorkspace ? (
+              <div className="sp-hint">
+                Anche i sample seguono:{" "}
+                <span className="mono">{(wsInfo.paths && wsInfo.paths.refs) || "refs/"}</span>.
+                {wsInfo.isRoot ? (
+                  // Senza --workspace le due cartelle coincidono e quella e' la
+                  // refs/ del motore, gia' piena: dirla "creata vuota" manda a
+                  // cercare un problema che non c'e', e proprio nel caso di
+                  // default. La frase sotto vale quando il workspace e' altrove.
+                  <> E' quella del motore, perche' il workspace coincide col suo repo.</>
+                ) : (
+                  <> La cartella la crea il bridge, vuota: copiaci i file, o falla
+                  puntare alla libreria che usi gia' con un symlink.</>
+                )}{" "}
+                Il motore la riceve come{" "}
+                <span className="mono">--samples-dir</span> a ogni render.
+              </div>
+            ) : (
+              <div className="sp-hint">
+                I sample restano quelli del motore (
+                <span className="mono">{(wsInfo.paths && wsInfo.paths.refs) || "refs/"}</span>):
+                questo motore non ha <span className="mono">--samples-dir</span>, quindi
+                il render li risolverebbe comunque su <span className="mono">./refs/</span>{" "}
+                del proprio repo. Aggiorna il motore e seguiranno il workspace.
+              </div>
+            )
+          ) : null}
           <div className="sp-hint">
             Cambiare cartella ricarica progetti, media e stem: le modifiche non salvate
             del progetto aperto vanno perse. Rifiutato mentre un render e' in corso.
@@ -241,10 +268,21 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             <input className="sp-input mono" value={tweaks.outputPath || "output"}
                    onChange={(e) => setTweak("outputPath", e.target.value)} />
           </div>
+          {/* Anche qui la risposta e' quella del server, la stessa che decide
+              le due frasi nella sezione Workspace. Prima era una condizione da
+              districare, introdotta da un "a meno che ... non", che in italiano
+              vale "se": diceva quindi l'opposto di quel che succede, e lo
+              diceva anche quando la risposta era gia' arrivata. #148 */}
           <div className="sp-hint">
-            Specchio delle path risolte da <span className="mono">server.py</span>: media
-            da <span className="mono">--root</span>, progetti e output dal Workspace qui
-            sopra. Campi informativi — si cambiano di la', o al lancio del server.
+            Specchio delle path risolte da <span className="mono">server.py</span>:
+            progetti e output dal Workspace qui sopra
+            {wsInfo ? (wsInfo.samplesFollowWorkspace ? (
+              <>, e con essi i media.</>
+            ) : (
+              <>; i media no — questo motore non ha{" "}
+              <span className="mono">--samples-dir</span>, quindi restano i suoi.</>
+            )) : "."}{" "}
+            Campi informativi — si cambiano di la', o al lancio del server.
           </div>
         </div>
 

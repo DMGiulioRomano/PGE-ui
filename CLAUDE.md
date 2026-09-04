@@ -206,18 +206,37 @@ and it only proves a component parses. UI verification is manual (open
 
 ### Two-repo split (deliberate)
 
-`PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it reads `refs/` there and works inside `configs/`, `output/`, `cache/`, which since #147 can live in a workspace of their own (see below).
+`PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it works inside `configs/`, `output/`, `cache/` and `refs/`, all four of which can live in a workspace of their own (#147, and #148 for `refs/`; see below).
 
-### Workspace: the project folder is not the engine checkout (#147)
+### Workspace: the project folder is not the engine checkout (#147, #148)
 
 `--root` is engine **source** (`src/main.py`, `.venv/`, `csound/`, `logs/`).
-`--workspace` is where the *work* lives: `configs/`, `output/`, `cache/`. Omit it
-and they coincide — the historical behavior, where every piece is a file inside
-the engine checkout and `/render` rewrites it there. `refs/` still comes from
-`--root`: the subprocess runs with `cwd=root` and the numpy renderer resolves
-samples against `./refs/`, so samples move only once the engine grows
-`--samples-dir` (PythonGranularEngine#235). `_ensure_venv_events` and the csound
-paths stay on `--root` on purpose — engine code, not the author's work.
+`--workspace` is where the *work* lives: `configs/`, `output/`, `cache/` and —
+since #148 — `refs/`. Omit it and they coincide — the historical behavior, where
+every piece is a file inside the engine checkout and `/render` rewrites it there.
+`_ensure_venv_events` and the csound paths stay on `--root` on purpose — engine
+code, not the author's work.
+
+**`refs/` follows the workspace only where the engine can be told about it.**
+The subprocess runs with `cwd=root`, and without `--samples-dir` the engine
+resolves samples against `./refs/` — relative to that cwd, in *both* renderers:
+`--ssdir` covers csound's render-time lookup but not `Stream.__init__`, which
+resolves the sample's duration before a renderer exists. `build_render_command`
+therefore sends `--samples-dir <refs>` for both, always: the engine's CLI parses
+`sys.argv` by hand and ignores unknown flags, so it is inert on an engine that
+predates PythonGranularEngine#235.
+
+What is *not* inert is moving the folder. On an engine without the flag, a
+`refs/` inside the workspace is a folder the editor lists and the render never
+reads — a disagreement that only surfaces as a failed render. So
+`_set_workspace` asks first: `engine_supports_samples_dir(root)` (an AST read of
+the engine's CLI, mtime-cached like the semantics version) decides whether
+`refs` binds under the workspace or stays at `root/refs`. The browser can't
+derive that from the paths (with `workspace == root` the two coincide anyway),
+so `GET/POST /workspace` carry `samplesFollowWorkspace` and Settings words its
+hint from it. The probe's criterion is the string constant `--samples-dir` as
+the engine's own source spells it: comments don't survive the AST, and an engine
+that merely mentions the flag in a TODO doesn't parse it.
 
 The four paths are **not** closure constants any more: `_set_workspace` rebinds
 them (`nonlocal`) and `_bases()` rebuilds the `kind`→folder map per request, so
@@ -267,8 +286,13 @@ the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
 first pass, even an empty one. What deliberately survives is `pge-local-fp`: it
 records what a stream looked like when it was rendered — a statement about the
 YAML, not about the files — so a same-named project with different content
-hashes differently (stale, the safe direction) and with identical content would
-render identical audio anyway.
+hashes differently (stale, the safe direction). Identical content, where the
+hash matches, is safe for a different reason than the one written here before:
+"the audio would be identical anyway" died with #148, since `refs/` follows the
+workspace on an engine with `--samples-dir` and the same YAML over different
+samples renders differently. What holds it up is that a fingerprint can only
+*withhold* the green dot, never grant it — green needs a stem in the index, and
+the index is exactly what the switch empties.
 
 Settings shows the workspace field; the value comes from `GET /workspace` on
 every panel open, never from a saved preference — the server is the single

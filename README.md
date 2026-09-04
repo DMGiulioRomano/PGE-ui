@@ -12,10 +12,10 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
 ~/projects/
 ├── PythonGranularEngine/        ← the renderer (pure CLI, untouched)
 │   ├── src/main.py
-│   ├── refs/*.wav               ← samples (always from here, for now)
-│   ├── configs/*.yml            ┐
-│   ├── output/                  ├ default workspace: pass --workspace to
-│   └── cache/                   ┘ keep these three next to your own work
+│   ├── refs/*.wav               ┐
+│   ├── configs/*.yml            ├ default workspace: pass --workspace to
+│   ├── output/                  │ keep these four next to your own work
+│   └── cache/                   ┘
 │
 └── PGE-ui/                      ← this repo
     ├── PGE Editor.html          ← open this in a browser
@@ -47,8 +47,8 @@ git clone https://github.com/DMGiulioRomano/PGE-ui
 Your own pieces don't have to live inside the engine checkout: `--workspace
 /path/to/brani` puts `configs/ output/ cache/` wherever you keep your work, so
 editing a composition stops dirtying the engine repo and `git` rollback becomes
-your own. Sample files (`refs/`) still come from the engine — see
-[Workspace](#workspace) below.
+your own. Sample files (`refs/`) come along too, on an engine that has
+`--samples-dir` — see [Workspace](#workspace) below.
 
 ### 2) Set up the engine
 
@@ -80,7 +80,7 @@ You'll see:
 PGE bridge
   root:      /Users/you/projects/PythonGranularEngine
   workspace: /Users/you/brani
-  refs/:     .../PythonGranularEngine/refs   (from the engine)
+  refs/:     /Users/you/brani/refs
   configs/:  /Users/you/brani/configs
   output/:   /Users/you/brani/output
   cache/:    /Users/you/brani/cache
@@ -115,11 +115,14 @@ engine checkout, and `/render` rewrites them there.
   describes the previous `output/` — stem index, durations, peaks, grains, the
   engine-semantics versions — so unsaved edits to the open project are lost.
   Refused mid-render, from the first instant of the render stream.
-- **`refs/` still comes from `--root`.** The render subprocess runs with its
-  working directory on the engine repo, and the numpy renderer resolves samples
-  against `./refs/` there. Samples will follow the workspace once the engine
-  grows `--samples-dir`
-  ([PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)).
+- **`refs/` follows too**, on an engine that has `--samples-dir`
+  ([PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)):
+  the bridge sends it on every render, so the samples are yours as well. The
+  folder is created empty — copy your files in, or point it at the library you
+  already use with a symlink. On an older engine the flag is ignored and samples
+  are resolved against the engine's own `./refs/`, so the bridge leaves `refs/`
+  there rather than listing a folder no render would read; Settings says which
+  of the two you are on.
 
 ---
 

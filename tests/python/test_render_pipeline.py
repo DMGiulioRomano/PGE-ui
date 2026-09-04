@@ -274,6 +274,32 @@ def test_build_cmd_csound_extra_args():
         assert flag in cmd
 
 
+@pytest.mark.parametrize("renderer", ["numpy", "csound"])
+def test_build_cmd_samples_dir_for_both_renderers(renderer):
+    """`--samples-dir` esce per entrambi i renderer (PGE-ui #148).
+
+    Era il ramo csound l'unico a ricevere path del motore (`--ssdir`), e da
+    quello si poteva credere che il caso csound fosse coperto: non lo era. La
+    durata del sample la risolve il Generator prima che esista un renderer, e
+    quel passo leggeva `./refs/` relativo al cwd — cioe' a tenere in piedi i
+    render era `cwd=root`, non questa lista."""
+    cmd = _cmd(renderer=renderer, refs=Path("/altrove/refs"))
+    assert "--samples-dir" in cmd
+    assert cmd[cmd.index("--samples-dir") + 1] == str(Path("/altrove/refs"))
+
+
+def test_build_cmd_csound_keeps_ssdir_beside_samples_dir():
+    """Il ramo csound tiene il suo `--ssdir` accanto a `--samples-dir`.
+
+    Sul motore di oggi i due dicono la stessa cosa (SSDIR ricade su
+    samples_dir), ma su un motore senza `--samples-dir` `--ssdir` e' l'unica
+    meta' che atterra: toglierlo trasformerebbe una ridondanza in una
+    regressione."""
+    cmd = _cmd(renderer="csound", refs=Path("/altrove/refs"))
+    assert cmd[cmd.index("--ssdir") + 1] == str(Path("/altrove/refs"))
+    assert cmd[cmd.index("--samples-dir") + 1] == str(Path("/altrove/refs"))
+
+
 def test_build_cmd_reaper():
     assert "--reaper" not in _cmd(reaper=False)
     cmd = _cmd(reaper=True)
@@ -966,6 +992,103 @@ def test_engine_semantics_cache_keeps_one_entry_per_root(tmp_path):
     assert len(mine) == 1, f"{len(mine)} voci per una sola root: {mine}"
 
 
+# ---------------------------------------------------------------------------
+# engine_supports_samples_dir — la capacita' del motore, non un valore
+#
+# E' l'unica lettura di engine_introspect che serve a decidere DOVE stanno i
+# sample invece di leggere un numero: il flag si manda comunque (inerte sui
+# motori che non l'hanno), ma spostare refs/ dentro il workspace su un motore
+# che non lo legge darebbe una cartella che la UI elenca e il render ignora.
+# PGE-ui #148 / PythonGranularEngine#235
+# ---------------------------------------------------------------------------
+
+def _stub_cli(root: Path, text: str, where=("pge", "cli.py")):
+    d = root / "src"
+    for part in where[:-1]:
+        d = d / part
+    d.mkdir(parents=True, exist_ok=True)
+    (d / where[-1]).write_text(text)
+    return root / "src" / Path(*where)
+
+
+def test_engine_supports_samples_dir_current_layout(tmp_path):
+    import engine_introspect as ei
+    _stub_cli(tmp_path, "import sys\nif '--samples-dir' in sys.argv:\n    pass\n")
+    assert ei.engine_supports_samples_dir(tmp_path) is True
+
+
+@pytest.mark.parametrize("where", [("cli.py",), ("main.py",)])
+def test_engine_supports_samples_dir_older_layouts(tmp_path, where):
+    """La CLI e' nata in src/main.py, e' passata per src/cli.py e vive in
+    src/pge/cli.py (PGE #162): i candidati coprono le tre vintage, altrimenti
+    un motore aggiornato ma con la CLI dove stava prima verrebbe letto come
+    un motore senza il flag."""
+    import engine_introspect as ei
+    _stub_cli(tmp_path, "import sys\nif '--samples-dir' in sys.argv:\n    pass\n",
+              where=where)
+    assert ei.engine_supports_samples_dir(tmp_path) is True
+
+
+def test_engine_supports_samples_dir_absent(tmp_path):
+    import engine_introspect as ei
+    _stub_cli(tmp_path, "import sys\nif '--ssdir' in sys.argv:\n    pass\n")
+    assert ei.engine_supports_samples_dir(tmp_path) is False
+
+
+def test_engine_supports_samples_dir_missing_engine(tmp_path):
+    """Nessun sorgente = nessuna capacita'. Vale come "non lo so" e porta al
+    comportamento storico, che e' la direzione sicura."""
+    import engine_introspect as ei
+    assert ei.engine_supports_samples_dir(tmp_path) is False
+
+
+def test_engine_supports_samples_dir_ignores_a_mention(tmp_path):
+    """Il criterio e' il letterale, ed e' per questo che si passa dall'AST: un
+    motore che il flag lo nomina in un commento o in un TODO (`#235` era una
+    issue aperta prima di essere un flag) non lo parsa, e leggere il testo
+    grezzo lo direbbe pronto."""
+    import engine_introspect as ei
+    _stub_cli(tmp_path,
+              "import sys\n"
+              "# TODO: --samples-dir, quando ci arriviamo (issue #235)\n"
+              "USAGE = '[--samples-dir DIR] '\n")
+    assert ei.engine_supports_samples_dir(tmp_path) is False
+
+
+def test_engine_supports_samples_dir_sees_a_live_update(tmp_path):
+    """Cache invalidata sull'mtime, come la versione di semantica: il caso e'
+    un `git pull` nel checkout del motore sotto un `make serve` acceso."""
+    import os
+    import engine_introspect as ei
+    src = _stub_cli(tmp_path, "import sys\n")
+    assert ei.engine_supports_samples_dir(tmp_path) is False
+
+    src.write_text("import sys\nif '--samples-dir' in sys.argv:\n    pass\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert ei.engine_supports_samples_dir(tmp_path) is True
+
+
+def test_engine_supports_samples_dir_on_the_real_engine():
+    """Il motore vero ce l'ha (PGE #236). E' la canarina della #132 su questa
+    lettura: il giorno che il flag venisse rinominato a monte, refs/ tornerebbe
+    in silenzio dentro il checkout del motore per tutti — un workspace che
+    smette di essere una cartella di lavoro senza che nulla diventi rosso."""
+    err = engine_corpus.corpus_error()
+    assert err is None, err
+    reason = engine_corpus.skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    import engine_introspect as ei
+    root = Path(engine_corpus.ENGINE_ROOT)
+    assert ei.engine_supports_samples_dir(root) is True, (
+        f"il motore in {root} non nomina --samples-dir nella sua CLI: "
+        "o e' precedente a PGE #236, o il flag ha cambiato nome e il bridge "
+        "ha smesso di spostare refs/ senza dirlo"
+    )
+
+
 def test_semantics_version_endpoint(tmp_path):
     import server
     (tmp_path / "src").mkdir(parents=True, exist_ok=True)
@@ -1262,15 +1385,25 @@ def test_semantics_version_endpoint_without_engine(tmp_path):
 # `--root` resta la sorgente del motore (src/main.py, .venv, csound/); il
 # workspace e' dove vivono configs/ output/ cache/, cioe' il lavoro dell'autore.
 # Senza workspace le due cose coincidono, che e' il comportamento storico.
-# refs/ NON segue ancora: il sottoprocesso gira con cwd=root e col renderer
-# numpy i sample si risolvono su ./refs/ del motore (PythonGranularEngine#235).
-# PGE-ui #147
+# Anche refs/ segue, ma solo dove il motore ha --samples-dir: il bridge glielo
+# manda a ogni render (PythonGranularEngine#235), e senza quel flag i sample si
+# risolvono comunque su ./refs/ del cwd del sottoprocesso, che e' root.
+# PGE-ui #147, #148
 # ---------------------------------------------------------------------------
 
-def _engine_stub(root: Path):
-    """Il minimo che make_app si aspetta da un checkout del motore."""
+def _engine_stub(root: Path, samples_dir: bool = True):
+    """Il minimo che make_app si aspetta da un checkout del motore.
+
+    `samples_dir` sceglie la vintage: con la CLI che parsa `--samples-dir`
+    (motore corrente) o senza (motore precedente a PGE #235). Non e' un
+    dettaglio del fixture — e' cio' che decide dove punta refs/."""
     (root / "src").mkdir(parents=True, exist_ok=True)
     (root / "src" / "main.py").write_text("# stub\n")
+    (root / "src" / "pge").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "pge" / "cli.py").write_text(
+        "import sys\n"
+        + ("if '--samples-dir' in sys.argv:\n    pass\n" if samples_dir else "")
+    )
     (root / "refs").mkdir(exist_ok=True)
     return root
 
@@ -1289,13 +1422,10 @@ def test_workspace_absent_means_root(tmp_path):
     assert client.get("/workspace").get_json()["isRoot"] is True
 
 
-def test_workspace_moves_configs_output_cache_but_not_refs(tmp_path):
-    """Le tre directory seguono il workspace; refs/ resta al motore.
-
-    E' il nodo aperto dell'issue: finche' il motore non ha --samples-dir, i
-    sample si risolvono su ./refs/ del cwd del sottoprocesso, che e' root.
-    Spostare refs/ senza spostare quella risoluzione darebbe una cartella di
-    sample che nessuno legge."""
+def test_workspace_moves_all_four_folders(tmp_path):
+    """Con un motore che ha --samples-dir seguono tutte e quattro, refs/
+    compresa: e' l'ultima che teneva la cartella di lavoro dentro il checkout
+    del motore (PGE-ui #148)."""
     import server
     root = _engine_stub(tmp_path / "engine")
     ws = tmp_path / "brani"
@@ -1309,8 +1439,98 @@ def test_workspace_moves_configs_output_cache_but_not_refs(tmp_path):
     assert h["configs"] == str(ws / "configs")
     assert h["output"] == str(ws / "output")
     assert h["cache"] == str(ws / "cache")
-    assert h["refs"] == str(root / "refs")          # dal motore, non dal workspace
-    assert client.get("/workspace").get_json()["isRoot"] is False
+    assert h["refs"] == str(ws / "refs")
+    w = client.get("/workspace").get_json()
+    assert w["isRoot"] is False
+    assert w["samplesFollowWorkspace"] is True
+
+
+def test_workspace_leaves_refs_to_an_engine_without_the_flag(tmp_path):
+    """Su un motore senza --samples-dir refs/ resta quella del motore.
+
+    Il flag viene mandato lo stesso (e' inerte), ma il render risolve i sample
+    su ./refs/ relativo al proprio cwd, che e' root. Puntare la UI altrove
+    darebbe una cartella di sample che l'editor elenca e il motore non legge:
+    un disaccordo che si scopre solo quando un render fallisce."""
+    import server
+    root = _engine_stub(tmp_path / "engine", samples_dir=False)
+    ws = tmp_path / "brani"
+    ws.mkdir()
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    h = client.get("/health").get_json()
+
+    assert h["refs"] == str(root / "refs")
+    assert h["configs"] == str(ws / "configs")      # le altre tre seguono lo stesso
+    assert client.get("/workspace").get_json()["samplesFollowWorkspace"] is False
+    assert not (ws / "refs").exists(), (
+        "una refs/ creata nel workspace di un motore che non la leggera' mai "
+        "e' un invito a metterci i sample sbagliati"
+    )
+
+
+def test_workspace_switch_moves_refs_too(tmp_path):
+    """La commutazione a caldo porta con se' anche refs/: `_bases()` e
+    `_resolved_paths()` la rileggono, non e' una costante della closure."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    uno = tmp_path / "uno"; uno.mkdir()
+    due = tmp_path / "due"; due.mkdir()
+
+    client = server.make_app(root, render_timeout=600.0, workspace=uno).test_client()
+    assert client.get("/health").get_json()["refs"] == str(uno / "refs")
+
+    r = client.post("/workspace", json={"path": str(due)})
+    assert r.status_code == 200
+    assert r.get_json()["paths"]["refs"] == str(due / "refs")
+    assert client.get("/health").get_json()["refs"] == str(due / "refs")
+    assert (due / "refs").is_dir()
+
+
+@pytest.mark.parametrize("samples_dir", [True, False])
+def test_app_exposes_the_paths_the_banner_prints(tmp_path, samples_dir):
+    """`app.pge_paths()` / `app.pge_samples_follow()` sono cio' che il banner
+    d'avvio stampa, e vengono da _set_workspace.
+
+    Il banner riderivava la regola per conto suo (`(ws / "refs") if follow else
+    root / "refs"`): due scritture della stessa cosa, con la guardia di
+    sorgente attaccata a una sola. Ed e' la riga da cui l'autore impara dove
+    mettere i sample — una copia divergente li' si legge come verita'. Il test
+    tiene gli accessor allineati alle route su entrambe le vintage del motore.
+    """
+    import server
+    root = _engine_stub(tmp_path / "engine", samples_dir=samples_dir)
+    ws = tmp_path / "brani"
+    ws.mkdir()
+
+    app = server.make_app(root, render_timeout=600.0, workspace=ws)
+    client = app.test_client()
+
+    assert app.pge_samples_follow() is samples_dir
+    assert (client.get("/workspace").get_json()["samplesFollowWorkspace"]
+            is samples_dir)
+    health = client.get("/health").get_json()
+    for key, value in app.pge_paths().items():
+        assert health[key] == value, key
+    assert app.pge_paths()["refs"] == str(
+        (ws if samples_dir else root) / "refs")
+
+
+def test_app_paths_follow_a_hot_switch(tmp_path):
+    """E seguono la commutazione a caldo: sono la closure, non una copia presa
+    all'avvio (il banner li legge una volta, ma le route no)."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    uno = tmp_path / "uno"; uno.mkdir()
+    due = tmp_path / "due"; due.mkdir()
+
+    app = server.make_app(root, render_timeout=600.0, workspace=uno)
+    client = app.test_client()
+    assert app.pge_paths()["refs"] == str(uno / "refs")
+
+    assert client.post("/workspace", json={"path": str(due)}).status_code == 200
+    assert app.pge_paths()["refs"] == str(due / "refs")
+    assert app.pge_paths()["workspace"] == str(due)
 
 
 def test_workspace_creates_its_subdirs(tmp_path):
@@ -1327,6 +1547,9 @@ def test_workspace_creates_its_subdirs(tmp_path):
     assert (ws / "configs").is_dir()
     assert (ws / "output").is_dir()
     assert (ws / "cache").is_dir()
+    # E refs/ con loro, dove il motore sa leggerla: una cartella dei sample da
+    # riempire e' meglio di un errore "refs/ folder missing" al primo /media.
+    assert (ws / "refs").is_dir()
     # E il motore non guadagna una configs/ che non gli serve piu'.
     assert not (root / "configs").exists()
 

@@ -1964,9 +1964,9 @@ function App() {
     if (paths.configs) setTweak("projectsPath", paths.configs);
     if (paths.output)  setTweak("outputPath",   paths.output);
 
-    // refs/ non segue ancora il workspace (PythonGranularEngine#235), quindi
-    // oggi la media list tornerebbe identica: la ricarichiamo lo stesso perche'
-    // il giorno che seguira' questo e' il punto che deve accorgersene.
+    // Su un motore con --samples-dir anche refs/ e' cambiata (#148), quindi la
+    // media list e' un'altra: questo e' il punto che se ne accorge. Sull'altro
+    // motore torna identica, e ricaricarla costa una GET.
     await refreshMedia();
     await refreshProjects();
 

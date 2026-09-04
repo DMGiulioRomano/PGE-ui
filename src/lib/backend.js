@@ -10,7 +10,11 @@
  *   window.PGEBackend.create(opts) — factory (returns the local backend)
  *
  * Contract (every backend implements):
- *   workspace()                   → Promise<{ ok, workspace, isRoot, paths, projects }>
+ *   workspace()                   → Promise<{ ok, workspace, isRoot, paths, projects,
+ *                                   samplesFollowWorkspace }>. L'ultimo dice se refs/
+ *                                   segue il workspace o resta al motore (#148): dai
+ *                                   path non si deduce, con workspace == root le due
+ *                                   cartelle coincidono comunque
  *   setWorkspace(path)            → lo stesso, oppure { ok:false, error } (percorso
  *                                   invalido / render in corso). "" torna al --root
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
@@ -753,7 +757,13 @@
       // dicono "com'era lo stream quando l'ho renderizzato". Un progetto
       // omonimo in un'altra cartella con contenuto diverso ha impronta diversa
       // (quindi stale, che e' la direzione giusta); con contenuto identico
-      // l'audio sarebbe identico — i sample vengono comunque dal motore.
+      // l'impronta combacia, e va bene lo stesso — ma non per il motivo che
+      // era scritto qui. "I sample vengono comunque dal motore" e' caduto con
+      // #148: dove il motore ha --samples-dir anche refs/ segue il workspace,
+      // quindi lo stesso YAML sopra sample diversi rende audio diverso. Regge
+      // perche' un'impronta puo' solo NEGARE il verde, mai concederlo: il
+      // verde vuole uno stem nell'indice, e l'indice e' quello che la riga
+      // qui sotto svuota.
       //
       // Le versioni di semantica in `pge-local-sem` NO, e la differenza sta in
       // cosa affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
