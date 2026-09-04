@@ -194,6 +194,13 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
     also reads out the envelope values at its instant. The two combine (auto
     lens plus explicit ones) and are gated on `--visualize` like the rest.
 
+    `refs` (PGE-ui #148) is the samples directory, and goes out as
+    `--samples-dir` for **both** renderers — see the comment at the flag. The
+    csound branch keeps its own `--ssdir` on top: on a current engine the two
+    say the same thing (SSDIR falls back to samples_dir), but on an engine
+    without `--samples-dir` the `--ssdir` is the only half that lands, and
+    dropping it would turn a redundant flag into a regression.
+
     The SPEC is forwarded verbatim, like `--plot-envelopes` names: the engine
     is the one that parses it. What this function does refuse is the *blank*
     one — a whitespace-only field means "no explicit targets", while
@@ -228,6 +235,24 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
             cmd += ["--magnify-at", spec]
     if reaper:
         cmd += ["--reaper", "--reaper-path", str(output / f"{basename}.rpp")]
+    # --samples-dir: dove stanno i file audio sorgente, per ENTRAMBI i
+    # renderer (PythonGranularEngine#235 / PGE-ui #148). Senza, il motore li
+    # risolve su `./refs/` RELATIVO AL PROPRIO CWD — cioe' i render di oggi
+    # stanno in piedi per via del `cwd=root` dello spawn, non per il --ssdir
+    # qui sotto: SSDIR dice a csound dove cercare i soundfile in fase di
+    # render, ma la durata del sample la risolve il Generator prima che esista
+    # un renderer, e quel passo leggeva il globale. Esplicito, la dipendenza
+    # implicita dal cwd cade e la cartella dei sample puo' stare altrove.
+    #
+    # Inerte sui motori che il flag non ce l'hanno: il parsing della CLI e'
+    # manuale su sys.argv, solo argv[1] e argv[2] sono posizionali e le flag
+    # sconosciute vengono ignorate in silenzio (engine docs/reference/cli.md).
+    # Per questo va mandato sempre, senza gate di versione — a essere gated e'
+    # semmai dove il bridge fa puntare `refs` (server.py, _set_workspace).
+    #
+    # Lo slash finale non serve: il motore normalizza (`_with_trailing_sep` in
+    # pge/api.py) prima dei due punti che concatenano il nome file.
+    cmd += ["--samples-dir", str(refs)]
     if renderer == "csound":
         cmd += [
             "--orc-path", str(root / "csound" / "main.orc"),

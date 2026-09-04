@@ -455,3 +455,58 @@ def engine_semantics_version(root: Path):
     version = _read_int_constant(candidates, "VARIATION_SEMANTICS_VERSION")
     _SEMANTICS_CACHE[key] = (stamp, version)
     return version
+
+
+_SAMPLES_DIR_CACHE: dict = {}
+
+
+def engine_supports_samples_dir(root: Path) -> bool:
+    """La CLI del motore riconosce `--samples-dir` (PythonGranularEngine#235)?
+
+    E' l'unica lettura di questo modulo che non serve a leggere un valore ma a
+    sapere se il motore ha una capacita', e la ragione e' che il bridge deve
+    decidere DOVE stanno i sample, non solo cosa mandare in argv. Mandare il
+    flag e' innocuo su ogni motore (il parsing della CLI e' manuale su
+    `sys.argv` e ignora in silenzio le flag sconosciute), ma spostare `refs/`
+    dentro il workspace su un motore che il flag non ce l'ha darebbe una
+    cartella di sample che la UI elenca e il motore non legge: il render
+    cercherebbe comunque `./refs/` relativo al proprio cwd. Quel disaccordo e'
+    silenzioso finche' non fallisce un render, quindi si chiede prima.
+
+    Il criterio e' la costante di stringa `--samples-dir` esattamente com'e'
+    scritta nel sorgente: i commenti non sopravvivono all'AST, e la riga d'uso
+    (`"[--samples-dir DIR] "`) e' un letterale diverso, quindi a rispondere si'
+    e' solo un file che il flag lo nomina davvero.
+
+    Candidati dal piu' recente al piu' vecchio: la CLI e' nata dentro
+    `src/main.py`, e' diventata `src/cli.py` e infine `src/pge/cli.py` (PGE
+    #162, con `main.py` ridotto a shim). Il primo che risponde si' chiude la
+    ricerca; nessun candidato che risponda si' = motore piu' vecchio del flag.
+
+    Cache invalidata sull'mtime, come `engine_semantics_version` e per la
+    stessa ragione: un `git pull` nel checkout del motore sotto un `make serve`
+    acceso e' esattamente l'evento che cambia la risposta."""
+    candidates = (
+        root / "src" / "pge" / "cli.py",
+        root / "src" / "cli.py",
+        root / "src" / "main.py",
+    )
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _SAMPLES_DIR_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    found = False
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value == "--samples-dir":
+                found = True
+                break
+        if found:
+            break
+    _SAMPLES_DIR_CACHE[key] = (stamp, found)
+    return found
