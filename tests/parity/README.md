@@ -178,6 +178,22 @@ arriva lo hasha il motore.
   hashata. Resta escluso, e la premessa e' un caso di parita' invece che un
   commento: se il parse smettesse di derivare `curve`, il test parla.
 
+Il criterio, preso alla lettera, e' una domanda per il **serializer**, non una
+terza lista di nomi: la stessa chiave, nello stesso posto, a volte esce e a
+volte no. `statePositions` arriva nello YAML solo finche' e' allineato a
+`states`; rimasto stale dopo un edit strutturale (uno stato aggiunto, la copia
+corta) il serializer lo ignora e scrive posizioni uniformi, e due stream che
+differiscono solo li' serializzano lo stesso identico YAML. Il motore non puo'
+distinguerli: se la UI lo facesse sarebbe giallo su uno stem fresco — verso
+sicuro, ma una **seconda** divergenza dalla derivata del motore, e la lista qui
+sotto ne ammette una sola. Percio' la regola sta scritta una volta,
+`statePositionsReachYaml` in `yaml-bridge.js`, con due chiamanti: il serializer
+che emette le posizioni e `canonicalJSON` in `backend.js`, che salta la chiave
+esattamente quando il serializer la salterebbe. Il caso di parita' misura
+entrambe le meta' contro il motore, e i sabotaggi cadono da tutte e due le
+parti: una guardia che non scatta mai rimette #134, una che scatta sempre rende
+muto un edit vero.
+
 Vale la pena notare cosa non era bastato: `tests/node/test-fingerprint.js`
 fissava l'assunzione sbagliata (`ignores grain.envelope.statePositions`), verde
 e sicura di se'. Lo specchio internamente perfetto e divergente dall'originale,
@@ -204,6 +220,14 @@ sono due, e stanno in `test-bounds-parity.js`:
   ancora `frozenset(ENVELOPE_COLORS)`. Se il motore restringesse la validazione
   senza toccare il dict, il filtro del bridge diventerebbe piu' largo del
   motore: un nome che passa il filtro e uccide il render.
+
+Una nota sull'asimmetria fra i due lati: l'oracolo importa un solo modulo
+(`pge.rendering.envelope_extractor`), mentre `engine_envelope_keys` prova tre
+candidati per reggere ogni annata del motore. E' voluta, e va nella direzione
+giusta — il bridge deve funzionare ovunque, la parita' deve dire la verita' su
+*questo* checkout: su un layout vecchio il caso cade nominando «il motore
+dichiara ENVELOPE_COLORS», invece di confrontare due letture di cui una ha
+ripiegato.
 
 ## Divergenze dichiarate
 

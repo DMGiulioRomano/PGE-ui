@@ -782,6 +782,15 @@ def _op_constants(args):
     # `envelope_extractor` e' matplotlib-free e importa solo stdlib (e' stato
     # estratto da score_visualizer proprio per questo), quindi qui si puo'
     # importare per davvero: nessuna deroga in stile magnify, nessun venv.
+    #
+    # L'import nomina un solo modulo, mentre `engine_envelope_keys` prova tre
+    # candidati (src/pge/rendering/, il vecchio src/rendering/, e prima ancora
+    # score_visualizer). L'asimmetria e' voluta e va nella direzione giusta: il
+    # bridge deve funzionare su ogni annata del motore, la parita' deve dire la
+    # verita' su QUESTO checkout. Su un motore di layout vecchio il caso cade
+    # nominando "il motore dichiara ENVELOPE_COLORS" invece di confrontare due
+    # letture di cui una ha ripiegato — che e' il fallimento informativo, non
+    # un falso rosso.
     try:
         ee = ENGINE.module("pge.rendering.envelope_extractor")
         out["envelope_colors_keys"] = list(ee.ENVELOPE_COLORS)
