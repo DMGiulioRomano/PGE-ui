@@ -222,12 +222,13 @@ function buildCommand(o) {
       parts.push("--plot-envelopes", o.plotEnvelopes.join(","));
     }
     if (o.magnify) parts.push("--magnify");
-    // Stesso filtro di onRender: uno SPEC vuoto o rotto non viene spedito,
-    // quindi l'anteprima non deve mostrarlo.
-    const spec = (o.magnifyAt || "").trim();
-    const specOk = spec && window.PGEMagnifySpec
-      && window.PGEMagnifySpec.error(spec) === null;
-    if (specOk) parts.push("--magnify-at", `"${spec}"`);
+    // Stessa funzione di onRender, non lo stesso filtro riscritto: e' cio' che
+    // rende l'anteprima uguale a quel che parte, byte per byte — inclusa la
+    // ripulitura dei bordi. Con due copie le due meta' si sono gia'
+    // disallineate una volta (vedi `sendable` in magnify-spec.js).
+    const spec = window.PGEMagnifySpec
+      ? window.PGEMagnifySpec.sendable(o.magnifyAt) : null;
+    if (spec) parts.push("--magnify-at", `"${spec}"`);
   }
   if (o.reaper) parts.push("--reaper");
   return parts.join(" ");

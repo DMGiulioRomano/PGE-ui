@@ -50,7 +50,6 @@ Endpoints:
 """
 
 import argparse
-import ast
 import json
 import os
 import subprocess
@@ -77,276 +76,20 @@ from render_pipeline import (
 # Helpers
 #
 # Audio (sox transcode / peaks / spectrogram, path resolution) lives in
-# audio_pipeline.py and render orchestration (parse_render_line, RenderState,
-# command build, watchdog) in render_pipeline.py. Only the engine-venv
-# bootstrap stays here — it's used by /setup and the render route and is a
-# distinct concern. #43
+# audio_pipeline.py, render orchestration (parse_render_line, RenderState,
+# command build, watchdog) in render_pipeline.py, and the AST reads of the
+# engine's own source in engine_introspect.py. Only the engine-venv bootstrap
+# stays here — it's used by /setup and the render route and is a distinct
+# concern. #43, #133
 # -------------------------------------------------------------------------
 
-
-_ENVELOPE_KEYS_CACHE: dict = {}
-
-
-def engine_envelope_keys(root: Path) -> list:
-    """Valid `--plot-envelopes` names = keys of the engine's `ENVELOPE_COLORS`
-    dict literal (issue #31).
-
-    We AST-parse the source rather than importing the module: it pulls in
-    matplotlib/numpy/soundfile and may live in the engine's own venv, neither
-    of which this bridge process has. Parsing the literal needs only stdlib and
-    works even when the engine venv isn't set up yet. The UI fetches these to
-    populate the score-envelope filter so the list is never hardcoded.
-
-    The literal has moved across engine layouts (issue #109): born in
-    src/rendering/score_visualizer.py, extracted to envelope_extractor.py
-    (PGE #150 — score_visualizer now only re-imports it, so parsing it there
-    finds nothing), then the whole package moved under src/pge/ (PGE #162).
-    Candidates are tried newest-first; the first file whose parse yields keys
-    wins, so every engine vintage keeps working.
-
-    Returns the keys in source order, or [] if no candidate has the constant
-    (an engine without the feature) — in which case the filter stays hidden
-    and the flag is never sent. Result is cached per resolved root."""
-    key = str(root)
-    if key in _ENVELOPE_KEYS_CACHE:
-        return _ENVELOPE_KEYS_CACHE[key]
-    candidates = (
-        root / "src" / "pge" / "rendering" / "envelope_extractor.py",
-        root / "src" / "rendering" / "envelope_extractor.py",
-        root / "src" / "rendering" / "score_visualizer.py",
-    )
-    keys: list = []
-    for src in candidates:
-        try:
-            tree = ast.parse(src.read_text(encoding="utf-8"))
-            for node in tree.body:
-                if not isinstance(node, ast.Assign):
-                    continue
-                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-                if "ENVELOPE_COLORS" not in names or not isinstance(node.value, ast.Dict):
-                    continue
-                for k in node.value.keys:
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                        keys.append(k.value)
-                break
-        except Exception:
-            keys = []
-        if keys:
-            break
-    _ENVELOPE_KEYS_CACHE[key] = keys
-    return keys
-
-
-_PARAMETER_BOUNDS_CACHE: dict = {}
-
-# Fields of the engine's ParameterBounds dataclass, in positional order, with
-# the dataclass defaults for the ones that have them (min_val/max_val are
-# required, so they have no default here).
-_PB_FIELDS = ("min_val", "max_val", "min_range", "max_range",
-              "default_jitter", "variation_mode")
-_PB_DEFAULTS = {"min_range": 0.0, "max_range": 0.0,
-                "default_jitter": 0.0, "variation_mode": "additive"}
-# Used only if pitch_unit.py can't be parsed (older/odd engine): the nominal
-# EDO presets and the ±3-octave factor, matching pitch_unit.py.
-_PITCH_PRESET_DIVISIONS = {"semitones": 12, "cents": 1200,
-                           "quarter_tone": 24, "eighth_tone": 48}
-
-
-def _ast_literal(node):
-    """ast.literal_eval a node, tolerating unary minus (e.g. -100.0) and None.
-    Returns None on anything non-literal (an expression we can't resolve)."""
-    try:
-        return ast.literal_eval(node)
-    except Exception:
-        return None
-
-
-def _ast_call_name(call):
-    """Callee name of an ast.Call: `Foo(...)` → 'Foo', `mod.Foo(...)` → 'Foo'."""
-    f = call.func
-    if isinstance(f, ast.Name):
-        return f.id
-    if isinstance(f, ast.Attribute):
-        return f.attr
-    return None
-
-
-def _parse_bounds_call(call):
-    """Turn a `ParameterBounds(...)` AST call into a plain dict, applying the
-    dataclass defaults for omitted fields. Positional args map onto _PB_FIELDS
-    in order; keywords override. Returns None unless both min_val and max_val
-    are present (max_val may legitimately be None — a sample-driven loop bound).
-    """
-    rec = dict(_PB_DEFAULTS)
-    for field, arg in zip(_PB_FIELDS, call.args):
-        rec[field] = _ast_literal(arg)
-    for kw in call.keywords:
-        if kw.arg in _PB_FIELDS:
-            rec[kw.arg] = _ast_literal(kw.value)
-    if "min_val" not in rec or "max_val" not in rec:
-        return None
-    return rec
-
-
-def _assigned_dict(node, name):
-    """Return the ast.Dict assigned to `name` by this node, handling both a
-    plain `name = {…}` (Assign) and an annotated `name: T = {…}` (AnnAssign —
-    the engine annotates GRANULAR_PARAMETERS / PITCH_UNIT_PRESETS). None if the
-    node isn't that assignment or the value isn't a dict literal."""
-    if isinstance(node, ast.Assign):
-        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-        value = node.value
-    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        targets = [node.target.id]
-        value = node.value
-    else:
-        return None
-    if name in targets and isinstance(value, ast.Dict):
-        return value
-    return None
-
-
-def _parse_granular_parameters(src_text):
-    """Extract GRANULAR_PARAMETERS from parameter_definitions.py source as
-    {name: {min_val, max_val, …}}."""
-    out = {}
-    tree = ast.parse(src_text)
-    for node in ast.walk(tree):
-        d = _assigned_dict(node, "GRANULAR_PARAMETERS")
-        if d is None:
-            continue
-        for k, v in zip(d.keys, d.values):
-            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
-                continue
-            if isinstance(v, ast.Call) and _ast_call_name(v) == "ParameterBounds":
-                rec = _parse_bounds_call(v)
-                if rec is not None:
-                    out[k.value] = rec
-        break
-    return out
-
-
-def _find_value_bounds_method(classdef):
-    for fn in classdef.body:
-        if isinstance(fn, ast.FunctionDef) and fn.name == "value_bounds":
-            return fn
-    return None
-
-
-def _parse_edo_factor(tree):
-    """The ±N·divisions octave factor from EdoUnit.value_bounds
-    (`bound = 3.0 * self.divisions`). Defaults to 3.0 if not found."""
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.ClassDef) and node.name == "EdoUnit"):
-            continue
-        fn = _find_value_bounds_method(node)
-        if fn is None:
-            continue
-        for sub in ast.walk(fn):
-            if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Mult):
-                for a, b in ((sub.left, sub.right), (sub.right, sub.left)):
-                    if (isinstance(a, ast.Constant)
-                            and isinstance(a.value, (int, float))
-                            and not isinstance(a.value, bool)
-                            and isinstance(b, ast.Attribute)
-                            and b.attr == "divisions"):
-                        return float(a.value)
-    return 3.0
-
-
-def _parse_ratio_bounds(tree):
-    """{min, max, rangeMax} from RatioUnit.value_bounds. Defaults to the known
-    [0.001, 8] / rangeMax 2 if not found."""
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.ClassDef) and node.name == "RatioUnit"):
-            continue
-        fn = _find_value_bounds_method(node)
-        if fn is None:
-            continue
-        for sub in ast.walk(fn):
-            if isinstance(sub, ast.Call) and _ast_call_name(sub) == "ParameterBounds":
-                rec = _parse_bounds_call(sub)
-                if rec is not None and isinstance(rec.get("min_val"), (int, float)):
-                    return {"min": rec["min_val"], "max": rec["max_val"],
-                            "rangeMax": rec["max_range"]}
-    return {"min": 0.001, "max": 8.0, "rangeMax": 2.0}
-
-
-def _parse_pitch_presets(tree):
-    """EDO divisions per nominal preset from PITCH_UNIT_PRESETS
-    (`'semitones': lambda: EdoUnit(12, …)` → {'semitones': 12, …})."""
-    out = {}
-    for node in ast.walk(tree):
-        d = _assigned_dict(node, "PITCH_UNIT_PRESETS")
-        if d is None:
-            continue
-        for k, v in zip(d.keys, d.values):
-            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
-                continue
-            body = v.body if isinstance(v, ast.Lambda) else v
-            if (isinstance(body, ast.Call) and _ast_call_name(body) == "EdoUnit"
-                    and body.args):
-                div = _ast_literal(body.args[0])
-                if isinstance(div, int) and not isinstance(div, bool):
-                    out[k.value] = div
-        break
-    return out
-
-
-def _parse_pitch_bounds(src_text):
-    """Pitch bounds per unit, derived from pitch_unit.py: each EDO preset gets
-    ±(edoFactor·divisions); ratio is read from RatioUnit. Shape mirrors the
-    UI's window.PGE_BOUNDS.pitch."""
-    tree = ast.parse(src_text)
-    edo_factor = _parse_edo_factor(tree)
-    presets = _parse_pitch_presets(tree) or dict(_PITCH_PRESET_DIVISIONS)
-    out = {"edoFactor": edo_factor, "ratio": _parse_ratio_bounds(tree)}
-    for name, div in presets.items():
-        bound = edo_factor * div
-        out[name] = {"min": -bound, "max": bound, "rangeMax": bound}
-    return out
-
-
-def engine_parameter_bounds(root: Path) -> dict:
-    """Engine parameter clamps, AST-parsed from the engine source so the UI's
-    bounds aren't hardcoded.
-
-    Like engine_envelope_keys, we parse the literals rather than importing the
-    modules: parameter_definitions.py / pitch_unit.py would drag in the engine
-    package (and its venv), and parsing needs only stdlib — so this works even
-    when the engine venv isn't set up. Shape:
-
-        {"params": {name: {min_val, max_val, min_range, max_range,
-                           default_jitter, variation_mode}},
-         "pitch":  {semitones|cents|…: {min, max, rangeMax},
-                    ratio: {…}, edoFactor: float}}
-
-    Returns {} when neither source is present (an older engine) — the UI then
-    keeps its static fallback bounds. Cached per resolved root."""
-    key = str(root)
-    if key in _PARAMETER_BOUNDS_CACHE:
-        return _PARAMETER_BOUNDS_CACHE[key]
-    # Current layout first (src/pge/, PGE #162), legacy flat src/ as fallback
-    # for older engine checkouts (issue #109).
-    pdir = root / "src" / "pge" / "parameters"
-    if not pdir.is_dir():
-        pdir = root / "src" / "parameters"
-    params, pitch = {}, {}
-    pd = pdir / "parameter_definitions.py"
-    if pd.exists():
-        try:
-            params = _parse_granular_parameters(pd.read_text(encoding="utf-8"))
-        except Exception:
-            params = {}
-    pu = pdir / "pitch_unit.py"
-    if pu.exists():
-        try:
-            pitch = _parse_pitch_bounds(pu.read_text(encoding="utf-8"))
-        except Exception:
-            pitch = {}
-    out = {"params": params, "pitch": pitch} if (params or pitch) else {}
-    _PARAMETER_BOUNDS_CACHE[key] = out
-    return out
+# Engine-source introspection (envelope keys, parameter bounds, semantics
+# version) lives in
+# engine_introspect.py (#133): the parity oracle imports it with the standard
+# library alone, which importing this module would not allow. Re-exported here
+# because the routes below — and the python tests — call them as server.*.
+from engine_introspect import (engine_envelope_keys, engine_output_sr,
+                              engine_parameter_bounds, engine_semantics_version)
 
 
 def _ensure_venv_events(root: Path):
@@ -583,8 +326,40 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
     def bounds():
         """Engine parameter clamps (min/max/range + pitch), parsed from the
         engine source so the UI's bounds aren't hardcoded. Empty dict = an
-        engine without these files; the UI then keeps its static fallback."""
-        return jsonify({"ok": True, "bounds": engine_parameter_bounds(root)})
+        engine without these files; the UI then keeps its static fallback.
+
+        Porta anche `output_sr` (`DEFAULT_OUTPUT_SR`), che non e' un bound ma
+        ne genera uno: il minimo di `grain_duration` e' 1 campione, cioe'
+        `1/output_sr`, un override dinamico che l'AST dei bound non vede — e la
+        stessa costante regge la conversione di `grain.duration_unit: samples`,
+        che riscrive i valori nello YAML. Viaggia di qui invece che su una
+        route sua perche' e' esattamente la domanda che questa route serve:
+        i clamp che il motore impone.
+
+        E' condizionato al proprio None, non alla presenza dei bound: un motore
+        con `constants.py` e senza `parameter_definitions.py` e' strano, ma il
+        sample rate lo sappiamo lo stesso e tacerlo lo farebbe ricadere sul
+        letterale trascritto in yaml-bridge.js — cioe' proprio la cosa che
+        questa lettura toglie di mezzo. La composizione sta qui e non dentro
+        `engine_parameter_bounds` perche' le due letture hanno cache diverse:
+        i bound a vita, il sample rate invalidato sull'mtime."""
+        payload = dict(engine_parameter_bounds(root))
+        sr = engine_output_sr(root)
+        if sr is not None:
+            payload["output_sr"] = sr
+        return jsonify({"ok": True, "bounds": payload})
+
+    @app.get("/semantics-version")
+    def semantics_version():
+        """`VARIATION_SEMANTICS_VERSION` del motore (stream_cache_manager.py).
+
+        E' la versione della semantica con cui il motore legge lo YAML: entra
+        nel SUO fingerprint, quindi un bump marca dirty ogni stem di ogni
+        progetto anche a YAML fermo. L'editor la registra insieme ai propri
+        fingerprint per non mostrare "renderizzato" su audio che il motore
+        rifara' diverso. `null` = un motore senza la costante; la UI allora non
+        pretende niente (mai staleness inventata da un dato che non c'e')."""
+        return jsonify({"ok": True, "version": engine_semantics_version(root)})
 
     # --------- listing ---------
 
@@ -900,7 +675,14 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         basename = opts.get("yamlBasename") or opts.get("projectBasename")
         if not basename:
             abort(400, "yamlBasename required")
-        if "/" in basename or ".." in basename:
+        # Il basename diventa un path E un file scritto: e' il confine di
+        # fiducia di una route che scrive. Passa per `safe_resolve` come tutte
+        # le altre route invece di riscriverne una versione piu' debole — la
+        # regola scritta due volte divergeva gia': qui non erano rifiutati il
+        # separatore di Windows, il punto iniziale, e il NUL faceva 500
+        # (ValueError dal filesystem) invece di 400.
+        yml = safe_resolve(configs, f"{basename}.yml")
+        if yml is None:
             abort(400, "bad basename")
 
         renderer = opts.get("renderer", "numpy")
@@ -946,7 +728,6 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
         # (cache/<basename>.json), so a random temp name would orphan the manifest
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
-        yml = configs / f"{basename}.yml"
         if yaml_content:
             yml.write_text(yaml_content, encoding="utf-8")
         elif not yml.exists():
@@ -1000,8 +781,16 @@ def make_app(root: Path, render_timeout: float = 600.0) -> Flask:
                 # thread forever (workers=1, threads=4). The kill closes the
                 # pipe → readline hits EOF → this loop ends normally. #43
                 watchdog = start_watchdog(proc, render_timeout)
-                n_streams = len(opts.get("streams") or [])
-                state = {"streamId": None, "total": n_streams, "index": 0}
+                # Gli id dichiarati dalla richiesta: e' l'unica cosa che
+                # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
+                # che il motore stampa a ogni render con --cache. Vuoto (o
+                # assente) significa "richiesta che non dichiara gli stream":
+                # nessun filtro, comportamento storico. Vedi render_pipeline.
+                req_streams = opts.get("streams") or []
+                stream_ids  = {str(s.get("id")) for s in req_streams
+                               if isinstance(s, dict) and s.get("id") is not None}
+                state = {"streamId": None, "total": len(req_streams), "index": 0,
+                         "ids": stream_ids or None}
                 # Read line-by-line and stream to client.
                 for raw in iter(proc.stdout.readline, ""):
                     line = raw.rstrip("\n")

@@ -21,6 +21,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // Fake disk + the /stems shape server.py serves from it.
 let DISK = [];                                   // ["proj__stream1.wav", …]
@@ -30,9 +31,34 @@ global.localStorage = {
   getItem: (k) => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
 };
-global.fetch = (url) => {
-  const m = String(url).match(/\/stems\/([^?]+)/);
-  if (!m) return Promise.reject(new Error("unexpected fetch " + url));
+// NDJSON che la fetch finta di /render restituisce, uno stream di eventi come
+// quello vero: `run()` legge da `res.body.getReader()`, non da `json()`.
+let RENDER_EVENTS = null;
+// Cosa il motore lascia sul disco quando quel render finisce: uno stem
+// riscritto ha una durata nuova, ed e' l'unico modo di misurare se il
+// disegno finisce ritagliato sulla misura vecchia.
+let RENDER_WRITES = null;
+global.fetch = (url, init) => {
+  const u = String(url);
+  if (u.endsWith("/render")) {
+    if (RENDER_WRITES) { Object.assign(DUR, RENDER_WRITES); RENDER_WRITES = null; }
+    const body = (RENDER_EVENTS || []).map(e => JSON.stringify(e)).join("\n") + "\n";
+    const chunks = [new TextEncoder().encode(body)];
+    let i = 0;
+    return Promise.resolve({
+      ok: true,
+      body: { getReader: () => ({
+        read: () => Promise.resolve(i < chunks.length
+          ? { value: chunks[i++], done: false }
+          : { value: undefined, done: true }),
+      }) },
+    });
+  }
+  if (u.endsWith("/semantics-version")) {
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ version: 3 }) });
+  }
+  const m = u.match(/\/stems\/([^?]+)/);
+  if (!m) return Promise.reject(new Error("unexpected fetch " + u));
   const bn = decodeURIComponent(m[1]);
   const stems = DISK.filter(f => f.startsWith(bn + "__")).map(f => ({
     streamId: f.slice(bn.length + 2).replace(/\.[^.]+$/, ""),
@@ -54,6 +80,19 @@ function assert(label, cond, extra) {
 
 const backend = window.PGEBackend.create({ baseUrl: "http://x" });
 
+// Un backend nuovo per giro: l'indice stem vive nella chiusura di create(),
+// e due sezioni che se lo passassero si spiegherebbero i fantasmi a vicenda.
+function mkBackendWithRender(events) {
+  RENDER_EVENTS = events;
+  return window.PGEBackend.create({ baseUrl: "http://x" });
+}
+
+/* Il corpo e' asincrono; l'handler `exit` sta FUORI, a livello di modulo.
+ * Registrato dentro, un'eccezione prima di quella riga lo fa non esistere: il
+ * file esce senza riepilogo E senza "interrotto prima della fine", cioe' le due
+ * righe che sono l'intero contratto. Misurato rinominando un simbolo di
+ * backend.js: exit 1 e nessun verdetto. */
+let bodyDone = false;
 console.log("\n── a stem present in one format only ──");
 (async () => {
   DISK = ["proj__stream1.wav", "proj__stream2.aif"];
@@ -88,10 +127,10 @@ console.log("\n── a stem present in one format only ──");
     // Un render riscrive lo stem: la durata vecchia sarebbe peggio che nessuna,
     // perche' taglierebbe il disegno sulla misura di prima. Dimenticarla
     // riporta all'ipotesi "stem lungo quanto la clip", vera appena dopo.
-    const tlSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Timeline.jsx"), "utf8");
+    const tlSrc = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
     assert("uno stem appena scritto dimentica la durata vecchia",
            /function _markStemFresh\(key\) \{[\s\S]*?delete stemDurIndex\[key\];/.test(
-             fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8")));
+             SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"))));
     assert("il waveform e' mappato sul tempo, non stirato sulla clip",
            /const kOf = \(x\) => \(x \/ W\) \* sp \* n;/.test(tlSrc)
            && !/Math\.floor\(\(x \/ W\) \* n\)/.test(tlSrc));
@@ -101,8 +140,8 @@ console.log("\n── a stem present in one format only ──");
 
   console.log("\n── a clip that cannot sound says so (source guard) ──");
   {
-    const engSrc = fs.readFileSync(path.join(__dirname, "../../src/lib/audio-engine.js"), "utf8");
-    const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+    const engSrc = SG.codeOf(path.join(__dirname, "../../src/lib/audio-engine.js"));
+    const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
     assert("play() rejections are no longer swallowed",
            !/\.play\(\)\.catch\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/.test(engSrc));
     assert("the <audio> element's error is listened for",
@@ -112,13 +151,103 @@ console.log("\n── a stem present in one format only ──");
     assert("app.jsx listens for it", /pge-audio-error/.test(appSrc));
   }
 
-  // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
-  // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
-  // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
-  process.on("exit", (code) => {
-    console.log(`\n${"─".repeat(50)}`);
-    console.log(`${pass} passed, ${fail} failed`);
-    if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
-    if (fail > 0) process.exitCode = 1;
-  });
-})();
+  /* ------------------------------------------------------------------
+   * Gli eventi di un render vero non inquinano l'indice.
+   *
+   * `run()` scriveva nell'indice OGNI `stream-done` che leggeva, e il
+   * bridge ne inventava due per giro: `[CACHE] Manifest: <path>` e
+   * `[CACHE] GC: …` hanno la forma di una riga di stream. Da li'
+   * `ownsStem("Manifest")` rispondeva `true` per un file mai esistito —
+   * cioe' l'oracolo di cui `allocStreamIds` si fida, e il terzo rifiuto di
+   * `renameStream`. Il bridge ora filtra (tests/python/test_render_pipeline),
+   * ma la scrittura nell'indice deve pretendere lo stesso di cio' che
+   * scrive il fingerprint due righe sotto: uno stream dichiarato dalla
+   * richiesta.
+   * ------------------------------------------------------------------ */
+  console.log("\n── un `stream-done` fantasma non entra nell'indice ──");
+  {
+    const be = mkBackendWithRender([
+      { type: "stream-start", streamId: "Manifest", index: 0, total: 1 },
+      { type: "stream-done",  streamId: "Manifest", cached: true },
+      { type: "stream-start", streamId: "stream1", index: 1, total: 1 },
+      { type: "stream-done",  streamId: "stream1", cached: false },
+      { type: "done", ok: true, generated: [] },
+    ]);
+    const seen = [];
+    await be.render.run(
+      { yamlBasename: "proj", streams: [{ id: "stream1" }], outputFormat: "wav" },
+      (e) => seen.push(e));
+
+    assert("lo stream dichiarato entra nell'indice",
+           be.render.ownsStem("proj", "stream1") === true);
+    assert("l'id che la richiesta non dichiara resta fuori",
+           be.render.ownsStem("proj", "Manifest") === false,
+           "ownsStem e' l'oracolo di allocStreamIds e il terzo rifiuto di " +
+           "renameStream: un fantasma li' brucia un nome per sempre");
+    assert("...e non finisce nemmeno in `pge-local-stems`",
+           !/Manifest/.test(store["pge-local-stems"] || ""),
+           store["pge-local-stems"]);
+  }
+
+  /* ------------------------------------------------------------------
+   * Il fallback di `done` deve parlare del GIRO, non del disco.
+   *
+   * `if (stemIndex[key]) continue` leggeva "gia' gestito" da un indice che
+   * `loadCache` riempie da /stems a ogni apertura di progetto: dal secondo
+   * render in poi il fallback era morto. Ed e' l'unica rete dell'ultimo
+   * stream DIRTY del giro, il solo che dipende dalla riga di path.
+   * ------------------------------------------------------------------ */
+  console.log("\n── il fallback di `done` copre anche il secondo render ──");
+  {
+    DISK = ["proj__bass-1.wav"];
+    DUR  = { "proj__bass-1.wav": 2.0 };
+    const be = mkBackendWithRender([
+      // nessun `stream-done` per bass-1: e' il caso che il fallback copre
+      { type: "stream-start", streamId: "bass-1", index: 0, total: 1 },
+      { type: "done", ok: true, generated: ["output/proj__bass-1.wav"] },
+    ]);
+    RENDER_WRITES = { "proj__bass-1.wav": 1.0 };   // il render lo accorcia
+    await be.render.loadCache("proj");          // secondo render: lo stem c'e' gia'
+    assert("prima del render la durata su disco e' nota",
+           be.render.stemDur("proj", "bass-1") === 2.0);
+
+    const seen = [];
+    await be.render.run(
+      { yamlBasename: "proj", streams: [{ id: "bass-1" }], outputFormat: "wav" },
+      (e) => seen.push(e));
+
+    assert("il fallback emette lo `stream-done` sintetico anche al secondo giro",
+           seen.some(e => e.type === "stream-done" && e.streamId === "bass-1"),
+           "con la guardia sul disco il pallino resta giallo dopo un render " +
+           "riuscito, e ogni modifica costa due render");
+    assert("...e la durata disegnata e' quella dello stem appena scritto",
+           be.render.stemDur("proj", "bass-1") === 1.0,
+           `stemDur = ${be.render.stemDur("proj", "bass-1")} contro 1.0 sul ` +
+           "disco: con un solo stream nel giro `localFps` restava vuoto, " +
+           "quindi niente `loadCache` in fondo a run(), e il waveform " +
+           "restava ritagliato sulla misura di prima");
+  }
+
+  bodyDone = true;
+})().catch(e => {
+  /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e
+     nessun riepilogo. */
+  fail++;
+  console.error("FAIL  il corpo della suite e' morto a meta'\n      " +
+    (e && e.stack ? e.stack : String(e)));
+});
+
+// Il verdetto sta in un handler `exit`, non in una riga in fondo al file: cosi'
+// una sezione appesa dopo continua a contare, invece di stampare FAIL e uscire
+// 0. Il vincolo e' verificato da test-suite-harness.js (#132).
+process.on("exit", (code) => {
+  if (!bodyDone) {
+    fail++;
+    console.error("FAIL  il corpo della suite non e' arrivato in fondo: " +
+      "i suoi assert non hanno contato");
+  }
+  console.log(`\n${"─".repeat(50)}`);
+  console.log(`${pass} passed, ${fail} failed`);
+  if (code && !fail) console.log("interrotto prima della fine: il riepilogo e' parziale");
+  if (fail > 0) process.exitCode = 1;
+});

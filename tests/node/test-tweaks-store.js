@@ -9,6 +9,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // tweaks-store.js does `window.PGETweaks = {...}` inside an IIFE.
 global.window = {};
@@ -74,8 +75,8 @@ assert("returns a new object (does not mutate prev)", next !== prev && eq(prev, 
 
 console.log("\n── design-tool residue removed ──");
 
-const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
-const htmlSrc = fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8");
+const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+const htmlSrc = SG.codeOf(path.join(__dirname, "../../PGE Editor.html"));
 
 assert("app.jsx has no EDITMODE markers", !/EDITMODE-(BEGIN|END)/.test(appSrc));
 assert("app.jsx no longer renders window.TweaksPanel", !/window\.TweaksPanel/.test(appSrc));

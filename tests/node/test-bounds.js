@@ -9,6 +9,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // yaml-bridge.js publishes window.PGE_BOUNDS (the static fallback); bounds.js
 // publishes window.PGEBounds. js-yaml is required by yaml-bridge at load.
@@ -25,9 +26,10 @@ function assert(label, cond, extra) {
 }
 
 console.log("\n── module surface ──");
-assert("PGEBounds exposes mergeEngineBounds + apply + ENGINE_PARAM_MAP",
+assert("PGEBounds exposes mergeEngineBounds + apply + resolveOutputSr + ENGINE_PARAM_MAP",
   typeof B.mergeEngineBounds === "function" &&
   typeof B.apply === "function" &&
+  typeof B.resolveOutputSr === "function" &&
   B.ENGINE_PARAM_MAP && typeof B.ENGINE_PARAM_MAP === "object");
 
 console.log("\n── static fallback keys present in PGE_BOUNDS ──");
@@ -75,10 +77,14 @@ assert("grainDur ← grain_duration.value",   out.grainDur.max === 5);
 // PGE #158: il min reale di grain_duration è 1 campione (1/output_sr). L'engine
 // espone via /bounds solo il min statico (1 ms); l'override dinamico non è
 // visibile all'AST-parser, quindi lo applichiamo lato UI.
-assert("grainDur.min floored to 1 sample (1/48000) despite engine 0.002",
-  Math.abs(out.grainDur.min - 1 / 48000) < 1e-12, String(out.grainDur.min));
-assert("static fallback grainDur.min is 1 sample (1/48000)",
-  Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / 48000) < 1e-12,
+// Il sample rate si legge da window e non si riscrive 48000: qui il payload non
+// ne porta uno, quindi vince il fallback statico, ed è quello il numero atteso.
+// Che il fallback sia poi il numero GIUSTO lo pretende la parità — questa suite
+// gira senza motore e non ha modo di saperlo. Due domande, due posti.
+assert("grainDur.min floored to 1 sample despite the engine's declared min",
+  Math.abs(out.grainDur.min - 1 / window.PGE_OUTPUT_SR) < 1e-12, String(out.grainDur.min));
+assert("static fallback grainDur.min is 1 sample",
+  Math.abs(window.PGE_BOUNDS.grainDur.min - 1 / window.PGE_OUTPUT_SR) < 1e-12,
   String(window.PGE_BOUNDS.grainDur.min));
 assert("durationRange ← grain_duration.RANGE (0..0.8)", out.durationRange.min === 0 && out.durationRange.max === 0.8);
 // Il fallback statico deve dire lo stesso cap del motore (max_range = 1.0), non
@@ -97,6 +103,25 @@ assert("pitch.semitones ← engine", out.pitch.semitones.max === 24 && out.pitch
 assert("pitch.ratio ← engine (rangeMax)", out.pitch.ratio.rangeMax === 3);
 assert("pitch.edoFactor ← engine", out.pitch.edoFactor === 4);
 assert("pitch unit absent from raw keeps fallback (cents)", out.pitch.cents.max === baseCentsMax);
+
+/* Il bridge NON deve mandare numeri quando non ha letto niente: `edoFactor`,
+ * `ratio` e la tabella dei preset avevano tre ripieghi trascritti in
+ * engine_introspect.py, che arrivavano qui etichettati come verita' del
+ * motore e vincevano sul fallback statico. Ora quelle chiavi mancano, ed e'
+ * questo lato a dover trattare l'assenza come "non lo so" — la parita' non
+ * puo' vederlo, perche' col motore vero i due lati coincidono. */
+{
+  const baseEdo   = window.PGE_BOUNDS.pitch.edoFactor;
+  const baseRatio = window.PGE_BOUNDS.pitch.ratio.min;
+  const partial = B.mergeEngineBounds(window.PGE_BOUNDS, { params: {}, pitch: {} });
+  assert("pitch vuoto → edoFactor resta quello statico",
+    partial.pitch.edoFactor === baseEdo,
+    `${partial.pitch.edoFactor} contro ${baseEdo}`);
+  assert("pitch vuoto → ratio resta quello statico",
+    partial.pitch.ratio.min === baseRatio);
+  assert("pitch vuoto → le unita' EDO restano quelle statiche",
+    partial.pitch.cents.max === baseCentsMax);
+}
 
 console.log("\n── fallback preserved, base not mutated ──");
 assert("key without engine data keeps fallback (scatter)", out.scatter.max === baseScatterMax);
@@ -138,6 +163,114 @@ console.log("\n── senza window.PGE_OUTPUT_SR il min non diventa NaN ──")
   window.PGE_OUTPUT_SR = prev;
   assert("grainDur.min resta un numero", !isNaN(noSr.min) && noSr.min === 0.002,
     JSON.stringify(noSr));
+}
+
+console.log("\n── il sample rate viene dal motore, il letterale è solo il ripiego ──");
+{
+  /* La parità pretende che il letterale di yaml-bridge.js sia il numero del
+     motore; queste righe pretendono, senza motore, che sia il PAYLOAD a vincere
+     quando c'è. Sono due domande diverse e vanno tenute separate: se un giorno
+     il motore cambia sample rate, la prima diventa rossa (giusto: aggiorna il
+     ripiego) e queste restano verdi (giusto: la catena funziona lo stesso). */
+  const prev = window.PGE_OUTPUT_SR;
+  /* Il sample rate di prova è DERIVATO dal letterale, non scelto: con un 44100
+     scritto a mano queste righe diventerebbero rosse il giorno che il motore
+     adotta 44100 — cioè per il motivo sbagliato, visto che quel giorno è la
+     parità a dover parlare (il ripiego statico da aggiornare), non questa
+     suite, che gira senza motore e non sa nulla di lui. `prev * 2` è diverso
+     da `prev` per costruzione. */
+  const OTHER = prev * 2;
+  try {
+    const m = B.mergeEngineBounds({ grainDur: { min: 0.002, max: 10 } },
+      { params: { grain_duration: { min_val: 0.002, max_val: 10 } }, output_sr: OTHER });
+    assert("grainDur.min = 1 campione al sample rate del payload",
+      Math.abs(m.grainDur.min - 1 / OTHER) < 1e-15, String(m.grainDur.min));
+    assert("e non a quello del letterale statico",
+      Math.abs(m.grainDur.min - 1 / prev) > 1e-15, `payload ${OTHER}, statico ${prev}`);
+
+    /* Il caso che il `Math.min` di prima sbagliava: base già derivata da un
+       sample rate PIÙ ALTO (min più piccolo). Prendere il minore dei due
+       avrebbe tenuto il pavimento vecchio, cioè una durata sotto il campione
+       vero — il difetto che questa lettura chiude, rientrato di lato. */
+    const stale = B.mergeEngineBounds({ grainDur: { min: 1 / (OTHER * 2), max: 10 } },
+      { output_sr: OTHER });
+    assert("una base derivata da un sr più alto non tiene il pavimento vecchio",
+      Math.abs(stale.grainDur.min - 1 / OTHER) < 1e-15, String(stale.grainDur.min));
+
+    B.apply({ output_sr: OTHER });
+    assert("apply() installa il sample rate su window (lo leggono envelope-utils e i tooltip)",
+      window.PGE_OUTPUT_SR === OTHER, String(window.PGE_OUTPUT_SR));
+
+    /* Un sr assurdo non è un ripiego: `1/0` è Infinity, `1/-1` è negativo, e
+       un min così spegne ogni clamp a valle invece di stringerlo. */
+    for (const bad of [0, -1, NaN, Infinity, String(prev), null]) {
+      const r = B.resolveOutputSr({ output_sr: bad });
+      // String() e non JSON.stringify: NaN e Infinity escono entrambi "null"
+      // di lì, e tre righe identiche nel censimento non dicono quale caso è.
+      assert(`output_sr ${String(bad)} → si ricade su window, non si propaga`,
+        r === window.PGE_OUTPUT_SR, String(r));
+    }
+  } finally {
+    window.PGE_OUTPUT_SR = prev;
+  }
+  assert("il letterale statico è tornato al suo posto", window.PGE_OUTPUT_SR === prev);
+}
+
+console.log("\n── la catena che porta il sample rate dal motore alla UI ──");
+{
+  /* Nessuno di questi anelli gira in node, e insieme sono l'unica strada per
+     cui `DEFAULT_OUTPUT_SR` arriva ai suoi quattro lettori. Rotto un anello,
+     tutto resta verde e la UI torna al letterale: giusto oggi, sbagliato in
+     silenzio il giorno che il motore muove il numero. Il sorgente si legge
+     come CODICE (source-guard.js), altrimenti una riscrittura che lascia il
+     vecchio nome in un commento di rimando lascerebbe la guardia verde. */
+  const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+  const bndSrc  = SG.codeOf(path.join(__dirname, "../../src/lib/bounds.js"));
+  const srvSrc  = SG.codeOf(path.join(__dirname, "../../server.py"));
+  const introSrc = SG.codeOf(path.join(__dirname, "../../engine_introspect.py"));
+
+  assert("app.jsx chiede /bounds e passa il payload ad apply()",
+    /await backend\.bounds\(\)/.test(appSrc) &&
+    /window\.PGEBounds\.apply\(raw\)/.test(appSrc));
+  /* ...da TRE punti, non dal solo boot, ed e' la stessa regola dell'asse
+     semantica accanto. L'effetto di boot ha dipendenze vuote e sta dentro il
+     `try` del /health: col solo call site di li', un `git checkout` nel repo
+     fratello non arriva piu' in pagina — e `engine_introspect` invalida la
+     propria cache sull'mtime proprio per farcelo arrivare. Il lettore che
+     paga di piu' non e' un clamp: e' `grainUnitFactor`, che con quel sample
+     rate RISCRIVE duration/duration_range nello YAML. */
+  assert("refreshEngineBounds e' chiamata in tre punti",
+    (appSrc.match(/refreshEngineBounds\(\)/g) || []).length >= 4,   // 1 def + 3 usi
+    "col solo boot il numero del motore entra in pagina una volta e mai piu'");
+  /* E al render NON si aspetta: il render non consuma i clamp — li consuma
+     l'editor, dopo — quindi un await qui sarebbe un giro di rete davanti al
+     motore per un dato che a nessuno serve subito. La versione di semantica e'
+     l'altro caso, e infatti la' l'await c'e' (test-semantics-store.js). */
+  assert("...ma il render non l'aspetta, a differenza della semantica",
+    !/await refreshEngineBounds\(\)/.test(appSrc),
+    "aggiunge un round trip davanti al motore per un dato che serve dopo");
+  assert("apply() installa il sample rate su window, non solo i bound",
+    /window\.PGE_OUTPUT_SR\s*=\s*sr/.test(bndSrc));
+  assert("server.py mette output_sr nel payload di /bounds",
+    /engine_output_sr\(root\)/.test(srvSrc) && /"output_sr"\]\s*=\s*sr/.test(srvSrc));
+  assert("engine_introspect legge DEFAULT_OUTPUT_SR dai sorgenti del motore",
+    /def engine_output_sr\(/.test(introSrc) &&
+    /"DEFAULT_OUTPUT_SR"/.test(introSrc));
+  assert("e lo legge da shared/constants.py, nei due layout",
+    /"pge"\s*\/\s*"shared"\s*\/\s*"constants\.py"/.test(introSrc) &&
+    /"src"\s*\/\s*"shared"\s*\/\s*"constants\.py"/.test(introSrc));
+
+  /* Il letterale resta UNO. Due copie e la seconda non seguirebbe né il motore
+     né apply(): è il difetto che questa modifica chiude, e va reso irripetibile. */
+  const ybSrc = SG.codeOf(path.join(__dirname, "../../src/lib/yaml-bridge.js"));
+  const literals = (ybSrc.match(/PGE_OUTPUT_SR/g) || []).length;
+  assert("yaml-bridge.js pubblica il fallback una volta sola",
+    literals === 1, `${literals} occorrenze di PGE_OUTPUT_SR`);
+  assert("e nessun altro modulo di src/lib lo ASSEGNA fuori da apply()",
+    ["yaml-bridge.js", "envelope-utils.js", "grain-map.js", "render-status.js"]
+      .every(f => !/window\.PGE_OUTPUT_SR\s*=/.test(
+        SG.codeOf(path.join(__dirname, "../../src/lib", f)).replace(
+          /window\.PGE_OUTPUT_SR = OUTPUT_SR/, ""))));
 }
 
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");

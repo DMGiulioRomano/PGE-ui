@@ -7,6 +7,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // envelope-loops.js (window.PGEEnv) must load first; envelope-utils.js captures
 // window.PGEEnv at IIFE time and reads window.PGEDeviationProb (deviation-probability.js) at call
@@ -620,7 +621,7 @@ assert("envelope: forma dict {points}",
 
 console.log("\n── cablaggio loop_unit (issue #126) ──");
 {
-  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("l'Inspector risolve unità e provenienza con loopUnitInfo",
     /window\.PGEEnvUtils\.loopUnitInfo\(stream\)/.test(inspSrc));
@@ -657,8 +658,8 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
 
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
 {
-  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
-  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
     /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
@@ -863,7 +864,7 @@ console.log("\n── convertGrainDurationUnit ──");
 
 console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 {
-  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("il Seg elenca le unità del motore, non una coppia cablata a mano",
     /options=\{window\.PGEEnvUtils\.GRAIN_DURATION_UNITS\.map\(/.test(inspSrc)
@@ -908,7 +909,7 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   // Il footer è la frase che l'utente legge senza aprire un tooltip: scritta a
   // mano, sarebbe l'unica sbagliata il giorno in cui il motore muove la costante.
   assert("nemmeno il footer scrive il sample rate a mano", (() => {
-    const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+    const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
     return /sr \$\{window\.PGE_OUTPUT_SR\} · stereo/.test(appSrc) && !/sr 48000/.test(appSrc);
   })());
   // Il seme del passaggio a envelope (e il ritorno a scalare) è il default del
@@ -941,8 +942,8 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 
 console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
 {
-  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
-  const inspSrc = fs.readFileSync(path.join(__dirname, "../../src/components/Inspector.jsx"), "utf8");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   // I bound statici di grain_duration sono in secondi (max 10); i valori di un
   // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
@@ -1054,7 +1055,7 @@ console.log("\n── sliceStreamEnvelopes ──");
  * Le tre cose che rendono il taglio un taglio, e che una riscrittura
  * distratta toglierebbe senza che nessun test le veda. */
 {
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
   // La testa va congelata SEMPRE, non solo col lucchetto chiuso: uno stretch
   // riproporzionerebbe le curve e il taglio non sarebbe piu' un taglio.
   assert("la testa passa per rescale+truncate, indipendentemente dal toggle freeze",

@@ -12,6 +12,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 global.window = { jsyaml: require("js-yaml") };
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/yaml-bridge.js"), "utf8"));
@@ -46,7 +47,7 @@ console.log("\n── a multi-stream paste gets distinct ids ──");
 
 console.log("\n── app.jsx wiring (source guard) ──");
 {
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
   assert("no inline \"stream\" + counter allocator survives",
          !/"stream"\s*\+\s*counter/.test(appSrc));
   const calls = appSrc.match(/allocStreamIds\([^)]*\)/g) || [];
@@ -67,7 +68,7 @@ console.log("\n── deleting a stream is undoable (source guard) ──");
   // the backend stem index) survives the undo and leaves the resurrected stream
   // silent and marked "never rendered". With ids that no longer recycle, those
   // per-id entries are inert for every other stream, so the cure is to not wipe.
-  const appSrc = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
+  const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
   const m = appSrc.match(/function deleteStream\(id\) \{[\s\S]*?\n  \}/);
   assert("deleteStream found in app.jsx", !!m);
   const body = m ? m[0] : "";

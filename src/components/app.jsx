@@ -233,6 +233,93 @@ function App() {
   /* ============ Render state ============ */
   // lastRenderedFingerprints[streamId] = "abc123…" — what was on disk at last render
   const [lastRenderedFps, setLastRenderedFps] = useStateApp({});
+  /* La semantica del motore, su due lati (#133). `engineSem` e' quella del
+     motore che il bridge ha davanti adesso; `renderedSem` quella con cui ogni
+     stem e' stato scritto. Quando divergono lo stem e' vecchio anche a YAML
+     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. `null` /
+     voce assente = non si sa, e non si pretende niente. */
+  const [engineSem, setEngineSem] = useStateApp(null);
+  const [renderedSem, setRenderedSem] = useStateApp({});
+  /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
+     eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
+     l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
+     di prima della rilettura che `onRender` fa all'inizio. Il ref e' il valore
+     di adesso; lo stato serve alla classificazione, che rigira da sola. */
+  const engineSemRef = useRefApp(null);
+  /* Guardia di rientro del render, su un REF e non sullo stato.
+     `renderStatus.running` da solo non la fa: l'effetto della scorciatoia
+     (`onKey`) ha dipendenze `[dirty]`, quindi chiude su un `onRender` vecchio e
+     su un `renderStatus` piu' vecchio ancora — due `r` ravvicinati leggevano
+     entrambi `running: false` comunque si ordinassero le setState. Un ref si
+     alza nello stesso tick e vale per ogni chiusura, viva o stantia. */
+  const renderingRef = useRefApp(false);
+
+  /* La versione di semantica del motore, richiesta al bridge.
+   *
+   * Chiamata in tre punti — boot, cambio progetto, inizio di un render — e non
+   * solo al boot, che e' il difetto che questa funzione chiude: l'effetto di
+   * boot ha le dipendenze vuote e `serverDown` non torna mai a falso senza un
+   * reload, quindi chi apriva l'editor PRIMA di lanciare `make serve` restava
+   * senza asse semantica per tutta la sessione. E in modo asimmetrico: il
+   * render REGISTRAVA comunque la versione su `pge-local-sem` (backend.js la
+   * chiede per conto suo), ma il lato con cui confrontarla non arrivava mai,
+   * quindi nessun pallino poteva dirlo.
+   *
+   * `{refresh:true}` e non la cache: il numero e' una proprieta' del MOTORE
+   * accanto, e quello cambia sotto i piedi (un `git checkout` nel repo fratello,
+   * un pull) mentre l'editor resta aperto. Con la cella memorizzata a vita
+   * questi tre punti smettevano di essere riletture — diventavano `return`
+   * immediati — e un bump non arrivava mai al pallino: verde su stem che il
+   * motore rifara' diversi, fino al reload. Il bridge, un livello piu' sotto, fa
+   * gia' il contrario apposta (invalidazione sull'mtime in engine_introspect).
+   *
+   * Costa una fetch locale su una lettura AST gia' cachata lato bridge. */
+  async function refreshEngineSem() {
+    const backend = window.PGEBackend.current;
+    if (!backend || !backend.semanticsVersion) return null;
+    let v = null;
+    // Il catch e' difensivo, non atteso: `semanticsVersion` ha il proprio
+    // try/catch e non lancia mai (backend.js). Resta perche' qui si chiama
+    // attraverso `window.PGEBackend.current`, cioe' un'implementazione del
+    // contratto e non quella funzione: un rigetto non gestito dentro un
+    // effetto sarebbe peggio della riga.
+    try { v = await backend.semanticsVersion({ refresh: true }); } catch { v = null; }
+    const n = Number.isInteger(v) ? v : null;
+    engineSemRef.current = n;
+    setEngineSem(n);
+    return n;
+  }
+
+  /* I clamp del motore (`GET /bounds`), richiesti al bridge.
+   *
+   * Tre call site come `refreshEngineSem`, e per la stessa ragione — con un
+   * lettore in piu' a renderla piu' urgente, non meno. Questo payload porta
+   * anche `output_sr`, e `PGEBounds.apply` lo installa su
+   * `window.PGE_OUTPUT_SR`: da li' lo legge `grainUnitFactor`
+   * (envelope-utils.js), cioe' il fattore con cui `convertGrainDurationUnit`
+   * RISCRIVE `duration`/`duration_range` nello YAML. Un numero vecchio non
+   * stringe una manopola, scrive durate sbagliate su disco.
+   *
+   * Col solo call site di boot — effetto a dipendenze vuote, dentro il `try`
+   * del `/health` — chi apriva l'editor prima di `make serve` restava sul
+   * letterale statico di yaml-bridge.js per tutta la sessione; e un
+   * `git checkout` nel repo fratello sotto un `make serve` acceso non arrivava
+   * mai in pagina, benche' `engine_introspect` invalidi la sua cache
+   * sull'mtime apposta per farcelo arrivare.
+   *
+   * `apply()` e' idempotente per lo stesso payload: `mergeEngineBounds` non
+   * muta `base` e riscrive ogni chiave che il motore dichiara con lo stesso
+   * valore, quindi richiamarla non accumula. Best-effort: un server.py o un
+   * motore senza quei file rispondono `{}` e il fallback statico resta. */
+  async function refreshEngineBounds() {
+    const backend = window.PGEBackend.current;
+    if (!window.PGEBounds || !backend || !backend.bounds) return null;
+    try {
+      const raw = await backend.bounds();
+      if (raw && Object.keys(raw).length) return window.PGEBounds.apply(raw);
+    } catch { /* bridge giu' o route assente: il fallback statico resta */ }
+    return null;
+  }
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -336,11 +423,20 @@ function App() {
         // Pull the engine's parameter clamps so the UI's bounds + envelope
         // auto-fit track the engine instead of the static fallback. Best-effort:
         // an older server.py / engine returns {} and the fallback stays.
-        if (window.PGEBounds && window.PGEBackend.current.bounds) {
-          window.PGEBackend.current.bounds()
-            .then(raw => { if (raw && Object.keys(raw).length) window.PGEBounds.apply(raw); })
-            .catch(() => {});
-        }
+        //
+        // Lo stesso payload porta `output_sr` (DEFAULT_OUTPUT_SR), e apply()
+        // lo installa su window.PGE_OUTPUT_SR. Non e' un dettaglio dei bound:
+        // e' il fattore con cui envelope-utils converte
+        // `grain.duration_unit: samples`, e quella conversione riscrive
+        // duration/duration_range nello YAML. Primo dei tre punti in cui si
+        // chiede — vedi refreshEngineBounds.
+        refreshEngineBounds();
+        // La versione di semantica del motore, per sapere se gli stem gia' su
+        // disco sono stati scritti con la lettura di adesso. Best-effort: un
+        // server.py senza la route o un motore senza la costante danno null, e
+        // i pallini restano quelli di prima. Questo e' il primo dei tre punti
+        // in cui si chiede — vedi refreshEngineSem.
+        refreshEngineSem();
         // Run setup in background so the engine venv is ready.
         setTimeout(async () => {
           const backend = window.PGEBackend.current;
@@ -458,6 +554,18 @@ function App() {
     backend.render.loadCache(basename).then(cache => {
       setLastRenderedFps(cache || {});
     });
+    // Con le versioni registrate si rilegge anche quella del motore: se al boot
+    // il bridge era giu', questo e' il primo momento in cui puo' arrivare. E
+    // con essa i clamp, che dallo stesso payload prendono il sample rate: le
+    // due letture invecchiano insieme, per lo stesso `git pull` nel repo
+    // fratello.
+    refreshEngineSem();
+    refreshEngineBounds();
+    if (backend.render.loadSemantics) {
+      backend.render.loadSemantics(basename).then(sem => setRenderedSem(sem || {}));
+    } else {
+      setRenderedSem({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -497,10 +605,16 @@ function App() {
     return backend.render.ownsStem ? backend.render.ownsStem(basename, id) : !!lastRenderedFps[id];
   };
 
+  /* La coppia che render-status.js legge per l'asse "semantica". Un oggetto
+     solo, cosi' summarize e statusForStream non possono ricevere versioni
+     diverse dello stesso dato. */
+  const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
+    [renderedSem, engineSem]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor),
-    [data.streams, currentFps, lastRenderedFps, activeProject]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -508,6 +622,7 @@ function App() {
       running: renderStatus.running,
       currentStreamId: renderStatus.currentStreamId,
       streamProgress,
+      sem: semCtx,
     });
   }
 
@@ -1493,17 +1608,58 @@ function App() {
     setTweak("renderPreclean",  next.preclean);
   }
 
+  /* Il render ha DUE ingressi — il bottone e la scorciatoia (`r`) — e nessuno
+     dei due e' serializzato dal browser. La guardia sta tutta qui, e sul ref:
+     con la sola `renderStatus.running` due ingressi ravvicinati passavano
+     entrambi, e il danno non era cosmetico. Due `POST /render` scrivono lo
+     stesso `configs/<basename>.yml` e gli stessi stem; e `cancelAbort` in
+     backend.js e' UNA variabile di chiusura, riassegnata a ogni `run()`, quindi
+     il secondo giro sovrascriveva quella del primo e Cancel ne uccideva uno
+     solo — l'altro restava a scrivere sul disco senza piu' un modo di fermarlo. */
   async function onRender() {
-    if (renderStatus.running) return;
+    if (renderStatus.running || renderingRef.current) return;
+    renderingRef.current = true;
+    try {
+      await runRender();
+    } finally {
+      renderingRef.current = false;
+    }
+  }
+
+  async function runRender() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
+    /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
+       `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
+       Render non produceva niente di visibile — log non svuotato, nessun toast,
+       bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
+       e poi il render partiva lo stesso. */
     setLogLines([]);
     setStreamProgress({});
     setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, streamProgress: 0, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
       pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
+
+    // Terza (e ultima utile) occasione per la versione di semantica: qui il
+    // bridge e' per forza raggiungibile, si sta per parlarci. Attesa prima di
+    // chiamare `run()`, cosi' gli `stream-done` la trovano gia' nel ref — e
+    // l'ordine stato-poi-attesa non toglie niente a quell'intento, perche' il
+    // consumatore legge `engineSemRef.current`, non lo stato.
+    /* Il numero di QUESTO giro, letto una volta sola e passato a mano ai due
+       consumatori: `run()` (che lo registra in fondo) e l'handler degli
+       `stream-done` qui sotto. La cella condivisa e il ref sono riscritti da
+       chiunque rilegga — e l'effetto sul cambio progetto non ha una guardia
+       su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
+       numero di DOPO su stem scritti leggendo quello di PRIMA. */
+    const semOfThisRun = await refreshEngineSem();
+    // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
+    // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
+    // giro di rete davanti al motore per un dato che a nessuno serve subito.
+    // La versione di semantica invece si aspetta eccome: la registrano gli
+    // `stream-done` di questo stesso giro.
+    refreshEngineBounds();
 
     let cacheHits = 0;
     let generated = 0;
@@ -1527,12 +1683,13 @@ function App() {
       // espliciti parte solo se la grammatica regge: il motore lo rifiuterebbe
       // con exit 1, portandosi via anche l'audio gia' renderizzato.
       magnify: renderOptions.visualize && renderOptions.magnify ? true : undefined,
-      magnifyAt: renderOptions.visualize && magnifySpecSendable(renderOptions.magnifyAt)
-        ? renderOptions.magnifyAt.trim() : undefined,
+      magnifyAt: (renderOptions.visualize
+        && magnifySpecToSend(renderOptions.magnifyAt)) || undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
       streams: data.streams,
       outputFormat: tweaks.outputFormat || "wav",
+      semanticsVersion: semOfThisRun,
     };
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
@@ -1558,6 +1715,21 @@ function App() {
         setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
         // bump fp for this stream (so UI marks it fresh)
         setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
+        // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
+        // riga lo stem resterebbe marcato con quella del render precedente e
+        // tornerebbe giallo subito dopo essere stato rifatto. La persistenza su
+        // localStorage la fa backend.js insieme ai fingerprint, con la stessa
+        // regola: col numero ignoto la voce si cancella invece di restare
+        // indietro, perche' una versione vecchia su uno stem nuovo e' peggio di
+        // nessuna versione.
+        setRenderedSem(m => {
+          const sem = semOfThisRun;
+          if (sem !== null) return { ...m, [e.streamId]: sem };
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
       }
     });
 
@@ -1981,15 +2153,21 @@ function App() {
   );
 }
 
-/* SPEC delle lenti esplicite (--magnify-at): si invia solo se c'è ed è valido.
+/* SPEC delle lenti esplicite (--magnify-at): cosa parte, o null.
+ *
  * Il motore rifiuta uno SPEC malformato con exit 1 — la partitura non si
- * degrada, muore l'intero render — quindi il filtro sta qui e in
- * RenderButton.buildCommand, che deve mostrare quello che parte davvero. La
- * grammatica vive in src/lib/magnify-spec.js (node-testata). */
-function magnifySpecSendable(spec) {
-  const text = (spec || "").trim();
-  if (!text) return false;
-  return !window.PGEMagnifySpec || window.PGEMagnifySpec.error(text) === null;
+ * degrada, muore l'intero render — quindi il filtro esiste; ma non vive piu'
+ * qui. Era una copia, e come copia si e' disallineata: usava `.trim()` di JS
+ * mentre il modulo era passato allo strip ASCII, cosi' la popover mostrava
+ * rosso su uno SPEC che poi partiva ripulito. Ora la decisione e il testo che
+ * finisce in argv vengono dalla stessa funzione (`sendable` in
+ * src/lib/magnify-spec.js, node-testata), qui e in RenderButton.buildCommand.
+ *
+ * Il ramo senza modulo resta per il caso in cui magnify-spec.js non sia
+ * caricato: manda quel che c'e', com'e' sempre stato. */
+function magnifySpecToSend(spec) {
+  if (window.PGEMagnifySpec) return window.PGEMagnifySpec.sendable(spec);
+  return (spec || "").trim() || null;
 }
 
 function classifyLogLine(s) {

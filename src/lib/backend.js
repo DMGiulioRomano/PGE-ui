@@ -65,22 +65,61 @@
   // key, not what it says. Reopening a pre-v7 project must not mark every stem
   // stale over a key name — the healed value is hashed, so the migration still
   // marks stale exactly what it changes.
-  const FP_IGNORE = new Set(["color", "mute", "solo", "onset", "statePositions", "_curveRaw",
-                             "durationImplicit", "durationUnresolved",
-                             "deviationProbabilityLegacy"]);
+  // Le due liste NON hanno la stessa portata, e prima erano una sola.
+  //
+  // `FP_IGNORE_TOP` sono campi PER STREAM: il colore della clip, mute/solo, la
+  // posizione sulla timeline, la provenienza della durata e della grafia di
+  // `deviation_probability`. Il motore esclude i suoi (`solo`, `mute`) con una
+  // dict-comprehension sul solo primo livello, quindi escluderli anche in
+  // profondita' era una divergenza nel verso sbagliato: un `grain.mute` — o una
+  // chiave omonima dentro `_extra`, cioe' una chiave del motore che l'editor
+  // non modella — muove l'hash del motore e non muoveva questo, e il pallino
+  // restava verde su uno stem che il motore stava per riscrivere. Un render di
+  // meno, che e' l'errore che questo asse esiste per non fare.
+  //
+  // `FP_IGNORE_DEEP` sono invece campi dell'EDITOR iniettati al parse, e vivono
+  // annidati per costruzione (`grain.envelope.statePositions`,
+  // `grain.envelope._curveRaw`): rispecchiano dati gia' codificati negli stati
+  // e nella curva serializzati, quindi hasharli conterebbe due volte — e
+  // marcherebbe stale ogni stem multistate gia' reso.
+  const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
+                                  "durationImplicit", "durationUnresolved",
+                                  "deviationProbabilityLegacy"]);
+  const FP_IGNORE_DEEP = new Set(["statePositions", "_curveRaw"]);
 
-  function canonicalJSON(v, ignore) {
+  function canonicalJSON(v, ignore, deep) {
     if (v === null || v === undefined) return "null";
     if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
     if (typeof v === "string") return JSON.stringify(v);
-    if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, ignore)).join(",") + "]";
+    if (Array.isArray(v)) return "[" + v.map(x => canonicalJSON(x, deep, deep)).join(",") + "]";
     const keys = Object.keys(v).filter(k => !ignore.has(k)).sort();
-    return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalJSON(v[k], ignore)).join(",") + "}";
+    return "{" + keys.map(k => JSON.stringify(k) + ":" +
+      canonicalJSON(v[k], deep, deep)).join(",") + "}";
   }
 
+  /* Il primo livello e' quello dello YAML, non quello dell'oggetto JS, e i due
+     non coincidono: `serializeStream` splicia `_extra` NEL livello del blocco
+     che lo contiene, quindi `stream._extra.mute` esce come un `mute:` di primo
+     livello — che il motore filtra — mentre `grain._extra.mute` esce come
+     `grain: {mute: …}`, che il motore hasha eccome (la sua e' una
+     dict-comprehension sul solo primo livello). Percio' `FP_IGNORE_TOP` vale
+     sulle chiavi dello stream E su quelle del suo `_extra`, e basta. */
   function fingerprintStream(stream, format) {
-    const json = canonicalJSON(stream, FP_IGNORE) + `|fmt:${format || "aiff"}`;
-    return fnv1a(json);
+    const top = new Set([...FP_IGNORE_TOP, ...FP_IGNORE_DEEP]);
+    const keys = Object.keys(stream || {}).filter(k => !top.has(k)).sort();
+    const parts = [];
+    for (const k of keys) {
+      // `_extra` e' lo stesso livello YAML dello stream, quindi ci si applica
+      // la lista del primo livello...
+      const body = canonicalJSON(stream[k], k === "_extra" ? top : FP_IGNORE_DEEP,
+                                 FP_IGNORE_DEEP);
+      // ...e se dopo il filtro non resta niente, la voce sparisce del tutto:
+      // un `_extra` di soli nomi esclusi non e' distinguibile, nello YAML, da
+      // un `_extra` assente — e per il motore infatti non lo e'.
+      if (k === "_extra" && body === "{}") continue;
+      parts.push(JSON.stringify(k) + ":" + body);
+    }
+    return fnv1a("{" + parts.join(",") + "}" + `|fmt:${format || "aiff"}`);
   }
 
   // fetch with an AbortController timeout so a hung server.py can't leave a
@@ -108,6 +147,17 @@
     const baseUrl = (opts.baseUrl || "http://localhost:7878").replace(/\/$/, "");
     let cachedConfig = null;
     let cancelAbort = null;
+    /* `cancelAbort` e' UNA variabile di chiusura: due `run()` in volo se la
+       contendono, il secondo sovrascrive l'AbortController del primo, e
+       `cancel()` ne uccide uno solo — l'altro resta a scrivere stem senza piu'
+       un modo di fermarlo. Anche il file su disco e' uno: due POST /render
+       scrivono lo stesso `configs/<basename>.yml` e gli stessi stem.
+       La guardia sta QUI, nel file che subisce l'invariante, e non solo nel
+       chiamante: `renderingRef` in app.jsx copre i due ingressi della UI
+       (bottone e scorciatoia `r`), che sono un problema di app.jsx, ma
+       lasciava `run()` ad accettare in silenzio una seconda entrata — un patto
+       fra due file tenuto dalla prosa. */
+    let running = false;
 
     async function jget(path) {
       const r = await fetchWithTimeout(baseUrl + path);
@@ -241,12 +291,62 @@
           localStorage.setItem("pge-local-fp", JSON.stringify(all));
         } catch {}
       },
+
+      // La semantica del motore con cui ogni stem e' stato scritto, per
+      // progetto e per stream. Mappa parallela a `pge-local-fp`, non un campo
+      // dentro il fingerprint: i due dati rispondono a domande diverse — l'hash
+      // dice "l'utente ha modificato lo YAML", questa dice "il motore lo legge
+      // come allora" — e un progetto puo' portare stem scritti da motori
+      // diversi, quindi il dato e' per stream come l'hash.
+      //
+      // Voce assente = stem renderizzato prima che l'editor registrasse il
+      // numero. Resta assente: chi classifica non pretende niente da un dato
+      // che non c'e', e il primo render la scrive.
+      async loadSemantics(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistSem(yamlBasename, sems) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
+          all[yamlBasename] = sems;
+          localStorage.setItem("pge-local-sem", JSON.stringify(all));
+        } catch {}
+      },
       cancel() {
         if (cancelAbort) cancelAbort.abort();
         // fire-and-forget POST so the server kills the subprocess too
         fetch(baseUrl + "/render/cancel", { method: "POST" }).catch(() => {});
       },
       async run(opts, onEvent) {
+        /* Rigetto esplicito, e PRIMA di ogni scrittura di stato: alzare la
+           guardia dopo aver toccato `cancelAbort` avrebbe gia' fatto il danno
+           che la guardia esiste per impedire.
+           Ritorna invece di lanciare, come ogni altro fallimento di `run()`
+           (il catch in fondo non rilancia mai): il chiamante non ha try/catch,
+           e un throw diventerebbe una unhandled rejection. `configWritten:
+           false` e' la verita' su QUESTA chiamata — non ha fatto il POST,
+           quindi non ha riscritto il config, quindi non spegne l'avviso di
+           migrazione di `dephase`.
+
+           Nessun evento `done`, e la ragione scritta qui prima era falsa:
+           diceva che spegnerebbe la UI del render in volo, ma `runRender`
+           azzera log, progresso e stato PRIMA di chiamare `run()` e fa la
+           teardown incondizionata al ritorno, quindi non c'e' una UI da
+           spegnere. La ragione vera e' che `done` e' l'evento di un render
+           FINITO: emetterlo qui farebbe registrare al chiamante l'esito (e il
+           conto degli stem generati) di un giro che non e' mai partito, e lo
+           direbbe a chiunque altro ascolti lo stream. Il rifiuto lo dice il
+           valore di ritorno, che e' la sede giusta. */
+        if (running) {
+          const msg = "render already in progress";
+          onEvent && onEvent({ type: "log", line: `[ERROR] ${msg}` });
+          return { ok: false, error: msg, configWritten: false };
+        }
+        running = true;
         cancelAbort = new AbortController();
         const localFps = {};   // computed browser-side per stream as we go
         if (opts.preclean) {
@@ -272,6 +372,14 @@
         // sulla RISPOSTA, non sul body: `!res.ok || !res.body` e' un throw solo,
         // ma un 200 senza body e' comunque un server che ha gia' scritto.
         let configWritten = false;
+        // Gli id che hanno gia' ricevuto il loro `stream-done` in QUESTO giro.
+        // Il fallback di `done` chiedeva la stessa cosa a `stemIndex`, che pero'
+        // `loadCache` riempie da /stems a ogni apertura di progetto: li'
+        // "gia' gestito" voleva dire "esisteva su disco", quindi dal secondo
+        // render in poi il fallback era morto — e il fallback e' l'unica rete
+        // dell'ultimo stream DIRTY del giro, il solo che dipende dalla riga di
+        // path stampata in fondo.
+        const doneThisRun = new Set();
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -311,8 +419,14 @@
                     if (!stem.startsWith(prefix)) continue;
                     const streamId = stem.slice(prefix.length);
                     if (!streamId) continue;
+                    if (doneThisRun.has(streamId)) continue;  // already handled, this run
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
-                    if (stemIndex[key]) continue;  // already handled
+                    doneThisRun.add(streamId);
+                    // Qui l'id NON si valida contro `opts.streams`: `generated`
+                    // e' la lista dei file che il server ha trovato su disco,
+                    // quindi anche lo stem di uno stream cancellato esiste
+                    // davvero, e l'indice deve saperlo — e' esattamente la
+                    // domanda a cui `ownsStem` risponde.
                     _markStemFresh(key);
                     const s = (opts.streams || []).find(x => x.id === streamId);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
@@ -321,12 +435,23 @@
                   _persistStemIndex();
                 }
                 if (ev.type === "stream-done") {
-                  _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
-                  _persistStemIndex();
-                  // freeze the browser-side fingerprint for this stream so the
-                  // UI can mark it fresh (and detect later edits as stale).
+                  // Un solo `if (s)` per entrambe le scritture. L'evento arriva
+                  // da una riga di log parsata, non da un file: il motore
+                  // stampa righe `[CACHE]` di servizio (Manifest, GC) che ne
+                  // hanno la forma, e ognuna valeva una voce fantasma
+                  // nell'indice — da cui `ownsStem` rispondeva `true` per un
+                  // file mai esistito, bruciando quel nome per `allocStreamIds`
+                  // e per `renameStream`. Il fingerprint sotto gia' pretendeva
+                  // uno stream dichiarato; l'indice no.
                   const s = (opts.streams || []).find(x => x.id === ev.streamId);
-                  if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
+                  if (s) {
+                    _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
+                    _persistStemIndex();
+                    doneThisRun.add(ev.streamId);
+                    // freeze the browser-side fingerprint for this stream so the
+                    // UI can mark it fresh (and detect later edits as stale).
+                    localFps[s.id] = fingerprintStream(s, opts.outputFormat);
+                  }
                 }
               } catch (parseErr) {
                 onEvent && onEvent({ type: "log", line: `[warn] bad json line: ${line.slice(0,80)}` });
@@ -337,6 +462,36 @@
           if (Object.keys(localFps).length) {
             const existing = await this.loadCache(opts.yamlBasename);
             this._persistFp(opts.yamlBasename, { ...existing, ...localFps });
+            // ...e la semantica con cui il motore li ha appena scritti. E' il
+            // CHIAMANTE a fissarla, con `opts.semanticsVersion`: la riempie col
+            // valore che `refreshEngineSem()` gli ha appena restituito, cosi' i
+            // due lati leggono letteralmente la stessa variabile invece di due
+            // letture che si spera coincidano. Prima si prendeva la cella
+            // condivisa `_semantics` senza `refresh`, contando sul fatto che
+            // nessuno la riscrivesse a meta' giro — ma i tre punti di rilettura
+            // (boot, cambio progetto, inizio render) non sono mutuamente
+            // esclusivi col render in volo: cambiare progetto mentre rende, con
+            // il motore mosso nel frattempo, registrava la versione NUOVA su
+            // stem scritti leggendo la VECCHIA.
+            //
+            // Il ripiego sulla cella resta per un chiamante che non passa il
+            // campo: assente significherebbe "non lo so", e li' sarebbe una
+            // bugia che cancella le voci di stem appena resi.
+            //
+            // Col numero ignoto la voce si CANCELLA, non si salta: saltarla
+            // lascerebbe in piedi la versione di un render precedente, e uno
+            // stem appena reso apparirebbe giallo appena il numero si sapesse.
+            // Assente vuol dire "non lo so", che e' la verita'.
+            const sem = opts.semanticsVersion === undefined
+              ? await semanticsVersion()
+              : (Number.isInteger(opts.semanticsVersion) ? opts.semanticsVersion : null);
+            const prev = await this.loadSemantics(opts.yamlBasename);
+            const next = { ...prev };
+            for (const id of Object.keys(localFps)) {
+              if (sem === null) delete next[id];
+              else next[id] = sem;
+            }
+            this._persistSem(opts.yamlBasename, next);
           }
           return lastResult;
         } catch (e) {
@@ -346,6 +501,7 @@
           return { ok: false, error: msg, configWritten };
         } finally {
           cancelAbort = null;
+          running = false;
         }
       },
       // Playable *now*: a stem in the format stemUrl() is about to request.
@@ -518,10 +674,57 @@
       } catch { return {}; }
     }
 
+    // `VARIATION_SEMANTICS_VERSION` del motore, letta dal bridge dalla sorgente
+    // del motore (#133). E' il numero che il motore mette nel PROPRIO
+    // fingerprint: quando cambia, ogni stem gia' su disco e' stato scritto con
+    // una lettura diversa dello stesso YAML, e il pallino verde dell'editor
+    // starebbe mentendo.
+    //
+    // `null` per un server.py senza la route, un motore senza la costante o un
+    // bridge irraggiungibile: chi classifica non pretende niente e i pallini
+    // restano quelli di prima. Un numero e' un'affermazione, l'assenza no.
+    //
+    // La cache NON e' a vita, ed e' la stessa decisione che il bridge prende un
+    // livello piu' sotto: `engine_introspect.engine_semantics_version` invalida
+    // sull'mtime, perche' se il motore viene aggiornato sotto un `make serve`
+    // acceso una cache a vita renderebbe il bump invisibile — proprio l'evento
+    // che questa lettura esiste per intercettare. Qui vale identico: il numero
+    // e' una proprieta' del motore accanto, non della sessione dell'editor, e un
+    // `git checkout` nel repo fratello lo cambia sotto i piedi. Memorizzarlo per
+    // sempre significherebbe pallini VERDI su stem che il motore rifara'
+    // diversi, fino al reload della pagina.
+    //
+    // Quindi la freschezza sta nei CHIAMANTI, non nella cella: `refreshEngineSem`
+    // (app.jsx: boot, cambio progetto, inizio render) chiede `{refresh:true}` e
+    // riscrive la cella; chi legge senza flag riceve quel valore.
+    //
+    // Ed e' cio' che tiene allineati i due lati di un render: app.jsx rilegge
+    // PRIMA di partire e mette il numero nel ref, `run()` lo richiede in FONDO
+    // per registrarlo sugli stem. Poiche' una rilettura scrive nella cella
+    // esattamente cio' che restituisce — numero o `null`, il fallimento
+    // compreso — la seconda lettura non puo' cadere su un'altra risposta.
+    let _semantics;
+    async function semanticsVersion(opts) {
+      if (!(opts && opts.refresh) && _semantics !== undefined) return _semantics;
+      let v = null;
+      try {
+        const d = await jget("/semantics-version");
+        v = Number.isInteger(d && d.version) ? d.version : null;
+      } catch {
+        // Bridge irraggiungibile o server.py senza la route: non si sa. Il
+        // fallimento non condanna piu' la sessione perche' la rilettura esiste
+        // — prima era la cella a doverlo garantire, non ricordandolo.
+        v = null;
+      }
+      _semantics = v;
+      return v;
+    }
+
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
-    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup, envelopeKeys, bounds };
+    return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup,
+             envelopeKeys, bounds, semanticsVersion };
   }
 
   window.PGEBackend = {

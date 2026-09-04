@@ -8,6 +8,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 // Shim: provide window.jsyaml so yaml-bridge.js can load without a browser.
 global.window = { jsyaml: require("js-yaml") };
@@ -33,9 +34,15 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 /* ---------- engine fixtures (#132) ----------
  * Parte della suite gira sui config veri del motore, cercato come repository
- * fratello (`__dirname/../../..`). Prima della #132 ogni blocco faceva il
- * proprio `existsSync` e, se mancava, stampava SKIP: un file rinominato lato
- * motore e il test diventava verde senza verificare nulla.
+ * fratello (`__dirname/../../..`) oppure dove dice `PGE_ENGINE_ROOT` — la
+ * stessa variabile che il Makefile passa ai tre target di test e che
+ * `tests/parity/harness.js` e `tests/python/engine_corpus.py` gia' leggevano.
+ * Solo questo file la ignorava, quindi `make tests-node ROOT=/path/to/engine`
+ * — il ROOT= che l'help del Makefile suggerisce — non arrivava alle fixture
+ * nominate: sparivano in uno skip verde, cioe' la #132 dalla porta di servizio.
+ * Prima della #132 ogni blocco faceva il proprio `existsSync` e, se mancava,
+ * stampava SKIP: un file rinominato lato motore e il test diventava verde
+ * senza verificare nulla.
  *
  * Ora lo skip e' legittimo in un caso solo — il checkout del motore non c'e'
  * affatto (sviluppo locale senza repo fratello, PR da un fork senza secret).
@@ -48,7 +55,8 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
  * riuscito che non lascia i file dove il test li cerca non puo' passare verde.
  */
 
-const ENGINE_ROOT    = path.join(__dirname, "../../..", "PythonGranularEngine");
+const ENGINE_ROOT    = path.resolve(process.env.PGE_ENGINE_ROOT
+                                   || path.join(__dirname, "../../..", "PythonGranularEngine"));
 const ENGINE_CONFIGS = path.join(ENGINE_ROOT, "configs");
 const ENGINE_PRESENT = fs.existsSync(ENGINE_CONFIGS);
 // `=== "1"` e non la verita' della stringa: `=0` e `=false` disattivano, come
@@ -977,9 +985,9 @@ ${body}
    che i test node non eseguono. Sono esattamente le righe la cui assenza fa
    mentire l'avviso, nelle due direzioni opposte. */
 {
-  const appSrc  = fs.readFileSync(path.join(__dirname, "../../src/components/app.jsx"), "utf8");
-  const yeSrc   = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
-  const beSrc   = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
+  const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+  const yeSrc   = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
+  const beSrc   = SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"));
   const calls = (appSrc.match(/clearDeviationProbabilityLegacy/g) || []).length;
   assert("wiring — app.jsx spegne il flag a entrambi i punti di scrittura (Save e render)",
     calls === 2, `chiamate trovate: ${calls}`);
@@ -1402,6 +1410,9 @@ if (ENGINE_PRESENT) {
 console.log("\n── per-stream serializer unified on bridge (#42) ──");
 
 global.React = {};                                    // satisfies `const {…} = React`
+// Sorgente GREZZO, non `SG.codeOf`: qui non si cerca niente, si ESEGUE la
+// testa del file — e il taglio e' su un commento marcatore, che uno strip dei
+// commenti fa sparire, mandando in eval anche il JSX.
 const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
 // The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
