@@ -3,7 +3,8 @@
  * (#147).
  *
  * `--root` e' la sorgente del motore, il *workspace* e' dove vivono
- * configs/ output/ cache/ — cioe' il lavoro dell'autore. La commutazione a
+ * configs/ output/ cache/ — e refs/ con loro, su un motore che ha
+ * `--samples-dir` (#148) — cioe' il lavoro dell'autore. La commutazione a
  * caldo passa da POST /workspace, e il pezzo delicato sta di qua: quello che
  * il browser ha in mano descrive la cartella di PRIMA.
  *
@@ -215,8 +216,15 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /def _set_workspace\(path\)/.test(srv) && !/^\s*BASES = \{/m.test(srv));
     assert("la mappa kind→cartella si ricalcola a ogni richiesta",
            /def _bases\(\)/.test(srv) && /_bases\(\)\.get\(kind\)/.test(srv));
-    assert("refs/ resta legata al motore (PythonGranularEngine#235)",
-           /refs\s*=\s*root \/ "refs"/.test(srv));
+    // refs/ segue il workspace, ma la decisione non e' una preferenza: e' la
+    // risposta del motore. Le due meta' devono restare attaccate — un `refs =
+    // subs["refs"]` senza il ramo `else root / "refs"` sposterebbe la cartella
+    // dei sample anche dove il motore continuerebbe a leggere la propria. #148
+    assert("refs/ segue il workspace solo dove il motore ha --samples-dir",
+           /engine_supports_samples_dir/.test(srv) &&
+           /refs\s*=\s*subs\["refs"\] if follow else root \/ "refs"/.test(srv));
+    assert("e il browser lo sa dire, perche' dai path non si deduce",
+           /"samplesFollowWorkspace": bool\(samples_follow_ws\)/.test(srv));
     assert("la cartella deve esistere: si creano le sotto, non il workspace",
            /non esiste: \{target\}/.test(srv));
     assert("e la commutazione e' rifiutata a render in corso",
@@ -224,6 +232,12 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     const rp = fs.readFileSync(path.join(__dirname, "../../render_pipeline.py"), "utf8");
     assert("is_running guarda il processo, non solo il campo",
            /def is_running\(self\)/.test(rp) && /proc\.poll\(\) is None/.test(rp));
+    // Il flag esce per entrambi i renderer e fuori dal blocco csound: dentro,
+    // il renderer numpy tornerebbe a risolvere i sample su ./refs/ del cwd —
+    // cioe' la cartella del workspace la leggerebbe solo csound. #148
+    const beforeCsound = rp.slice(0, rp.indexOf('if renderer == "csound":'));
+    assert("--samples-dir esce per entrambi i renderer",
+           /cmd \+= \["--samples-dir", str\(refs\)\]/.test(beforeCsound));
   }
 
   console.log("\n── il resto dello stato per-stream cade con l'indice (source guard) ──");
@@ -265,6 +279,13 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /backend\.workspace\(\)/.test(sp) && !/tweaks\.workspacePath/.test(sp));
     assert("l'errore del server e' quello che si legge",
            /res && res\.error/.test(sp));
+    // Dove stanno i sample lo dice il server: le due frasi sono i due motori,
+    // e su nessuna delle due si scommette prima della risposta. #148
+    assert("il pannello dice dove stanno i sample, e lo chiede al server",
+           /wsInfo\.samplesFollowWorkspace/.test(sp) &&
+           /wsInfo\.paths && wsInfo\.paths\.refs/.test(sp));
+    assert("e non trascrive la vecchia promessa",
+           !/Seguiranno il workspace quando il motore/.test(sp));
   }
 
   bodyDone = true;

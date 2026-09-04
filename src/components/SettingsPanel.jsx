@@ -210,12 +210,30 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             del motore, il rollback di un progetto torna a essere il proprio git.
             {wsInfo && wsInfo.isRoot ? " Ora coincide col repo del motore (default)." : ""}
           </div>
-          <div className="sp-hint">
-            I sample restano quelli del motore (<span className="mono">refs/</span>): il
-            render gira con la working directory sul repo del motore e il renderer numpy
-            li risolve li'. Seguiranno il workspace quando il motore avra'{" "}
-            <span className="mono">--samples-dir</span>.
-          </div>
+          {/* Dove stanno i sample lo decide il motore, non una preferenza:
+              con --samples-dir (PythonGranularEngine#235) refs/ segue il
+              workspace, senza resta quella del motore — l'unica che il render
+              leggerebbe davvero. Finche' il server non ha risposto non si
+              dice niente: una delle due frasi sarebbe una scommessa. #148 */}
+          {wsInfo ? (
+            wsInfo.samplesFollowWorkspace ? (
+              <div className="sp-hint">
+                Anche i sample seguono:{" "}
+                <span className="mono">{(wsInfo.paths && wsInfo.paths.refs) || "refs/"}</span>.
+                La cartella la crea il bridge, vuota: copiaci i file, o falla puntare
+                alla libreria che usi gia' con un symlink. Il motore la riceve come{" "}
+                <span className="mono">--samples-dir</span> a ogni render.
+              </div>
+            ) : (
+              <div className="sp-hint">
+                I sample restano quelli del motore (
+                <span className="mono">{(wsInfo.paths && wsInfo.paths.refs) || "refs/"}</span>):
+                questo motore non ha <span className="mono">--samples-dir</span>, quindi
+                il render li risolverebbe comunque su <span className="mono">./refs/</span>{" "}
+                del proprio repo. Aggiorna il motore e seguiranno il workspace.
+              </div>
+            )
+          ) : null}
           <div className="sp-hint">
             Cambiare cartella ricarica progetti, media e stem: le modifiche non salvate
             del progetto aperto vanno perse. Rifiutato mentre un render e' in corso.
@@ -242,9 +260,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
                    onChange={(e) => setTweak("outputPath", e.target.value)} />
           </div>
           <div className="sp-hint">
-            Specchio delle path risolte da <span className="mono">server.py</span>: media
-            da <span className="mono">--root</span>, progetti e output dal Workspace qui
-            sopra. Campi informativi — si cambiano di la', o al lancio del server.
+            Specchio delle path risolte da <span className="mono">server.py</span>:
+            progetti e output dal Workspace qui sopra, e con essi i media — a meno che
+            il motore non abbia <span className="mono">--samples-dir</span>, nel qual
+            caso restano i suoi. Campi informativi — si cambiano di la', o al lancio
+            del server.
           </div>
         </div>
 
