@@ -774,6 +774,29 @@ def _op_constants(args):
         out["deviation_probability_keys_error"] = str(exc)
         out["grain_duration_default"] = None
 
+    # I nomi validi per --plot-envelopes. Il motore li valida in cli.py contro
+    # PLOT_ENVELOPE_KEYS, che e' frozenset(ENVELOPE_COLORS); il bridge li legge
+    # dall'AST (engine_introspect.engine_envelope_keys) e li serve su
+    # GET /envelope-keys, e con quelli server.py filtra i nomi prima di argv —
+    # uno sconosciuto fa uscire il motore con 1, portandosi via l'audio.
+    # `envelope_extractor` e' matplotlib-free e importa solo stdlib (e' stato
+    # estratto da score_visualizer proprio per questo), quindi qui si puo'
+    # importare per davvero: nessuna deroga in stile magnify, nessun venv.
+    try:
+        ee = ENGINE.module("pge.rendering.envelope_extractor")
+        out["envelope_colors_keys"] = list(ee.ENVELOPE_COLORS)
+        out["plot_envelope_keys"] = sorted(ee.PLOT_ENVELOPE_KEYS)
+    except OracleError as exc:
+        out["envelope_colors_keys"] = None
+        out["plot_envelope_keys"] = None
+        out["envelope_keys_error"] = str(exc)
+    try:
+        out["envelope_colors_keys_ast"] = (
+            _introspect("constants").engine_envelope_keys(ENGINE.root))
+    except OracleError as exc:
+        out["envelope_colors_keys_ast"] = None
+        out["envelope_colors_keys_ast_error"] = str(exc)
+
     try:
         ns = _load_magnify_from_source()
         out["magnify_source"] = ns["_source"]
