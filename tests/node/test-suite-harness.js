@@ -397,6 +397,89 @@ console.log("\n── il verdetto viene anche consegnato ──");
   }
 }
 
+/* ============================================================
+ * 5 — la radice del motore e' UNA convenzione, non tre
+ *
+ * Le tre meta' della suite cercano il motore, e per un giro l'hanno cercato in
+ * modi diversi: `tests/parity/harness.js` e `tests/python/engine_corpus.py`
+ * leggevano `PGE_ENGINE_ROOT`, `tests/node/test-yaml-bridge.js` no — e il
+ * Makefile la passava a due target su tre. Il sintomo non era un rosso: era
+ * `make tests-node ROOT=/path/to/engine` che salta le sette fixture nominate e
+ * stampa verde, cioe' lo skip silenzioso che la #132 esiste per rendere
+ * impossibile, rientrato dalla porta di servizio.
+ *
+ * Guardia sorgente sui tre lettori e sui tre target, piu' una verifica
+ * ESEGUENDO: che il nome compaia nel file non dice che il valore arrivi fino
+ * al messaggio di skip, ed e' quello il pezzo che mancava.
+ * ============================================================ */
+
+console.log("\n── la radice del motore: una convenzione per tre meta' ──");
+{
+  const repo = path.join(__dirname, "..", "..");
+
+  const readers = [
+    ["node/test-yaml-bridge.js", path.join(repo, "tests/node/test-yaml-bridge.js"), true],
+    ["parity/harness.js",        PARITY_HARNESS,                                    true],
+    ["python/engine_corpus.py",  path.join(repo, "tests/python/engine_corpus.py"),  false],
+  ];
+  for (const [label, file, isJs] of readers) {
+    if (!fs.existsSync(file)) continue;
+    // Il .py non passa da source-guard (e' uno scanner JS): li' vale il testo
+    // grezzo, e un `#` che citasse il nome starebbe comunque accanto alla
+    // lettura vera, non al posto suo.
+    const src = isJs ? SG.codeOf(file) : fs.readFileSync(file, "utf8");
+    assert(`${label} — legge PGE_ENGINE_ROOT`, /PGE_ENGINE_ROOT/.test(src),
+      "cerca il motore solo come repo fratello: ROOT= non ci arriva");
+  }
+
+  const mk = path.join(repo, "Makefile");
+  if (fs.existsSync(mk)) {
+    const mkSrc = fs.readFileSync(mk, "utf8");
+    for (const target of ["tests-node", "tests-python", "tests-parity"]) {
+      // Il corpo della ricetta, non il file intero: `PGE_ENGINE_ROOT` compare
+      // anche nei commenti che spiegano la precedenza, e li' non passa a
+      // nessuno.
+      const at = mkSrc.search(new RegExp("^" + target + ":", "m"));
+      const body = at < 0 ? "" : mkSrc.slice(at).split(/\n(?=\S)/)[0];
+      assert(`Makefile — ${target} passa PGE_ENGINE_ROOT`,
+        /PGE_ENGINE_ROOT="\$\(ENGINE_ROOT\)"/.test(body),
+        `il ROOT= che l'help suggerisce non arriva a ${target}`);
+    }
+  }
+
+  /* Eseguendo: una root inventata, e il file deve dichiarare di aver saltato
+     QUELLA. Con la lettura assente nominerebbe il fratello, ed e' il modo in
+     cui il difetto e' rimasto invisibile per un giro.
+
+     Condizionato a js-yaml perche' test-yaml-bridge.js lo richiede in cima,
+     cioe' prima di risolvere la root: senza `npm install` il figlio muore al
+     require e la misura non e' possibile. Non e' un buco come lo skip delle
+     fixture — li' a mancare era la verifica, qui restano le guardie sorgente
+     qui sopra, che girano sempre — e `make tests-node` (la via documentata, e
+     quella della CI) fa `npm install` prima del ciclo, quindi questo ramo non
+     e' mai quello di CI. */
+  if (!fs.existsSync(path.join(repo, "tests", "node", "node_modules", "js-yaml"))) {
+    console.log("  SKIP la verifica eseguendo (js-yaml assente: `npm install` " +
+                "in tests/node, o `make tests-node`)");
+  } else {
+    const fake = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-root-")));
+    try {
+      const r = spawnSync(process.execPath, ["test-yaml-bridge.js"], {
+        cwd: path.join(repo, "tests", "node"),
+        env: { ...process.env, PGE_ENGINE_ROOT: fake, PGE_REQUIRE_ENGINE_FIXTURES: "" },
+        encoding: "utf8",
+      });
+      const out = (r.stdout || "") + (r.stderr || "");
+      assert("test-yaml-bridge.js — PGE_ENGINE_ROOT arriva fino allo skip",
+        out.includes(fake), `nessuna riga nomina ${fake}`);
+      assert("...e un motore assente resta uno skip legittimo, non un rosso",
+        r.status === 0, `exit ${r.status}`);
+    } finally {
+      fs.rmSync(fake, { recursive: true, force: true });
+    }
+  }
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

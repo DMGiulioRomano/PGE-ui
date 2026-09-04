@@ -84,11 +84,17 @@ tests:
 # il ciclo alla prima suite rossa, e con venti file significa vedere un
 # fallimento per giro invece di tutti. L'esito si accumula e si esce in fondo:
 # un giro, il censimento completo.
+#
+# `PGE_ENGINE_ROOT` come negli altri due target: era l'unico a non passarla, e
+# `test-yaml-bridge.js` era l'unico dei tre lettori a non leggerla, quindi
+# `make tests-node ROOT=/path` — il ROOT= che l'help qui sopra suggerisce — non
+# arrivava alle sette fixture nominate e il corpus spariva in uno skip verde.
+# La stessa #132 che questo repo presidia, dalla porta di servizio.
 tests-node:
 	cd tests/node && npm install --silent
 	@cd tests/node && rc=0; for f in test-*.js; do \
 	  echo "▶ $$f"; \
-	  node "$$f" || rc=1; \
+	  PGE_ENGINE_ROOT="$(ENGINE_ROOT)" node "$$f" || rc=1; \
 	done; exit $$rc
 
 # `PGE_ENGINE_ROOT` passata anche qui: senza, `make tests-python ROOT=/path`

@@ -34,9 +34,15 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 /* ---------- engine fixtures (#132) ----------
  * Parte della suite gira sui config veri del motore, cercato come repository
- * fratello (`__dirname/../../..`). Prima della #132 ogni blocco faceva il
- * proprio `existsSync` e, se mancava, stampava SKIP: un file rinominato lato
- * motore e il test diventava verde senza verificare nulla.
+ * fratello (`__dirname/../../..`) oppure dove dice `PGE_ENGINE_ROOT` — la
+ * stessa variabile che il Makefile passa ai tre target di test e che
+ * `tests/parity/harness.js` e `tests/python/engine_corpus.py` gia' leggevano.
+ * Solo questo file la ignorava, quindi `make tests-node ROOT=/path/to/engine`
+ * — il ROOT= che l'help del Makefile suggerisce — non arrivava alle fixture
+ * nominate: sparivano in uno skip verde, cioe' la #132 dalla porta di servizio.
+ * Prima della #132 ogni blocco faceva il proprio `existsSync` e, se mancava,
+ * stampava SKIP: un file rinominato lato motore e il test diventava verde
+ * senza verificare nulla.
  *
  * Ora lo skip e' legittimo in un caso solo — il checkout del motore non c'e'
  * affatto (sviluppo locale senza repo fratello, PR da un fork senza secret).
@@ -49,7 +55,8 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
  * riuscito che non lascia i file dove il test li cerca non puo' passare verde.
  */
 
-const ENGINE_ROOT    = path.join(__dirname, "../../..", "PythonGranularEngine");
+const ENGINE_ROOT    = path.resolve(process.env.PGE_ENGINE_ROOT
+                                   || path.join(__dirname, "../../..", "PythonGranularEngine"));
 const ENGINE_CONFIGS = path.join(ENGINE_ROOT, "configs");
 const ENGINE_PRESENT = fs.existsSync(ENGINE_CONFIGS);
 // `=== "1"` e non la verita' della stringa: `=0` e `=false` disattivano, come
