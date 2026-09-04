@@ -220,8 +220,17 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
               <div className="sp-hint">
                 Anche i sample seguono:{" "}
                 <span className="mono">{(wsInfo.paths && wsInfo.paths.refs) || "refs/"}</span>.
-                La cartella la crea il bridge, vuota: copiaci i file, o falla puntare
-                alla libreria che usi gia' con un symlink. Il motore la riceve come{" "}
+                {wsInfo.isRoot ? (
+                  // Senza --workspace le due cartelle coincidono e quella e' la
+                  // refs/ del motore, gia' piena: dirla "creata vuota" manda a
+                  // cercare un problema che non c'e', e proprio nel caso di
+                  // default. La frase sotto vale quando il workspace e' altrove.
+                  <> E' quella del motore, perche' il workspace coincide col suo repo.</>
+                ) : (
+                  <> La cartella la crea il bridge, vuota: copiaci i file, o falla
+                  puntare alla libreria che usi gia' con un symlink.</>
+                )}{" "}
+                Il motore la riceve come{" "}
                 <span className="mono">--samples-dir</span> a ogni render.
               </div>
             ) : (

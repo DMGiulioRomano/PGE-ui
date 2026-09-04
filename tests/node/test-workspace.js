@@ -306,6 +306,12 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     assert("il pannello dice dove stanno i sample, e lo chiede al server",
            /wsInfo\.samplesFollowWorkspace/.test(sp) &&
            /wsInfo\.paths && wsInfo\.paths\.refs/.test(sp));
+    // "La cartella la crea il bridge, vuota" e' vera solo dove il workspace non
+    // e' il repo del motore: senza --workspace le due coincidono e quella refs/
+    // e' la sua, gia' piena. E' il caso di default, cioe' quello in cui la
+    // frase sbagliata la legge piu' gente. #148
+    assert("e non promette una refs/ vuota dove e' quella del motore",
+           /wsInfo\.isRoot \?/.test(sp.slice(sp.indexOf("Anche i sample seguono"))));
     assert("e non trascrive la vecchia promessa",
            !/Seguiranno il workspace quando il motore/.test(sp));
     // Anche lo specchio delle path nella sezione Paths lo chiede al server.
