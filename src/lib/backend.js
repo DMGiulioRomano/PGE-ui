@@ -53,11 +53,26 @@
   // so this is a deliberate divergence for UX reasons.
   // statePositions / _curveRaw (grain.envelope multistate) are editor-only
   // preservation fields injected at parse to round-trip explicit positions and
-  // the verbatim curve (#59). They mirror data already encoded in the serialized
-  // states/curve, so hashing them too would double-count — and, more importantly,
-  // would mark every already-rendered multistate stem stale the moment this
-  // preservation shipped. Exclude them: only a real edit to a window name or the
-  // curve changes the fingerprint.
+  // the verbatim curve (#59). They were both excluded here on the grounds that
+  // they mirror data already encoded in the serialized states/curve — true of
+  // one and false of the other, and nobody had asked the engine which:
+  //   * `statePositions` does NOT mirror anything. `serializeGrainEnvelope`
+  //     splices it INTO `states` (`[[pos, name], …]`), so it reaches the YAML,
+  //     the engine hashes it, and its own comment says the positions are
+  //     thresholds in value-space — i.e. they change the rendered audio. Edit
+  //     them in the Raw tab and `states` stays a list of the same names: the
+  //     engine hash moved, this one didn't, and the dot stayed green on a stem
+  //     the engine was about to rewrite. It IS hashed now.
+  //   * `_curveRaw` really is redundant, and for a reason worth writing down:
+  //     `parseGrainEnvelope` DERIVES `curve` from it (`rescaleCurveY`, a linear
+  //     *(n-1)), so the two can't move apart on the path that creates them —
+  //     a drift too small for `curveMatchesRaw`'s 1e-9 to notice still lands in
+  //     `curve`, which is hashed. It stays excluded, and that premise is pinned
+  //     by a parity case (a reparse whose curve drifts must move BOTH hashes)
+  //     instead of being asserted here.
+  // Cost of hashing the positions: every already-rendered multistate stem with
+  // non-uniform positions reads stale once. Safe direction, self-clearing on the
+  // first pass — one render too many, never one too few.
   // durationImplicit / durationUnresolved (engine #205) are bookkeeping for the
   // optional `duration`: they record whether the length was written in the YAML
   // or inherited from the sample. The renderer only ever sees the resolved
@@ -81,14 +96,16 @@
   // meno, che e' l'errore che questo asse esiste per non fare.
   //
   // `FP_IGNORE_DEEP` sono invece campi dell'EDITOR iniettati al parse, e vivono
-  // annidati per costruzione (`grain.envelope.statePositions`,
-  // `grain.envelope._curveRaw`): rispecchiano dati gia' codificati negli stati
-  // e nella curva serializzati, quindi hasharli conterebbe due volte — e
-  // marcherebbe stale ogni stem multistate gia' reso.
+  // annidati per costruzione (`grain.envelope._curveRaw`). Il criterio non e'
+  // "campo dell'editor" ma "arriva nello YAML": quello che ci arriva lo hasha
+  // il motore, e se non lo hashiamo anche noi il pallino resta verde su uno
+  // stem che verra' riscritto. `statePositions` ci arriva (spliciato dentro
+  // `states`) ed e' uscito da questa lista; `_curveRaw` ci arriva pure, ma non
+  // puo' muoversi senza muovere `curve`, che e' hashata — vedi sopra.
   const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
                                   "durationImplicit", "durationUnresolved",
                                   "deviationProbabilityLegacy"]);
-  const FP_IGNORE_DEEP = new Set(["statePositions", "_curveRaw"]);
+  const FP_IGNORE_DEEP = new Set(["_curveRaw"]);
 
   function canonicalJSON(v, ignore, deep) {
     if (v === null || v === undefined) return "null";

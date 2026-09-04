@@ -117,12 +117,19 @@ assert("output format affects fingerprint", fp(base(), "aiff") !== fp(base(), "w
     JSON.stringify({ a: fp(a), b: fp(b) }));
 }
 
-console.log("\n── multistate envelope preservation fields are fingerprint-inert (#59) ──");
+console.log("\n── i campi di preservazione del multistate (#59): il criterio e' lo YAML ──");
 {
-  // statePositions / _curveRaw are editor-only fields injected at parse to
-  // round-trip explicit positions + the verbatim curve. They must not move the
-  // fingerprint (or every already-rendered multistate stem would read stale),
-  // while a real edit to a window name or the curve still must.
+  // statePositions / _curveRaw sono iniettati al parse per far tornare indietro
+  // le posizioni esplicite e la curva verbatim. Erano esclusi entrambi
+  // dall'hash "perche' rispecchiano dati gia' codificati negli stati e nella
+  // curva". Vero di uno, falso dell'altro, e il criterio giusto non e' "campo
+  // dell'editor" ma ARRIVA NELLO YAML: cio' che ci arriva lo hasha il motore.
+  //
+  // `statePositions` ci arriva: `serializeGrainEnvelope` lo splicia dentro
+  // `states` (`[[pos, name], …]`). Escluderlo voleva dire pallino verde su uno
+  // stem che il motore riscrive — e riscrive DIVERSO, perche' le posizioni sono
+  // soglie in value-space. Misurato contro il motore in
+  // tests/parity/test-fingerprint-parity.js.
   const ms = () => ({
     id: "s1", duration: 10, sample: "x.wav",
     grain: { duration: 0.1, envelope: { states: ["hanning", "bartlett", "blackman"], curve: [[0, 0], [1, 2]] } },
@@ -130,9 +137,23 @@ console.log("\n── multistate envelope preservation fields are fingerprint-in
   const fpMs = fp(ms());
   {
     const s = ms(); s.grain.envelope.statePositions = [0, 0.2, 0.9];
-    assert("ignores grain.envelope.statePositions", fp(s) === fpMs, "fp changed");
+    assert("detects grain.envelope.statePositions", fp(s) !== fpMs, "fp unchanged");
   }
   {
+    // …e due posizioni diverse restano due fingerprint diversi: se l'hash le
+    // vedesse solo come "presenti" (una chiave in piu') l'edit nel tab Raw da
+    // 0.2 a 0.9 tornerebbe muto, che e' il difetto di prima con un passo in meno.
+    const a = ms(); a.grain.envelope.statePositions = [0, 0.2, 0.9];
+    const b = ms(); b.grain.envelope.statePositions = [0, 0.7, 0.9];
+    assert("e posizioni diverse danno fingerprint diversi", fp(a) !== fp(b), "fp uguale");
+  }
+  {
+    // `_curveRaw` resta fuori, ma non perche' sia "dell'editor": perche' non
+    // puo' muoversi da solo. `parseGrainEnvelope` DERIVA `curve` da lui
+    // (rescaleCurveY, lineare), quindi una deriva troppo piccola per il 1e-9 di
+    // `curveMatchesRaw` finisce comunque in `curve`, che e' hashata. La premessa
+    // e' pretesa dal motore in test-fingerprint-parity.js; qui si fissa il verso
+    // che vale senza motore.
     const s = ms(); s.grain.envelope._curveRaw = [[0, 0], [1, 1]];
     assert("ignores grain.envelope._curveRaw", fp(s) === fpMs, "fp changed");
   }
@@ -143,6 +164,21 @@ console.log("\n── multistate envelope preservation fields are fingerprint-in
   {
     const s = ms(); s.grain.envelope.curve = [[0, 0], [1, 1.5]];
     assert("detects grain.envelope.curve edit", fp(s) !== fpMs, "fp unchanged");
+  }
+  {
+    // La premessa di `_curveRaw`, dal lato che non ha bisogno del motore: una
+    // curva che deriva sotto la tolleranza di `curveMatchesRaw` muove `curve` e
+    // quindi l'hash. Se un domani il parse smettesse di derivarla, questo
+    // assert cade e `_curveRaw` va hashato come le posizioni.
+    const y = (cy) => `stream_id: s1\nduration: 10\nsample: x.wav\n` +
+      `grain:\n  duration: 0.1\n  envelope:\n` +
+      `    states: [[0, hanning], [0.5, bartlett], [1, blackman]]\n` +
+      `    curve: [[0, 0], [1, ${cy}]]\n`;
+    const p0 = window.PGEYaml.parseStream(y("1"), 0, { samples: [] });
+    const p1 = window.PGEYaml.parseStream(y("1.0000000000001"), 0, { samples: [] });
+    assert("una deriva sotto 1e-9 in _curveRaw passa comunque per curve",
+      p0.grain.envelope._curveRaw[1][1] !== p1.grain.envelope._curveRaw[1][1] &&
+      fp(p0) !== fp(p1), "fingerprint uguale");
   }
 }
 
