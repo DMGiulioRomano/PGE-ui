@@ -235,7 +235,19 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // Il flag esce per entrambi i renderer e fuori dal blocco csound: dentro,
     // il renderer numpy tornerebbe a risolvere i sample su ./refs/ del cwd —
     // cioe' la cartella del workspace la leggerebbe solo csound. #148
-    const beforeCsound = rp.slice(0, rp.indexOf('if renderer == "csound":'));
+    //
+    // L'ancora si verifica prima di tagliare, e non e' zelo: `indexOf` che non
+    // trova torna -1, e `slice(0, -1)` e' il file intero meno un carattere,
+    // cioe' una guardia che passa CON il flag dentro il blocco csound. Misurato
+    // su due sabotaggi: flag spostato dentro -> rosso; flag dentro piu' il ramo
+    // riscritto `is_csound = renderer == "csound"` -> verde. La condizione e'
+    // scritta a mano una volta sola nel file, quindi una riscrittura del ramo
+    // deve far rosso qui, non sparire — l'idioma della guardia vicina su
+    // onWorkspaceChange (`h.length > 0`).
+    const csoundAt = rp.indexOf('if renderer == "csound":');
+    assert("il ramo csound e' ancora l'ancora della guardia qui sotto",
+           csoundAt > 0, `indexOf -> ${csoundAt}`);
+    const beforeCsound = csoundAt > 0 ? rp.slice(0, csoundAt) : "";
     assert("--samples-dir esce per entrambi i renderer",
            /cmd \+= \["--samples-dir", str\(refs\)\]/.test(beforeCsound));
     // Il banner d'avvio stampa le path che make_app ha risolto: la regola di
