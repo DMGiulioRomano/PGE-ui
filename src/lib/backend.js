@@ -562,12 +562,21 @@
         return Object.values(EXT_OF).some(
           (e) => !!stemIndex[`${yamlBasename}__${streamId}${e}`]);
       },
-      // Durata dello stem su disco, format-agnostica come ownsStem: chi
-      // disegna vuole sapere quanto dura l'audio che ha in mano, non in che
-      // formato sta. `null` = non lo sappiamo (nessun /stems ancora, render
-      // appena fatto, file illeggibile).
-      stemDur(yamlBasename, streamId) {
-        for (const e of Object.values(EXT_OF)) {
+      // Durata dello stem su disco: sta dalla parte di hasStem, non di
+      // ownsStem. Il numero regge `span`, cioe' su che larghezza va disegnato
+      // il waveform, e il waveform e' quello del file che /peaks ha letto —
+      // l'estensione del formato di output. Format-agnostica iterava EXT_OF
+      // (wav per primo) mentre il disegno poteva arrivare dall'aif: `span`
+      // descriveva un file diverso da quello disegnato. Il fallback sugli
+      // altri formati resta, perche' il disegno stesso ricade li' quando il
+      // formato chiesto non e' sul disco. `null` = non lo sappiamo (nessun
+      // /stems ancora, render appena fatto, file illeggibile).
+      stemDur(yamlBasename, streamId, format) {
+        const want = EXT_OF[format];
+        const exts = want
+          ? [want, ...Object.values(EXT_OF).filter((e) => e !== want)]
+          : Object.values(EXT_OF);
+        for (const e of exts) {
           const d = stemDurIndex[`${yamlBasename}__${streamId}${e}`];
           if (d > 0) return d;
         }
@@ -582,17 +591,23 @@
         const ext = EXT_OF[format] || EXT_OF.wav;
         return `${baseUrl}/output/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
-      // Server-side waveform peaks (~128 KB float32). Extension is irrelevant —
-      // the server resolves the stem regardless of format.
-      peaksUrl(yamlBasename, streamId) {
-        return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif`;
+      // Server-side waveform peaks (~128 KB float32). L'estensione e' quella
+      // del formato di output, come in stemUrl: il server ora prova prima
+      // quella chiesta, e con un `.aif` di un render precedente ancora sul
+      // disco un `.aif` cablato qui faceva sentire l'audio nuovo e vedere il
+      // disegno vecchio. Il fallback lato server copre il caso in cui il
+      // formato chiesto non sia stato reso.
+      peaksUrl(yamlBasename, streamId, format) {
+        const ext = EXT_OF[format] || EXT_OF.wav;
+        return `${baseUrl}/peaks/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}`;
       },
-      // Server-side STFT spectrogram (uint32 w/h header + uint8 grid). Same stem
-      // resolution as peaksUrl — extension is irrelevant. `scale` ("linear" |
-      // "log") picks the frequency-axis bucketing.
-      spectrogramUrl(yamlBasename, streamId, scale) {
+      // Server-side STFT spectrogram (uint32 w/h header + uint8 grid). Stessa
+      // risoluzione di peaksUrl, stessa ragione per il formato. `scale`
+      // ("linear" | "log") picks the frequency-axis bucketing.
+      spectrogramUrl(yamlBasename, streamId, scale, format) {
         const q = scale === "log" ? "?scale=log" : "";
-        return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}.aif${q}`;
+        const ext = EXT_OF[format] || EXT_OF.wav;
+        return `${baseUrl}/spectrogram/${encodeURIComponent(yamlBasename)}__${encodeURIComponent(streamId)}${ext}${q}`;
       },
       // Per-stream grain JSON sidecar (engine --grain-json). basename and
       // streamId are separate path segments because the file is

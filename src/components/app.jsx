@@ -748,7 +748,11 @@ function App() {
           continue;
         }
         const url = backend.render.stemUrl ? backend.render.stemUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
-        const peaksUrl = backend.render.peaksUrl ? backend.render.peaksUrl(basename, s.id) : null;
+        // Il formato va passato anche qui, non solo a stemUrl: sono lo stesso
+        // file, e senza si sente l'audio nuovo mentre si vede il disegno di un
+        // render precedente rimasto sul disco nell'altro formato (#153).
+        const peaksUrl = backend.render.peaksUrl
+          ? backend.render.peaksUrl(basename, s.id, tweaks.outputFormat || "wav") : null;
         // La revisione stem fa parte della chiave peaks così una rigenerazione
         // che non muove il fingerprint (onset escluso) rinfresca comunque il
         // waveform — l'effetto rigira a ogni stream-done (lastRenderedFps cambia
@@ -765,7 +769,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.outputFormat]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -787,7 +791,9 @@ function App() {
           continue;
         }
         try {
-          const res = await fetch(backend.render.spectrogramUrl(basename, s.id, tweaks.spectrogramScale || "linear"));
+          const res = await fetch(backend.render.spectrogramUrl(
+            basename, s.id, tweaks.spectrogramScale || "linear",
+            tweaks.outputFormat || "wav"));
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const buf = await res.arrayBuffer();
           if (!cancelled && buf) setSpectrograms(m => m[s.id] === buf ? m : ({ ...m, [s.id]: buf }));
@@ -795,7 +801,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale]);
+  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
   /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
@@ -2073,7 +2079,10 @@ function App() {
               sampleDurOf={(name) => ((mediaList.files || []).find(f => f.name === name) || {}).duration || 0}
               stemDurFor={(id) => {
                 const b = window.PGEBackend.current.render;
-                return b.stemDur ? b.stemDur(activeProject.replace(/\.yml$/, ""), id) : null;
+                return b.stemDur
+                  ? b.stemDur(activeProject.replace(/\.yml$/, ""), id,
+                              tweaks.outputFormat || "wav")
+                  : null;
               }}
               onNeedGrains={ensureGrainData}
               laneMoveKeys={[tweaks.shortcutMoveLaneUp || MOVE_LANE_UP,
