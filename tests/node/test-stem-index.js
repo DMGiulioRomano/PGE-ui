@@ -120,10 +120,10 @@ console.log("\n── a stem present in one format only ──");
     DISK = ["p2__stream1.wav", "p2__stream2.aif"];
     DUR = { "p2__stream1.wav": 4.25 };
     await backend.render.loadCache("p2");
-    assert("la durata arriva da /stems", backend.render.stemDur("p2", "stream1") === 4.25);
-    assert("format-agnostica come ownsStem",
-           backend.render.stemDur("p2", "stream2") === null);
-    assert("id sconosciuto → null", backend.render.stemDur("p2", "stream9") === null);
+    assert("la durata arriva da /stems", backend.render.stemDur("p2", "stream1", "wav") === 4.25);
+    assert("il formato mancante ricade sull'altro, come fa il disegno",
+           backend.render.stemDur("p2", "stream2", "wav") === null);
+    assert("id sconosciuto → null", backend.render.stemDur("p2", "stream9", "wav") === null);
     // Un render riscrive lo stem: la durata vecchia sarebbe peggio che nessuna,
     // perche' taglierebbe il disegno sulla misura di prima. Dimenticarla
     // riporta all'ipotesi "stem lungo quanto la clip", vera appena dopo.
@@ -136,6 +136,70 @@ console.log("\n── a stem present in one format only ──");
            && !/Math\.floor\(\(x \/ W\) \* n\)/.test(tlSrc));
     assert("stessa regola per lo spettrogramma",
            /drawImage\(off, 0, 0, cols, bins, 0, 0, W \/ sp, H\)/.test(tlSrc));
+  }
+
+  /* ------------------------------------------------------------------
+   * #153 — il disegno legge il file che il playback suona.
+   *
+   * `peaksUrl`/`spectrogramUrl` cablavano `.aif` e il bridge risolveva
+   * l'`.aif` per primo: col default `wav`, uno stem lasciato da un render
+   * precedente in aiff faceva sentire l'audio nuovo e vedere il disegno
+   * vecchio, senza che nessun render successivo lo sbloccasse. `stemDur` sta
+   * dalla stessa parte: regge `span`, cioe' su che larghezza il waveform va
+   * disegnato, quindi deve descrivere lo stesso file.
+   * ------------------------------------------------------------------ */
+  console.log("\n── peaks, spettrogramma e durata seguono il formato di output ──");
+  {
+    const r = backend.render;
+    assert("peaksUrl chiede l'estensione del formato",
+           r.peaksUrl("proj", "s1", "wav").endsWith("/peaks/proj__s1.wav")
+           && r.peaksUrl("proj", "s1", "aiff").endsWith("/peaks/proj__s1.aif")
+           && r.peaksUrl("proj", "s1", "flac").endsWith("/peaks/proj__s1.flac"),
+           r.peaksUrl("proj", "s1", "wav"));
+    assert("spectrogramUrl idem, con lo scale dopo",
+           r.spectrogramUrl("proj", "s1", "linear", "wav")
+             .endsWith("/spectrogram/proj__s1.wav")
+           && r.spectrogramUrl("proj", "s1", "log", "aiff")
+             .endsWith("/spectrogram/proj__s1.aif?scale=log"),
+           r.spectrogramUrl("proj", "s1", "log", "aiff"));
+    assert("un id con . e - resta un segmento solo",
+           r.peaksUrl("proj", "bass-1.a", "wav").endsWith("/peaks/proj__bass-1.a.wav"));
+
+    DISK = ["p3__s1.wav", "p3__s1.aif"];
+    DUR  = { "p3__s1.wav": 4.0, "p3__s1.aif": 9.0 };
+    await backend.render.loadCache("p3");
+    assert("stemDur preferisce il formato chiesto",
+           backend.render.stemDur("p3", "s1", "wav") === 4.0
+           && backend.render.stemDur("p3", "s1", "aiff") === 9.0,
+           "iterando EXT_OF `span` poteva descrivere un file diverso da " +
+           "quello disegnato");
+    DISK = ["p4__s1.aif"];
+    DUR  = { "p4__s1.aif": 9.0 };
+    await backend.render.loadCache("p4");
+    assert("...e ricade sugli altri quando quello chiesto non c'e'",
+           backend.render.stemDur("p4", "s1", "wav") === 9.0,
+           "il disegno stesso ricade li': la route serve l'unico file che c'e'");
+  }
+
+  console.log("\n── il cablaggio del formato (source guard) ──");
+  {
+    const beSrc  = SG.codeOf(path.join(__dirname, "../../src/lib/backend.js"));
+    const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+    assert("nessuna estensione cablata nei due costruttori di URL",
+           !/\/peaks\/\$\{[^`]*\}\.aif/.test(beSrc)
+           && !/\/spectrogram\/\$\{[^`]*\}\.aif/.test(beSrc),
+           "un'estensione fissa qui e' esattamente la #153");
+    assert("app.jsx passa il formato a peaksUrl",
+           /peaksUrl\(basename, s\.id, tweaks\.outputFormat \|\| "wav"\)/.test(appSrc));
+    assert("app.jsx passa il formato a spectrogramUrl",
+           /spectrogramUrl\(\s*basename, s\.id, tweaks\.spectrogramScale \|\| "linear",\s*tweaks\.outputFormat \|\| "wav"\)/.test(appSrc));
+    assert("app.jsx passa il formato a stemDur",
+           /stemDur\(activeProject\.replace\(\/\\\.yml\$\/, ""\), id,\s*tweaks\.outputFormat \|\| "wav"\)/.test(appSrc));
+    assert("i due effetti rigirano quando il formato cambia",
+           (appSrc.match(/backendKind, tweaks\.outputFormat\]/g) || []).length === 1
+           && /tweaks\.spectrogramScale, tweaks\.outputFormat\]/.test(appSrc),
+           "l'URL e' costruito dal formato: senza la dipendenza il disegno " +
+           "resta quello di prima finche' non si tocca altro");
   }
 
   console.log("\n── a clip that cannot sound says so (source guard) ──");

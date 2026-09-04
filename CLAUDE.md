@@ -48,8 +48,10 @@ exists):
   guards on the UI wiring), and `test-stream-id.js` (`allocStreamIds` never
   reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
-  (the `hasStem`/`ownsStem` split over the format-keyed stem index, plus source
-  guards on the audio-error path), and `test-semantics-store.js` (where the two
+  (the `hasStem`/`ownsStem` split over the format-keyed stem index, the
+  format-aware `peaksUrl`/`spectrogramUrl`/`stemDur` of #153, plus source
+  guards on the audio-error path and on the app.jsx wiring that passes the
+  format), and `test-semantics-store.js` (where the two
   numbers of the semantics axis come from: `semanticsVersion` re-reading the
   bridge, and a whole `render.run()` writing/reading `pge-local-sem` — the real
   backend driven with a fake `fetch` and `localStorage`), and
@@ -73,7 +75,8 @@ exists):
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
-  (path/security helpers), `test_yaml_structure.py` (the engine config corpus,
+  (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
+  routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
@@ -695,9 +698,10 @@ matching the clip's the moment an edit shortens the stream without a re-render �
 a split, a resize. Mapped onto the clip's width, half a clip showed the entire
 waveform squeezed into it, which reads as a broken redraw rather than as a stem
 to regenerate. `GET /stems/<basename>` therefore carries `dur` per file
-(`audio_duration`, a header-only read), `backend.render.stemDur(basename, id)`
-serves it format-agnostically like `ownsStem`, and `ClipWaveform` /
-`ClipSpectrogram` take a `span` = stem duration / clip duration: the excess
+(`audio_duration`, a header-only read), `backend.render.stemDur(basename, id,
+format)` serves it **for the format asked**, like `hasStem` (see below), and
+`ClipWaveform` / `ClipSpectrogram` take a `span` = stem duration / clip
+duration: the excess
 falls outside the clip, the missing tail stays flat, and the 🟡 dot says the
 rest. `span` defaults to 1 when the duration is unknown — which is also the
 truth right after a render, so `_markStemFresh` **drops** the cached duration
@@ -715,6 +719,33 @@ The stem index is keyed by **filename, extension included**:
 - `ownsStem(basename, id)`: "some file still claims this id" — format-agnostic. Allocation must use this one; filtering by format would recycle an id whose other-format stem survives.
 
 `GET /stems/<basename>` returns one entry per **file** (with its `ext`), not one per stream id.
+
+**Everything derived from a stem sits on the `hasStem` side of that split**
+(#153) — peaks, spectrogram, and the duration behind `span`: whoever draws
+wants to know what the file *it is drawing* sounds like, not who owns the id.
+`peaksUrl(bn, id, format)` and `spectrogramUrl(bn, id, scale, format)` emit the
+real extension, exactly like `stemUrl`, and `stemDur` tries the requested
+format first (the others stay as fallback, because the drawing itself falls
+back the same way). While those two hardcoded `.aif` and the bridge resolved
+`.aif` first, a project rendered once in aiff and then in the default wav
+**played the new audio and drew the old picture**, with no later render able to
+clear it: the peaks cache was named without the source's extension, so both
+formats shared one entry and `_is_fresh` compared it against the older `.aif`
+— fresh forever. Only the clips with a leftover `.aif` froze, which is why it
+looked intermittent. Two consequences to keep: the output format is among the
+deps of the peaks/spectrogram effects in `app.jsx` (the URL is built from it),
+and the cache file is `cache/peaks/<stem><ext>.<buckets>.f32` (same rule for
+`cache/spec/` and the `*_media` twins).
+
+Server-side, `_resolve_audio` in `audio_pipeline.py` is **the one spelling** of
+"which file is this": it tries the requested extension first, then the historic
+fallback list. `/peaks`, `/spectrogram` and `/audio` each had a copy of that
+loop inline — three lists of extensions to keep aligned, and the `/audio` one
+didn't even go through `safe_resolve`; they all call the helper now. `/audio`'s
+transcoded copy moved with it, from `output/` to `cache/output_wav/`: inside
+`output/` it was inventoried by `GET /stems` as a stem with the id
+`<sid>.transcoded`, i.e. a phantom name burned for `allocStreamIds` — the same
+choice `/media_audio` always made by never writing inside `refs/`.
 
 ### Tracks: a lane holds N streams (`tracks.js`)
 
