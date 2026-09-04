@@ -286,8 +286,13 @@ the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
 first pass, even an empty one. What deliberately survives is `pge-local-fp`: it
 records what a stream looked like when it was rendered — a statement about the
 YAML, not about the files — so a same-named project with different content
-hashes differently (stale, the safe direction) and with identical content would
-render identical audio anyway.
+hashes differently (stale, the safe direction). Identical content, where the
+hash matches, is safe for a different reason than the one written here before:
+"the audio would be identical anyway" died with #148, since `refs/` follows the
+workspace on an engine with `--samples-dir` and the same YAML over different
+samples renders differently. What holds it up is that a fingerprint can only
+*withhold* the green dot, never grant it — green needs a stem in the index, and
+the index is exactly what the switch empties.
 
 Settings shows the workspace field; the value comes from `GET /workspace` on
 every panel open, never from a saved preference — the server is the single
