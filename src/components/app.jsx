@@ -1091,9 +1091,14 @@ function App() {
    *     lasciato, e quel punto lo sa solo il motore — e' il `ptr` del sidecar
    *     dei grani, lo stesso numero che il riquadro sotto il cursore mostra
    *     come "Read". Senza sidecar non lo si inventa: lo split si rifiuta.
-   * `pointer.start` va scritto nell'unita' in vigore (loop_unit o time_mode):
-   * ogni stream nato nell'editor e' `time_mode: normalized`, dove start vive in
-   * [0,1] del sample — scriverci dentro dei secondi lo manderebbe fuori file. */
+   * `pointer.start` va scritto nell'unita' in vigore, che e' `pointer.loop_unit`
+   * e nient'altro: dopo PGE #222 la chiave non eredita piu' da `time_mode` e in
+   * sua assenza il motore legge secondi. Ogni stream nato nell'editor dichiara
+   * `loop_unit: normalized`, dove start vive in [0,1] del sample — scriverci
+   * dentro dei secondi lo manderebbe fuori file; su uno YAML scritto a mano che
+   * porta `time_mode: normalized` senza `loop_unit` vale l'opposto, ed e' per
+   * questo che l'unita' la chiede a loopUnitInfo invece di dedurla dallo
+   * stream. */
   function splitAtPlayhead() {
     const t = time;
     const R = (x) => +x.toFixed(4);
@@ -1432,6 +1437,8 @@ function App() {
         grain: { duration: 0.05, durationRange: null, envelope: "hanning" },
         // loop_unit: normalized → start/loop coords read as [0,1] × sample_dur.
         // No loop_start, so no loop is created; it only sets the unit convention.
+        // La chiave e' esplicita apposta: dopo PGE #222 e' l'unica cosa che dice
+        // al motore di leggerli cosi' — time_mode non c'entra piu' nulla.
         pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null, loopUnit: "normalized" },
         pitch: { semitones: 0, range: null },
         voices: { num: 1 },
