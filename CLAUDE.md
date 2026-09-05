@@ -470,11 +470,39 @@ The floor is `1/sr` outright and not `Math.min(base.min, 1/sr)` — the two agre
 only while the declared min sits above one sample, and with a payload carrying
 `output_sr` and no params the `Math.min` kept the floor of the *old* sample rate.
 
-A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose `max_val` is `null` because the real cap is the **chosen sample's duration**. `loopEnvMax` in `envelope-utils.js` drives the EnvelopeEditor `hardMax` + Inspector scalar clamp from that duration, unit-aware (`loop_unit || time_mode`: seconds → `sample_dur`, normalized → `1`), falling back to the static cap only when the duration is unknown.
+A `null` engine `max_val` keeps the static fallback cap — except the `loop_*` trio, whose `max_val` is `null` because the real cap is the **chosen sample's duration**. `loopEnvMax` in `envelope-utils.js` drives the EnvelopeEditor `hardMax` + Inspector scalar clamp from that duration, unit-aware (`loop_unit` alone — seconds → `sample_dur`, normalized → `1`), falling back to the static cap only when the duration is unknown.
 
 Loop-window semantics: with a loop active the engine confines the grain read position to `[loop_start, loop_end)` via modular wrap. A loop straddling the file end is expressible **only** via `loop_dur` (`loop_start + loop_dur > sample_dur`); `loop_end` stays bound to `[0, sample_dur]`. `loopBoundsError` in `envelope-utils.js` mirrors the static degenerate-window check (`loop_end <= loop_start`).
 
-`loopUnitInfo` in `envelope-utils.js` returns the unit **and** its provenance (`loop_unit` / `time_mode` / `default`). Picking the inherited unit deletes the key rather than materializing a redundant one — absence is the "inherit" state. Switching the unit re-clamps scalar endpoints; envelope endpoints are per-grain and exempt.
+**`loop_unit` inherits nothing** (PGE #222, PGE-ui #149). It used to fall back to
+the stream's `time_mode`; the engine cut that — the two keys govern different
+axes with different references (`time_mode` scales the envelopes' *x* on the
+stream duration, `loop_unit` scales the *y* — a position in the sample — on
+`sample_dur_sec`) — and the default is now `seconds`, a constant. The vocabulary
+became explicit too: `('seconds', 'absolute', 'normalized')`, where `seconds` is
+canonical and `absolute` the historical alias for the same reading; anything else
+is `InvalidFieldValueError` instead of the old silent "not normalized, therefore
+absolute".
+
+`loopUnitInfo` in `envelope-utils.js` returns the reading (`unit`: `normalized` /
+`absolute`), the spelling as written, and the provenance — now two-valued,
+`loop_unit` / `default`. `loopUnitError` is the mirror of the engine's refusal,
+shown under the Inspector's selector. Picking the **default** deletes the key
+rather than materializing a redundant one; that rule survives #222 only because
+"redundant" is finally a property of the key and not of the stream hosting it.
+Switching the unit re-clamps scalar endpoints; envelope endpoints are per-grain
+and exempt.
+
+Two consequences the editor had to be taught, both of which turned a healthy
+stream into an exposed one. `Seg` calls `onChange` on the already-active button,
+so a click on the lit "normalized" used to delete the explicit key of every clip
+the editor creates — and `loopUnitInfo` then still answered "normalized" by
+inheritance, so nothing on screen moved while the engine started reading seconds.
+The handler now returns early when the reading doesn't change. And the ×
+"Remove loop" deleted `loop_unit` along with the six loop keys, though the unit
+also governs `pointer.start`, which outlives the loop: the loop rows
+(`loopWindowShown`) and the unit control (`loopUnitShown`) are separate blocks
+now, so removing the loop leaves the unit standing.
 
 `grain.duration_unit` (`seconds | samples | milliseconds`, PGE #158 then #171) is the same shape of problem one level down: the engine's `grain_duration` bounds are in **seconds**, the YAML values are in the declared unit. `grainUnitFactor` / `grainUnitBounds` / `grainDefaultDuration` / `grainUnitSuffix` in `envelope-utils.js` are the single source — bounds, the `0.05` s default and the row suffix expressed in the unit in force (in ms the cap is `10000`, not `10`); they drive the EnvelopeEditor `hardMin/hardMax` + vis window and the seed of the scalar↔env toggle. Changing the unit goes through `convertGrainDurationUnit`, which **converts** `duration`/`duration_range` — scalars and envelopes, every form `Envelope._scale_raw_values_y` scales — instead of letting the old number be reinterpreted in the new scale, then re-clamps the scalars (envelope points need no clamp: bounds scale by the same factor). An unknown unit converts nothing and gets no suffix. The key is deleted only for `seconds` — absence *is* seconds. One asymmetry is deliberate: changing the unit **does** mark the stem stale even though the rendered audio is identical, because `fingerprintStream` sees `0.05` become `50` — the safe direction (one render too many, never one too few), and normalizing the hash to seconds would cost more than it's worth.
 
@@ -525,9 +553,9 @@ with `fetch-depth: 300`.
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
 bridge and the oracle can use it. It reads the envelope keys, the parameter
-bounds, `VARIATION_SEMANTICS_VERSION` and `DEFAULT_OUTPUT_SR`; each returns an
-empty/`None` result for an engine that doesn't have the thing, and every caller
-must treat that as "don't know", never as a value. For the sample rate that
+bounds, `VARIATION_SEMANTICS_VERSION`, `DEFAULT_OUTPUT_SR` and `LOOP_UNITS`;
+each returns an empty/`None` result for an engine that doesn't have the thing,
+and every caller must treat that as "don't know", never as a value. For the sample rate that
 extends to values that aren't sample rates: `0` or a negative reads as unknown,
 because the UI divides by it and `1/0` is an `Infinity` that silently switches
 off every clamp downstream.
@@ -536,6 +564,15 @@ off every clamp downstream.
 last one to go was the one nobody was watching: `OUTPUT_SR = 48000` in
 `yaml-bridge.js`. It is still written there, but as a declared static fallback
 that parity requires to equal the engine's — see the `/bounds` section above.
+
+The rule has one more subject since #149: `LOOP_UNITS` in `envelope-utils.js`,
+the vocabulary of `pointer.loop_unit`. Before PGE #222 there was nothing to
+mirror — the key had no declared set — and now a spelling outside it kills the
+render, so the UI has to name it while you type. `engine_loop_units` reads it
+from `pointer_controller.py` by AST (importing that module drags in numpy, which
+the CI node job doesn't have), and `test-bounds-parity.js` requires the UI's copy
+to equal the engine's **in order** — the first spelling is the canonical one, and
+`LOOP_UNIT_DEFAULT` is what the Inspector's selector writes.
 
 That was **false for the `pitch` half** until this round: three fallbacks
 (`edoFactor`, the ratio record, the EDO preset table) returned today's engine
@@ -580,10 +617,14 @@ The two halves fail in two different ways, and each has its own guard:
   declared the position is a median estimate (`exact:false`) — split proceeds,
   with a toast saying so.
 
-`pointer.start` is written in the unit in force (`loopUnitInfo`:
-`pointer.loop_unit || time_mode`). Every stream the editor creates is born
-`time_mode: normalized`, where `start` lives in `[0,1]` of the sample — writing
-seconds there would send it off the end of the file. Normalized with an unknown
+`pointer.start` is written in the unit in force, which is `pointer.loop_unit` and
+nothing else (`loopUnitInfo`; PGE #222 cut the `time_mode` fallback). Every stream
+the editor creates declares `loop_unit: normalized`, where `start` lives in
+`[0,1]` of the sample — writing seconds there would send it off the end of the
+file. The risk is symmetric on a hand-written YAML carrying `time_mode:
+normalized` **without** `loop_unit`: there the engine reads seconds, and the
+normalized branch would write a position 8× off. That is why the unit is asked of
+`loopUnitInfo` rather than deduced from the stream. Normalized with an unknown
 sample duration is the third refusal.
 
 **`rescaleEnvArray` deliberately does not clamp x to 1** (and that clamp was a
