@@ -31,11 +31,11 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 19 helpers",
+assert("PGEEnvUtils exposes the 20 helpers",
   ["sliceEnvArray", "sliceStreamEnvelopes", "rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopUnitError", "loopBoundsError", "grainDurationUnitError",
-   "snapDirection", "snapForDomain", "readDirectionError"]
+   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopUnitError", "loopUnitRescaleKeys", "loopBoundsError",
+   "grainDurationUnitError", "snapDirection", "snapForDomain", "readDirectionError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 // Il vocabolario non e' una funzione: viaggia con loro perche' il selettore
@@ -452,6 +452,61 @@ console.log("\n── loopUnitError (vocabolario) ──");
   assert("stringa vuota → null", err("") === null);
 }
 
+// ---------------------------------------------------------------------------
+// loopUnitRescaleKeys — quali chiavi cambiano DAVVERO lettura per uno stream
+// che #222 ha spostato. Specchio di `_rescaling_would_change` sul giro di
+// `_LOOP_UNIT_SCOPE`: e' il filtro con cui il motore decide se emettere
+// l'avviso [LOOP_UNIT], e l'avviso dell'Inspector e' quello stesso avviso.
+// Senza filtro l'editor parla su `start: 0` — la forma piu' comune del corpus,
+// e quella con cui nasce ogni clip — dove non si muove un campione.
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──");
+{
+  const K = (pointer) => U.loopUnitRescaleKeys(pointer);
+
+  assert("pointer nullo → nessuna chiave", eq(K(null), []));
+  assert("pointer vuoto → nessuna chiave", eq(K({}), []));
+
+  /* Il caso che il filtro esiste per tacere: zero resta zero sotto qualunque
+     fattore di scala. E' il pointer con cui l'editor crea ogni clip. */
+  assert("start: 0 senza loop → nessuna chiave (zero non si muove)",
+    eq(K({ start: 0, speedRatio: 1, loopStart: null, loopDur: null }), []));
+  assert("loop_start: 0 esplicito → nessuna chiave", eq(K({ loopStart: 0 }), []));
+
+  assert("start non nullo → start", eq(K({ start: 0.5 }), ["start"]));
+  assert("start negativo → start", eq(K({ start: -0.25 }), ["start"]));
+  assert("loop_start scalare → loop_start", eq(K({ loopStart: 0.2 }), ["loop_start"]));
+  assert("loop_end scalare → loop_end", eq(K({ loopEnd: 1 }), ["loop_end"]));
+  assert("loop_dur scalare → loop_dur", eq(K({ loopDur: 0.5 }), ["loop_dur"]));
+
+  /* Un envelope si muove tutto: `scale_raw_param_values` scala i valori y, e
+     `is_envelope_like` e' proprio il ramo che glielo fa fare. Nel bridge la
+     forma envelope vive nel gemello `*Env`, mai nello scalare. */
+  assert("loop_start envelope → loop_start",
+    eq(K({ loopStart: null, loopStartEnv: [[0, 0.1], [1, 0.9]] }), ["loop_start"]));
+  assert("loop_dur envelope → loop_dur",
+    eq(K({ loopDurEnv: { type: "linear", points: [[0, 0.1], [1, 0.9]] } }), ["loop_dur"]));
+  assert("start envelope (passa grezzo dal bridge) → start",
+    eq(K({ start: [[0, 0.1], [1, 0.9]] }), ["start"]));
+
+  /* Ordine e grafia: sono le chiavi che il messaggio del motore nomina
+     (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), nell'ordine di
+     `_LOOP_UNIT_SCOPE`. */
+  assert("le chiavi escono in grafia YAML e nell'ordine del motore",
+    eq(K({ loopEnd: 2, start: 0.5, loopDur: null, loopStart: 0 }), ["start", "loop_end"]));
+  assert("tutte e quattro insieme",
+    eq(K({ start: 0.1, loopStart: 0.2, loopEnd: 0.3, loopDur: 0.4 }),
+       ["start", "loop_start", "loop_end", "loop_dur"]));
+
+  /* Quel che la conversione lasciava passare invariato non si muoveva nemmeno
+     prima: `_rescaling_would_change` esclude None e i bool, e una stringa non
+     e' envelope-like. */
+  assert("null/undefined → nessuna chiave", eq(K({ start: null, loopStart: undefined }), []));
+  assert("booleano → nessuna chiave (il motore esclude bool prima dei numeri)",
+    eq(K({ start: true }), []));
+  assert("stringa → nessuna chiave (non e' envelope-like)", eq(K({ start: "0.5" }), []));
+}
+
 // loopBoundsError — mirrors the engine's static loop-window validation (PGE
 // issue #97 / engine ec61242): with a loop active the read position is confined
 // to [loop_start, loop_end) via modular wrap, so a degenerate window is rejected
@@ -760,9 +815,19 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
   /* L'avviso alla popolazione che #222 ha spostato: normalized senza chiave.
      Il motore lo dice a render (`[LOOP_UNIT] … ora in secondi`) ma quel
      messaggio e' marcato `# ponytail` e va via dopo una release. */
+  /* …ma solo quella a cui i numeri si muovono davvero. Il motore filtra il suo
+     avviso con `_rescaling_would_change` perche' `start: 0` e' la forma piu'
+     comune del corpus — ed e' quella con cui nasce ogni clip dell'editor —
+     quindi un avviso non filtrato parlerebbe dove il motore tace, e chi lo
+     seguisse scriverebbe una chiave che non muove un campione: fingerprint
+     mosso, un render in piu' su uno stem che era giusto. */
   assert("uno stream normalized senza loop_unit viene avvisato",
-    /const loopUnitMigrated = stream\.timeMode === "normalized" && loopUnit\.source === "default"/.test(inspSrc)
+    /const loopUnitMigratedKeys = \(stream\.timeMode === "normalized" && loopUnit\.source === "default"\)/.test(inspSrc)
+    && /window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc)
+    && /const loopUnitMigrated = loopUnitMigratedKeys\.length > 0/.test(inspSrc)
     && /non implica più loop_unit: normalized/.test(inspSrc));
+  assert("…e l'avviso nomina le chiavi che cambiano, come fa il motore",
+    /\{loopUnitMigratedKeys\.join\(", "\)\}: ora in secondi/.test(inspSrc));
   // start è is_smart=False lato motore (valore raw, nessun bound): clamparlo
   // qui sarebbe la UI a inventarsi un vincolo che il render non ha.
   assert("il ri-clamp resta sui tre estremi del loop, start fuori",

@@ -553,6 +553,67 @@
     return LOOP_UNITS.indexOf(u) >= 0 ? null : { value: u, units: LOOP_UNITS.slice() };
   }
 
+  // Le chiavi del blocco pointer che `loop_unit` interpreta, nella grafia dello
+  // YAML e nell'ordine in cui il motore le elenca (`_LOOP_UNIT_SCOPE` in
+  // pointer_controller.py). 'start' è fra queste benché loop non sia: è una
+  // posizione nel sample come loop_start, stesso dominio e stessa unità. Accanto
+  // a ciascuna, i campi con cui il bridge la tiene in stato — il valore scalare
+  // e il gemello `*Env`, che `unpackValueOrEnv` riempie solo su una forma
+  // envelope.
+  const LOOP_UNIT_SCOPE = [
+    ["start",      "start",     null],
+    ["loop_start", "loopStart", "loopStartEnv"],
+    ["loop_end",   "loopEnd",   "loopEndEnv"],
+    ["loop_dur",   "loopDur",   "loopDurEnv"],
+  ];
+
+  // Quali di quelle chiavi cambiano DAVVERO lettura su uno stream che PGE #222
+  // ha spostato — `time_mode: normalized` senza `loop_unit`, cioè quelli che
+  // prima ereditavano. Specchio di `_rescaling_would_change`: uno zero resta
+  // zero sotto qualunque fattore di scala, e quel che la conversione lasciava
+  // passare invariato non si muoveva nemmeno prima.
+  //
+  // Il filtro non è un di più: il motore lo ha messo apposta nel suo avviso, e
+  // il suo docstring dice perché — «senza il filtro sarebbero undici avvisi su
+  // stream in cui non si muove un campione, con i tre casi veri in mezzo al
+  // rumore». `start: 0` è la forma più comune nel corpus dei config, ed è anche
+  // quella con cui nasce ogni clip dell'editor. La riga d'avviso dell'Inspector
+  // È quell'avviso, quindi porta lo stesso filtro: senza, l'editor griderebbe
+  // dove il motore tace, e chi seguisse il consiglio scriverebbe una chiave che
+  // non cambia un campione — pagandola con un fingerprint mosso, cioè un render
+  // in più su uno stem che era giusto.
+  //
+  // Si restituiscono le chiavi, non un booleano: sono quelle che il messaggio
+  // del motore nomina (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), e
+  // l'Inspector le nomina uguale.
+  //
+  // Niente patto di parità su questa, a differenza di LOOP_UNITS: la funzione
+  // del motore che rispecchia è marcata `# ponytail` (PGE #242) e va via dopo
+  // una release, mentre `Envelope.is_envelope_like` — da cui dipende — non è
+  // raggiungibile senza numpy, che il job node della CI non ha. Le divergenze
+  // residue sono tutte nella direzione sicura (avvisare di troppo): `isEnvValue`
+  // dice sì anche su una lista vuota, dove `is_envelope_like` dice no.
+  function loopUnitRescaleKeys(pointer) {
+    if (!pointer) return [];
+    const moves = (v) => {
+      if (v == null) return false;
+      if (typeof v === "number") return v !== 0;
+      // Stesso discriminatore che il resto del modulo usa per «il motore lo
+      // tratterà da envelope», invece di una seconda lettura della stessa cosa.
+      // Qui copre anche i booleani: `_rescaling_would_change` deve escluderli a
+      // mano perché in Python `bool` è un `int` e cadrebbe nel ramo numerico,
+      // mentre in JS `typeof true !== "number"` e il booleano arriva intero
+      // fin qui, dove `isEnvValue` dice no. Un ramo esplicito sarebbe copia
+      // muta di un pericolo che questo linguaggio non ha — la riga che lo
+      // tiene onesto è l'assert «booleano → nessuna chiave» in
+      // test-envelope-utils.js, che sopravvive a qualunque riscrittura.
+      return window.PGEDeviationProb.isEnvValue(v);
+    };
+    return LOOP_UNIT_SCOPE
+      .filter(([, scalar, env]) => moves(pointer[scalar]) || (env != null && pointer[env] != null))
+      .map(([yamlKey]) => yamlKey);
+  }
+
   // Mirror of the engine's static loop-window validation (PGE issue #97 / engine
   // ec61242). With a loop active the engine now confines the grain read position
   // — base + pointer.offset_range + voice pointer offsets — to [loop_start,
@@ -867,6 +928,7 @@
     loopEnvMax,
     loopUnitInfo,
     loopUnitError,
+    loopUnitRescaleKeys,
     LOOP_UNITS,
     LOOP_UNIT_DEFAULT,
     loopBoundsError,

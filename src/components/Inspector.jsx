@@ -680,7 +680,19 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // `time_mode: normalized` senza `loop_unit`, cioe' quelli che prima
   // ereditavano. Il motore li avvisa a render ([LOOP_UNIT] … ora in secondi),
   // ma quel messaggio e' marcato `# ponytail` e va via dopo una release.
-  const loopUnitMigrated = stream.timeMode === "normalized" && loopUnit.source === "default";
+  //
+  // «Cambiato il significato» va preso alla lettera, ed e' per questo che la
+  // condizione non si ferma alle due chiavi: uno zero resta zero sotto
+  // qualunque fattore di scala, e `start: 0` senza loop e' la forma piu'
+  // comune del corpus — lo stesso motivo per cui il motore filtra il suo
+  // avviso con `_rescaling_would_change` invece di parlare a tutta la
+  // popolazione. Senza il filtro l'editor griderebbe dove il motore tace, e
+  // chi seguisse il consiglio scriverebbe una chiave che non muove un
+  // campione, pagandola con un fingerprint mosso: un render in piu' su uno
+  // stem che era giusto.
+  const loopUnitMigratedKeys = (stream.timeMode === "normalized" && loopUnit.source === "default")
+    ? window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer) : [];
+  const loopUnitMigrated = loopUnitMigratedKeys.length > 0;
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
   // contraddirebbe la riga di hint due righe più sotto.
   const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
@@ -1147,7 +1159,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <div className="pge-prow hint" style={{paddingTop:0}}>
                       <span className="k" /><span />
                       <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        time_mode: normalized non implica più loop_unit: normalized — start e le coordinate del loop sono in secondi.
+                        {loopUnitMigratedKeys.join(", ")}: ora in secondi — time_mode: normalized non implica più loop_unit: normalized.
                         Per la lettura precedente ([0,1] × sample_dur) scegli normalized qui sopra.
                       </span>
                       <span />

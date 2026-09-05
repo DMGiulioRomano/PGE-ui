@@ -504,6 +504,24 @@ also governs `pointer.start`, which outlives the loop: the loop rows
 (`loopWindowShown`) and the unit control (`loopUnitShown`) are separate blocks
 now, so removing the loop leaves the unit standing.
 
+The Inspector also warns the population #222 moved under the feet — `time_mode:
+normalized` with no `loop_unit`, which the engine reads as seconds now — but
+only where the numbers actually move. `loopUnitRescaleKeys` in
+`envelope-utils.js` is the mirror of the engine's `_rescaling_would_change` over
+its `_LOOP_UNIT_SCOPE` (`start`, `loop_start`, `loop_end`, `loop_dur`): a zero
+stays a zero under any scale factor, and `start: 0` with no loop is both the
+commonest shape in the config corpus and the one every clip the editor creates
+is born with. The engine filters its own `[LOOP_UNIT]` warning on exactly that,
+and the Inspector's hint *is* that warning, so it carries the same filter and
+names the same keys — otherwise the editor shouts where the engine is silent,
+and taking its advice writes a key that doesn't move a sample while moving the
+fingerprint: one render too many on a stem that was right. No parity pact for
+this one, unlike `LOOP_UNITS`: the engine method it mirrors is marked
+`# ponytail` (PGE #242) and goes away after a release, and it leans on
+`Envelope.is_envelope_like`, unreachable without numpy — which is what the CI
+node job running parity does not have. The residual divergences are all on the
+loud side (`isEnvValue` says yes to an empty list, `is_envelope_like` says no).
+
 `grain.duration_unit` (`seconds | samples | milliseconds`, PGE #158 then #171) is the same shape of problem one level down: the engine's `grain_duration` bounds are in **seconds**, the YAML values are in the declared unit. `grainUnitFactor` / `grainUnitBounds` / `grainDefaultDuration` / `grainUnitSuffix` in `envelope-utils.js` are the single source — bounds, the `0.05` s default and the row suffix expressed in the unit in force (in ms the cap is `10000`, not `10`); they drive the EnvelopeEditor `hardMin/hardMax` + vis window and the seed of the scalar↔env toggle. Changing the unit goes through `convertGrainDurationUnit`, which **converts** `duration`/`duration_range` — scalars and envelopes, every form `Envelope._scale_raw_values_y` scales — instead of letting the old number be reinterpreted in the new scale, then re-clamps the scalars (envelope points need no clamp: bounds scale by the same factor). An unknown unit converts nothing and gets no suffix. The key is deleted only for `seconds` — absence *is* seconds. One asymmetry is deliberate: changing the unit **does** mark the stem stale even though the rendered audio is identical, because `fingerprintStream` sees `0.05` become `50` — the safe direction (one render too many, never one too few), and normalizing the hash to seconds would cost more than it's worth.
 
 Every grafia converts, and that used to be false. Before PGE #234 the engine's `is_envelope_like` was **narrower than its own builder**: a list of only dict breakpoints or only 3-tuples was not envelope-like, so `scale_raw_param_values` left it alone and the engine read it in seconds whatever unit was declared. The UI mirrored that quirk with an `isEngineEnvelopeLike` gate, and derived a per-curve axis unit from it. The engine now scales every form its builder accepts (and stopped dropping the per-point interp inside a compact block), so the gate, the per-curve unit and the Inspector's warning row are gone — about 140 lines whose only job was to copy a defect. `deviation-probability.js` lost the matching `dictBPOk` parameter for the same reason. **If a future engine change re-narrows that predicate, this is the code that has to come back.**
