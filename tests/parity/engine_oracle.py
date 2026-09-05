@@ -806,6 +806,18 @@ def _op_constants(args):
         out["envelope_colors_keys_ast"] = None
         out["envelope_colors_keys_ast_error"] = str(exc)
 
+    # Il vocabolario di `pointer.loop_unit` (PGE #222). Solo AST: importare
+    # `pointer_controller` tira dentro `pge.envelopes.envelope` e quindi numpy,
+    # e nessuna op puo' pretendere il venv del motore — il job node della CI,
+    # dove la parita' gira, non ne costruisce uno. L'ordine conta: la prima
+    # grafia e' quella canonica, ed e' quella che il selettore dell'Inspector
+    # scrive.
+    try:
+        out["loop_units_ast"] = _introspect("constants").engine_loop_units(ENGINE.root)
+    except OracleError as exc:
+        out["loop_units_ast"] = None
+        out["loop_units_ast_error"] = str(exc)
+
     try:
         ns = _load_magnify_from_source()
         out["magnify_source"] = ns["_source"]

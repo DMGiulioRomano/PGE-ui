@@ -1822,3 +1822,94 @@ def test_render_state_claim_covers_the_gap_before_the_spawn():
     assert rs.is_running() is True, "senza proc la pretesa non conta"
     rs.clear()
     assert rs.is_running() is False
+
+
+# ---------------------------------------------------------------------------
+# engine_loop_units — il vocabolario di `pointer.loop_unit` (PGE #222).
+#
+# Prima di #222 la chiave non aveva un insieme dichiarato: il motore testava
+# `!= 'normalized'` e ogni altra stringa valeva "assoluto" per esclusione.
+# Ora una grafia fuori lista e' InvalidFieldValueError, cioe' un render che
+# muore, e la UI la nomina mentre si scrive (`loopUnitError`). Questa lettura
+# e' cio' che impedisce a quella lista di diventare una trascrizione: la
+# parita' pretende che i due lati coincidano.
+#
+# Solo AST, e non per gusto: importare `pointer_controller` tira dentro
+# `pge.envelopes.envelope` e quindi numpy, che nel job node della CI — dove la
+# parita' gira — non esiste.
+# ---------------------------------------------------------------------------
+
+def _stub_pointer_controller(root, body, layout="pge"):
+    d = {"pge": root / "src" / "pge" / "controllers",
+         "flat": root / "src" / "controllers",
+         "root": root / "src"}[layout]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "pointer_controller.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_loop_units_parses_source(tmp_path):
+    import engine_introspect as ei
+    _stub_pointer_controller(
+        tmp_path, "LOOP_UNITS = ('seconds', 'absolute', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "absolute", "normalized"]
+
+
+def test_engine_loop_units_keeps_the_order(tmp_path):
+    """L'ordine e' significativo: la prima grafia e' la canonica, ed e' quella
+    che il selettore dell'Inspector scrive. Un set qui perderebbe proprio il
+    dato che il chiamante usa."""
+    import engine_introspect as ei
+    _stub_pointer_controller(tmp_path, "LOOP_UNITS = ('absolute', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["absolute", "normalized"]
+
+
+def test_engine_loop_units_annotated(tmp_path):
+    """`LOOP_UNITS: tuple = (...)` e' un AnnAssign: la grafia annotata e' stile
+    di casa nel motore, e filtrare su Assign soltanto la renderebbe muta."""
+    import engine_introspect as ei
+    _stub_pointer_controller(
+        tmp_path, "LOOP_UNITS: tuple = ('seconds', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "normalized"]
+
+
+@pytest.mark.parametrize("layout", ["flat", "root"])
+def test_engine_loop_units_older_layouts(tmp_path, layout):
+    import engine_introspect as ei
+    _stub_pointer_controller(tmp_path, "LOOP_UNITS = ('seconds',)\n", layout=layout)
+    assert ei.engine_loop_units(tmp_path) == ["seconds"]
+
+
+def test_engine_loop_units_missing_is_empty(tmp_path):
+    """Un motore piu' vecchio di #222 non ha la costante. `[]` = "non lo so", e
+    chi chiama non deve inventarsi un vocabolario."""
+    import engine_introspect as ei
+    assert ei.engine_loop_units(tmp_path) == []
+    _stub_pointer_controller(tmp_path, "SOMETHING_ELSE = 1\n")
+    assert ei.engine_loop_units(tmp_path) == []
+
+
+def test_engine_loop_units_non_literal_is_empty(tmp_path):
+    """Il nome c'e' ma non e' una lista di stringhe letterali: la risposta e'
+    "non lo so", non una lista mezza letta."""
+    import engine_introspect as ei
+    _stub_pointer_controller(tmp_path, "LOOP_UNITS = tuple(_UNITS)\n")
+    assert ei.engine_loop_units(tmp_path) == []
+    _stub_pointer_controller(tmp_path, "LOOP_UNITS = ('seconds', 3)\n")
+    assert ei.engine_loop_units(tmp_path) == []
+
+
+def test_engine_loop_units_sees_a_live_bump(tmp_path):
+    """Cache invalidata sull'mtime come le altre letture: il caso e' un `git
+    pull` nel repo fratello sotto un `make serve` acceso. Con una cache a vita
+    l'editor rifiuterebbe una grafia che il motore ha appena imparato."""
+    import os
+    import engine_introspect as ei
+    _stub_pointer_controller(tmp_path, "LOOP_UNITS = ('seconds', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "normalized"]
+
+    src = tmp_path / "src" / "pge" / "controllers" / "pointer_controller.py"
+    src.write_text("LOOP_UNITS = ('seconds', 'absolute', 'normalized')\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "absolute", "normalized"]

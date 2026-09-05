@@ -30,7 +30,14 @@
 
 const { parity, loadUiLibs } = require("./harness.js");
 
-const window = loadUiLibs(["yaml-bridge.js", "bounds.js"]);
+const window = loadUiLibs([
+  "yaml-bridge.js", "bounds.js",
+  // envelope-utils porta LOOP_UNITS, l'ultimo vocabolario del motore che
+  // questo repo scrive per esteso; le due prima sono le sue dipendenze di
+  // caricamento (envelope-loops per window.PGEEnv, deviation-probability per
+  // la lettura a chiamata).
+  "envelope-loops.js", "deviation-probability.js", "envelope-utils.js",
+]);
 const B = window.PGEBounds;
 const STATIC = JSON.parse(JSON.stringify(window.PGE_BOUNDS));
 
@@ -475,6 +482,62 @@ parity({
 
         ctx.note(`${(imported || []).length} nomi plottabili, letti dal motore`,
           (imported || []).join(", "));
+      },
+    },
+    {
+      label: "il vocabolario di loop_unit: la terza lista che la UI scrive per esteso",
+      run: async (ask, assert, ctx) => {
+        /* PGE #222 / PGE-ui #149. Prima `loop_unit` non aveva un insieme
+         * dichiarato: il motore testava `!= 'normalized'` e ogni altra stringa
+         * valeva "assoluto", quindi non c'era niente da rispecchiare. Ora una
+         * grafia fuori lista e' InvalidFieldValueError — un render che muore —
+         * e `loopUnitError` in envelope-utils.js lo dice mentre si scrive.
+         *
+         * Il prezzo e' una lista di stringhe del motore scritta in questo repo,
+         * cioe' esattamente cio' che CLAUDE.md vieta senza una parita' che la
+         * tenga onesta: con il motore davanti i due lati coincidono sempre, e a
+         * divergere sarebbero solo dopo un rename upstream che nessun test
+         * node vedrebbe. Questo caso e' quella parita'.
+         *
+         * L'ordine conta: la prima grafia e' la canonica, ed e' quella che il
+         * selettore dell'Inspector scrive quando l'utente sceglie l'assoluto. */
+        const c = (await ask("constants", {})).value;
+        const fromEngine = c.loop_units_ast;
+
+        assert("il motore dichiara LOOP_UNITS",
+          Array.isArray(fromEngine) && fromEngine.length > 0,
+          c.loop_units_ast_error || JSON.stringify(fromEngine));
+
+        assert("la UI ne ha la stessa copia, nello stesso ordine",
+          JSON.stringify(window.PGEEnvUtils.LOOP_UNITS) === JSON.stringify(fromEngine),
+          `ui=${JSON.stringify(window.PGEEnvUtils.LOOP_UNITS)} motore=${JSON.stringify(fromEngine)}`);
+
+        /* Il default della UI dev'essere una grafia che il motore accetta, e
+         * la canonica: e' quella che il selettore scrive, quindi una scelta
+         * fuori lista sarebbe un render ucciso dall'editor stesso. */
+        assert("il default della UI e' la prima grafia del motore",
+          window.PGEEnvUtils.LOOP_UNIT_DEFAULT === fromEngine[0],
+          `default=${window.PGEEnvUtils.LOOP_UNIT_DEFAULT} prima=${fromEngine[0]}`);
+
+        /* E il mirror non deve solo avere la lista: deve usarla. Ogni grafia
+         * del motore passa, una inventata no — altrimenti una `LOOP_UNITS`
+         * allineata e un `loopUnitError` che ignora la lista starebbero
+         * verdi insieme. */
+        assert("loopUnitError accetta ogni grafia del motore",
+          fromEngine.every(u => window.PGEEnvUtils.loopUnitError({ loopUnit: u }) === null));
+        assert("…e rifiuta quel che il motore non dichiara",
+          window.PGEEnvUtils.loopUnitError({ loopUnit: fromEngine[0] + "_"}) !== null);
+
+        /* L'ereditarieta' e' morta davvero, e non solo nel commento: nessun
+         * time_mode puo' far leggere le coordinate come normalized. E' la
+         * divergenza che #149 ha chiuso — la UI scriveva 0.075 dove il motore
+         * legge 0.6 s. */
+        assert("nessun time_mode produce la lettura normalized",
+          ["normalized", "absolute", undefined]
+            .every(tm => window.PGEEnvUtils.loopUnitInfo({ timeMode: tm }).unit === "absolute"));
+
+        ctx.note(`vocabolario di loop_unit: ${fromEngine.join(", ")}`,
+          `canonica «${fromEngine[0]}», default della chiave assente`);
       },
     },
   ],
