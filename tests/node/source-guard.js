@@ -20,7 +20,7 @@
  *
  * Non e' un parser: e' uno scanner che riconosce commenti di riga e di blocco,
  * le tre grafie di stringa e i letterali regex. Basta per del codice che parsa
- * gia' (`test-jsx-parse.js` lo pretende) e non introduce dipendenze.
+ * gia' (`test-sources.js` lo pretende) e non introduce dipendenze.
  * =========================================================================== */
 
 const fs = require("fs");
