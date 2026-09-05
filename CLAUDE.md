@@ -68,10 +68,13 @@ exists):
   guards on the Timeline/app wiring), and `test-workspace.js` (the
   workspace switch: a successful one empties the stem index — it describes the
   previous `output/` — a refused one changes nothing, plus source guards on the
-  server routes and the app/Settings wiring), and `test-jsx-parse.js` (every
-  `.jsx` file parses — there is no build step, so a syntax error would only
-  surface as a blank editor, and the regex source guards stay green on a file
-  that cannot run).
+  server routes and the app/Settings wiring), and `test-sources.js` (the static
+  gate on the editor's own sources: every `src/lib/*.js` and
+  `src/components/*.jsx` parses in the dialect the browser gets, the census
+  between `PGE Editor.html` and the filesystem closes in both directions, the
+  load order has the documented shape, and no file reads a `window.*` global at
+  load time that a *later* script defines — the last one derived from the
+  sources, not from a table of declared dependencies).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
@@ -198,9 +201,38 @@ open handle the way a real oracle would — the earlier single probe closed the
 fake oracle before hanging, i.e. it tested the branch in the one configuration
 where the defect cannot exist.
 
-There is no linter or typechecker — `test-jsx-parse.js` is the whole static net,
-and it only proves a component parses. UI verification is manual (open
-`PGE Editor.html`, Settings → local backend, test connection, render).
+There is no linter or typechecker — `test-sources.js` is the whole static net.
+It answers four questions about the sources, and only those: every file parses,
+every file is loaded by `PGE Editor.html` exactly once (and every `<script>`
+points at a file that exists), the order has the documented shape (vendor →
+`src/lib/` → `src/components/`, `app.jsx` last), and nothing reads a `window.*`
+global at load time that a later script defines.
+
+That last check is **derived from the sources**, not from a `{file: [deps]}`
+table written in the test: a table is a second copy of the truth, and the
+person adding a dependency is not the person who remembers to update it — it
+would go mute exactly while the order was about to break. The scanner reads
+`window.X` assignments as definitions and `window.X` reads as dependencies,
+**both** restricted to what actually runs at load: the module body plus the
+IIFE bodies inside it (the shape of every `src/lib/` file). The restriction has
+to cover the two halves or it leaks: a `window.X = …` sitting in a function
+somebody calls *later* has put nothing on `window` by the time the next script
+reads `X`, and counting it as a definition made the guard green on an
+`undefined` — the very case it exists to catch — while also inflating the
+edge count with an arc that doesn't exist. `window.PGE.Timeline = …` counts as
+a **read** of `PGE`: that is the arc every component has towards whoever
+*creates* the namespace, which is `primitives.jsx` only because it loads first —
+nine files write `window.PGE = window.PGE || {}`, so moving `primitives.jsx`
+behind another of the nine stays green, and correctly (at load time what is
+needed is the object, not the components that end up inside it). Property-level
+dependencies (`PGE.Knob`) are not seen at all. Its other declared blind spot: a
+function *declared* at load level and called immediately after is walked as
+lazy, so a dependency hidden that way is missed — a false negative, the safe
+direction.
+
+What it does not do is prove a component *works*: for that there is no headless
+boot. UI verification is manual (open `PGE Editor.html`, Settings → local
+backend, test connection, render).
 
 ## Architecture
 
@@ -964,6 +996,12 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+
+That last sentence is not prose any more: `tests/node/test-sources.js` is its
+executable form (#138). It reads the `<script>` list out of the HTML, requires a
+bijection with the files on disk, and refuses a `window.*` read that a later
+script satisfies. What it cannot say is *where* in the phase a new file goes —
+only that the order it is given holds together.
 
 ## Security stance of `server.py`
 
