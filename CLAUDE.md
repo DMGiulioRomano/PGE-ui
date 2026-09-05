@@ -212,13 +212,23 @@ That last check is **derived from the sources**, not from a `{file: [deps]}`
 table written in the test: a table is a second copy of the truth, and the
 person adding a dependency is not the person who remembers to update it — it
 would go mute exactly while the order was about to break. The scanner reads
-`window.X` assignments as definitions and `window.X` reads inside the module
-body (IIFE bodies included — the shape of every `src/lib/` file) as load-time
-dependencies. `window.PGE.Timeline = …` counts as a **read** of `PGE`, which is
-what makes every component's dependency on `primitives.jsx` visible. Its
-declared blind spot: a function *declared* at load level and called immediately
-after is walked as lazy, so a dependency hidden that way is missed — a false
-negative, the safe direction.
+`window.X` assignments as definitions and `window.X` reads as dependencies,
+**both** restricted to what actually runs at load: the module body plus the
+IIFE bodies inside it (the shape of every `src/lib/` file). The restriction has
+to cover the two halves or it leaks: a `window.X = …` sitting in a function
+somebody calls *later* has put nothing on `window` by the time the next script
+reads `X`, and counting it as a definition made the guard green on an
+`undefined` — the very case it exists to catch — while also inflating the
+edge count with an arc that doesn't exist. `window.PGE.Timeline = …` counts as
+a **read** of `PGE`: that is the arc every component has towards whoever
+*creates* the namespace, which is `primitives.jsx` only because it loads first —
+nine files write `window.PGE = window.PGE || {}`, so moving `primitives.jsx`
+behind another of the nine stays green, and correctly (at load time what is
+needed is the object, not the components that end up inside it). Property-level
+dependencies (`PGE.Knob`) are not seen at all. Its other declared blind spot: a
+function *declared* at load level and called immediately after is walked as
+lazy, so a dependency hidden that way is missed — a false negative, the safe
+direction.
 
 What it does not do is prove a component *works*: for that there is no headless
 boot. UI verification is manual (open `PGE Editor.html`, Settings → local

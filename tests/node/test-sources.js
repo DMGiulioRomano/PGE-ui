@@ -28,11 +28,17 @@
  * mentre l'ordine sta per rompersi. E' la stessa ragione per cui in questo repo
  * nessuna costante del motore e' piu' trascritta a mano.
  *
- * Limite dichiarato del punto 4: "al caricamento" significa il corpo del
- * modulo piu' quello delle IIFE — che e' la forma di ogni file di `src/lib/` —
- * non il corpo di una funzione dichiarata li' e chiamata subito dopo. Una
- * dipendenza nascosta cosi' non viene vista. E' un falso negativo, cioe' la
- * direzione sicura: la guardia non inventa fallimenti, ne perde qualcuno.
+ * "Al caricamento" e' la stessa riga per le due meta': vale per cio' che un
+ * file LEGGE e per cio' che DEFINISCE. Un `window.X = …` che sta nel corpo di
+ * una funzione chiamata da qualcun altro, dopo, non e' li' quando lo script
+ * successivo legge X — contarlo comunque scusava proprio la dipendenza che
+ * questa guardia esiste per vedere.
+ *
+ * Limite dichiarato del punto 4: il corpo del modulo piu' quello delle IIFE —
+ * che e' la forma di ogni file di `src/lib/` — non quello di una funzione
+ * dichiarata li' e chiamata subito dopo. Una dipendenza nascosta cosi' non
+ * viene vista. E' un falso negativo, cioe' la direzione sicura: la guardia non
+ * inventa fallimenti, ne perde qualcuno.
  *
  * Run: node test-sources.js (from tests/node/ after npm install)
  * =========================================================================== */
@@ -198,8 +204,13 @@ function windowMember(n) {
  * degli <script> e' gia' irrilevante.
  *
  * `window.PGE.Timeline = …` conta come LETTURA di `PGE`, non come definizione:
- * quel namespace dev'essere gia' li' — ed e' esattamente la dipendenza di ogni
- * componente da primitives.jsx.
+ * quel namespace dev'essere gia' li'. E' l'arco che ogni componente ha verso
+ * CHI CREA il namespace — oggi primitives.jsx perche' e' il primo caricato,
+ * non perche' sia l'unico: `window.PGE = window.PGE || {}` e' scritto da nove
+ * file. Spostare primitives.jsx dopo un altro dei nove resta verde, ed e'
+ * corretto: al caricamento serve l'oggetto, non i componenti che ci finiscono
+ * dentro (quelli si leggono dentro le render, cioe' in scope pigro). La
+ * dipendenza a livello di PROPRIETA' (`PGE.Knob`) questa guardia non la vede.
  */
 function scanWindowUse(ast) {
   const defines = new Set(), reads = new Set();
@@ -209,7 +220,13 @@ function scanWindowUse(ast) {
     if (!node.type) return;
 
     if (node.type === "AssignmentExpression" && windowMember(node.left)) {
-      defines.add(node.left.property.name);
+      // `eager` come per la lettura: un'assegnazione che sta in una funzione
+      // che qualcun altro chiamera' dopo non ha ancora messo niente su window
+      // quando lo script successivo legge quel nome. Senza questo gate un
+      // `window.PGEX` definito solo dentro una funzione pigra soddisfaceva la
+      // lettura al caricamento di un file caricato dopo — verde su un
+      // undefined — e in piu' contava come arco nel censimento qui sotto.
+      if (eager) defines.add(node.left.property.name);
       walk(node.right, eager, node, "right");
       return;
     }
@@ -227,6 +244,40 @@ function scanWindowUse(ast) {
     }
   })(ast.program, true, null, null);
   return { defines, reads };
+}
+
+/* Lo scanner e' il cuore del punto 4, e fin qui si vedeva solo di riflesso —
+ * nel verdetto sui file veri, dove le sue due regole e i suoi due limiti non
+ * sono distinguibili l'uno dall'altro. Quattro sorgenti sintetiche li fissano:
+ * due sono la regola, due sono il limite dichiarato nell'intestazione. Senza
+ * di loro, il gate su `eager` per la definizione sarebbe una riga che nessuno
+ * difende, cioe' la prossima a tornare indietro. */
+{
+  const probe = (src) =>
+    scanWindowUse(parser.parse(src, { sourceType: "script", plugins: ["jsx"] }));
+
+  const vivo = probe("(function(){ const a = window.PGEUno; window.PGEDue = a; })();");
+  assert("scanner: dentro una IIFE lettura e definizione contano entrambe",
+    vivo.reads.has("PGEUno") && vivo.defines.has("PGEDue"),
+    `reads=[${[...vivo.reads]}] defines=[${[...vivo.defines]}]`);
+
+  const defPigro = probe(
+    "(function(){ function tardi(){ window.PGETre = 1; } window.PGEInit = tardi; })();");
+  assert("scanner: un window.* assegnato in una funzione pigra non e' una definizione",
+    !defPigro.defines.has("PGETre") && defPigro.defines.has("PGEInit"),
+    "altrimenti scusa la lettura al caricamento di uno script successivo — " +
+    "cioe' proprio il caso che il punto 4 esiste per vedere");
+
+  const letPigra = probe(
+    "(function(){ function dopo(){ return window.PGEQuattro; } window.PGECin = dopo; })();");
+  assert("scanner: una lettura in una funzione pigra non conta (limite dichiarato)",
+    !letPigra.reads.has("PGEQuattro"),
+    "e' il falso negativo voluto: li' l'ordine degli <script> e' gia' irrilevante");
+
+  const ns = probe("window.PGE.Timeline = function(){};");
+  assert("scanner: window.PGE.X = … e' una LETTURA di PGE, non una definizione",
+    ns.reads.has("PGE") && !ns.defines.has("PGE") && !ns.defines.has("Timeline"),
+    `reads=[${[...ns.reads]}] defines=[${[...ns.defines]}]`);
 }
 
 const use = new Map();
@@ -261,7 +312,12 @@ localScripts.forEach((src, i) => {
 {
   /* Un nome nostro che nessuno definisce e' un refuso, non un globale del
    * browser: `window.matchMedia` non comincia per PGE. Senza questo, un
-   * `window.PGEEnvUtilss` passerebbe per una globale altrui e resterebbe muto. */
+   * `window.PGEEnvUtilss` passerebbe per una globale altrui e resterebbe muto.
+   *
+   * Da quando la definizione e' soggetta a "al caricamento" come la lettura,
+   * qui cade anche il nome che ESISTE ma solo dentro una funzione pigra: al
+   * momento della lettura non c'e', ed e' per questo che il messaggio dice
+   * "al caricamento" e non "da nessuna parte". */
   const orphans = [];
   for (const [src, u] of use) {
     if (!localScripts.includes(src)) continue;
@@ -269,7 +325,7 @@ localScripts.forEach((src, i) => {
       if (/^PGE/.test(name) && !definedAt.has(name)) orphans.push(`${src} → window.${name}`);
     }
   }
-  assert("nessuna lettura di una globale PGE* che nessuno definisce",
+  assert("nessuna lettura di una globale PGE* che nessuno definisce al caricamento",
     orphans.length === 0, orphans.join("\n      "));
 }
 {
