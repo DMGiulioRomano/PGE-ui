@@ -166,7 +166,7 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
                          cache, visualize, page_duration, reaper, basename,
                          refs, output, fmt, plot_envelopes=None,
                          grain_json=True, show_voice_offsets=False,
-                         magnify=False, magnify_at=None) -> list:
+                         magnify=False, magnify_at=None, bw=False) -> list:
     """Build the `python src/main.py …` argv. Pure (no spawning) so it is unit
     testable. `--show-static` is appended only with `--visualize` — it has no
     effect otherwise (engine docs/reference/cli.md). #43
@@ -193,6 +193,15 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
     (`t=14,y=2.7,zoom=10;t=20,stream=texture2`) — and since PGE #214 every lens
     also reads out the envelope values at its instant. The two combine (auto
     lens plus explicit ones) and are gated on `--visualize` like the rest.
+
+    `bw` (PGE #248 / PGE-ui #152) switches the score to the print-friendly
+    black-and-white preset (achromatic pitch colormap, envelopes told apart by
+    dash pattern instead of hue). It is a switch — no value to parse, so unlike
+    `--plot-envelopes` and `--magnify-at` it cannot make the engine exit 1 —
+    and it only means something with `--visualize`, so it rides inside that
+    block like `--show-static`. Inert on an engine that predates it: the CLI
+    parses sys.argv by hand and ignores unknown flags, and with no value of its
+    own it can't be mistaken for a positional either.
 
     `refs` (PGE-ui #148) is the samples directory, and goes out as
     `--samples-dir` for **both** renderers — see the comment at the flag. The
@@ -228,6 +237,8 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
             names = [str(n).strip() for n in plot_envelopes if str(n).strip()]
             if names:
                 cmd += ["--plot-envelopes", ",".join(names)]
+        if bw:
+            cmd += ["--bw"]
         if magnify:
             cmd += ["--magnify"]
         spec = str(magnify_at).strip() if magnify_at else ""

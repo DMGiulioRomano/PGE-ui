@@ -122,6 +122,17 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
           ) : null}
           {options.visualize ? (
             <div className="rs-row" style={{paddingLeft: 18}}
+                 onClick={() => toggle("bw", !options.bw)}>
+              <span className="rs-k">black &amp; white</span>
+              <div className={"rs-tog" + (options.bw ? " on" : "")}
+                   role="switch" aria-checked={!!options.bw}>
+                <span className="rs-tog-knob" />
+              </div>
+              <div className="rs-hint">print-friendly score: achromatic pitch map, envelopes told apart by dash pattern</div>
+            </div>
+          ) : null}
+          {options.visualize ? (
+            <div className="rs-row" style={{paddingLeft: 18}}
                  onClick={() => toggle("magnify", !options.magnify)}>
               <span className="rs-k">lens</span>
               <div className={"rs-tog" + (options.magnify ? " on" : "")}
@@ -221,6 +232,7 @@ function buildCommand(o) {
     if (Array.isArray(o.plotEnvelopes) && o.plotEnvelopes.length) {
       parts.push("--plot-envelopes", o.plotEnvelopes.join(","));
     }
+    if (o.bw) parts.push("--bw");
     if (o.magnify) parts.push("--magnify");
     // Stessa funzione di onRender, non lo stesso filtro riscritto: e' cio' che
     // rende l'anteprima uguale a quel che parte, byte per byte — inclusa la
