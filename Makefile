@@ -29,7 +29,7 @@ else
 ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
 endif
 
-.PHONY: help serve install dev-clean tests tests-node tests-python tests-parity
+.PHONY: help serve install dev-clean tests tests-node tests-python tests-parity tests-e2e
 
 help:
 	@echo " PGE-ui · targets"
@@ -39,8 +39,9 @@ help:
 	@echo "                       (default ROOT=$(ROOT))"
 	@echo "                       WORKSPACE=~/brani per lavorare fuori dal repo engine"
 	@echo ""
-	@echo "  make tests           suite completa (node + python + parita')"
+	@echo "  make tests           suite completa (node + python + parita' + e2e)"
 	@echo "  make tests-parity    solo i confronti con il motore vero"
+	@echo "  make tests-e2e       boot headless dell'editor (serve un browser)"
 	@echo ""
 	@echo " Variables:"
 	@echo "  PORT=7878            porta"
@@ -49,6 +50,7 @@ help:
 	@echo "                       (default: = ROOT, i progetti nel repo engine)"
 	@echo "  PYTHON=python3       interprete usato per creare il venv"
 	@echo "  PGE_PARITY_STRICT=1  un caso di parita' saltato diventa un errore"
+	@echo "  PGE_REQUIRE_E2E=1    un e2e saltato (browser assente) diventa un errore"
 
 $(VENV_BIN)/pip:
 	$(PYTHON) -m venv $(VENV)
@@ -59,7 +61,7 @@ install: $(VENV_BIN)/pip
 serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) $(WS_FLAG) --port $(PORT)
 
-.PHONY: tests tests-node tests-python tests-parity
+.PHONY: tests tests-node tests-python tests-parity tests-e2e
 
 # La parita' entra in `make tests` solo se il motore c'e': senza repo fratello
 # non c'e' niente da confrontare, e fallire li' punirebbe un clone appena
@@ -82,6 +84,7 @@ tests:
 	  echo "parita' saltata: nessun motore in $(ENGINE_ROOT)"; \
 	  echo "  clona PythonGranularEngine accanto a PGE-ui, oppure: make tests ROOT=/path/to/engine"; \
 	fi; \
+	$(MAKE) --no-print-directory tests-e2e || rc=1; \
 	echo ""; \
 	if [ $$rc -eq 0 ]; then echo "All tests passed."; \
 	else echo "Qualcosa e' rosso: il censimento qui sopra e' completo."; fi; \
@@ -129,3 +132,20 @@ dev-clean:
 	@echo "    localStorage.clear()"
 	@echo "(clears pge-local-stems / pge-local-fp / pge-local-sem; the server"
 	@echo " keeps the real files)."
+
+# Boot headless dell'editor (#139): apre `PGE Editor.html` in un Chromium
+# guidato da playwright, contro il bridge vero su un motore finto, e verifica
+# che l'app parta senza errori, carichi il progetto versionato in
+# tests/e2e/fixtures/, apra Inspector ed EnvelopeEditor e faccia un giro di
+# undo/redo. E' l'unica suite che dimostra che un componente *funziona*: il
+# gate statico (tests/node/test-sources.js) dice solo che parsa.
+#
+# `npm install` qui dentro e non in tests/node: playwright pesa, e ogni
+# `make tests-node` la pagherebbe. Il BROWSER invece non si scarica da soli —
+# sono ~150 MB, non e' roba che un target di test debba tirare giu' senza che
+# nessuno l'abbia chiesto: se manca, test-boot.js si salta rumorosamente e
+# dice il comando. PGE_REQUIRE_E2E=1 rende quello skip un fallimento, ed e'
+# cio' che passa la CI — la stessa regola di PGE_REQUIRE_ENGINE_FIXTURES.
+tests-e2e:
+	cd tests/e2e && npm install --silent
+	cd tests/e2e && node test-boot.js

@@ -15,12 +15,13 @@ make install          # pip install -r requirements.txt  (flask, flask-cors, gun
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
-make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there)
+make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
+make tests-e2e        # headless boot of the editor (needs a playwright browser)
 ```
 
-`make tests` runs three parts (the third only when the sibling engine checkout
-exists):
+`make tests` runs four parts (the third only when the sibling engine checkout
+exists, the fourth only when a browser is installed):
 
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
@@ -95,13 +96,20 @@ exists):
   `tests/parity/README.md`. The parity suites don't own their
   verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
   guards them against taking it back with a brutal exit.
+- **`make tests-e2e`** (node + python + a browser, needs **neither** the engine
+  checkout nor its venv) — `tests/e2e/test-boot.js`, the headless boot. See
+  "Headless boot" below. It is the only suite that shows a component *works*
+  rather than merely parsing, and the only one that runs the bridge over a real
+  socket.
 
-All three **accumulate** failures rather than stopping at the first red: with
+All four **accumulate** failures rather than stopping at the first red: with
 twenty-odd suites, `|| exit 1` meant seeing one failure per run instead of the
 whole census. That holds *between* the targets too — `tests: tests-node
 tests-python` was a make dependency, so one red node suite made pytest **and**
 parity disappear, and whoever ran `make tests` for the census got a third of
-it. **All three targets now forward `ROOT=` as `PGE_ENGINE_ROOT`**, and all
+it. (`tests-e2e` joins that accumulation; it asks the engine nothing, so `ROOT=`
+does not reach it.) **The three engine-facing targets forward `ROOT=` as
+`PGE_ENGINE_ROOT`**, and all
 three readers honour it (`tests/node/test-yaml-bridge.js`,
 `tests/python/engine_corpus.py`, `tests/parity/harness.js`). Each half ignored
 it in turn, and the symptom was never a red: `make tests-{python,node}
@@ -110,7 +118,8 @@ and printed green, i.e. #132 through the back door. `test-suite-harness.js`
 guards the three readers and the three recipes, and measures the node one by
 running it against an invented root.
 
-CI runs all of it on push and PR (`.github/workflows/ci.yml`). The python job
+CI runs all of it on push and PR (`.github/workflows/ci.yml`), in three jobs:
+`node`, `python` and `e2e`. The python job
 checks out the sibling engine and builds its venv. The node job checks it out
 too, for the fixture-dependent parts and for `make tests-parity` (which needs no
 engine venv at all), so both run on a PR: a `configs/` change in
@@ -262,9 +271,72 @@ function *declared* at load level and called immediately after is walked as
 lazy, so a dependency hidden that way is missed — a false negative, the safe
 direction.
 
-What it does not do is prove a component *works*: for that there is no headless
-boot. UI verification is manual (open `PGE Editor.html`, Settings → local
-backend, test connection, render).
+What it does not do is prove a component *works* — a file can parse perfectly
+and explode on its first render. That half is `tests/e2e/`.
+
+### Headless boot (`tests/e2e/`, #139)
+
+`make tests-e2e` opens the real `PGE Editor.html` in a headless Chromium
+(playwright) against the real bridge, and asserts the four things that were
+previously checked by hand: the page boots with **zero unhandled exceptions and
+zero console errors**, a project loads and reaches the timeline, the Inspector
+and the EnvelopeEditor open on a stream and the envelope *draws its
+breakpoints*, and one undo/redo round trip lands back where it started. The
+assertions are structural (how many breakpoints, which stream, what the `onset`
+row reads), never pixels: a pixel assert ages badly, a boot assert doesn't.
+
+Three decisions hold it up, and each is the answer to a way the test could have
+been green while proving nothing:
+
+- **The engine is not needed — neither its checkout nor its venv.**
+  `tests/e2e/bridge.py` calls `server.make_app` directly (`main()` would exit on
+  a missing `src/main.py`, and rightly) over a **stub** engine root plus a
+  temporary copy of `tests/e2e/fixtures/`. The project the editor opens is
+  versioned in this repo, so a fork PR without the engine secret runs the whole
+  suite. Two stub files are load-bearing: `src/main.py`, so `/diagnose` has one
+  fewer red check to add noise with, and `.venv/bin/python`, because the boot
+  fires `POST /setup` in the background and without it the test would build a
+  venv instead of booting.
+- **The network is the test's, not the internet's.** `tests/e2e/browser.js`
+  routes every request: the four CDN vendor scripts are served from
+  `tests/e2e/node_modules` (the npm packages the CDNs publish), the CSS's three
+  remote `@font-face` files are blocked, the app's own `http://localhost:7878`
+  is rewritten onto the bridge's ephemeral port, and **anything else fails the
+  test by name**. So CI does not depend on unpkg/cdnjs being up, and a new
+  remote asset can't slip in unnoticed. Both lists are *read from the sources* —
+  the `<script>` tags of the HTML, the `@font-face` blocks of `styles/*.css` —
+  never transcribed, for the usual reason: a hand-written copy goes mute exactly
+  when the dependency changes.
+- **The vendor bytes are the user's bytes.** `verifyVendor()` recomputes the SRI
+  hash of each local file and requires it to equal the `integrity` written in
+  `PGE Editor.html`. A version bumped on one side only is a named failure
+  instead of a boot that dies on a blocked script — and, incidentally, it is the
+  only check in the repo that the published SRI hashes are right.
+
+Two consequences worth keeping in mind. The `http://localhost:7878` rewrite
+rests on that literal still being app.jsx's default (`tweaks.serverUrl` has no
+entry in `TWEAK_DEFAULTS`, and preferences don't live in localStorage, so
+there is no way to tell the app otherwise from outside) — a source guard pins
+the pair, because without it the app would silently go `serverDown` and the
+test would keep passing on half an application. And the console-error count
+attributes an error to the *test* only when the console message's own
+`location().url` is one of the blocked fonts: "Failed to load resource" is also
+what a broken app fetch prints, which is precisely the case this suite exists
+to catch.
+
+Skipping is loud and bounded: `playwright` uninstalled or its browser not
+downloaded prints the command to fix it and exits 0 — a 150 MB download is not
+something a test target should trigger on its own — while `PGE_REQUIRE_E2E=1`
+turns that skip into a failure. That is what the CI job passes, the same rule
+as `PGE_REQUIRE_ENGINE_FIXTURES`. The static half of the suite (vendor, SRI,
+source guard) runs even when the browser is absent.
+
+`test-boot.js` is in `test-suite-harness.js`'s presidio like the `tests/node/`
+suites: its verdict is an `exit` handler registered at module level. It needs
+that more than they do — it is the only suite whose body can die for a reason
+that isn't an assert (a `page.click` that times out, a python that won't
+start), and without the handler that death exits 1 with a stack and no census
+of what didn't run.
 
 ## Architecture
 
@@ -1133,7 +1205,10 @@ That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a
 bijection with the files on disk, and refuses a `window.*` read that a later
 script satisfies. What it cannot say is *where* in the phase a new file goes —
-only that the order it is given holds together.
+only that the order it is given holds together. The other half — that the file
+so ordered actually *renders* — is `tests/e2e/test-boot.js` (#139), which boots
+the page for real; a new component that parses and then throws is caught there,
+nowhere else.
 
 ## Security stance of `server.py`
 
