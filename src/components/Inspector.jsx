@@ -694,8 +694,12 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     ? window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer) : [];
   const loopUnitMigrated = loopUnitMigratedKeys.length > 0;
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
-  // contraddirebbe la riga di hint due righe più sotto.
-  const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
+  // contraddirebbe la riga di hint due righe più sotto. E su una grafia fuori
+  // vocabolario il suffisso non c'è affatto — etichettare «s» mentre la riga
+  // d'errore qui sotto dice che l'unità non è riconosciuta sarebbero due
+  // affermazioni opposte. La regola è la stessa di grainUnitSuffix, e sta nel
+  // modulo perché la condivide l'EnvelopeEditor.
+  const loopUnitSuffix = window.PGEEnvUtils.loopUnitSuffix(stream.pointer);
   // grain.duration_unit (PGE #158, tre unità da PGE v5.2.0 / #171). È un
   // meta-parametro: governa insieme grain.duration e grain.duration_range, e
   // con qualunque unità che non sia 'seconds' il motore pretende una duration

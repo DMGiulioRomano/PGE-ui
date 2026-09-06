@@ -491,12 +491,21 @@ shown under the Inspector's selector. Picking the **default** deletes the key
 rather than materializing a redundant one; that rule survives #222 only because
 "redundant" is finally a property of the key and not of the stream hosting it.
 Switching the unit re-clamps scalar endpoints; envelope endpoints are per-grain
-and exempt. `loopUnitError` judges only spellings the engine will actually see:
-a *falsy* one (`loop_unit: 0`, `false`, `""`) is dropped by the serializer
-(`ptr.loopUnit || undefined`) and `/render` writes the editor's state to the
-config before launching, so the key never reaches the parser — accusing it would
-be a red on a render that succeeds, and would contradict `loopUnitInfo`, which
-reports those as absent (`source: "default"`).
+and exempt.
+
+`loopUnitError` existing pulls two neighbours into line, both of the same shape
+as `grain.duration_unit` one section down. `loopUnitSuffix` (same module, read by
+both the Inspector and the EnvelopeEditor) is the single source of the `s` on
+`pointer.start` and the three loop rows, and it goes **quiet** on a spelling
+outside the vocabulary — labelling seconds beside the red row that declares the
+unit unrecognized would be two opposite statements, which is exactly what
+`grainUnitSuffix` already says in its own comment. And `loopUnitError` judges
+only spellings the engine will actually see: a *falsy* one (`loop_unit: 0`,
+`false`, `""`) is dropped by the serializer (`ptr.loopUnit || undefined`) and
+`/render` writes the editor's state to the config before launching, so the key
+never reaches the parser — accusing it would be a red on a render that succeeds,
+and would contradict `loopUnitInfo`, which reports those as absent
+(`source: "default"`).
 
 Two consequences the editor had to be taught, both of which turned a healthy
 stream into an exposed one. `Seg` calls `onChange` on the already-active button,

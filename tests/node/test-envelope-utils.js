@@ -31,11 +31,11 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 20 helpers",
+assert("PGEEnvUtils exposes the 21 helpers",
   ["sliceEnvArray", "sliceStreamEnvelopes", "rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopUnitError", "loopUnitRescaleKeys", "loopBoundsError",
-   "grainDurationUnitError", "snapDirection", "snapForDomain", "readDirectionError"]
+   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopUnitError", "loopUnitSuffix", "loopUnitRescaleKeys",
+   "loopBoundsError", "grainDurationUnitError", "snapDirection", "snapForDomain", "readDirectionError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
 // Il vocabolario non e' una funzione: viaggia con loro perche' il selettore
@@ -467,6 +467,39 @@ console.log("\n── loopUnitError (vocabolario) ──");
 }
 
 // ---------------------------------------------------------------------------
+// loopUnitSuffix — l'etichetta di pointer.start e delle tre righe del loop.
+// Stessa regola di grainUnitSuffix, e per lo stesso motivo: su un'unita' che
+// il motore non riconosce non c'e' suffisso, perche' una «s» accanto alla riga
+// d'errore che dichiara l'unita' non riconosciuta sarebbero due affermazioni
+// opposte. Vive nel modulo perche' lo leggono Inspector ed EnvelopeEditor.
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitSuffix (etichetta di start e del loop) ──");
+{
+  const suf = (loopUnit) => U.loopUnitSuffix(loopUnit === undefined ? {} : { loopUnit });
+
+  assert("chiave assente → s (assente E' seconds)", suf(undefined) === "s");
+  assert("pointer nullo → s", U.loopUnitSuffix(null) === "s");
+  assert("seconds → s", suf("seconds") === "s");
+  assert("absolute (alias storico) → s", suf("absolute") === "s");
+  assert("normalized → nessun suffisso", suf("normalized") === "");
+
+  /* Il caso che questa funzione esiste per coprire: prima il suffisso era un
+     ternario su `unit`, e una grafia fuori vocabolario legge "absolute" —
+     quindi la riga mostrava «0.4 s» sotto un rosso che diceva che l'unita' non
+     e' riconosciuta. */
+  assert("grafia fuori vocabolario → nessun suffisso", suf("normalised") === "");
+  assert("…e per ogni grafia che loopUnitError rifiuta",
+    ["Seconds", "secondi", "x"].every(u => suf(u) === "" && U.loopUnitError({ loopUnit: u }) !== null));
+  assert("il suffisso tace esattamente dove parla loopUnitError, o in normalized",
+    ["seconds", "absolute", "normalized", "normalised", "", undefined]
+      .every(u => (suf(u) === "") === (!!U.loopUnitError({ loopUnit: u }) || u === "normalized")));
+
+  // Il timeMode non entra piu' nemmeno qui: e' loopUnitInfo, un livello sotto.
+  assert("timeMode non tocca il suffisso",
+    U.loopUnitSuffix({}) === "s" && U.loopUnitInfo({ timeMode: "normalized" }).unit === "absolute");
+}
+
+// ---------------------------------------------------------------------------
 // loopUnitRescaleKeys — quali chiavi cambiano DAVVERO lettura per uno stream
 // che #222 ha spostato. Specchio di `_rescaling_would_change` sul giro di
 // `_LOOP_UNIT_SCOPE`: e' il filtro con cui il motore decide se emettere
@@ -787,8 +820,12 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
     /durata del sample/.test(inspSrc));
   assert("loop_unit non è più nell'AddParamMenu (il controllo lo rimpiazza)",
     !/key: "loopUnit"/.test(inspSrc));
+  /* Il suffisso lo decide il modulo, non un ternario nel JSX: e' l'unico modo
+     perche' taccia anche su una grafia fuori vocabolario, dove una «s» starebbe
+     sotto la riga rossa che dichiara l'unita' non riconosciuta. */
   assert("in normalized le righe del loop non mostrano il suffisso in secondi",
-    /const loopUnitSuffix = loopUnit\.unit === "normalized" \? "" : "s"/.test(inspSrc)
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(inspSrc)
+    && !/loopUnit\.unit === "normalized" \? "" : "s"/.test(inspSrc)
     && (inspSrc.match(/unit=\{stream\.pointer\.loop\w+Env \? "" : loopUnitSuffix\}/g) || []).length === 3);
   assert("anche pointer.start segue l'unità (il motore scala pure quello)",
     /name="start"[\s\S]{0,160}unit=\{loopUnitSuffix\}/.test(inspSrc)
@@ -951,7 +988,7 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
-    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(eeSrc)
     && (eeSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
   assert("nessun consumatore deduce più la precisione dal suffisso",
     !/unit === "s"/.test(eeSrc));

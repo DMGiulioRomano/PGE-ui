@@ -561,6 +561,18 @@
     return LOOP_UNITS.indexOf(u) >= 0 ? null : { value: u, units: LOOP_UNITS.slice() };
   }
 
+  // Il suffisso con cui si etichettano `pointer.start` e le tre righe del loop.
+  // Vive qui, e non nel JSX, per la stessa ragione di `grainUnitSuffix`: lo
+  // condividono Inspector ed EnvelopeEditor, e la risposta su un'unità che il
+  // motore non riconosce è «nessun suffisso». Una «s» accanto alla riga
+  // d'errore che dichiara l'unità non riconosciuta sarebbero due affermazioni
+  // opposte — è la regola che `grainUnitSuffix` scrive per esteso, e prima di
+  // `loopUnitError` qui non c'era una riga d'errore da contraddire.
+  function loopUnitSuffix(pointer) {
+    if (loopUnitError(pointer)) return "";
+    return loopUnitInfo({ pointer }).unit === "normalized" ? "" : "s";
+  }
+
   // Le chiavi del blocco pointer che `loop_unit` interpreta, nella grafia dello
   // YAML e nell'ordine in cui il motore le elenca (`_LOOP_UNIT_SCOPE` in
   // pointer_controller.py). 'start' è fra queste benché loop non sia: è una
@@ -936,6 +948,7 @@
     loopEnvMax,
     loopUnitInfo,
     loopUnitError,
+    loopUnitSuffix,
     loopUnitRescaleKeys,
     LOOP_UNITS,
     LOOP_UNIT_DEFAULT,
