@@ -252,16 +252,28 @@ const HERE = fs.readdirSync(__dirname)
   .map(f => ({ label: f, file: path.join(__dirname, f) }));
 
 const PARITY_HARNESS = path.join(__dirname, "..", "parity", "harness.js");
-const suiteFiles = HERE.concat(
-  fs.existsSync(PARITY_HARNESS)
-    ? [{ label: "parity/harness.js", file: PARITY_HARNESS }]
-    : []);
+/* E la suite e2e (#139), che sta in una terza directory. Il contratto e' lo
+ * stesso e le serve piu' che alle altre: e' l'unica che guida un browser e un
+ * bridge, cioe' l'unica il cui corpo puo' morire per una ragione che non e' un
+ * assert — un `page.click` in timeout, un python che non parte. Senza
+ * l'handler quella morte esce 1 con uno stack e nessun riepilogo; con l'handler
+ * dice quali assert non hanno contato. */
+const E2E_BOOT = path.join(__dirname, "..", "e2e", "test-boot.js");
+const suiteFiles = HERE
+  .concat(fs.existsSync(PARITY_HARNESS)
+    ? [{ label: "parity/harness.js", file: PARITY_HARNESS }] : [])
+  .concat(fs.existsSync(E2E_BOOT)
+    ? [{ label: "e2e/test-boot.js", file: E2E_BOOT }] : []);
 
 assert("la suite ha piu' di un file da controllare", suiteFiles.length > 1,
   `trovati ${suiteFiles.length}`);
 assert("il runner di tests/parity/ e' nella lista",
   suiteFiles.some(f => f.label === "parity/harness.js"),
   "harness.js governa cinque suite: il contratto d'uscita vale anche per lui");
+assert("la suite e2e e' nella lista",
+  suiteFiles.some(f => f.label === "e2e/test-boot.js"),
+  "tests/e2e/test-boot.js e' sparita: se e' stata rinominata, aggiorna la " +
+  "guardia invece di lasciarla muta");
 
 /* Le CINQUE suite di parita' non devono rispettare l'intero contratto — il
  * verdetto non e' loro, lo tiene harness.js per tutte — ma non devono nemmeno
@@ -384,9 +396,16 @@ console.log("\n── il verdetto viene anche consegnato ──");
     const jobsAt = ciSrc.search(/^jobs:$/m);
     const jobs = jobsAt < 0 ? []
       : ciSrc.slice(jobsAt).split(/^  (?=[\w-]+:$)/m).slice(1);
-    assert("ci.yml — la CI ha i due job attesi", jobs.length === 2,
+    assert("ci.yml — la CI ha i tre job attesi", jobs.length === 3,
       `trovati ${jobs.length}: se sono cambiati, e' questa guardia a essere ` +
       `diventata muta`);
+    // Il terzo e' `e2e` (#139), e va nominato: il tetto sotto vale per
+    // qualunque job, ma se il boot headless sparisse dalla CI il conteggio
+    // tornerebbe a due e questa guardia lo direbbe come "guardia muta"
+    // invece che come "la suite e2e non gira piu'".
+    assert("ci.yml — il boot headless e' fra i job",
+      jobs.some(j => j.startsWith("e2e:")),
+      "tests/e2e/ senza un job in CI e' una suite che gira solo a mano");
     for (const job of jobs) {
       const name = job.slice(0, job.indexOf(":"));
       assert(`ci.yml — il job ${name} ha un timeout-minutes`,

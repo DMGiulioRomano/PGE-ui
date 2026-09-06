@@ -171,3 +171,49 @@ jobs:
         env:
           PGE_PARITY_STRICT: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: make tests-parity
+
+  e2e:
+    name: e2e (boot headless dell'editor · Inspector · EnvelopeEditor · undo)
+    runs-on: ubuntu-latest
+    # Stesso tetto del job node. Qui il rischio di appendersi e' concreto: un
+    # `page.click` che non aggancia niente, un bridge che non annuncia la
+    # porta. I tetti locali ci sono gia' (page.setDefaultTimeout in
+    # test-boot.js, il timeout su startBridge in browser.js); questo e' quello
+    # che non dipende da loro.
+    timeout-minutes: 15
+    steps:
+      - name: checkout PGE-ui
+        uses: actions/checkout@v4
+      # Nessun checkout del motore, ed e' una proprieta' del test, non una
+      # dimenticanza: il progetto che l'editor apre e' versionato in
+      # tests/e2e/fixtures/ e il bridge gira su un motore FINTO (bridge.py).
+      # Un boot che dipendesse dal repo fratello si spegnerebbe insieme al
+      # secret, cioe' proprio sulle PR da un fork.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Solo flask + flask-cors: numpy e soundfile servono a /peaks e
+      # /spectrogram, che senza stem sul disco nessuno chiama. /diagnose li
+      # segnala mancanti e va bene — e' un check giallo nel log di boot, non
+      # un errore in console, ed e' esattamente lo stato in cui il test deve
+      # restare verde.
+      - name: install bridge deps
+        run: pip install flask flask-cors
+      - name: install e2e deps
+        working-directory: tests/e2e
+        run: npm install
+      # Il browser NON lo scarica il target make: sono ~150 MB, e un
+      # `make tests` su un clone appena fatto non deve tirarli giu' da solo.
+      # In CI si scarica qui, e PGE_REQUIRE_E2E=1 sotto fa in modo che, se
+      # questo passo fallisse in silenzio, la suite non possa passare verde
+      # saltando tutto — la stessa regola di PGE_REQUIRE_ENGINE_FIXTURES.
+      - name: install chromium
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+      - name: run e2e suite
+        env:
+          PGE_REQUIRE_E2E: "1"
+        run: make tests-e2e
