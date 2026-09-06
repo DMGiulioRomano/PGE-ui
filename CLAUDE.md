@@ -37,6 +37,11 @@ exists):
   `audiblePosition`/`playAt` in `window.PGEAudioClock`), and
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
   `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
+  `test-score-options.js` (the score switches that reach argv from the render
+  popover — today `--bw`: source guards on the chain checkbox → tweak → POST
+  body → argv, both halves of the `visualize` gate included, plus a canary that
+  the engine's CLI still parses that token, since a flag it doesn't know is
+  ignored in silence), and
   `test-time-dist.js` (the compact block's time-distribution registry mirror —
   `window.PGEEnv.timeDistError`, including the `(param, n_reps)` overflow whose
   thresholds are checked against the real engine, plus the no-longer-silent
@@ -62,7 +67,8 @@ exists):
   `test-suite-harness.js` (the suite's own
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
-  positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
+  positional exit gate — and a check on `source-guard.js` itself, the reading
+  every other guard in the repo rests on), and `test-tracks.js` (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -187,6 +193,32 @@ bracket depth of the `process.on("exit"` occurrence (`tests/node/source-guard.js
 reads the source as *code*: comments stripped, strings kept, and a masked copy
 of the same length for the depth walk), because that depth is the only
 difference between a healthy file and a broken one.
+
+**And the scanner that reads the source as code is itself guarded**, because
+when it loses the thread every guard in the repo goes quiet at once. It is not
+a parser: it recognizes comments, the three string spellings and regex
+literals. An apostrophe inside JSX text (`each page's densest…`) used to open a
+string that never closed, and from there down the file stopped being read as
+code — in `RenderButton.jsx` that covered the whole of `buildCommand`, i.e.
+exactly the lines `test-score-options.js` and `test-magnify-spec.js` watch:
+commenting out `parts.push("--bw")` left the guard green, which is the one
+failure `source-guard.js` exists to prevent. A quoted string cannot contain a
+raw newline (only a template literal can), so a quote left unclosed at
+end-of-line is text.
+
+The other half is Python. `server.py` and `engine_introspect.py` go through
+`codeOf` in three guards, and reading them with the JS scanner was a category
+error — there `#` is not a comment and `"""` is three strings, so what came
+back was a scramble that answered by luck. `codeOf` (and `maskOf`) now pick the
+scanner from the extension. One consequence worth knowing: a Python **docstring
+is a string**, so it survives like a JS string does — a guard meant to tell code
+from prose needs a code-shaped needle (`opts.get("bw"`, not `bw`).
+
+`test-suite-harness.js` pins all of it twice: minimal examples for both
+scanners, and a census over `src/lib/`, `src/components/` and the bridge's
+`.py` where no line that *starts* with its language's comment marker may
+survive `codeOf`, and both readings must keep the file's length (the premise of
+`depthAt`, which walks the mask at offsets found on the code).
 
 **And the verdict has to be delivered, not only printed.** `Oracle.close()`
 kills the python if it doesn't leave on its own — `stdin.end()` + `unref()` was
@@ -404,6 +436,18 @@ Two options exit 1 (taking audio with them): unknown `--plot-envelopes` name, ma
 - **Lens SPEC** → filtered *client-side* (`src/lib/magnify-spec.js`, node-tested) because it's free text typed in the render popover and the useful error moment is while typing. The grammar mirrors Python's `float()`, not JS's `Number()` — they disagree on `0x10`, `1_000`, `inf` — and the strip is ASCII-only, a subset of Python's `str.strip()`, so the residual divergence is guaranteed safe-direction (JS `trim()` eats U+FEFF, `str.strip()` doesn't — that one killed renders). `tests/parity/test-magnify-parity.js` checks the whole corpus against the engine.
 
   **`error()` and `sendable()` answer different questions, and both live in the module.** `error(spec)` is the red text under the field; `sendable(spec)` returns *the bytes that reach argv*, or `null` when the flag must not be sent at all (empty SPEC, separators only, bad grammar). `app.jsx` and `RenderButton.buildCommand` both call `sendable` — when the gate was a copy in `app.jsx` it stayed on `.trim()` while the module moved to the ASCII strip, and the popover showed red on a SPEC that then went out cleaned. The tests call it too, so removing the empty-SPEC guard is red instead of silent.
+
+**The third score option is not on that list, and that is the whole point.**
+`--bw` (PGE #248 / #152) is a switch: no value to parse, nothing to spell
+wrong, so it cannot exit 1 and needs no filter on either side. What it needs is
+the chain — the popover checkbox, `renderBw` in the tweaks, `bw` in the POST
+body, `--bw` in `build_render_command`, all gated on `visualize` like
+`--show-static` — because its way of failing is the opposite one: on an engine
+that doesn't know the flag (CLI parsed by hand over `sys.argv`, unknown flags
+ignored, exactly like `--samples-dir`) the render succeeds, just in colour. So
+the flag goes out with no version gate, and what watches it is
+`tests/node/test-score-options.js`: the chain by source guard, the engine's
+spelling by canary, the body → argv half in `tests/python/test_render_pipeline.py`.
 
 The request body carries `yamlContent`. `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* a throwaway temp file. A temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY, defeating incremental caching. Writing the stable basename keeps the manifest persistent. Consequence: a render persists the editor state to the source config even if the user never hit Save. **Git is the rollback mechanism** (`git checkout -- configs/<basename>.yml`).
 

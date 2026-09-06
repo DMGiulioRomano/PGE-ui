@@ -856,6 +856,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # prima di inviare (src/lib/magnify-spec.js).
         magnify    = bool(opts.get("magnify", False))
         magnify_at = (opts.get("magnifyAt") or "").strip() or None
+        # Preset di stampa in bianco e nero della partitura (PGE #248 /
+        # issue #152). Interruttore: nessun valore da validare, quindi niente
+        # filtro — non è delle due opzioni che fanno uscire il motore con
+        # codice 1. Su un motore che il flag non ce l'ha resta inerte (CLI
+        # parsata a mano su sys.argv, flag sconosciuti ignorati), come
+        # --samples-dir: si manda sempre, senza gate di versione.
+        bw         = bool(opts.get("bw", False))
         reaper    = bool(opts.get("reaper", False))
         preclean  = bool(opts.get("preclean", False))
         # Per-stream grain sidecar (issue #68). Default True = historical
@@ -941,7 +948,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
                     basename=basename, refs=ws_refs, output=ws_output, fmt=fmt,
                     plot_envelopes=plot_envelopes, grain_json=grain_json,
                     show_voice_offsets=show_voice_offsets,
-                    magnify=magnify, magnify_at=magnify_at,
+                    magnify=magnify, magnify_at=magnify_at, bw=bw,
                 )
 
                 yield json.dumps({"type": "log",

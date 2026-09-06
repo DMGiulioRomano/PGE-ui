@@ -375,6 +375,28 @@ def test_build_cmd_magnify_modes_combine():
     assert "--magnify" not in only_at and "--magnify-at" in only_at
 
 
+# --- partitura leggibile in bianco e nero (PGE #248 / issue #152) ----------
+
+def test_build_cmd_bw_only_with_visualize():
+    """Preset di stampa B/N: default off, e senza `--visualize` non ha effetto
+    — stessa regola di `--show-static`, `--show-voice-offsets` e `--magnify`,
+    quindi sta dentro lo stesso blocco."""
+    assert "--bw" not in _cmd()
+    assert "--bw" not in _cmd(visualize=True)
+    assert "--bw" not in _cmd(visualize=False, bw=True)
+    cmd = _cmd(visualize=True, bw=True)
+    assert "--visualize" in cmd and "--bw" in cmd
+
+
+def test_build_cmd_bw_is_a_bare_switch():
+    """Non c'e' un valore da mandare: `--bw` e' un interruttore, e cio' che lo
+    segue in argv deve essere un altro flag (o niente). Un `["--bw", "True"]`
+    passerebbe il test qui sopra e darebbe al motore un positional in piu'."""
+    cmd = _cmd(visualize=True, bw=True)
+    i = cmd.index("--bw")
+    assert i == len(cmd) - 1 or cmd[i + 1].startswith("--"), cmd
+
+
 # ---------------------------------------------------------------------------
 # kill_process / watchdog
 # ---------------------------------------------------------------------------
@@ -1362,6 +1384,24 @@ def test_render_without_engine_keys_drops_the_flag(tmp_path):
         "visualize": True, "plotEnvelopes": ["volume"],
     })
     assert "--plot-envelopes" not in line, line
+
+
+def test_render_forwards_the_bw_switch(tmp_path):
+    """Il booleano nel corpo di POST /render diventa il flag in argv. E' la
+    meta' che mancava: senza, la casella del popover non arriva da nessuna
+    parte. A differenza di `--plot-envelopes` non c'e' filtro da fare — non
+    c'e' un valore da sbagliare, e su un motore che il flag non ce l'ha resta
+    inerte (la CLI parsa sys.argv a mano e ignora i flag sconosciuti)."""
+    import server
+    root = _render_root(tmp_path, fake_python=True)
+    client = server.make_app(root, render_timeout=600.0).test_client()
+    body = {"yamlBasename": "PGE_test", "yamlContent": "streams: []\n"}
+
+    line = _argv_line(client, {**body, "visualize": True, "bw": True})
+    assert "--bw" in line.split(), line
+    # spento, e senza partitura: il flag non parte
+    assert "--bw" not in _argv_line(client, {**body, "visualize": True}).split()
+    assert "--bw" not in _argv_line(client, {**body, "bw": True}).split()
 
 
 def test_semantics_version_endpoint_without_engine(tmp_path):
