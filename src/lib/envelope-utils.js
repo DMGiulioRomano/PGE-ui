@@ -543,13 +543,21 @@
   // esclusione (il motore testava solo `!= 'normalized'`), quindi un refuso
   // come `normalised` rendeva; ora è InvalidFieldValueError e il render muore.
   //
-  // La chiave scritta vuota (`loop_unit:` → null in YAML) è anch'essa un
-  // errore del motore, ma non arriva fin qui: il bridge la scarta in parse
-  // (`ptr.loop_unit != null`) e non la riserializza, quindi in editor quel
-  // caso è già la chiave assente.
+  // Una grafia FALSY non è un refuso, è la chiave assente — e la domanda non è
+  // cosa dice lo YAML sul disco, è cosa il motore leggerà: `/render` scrive lo
+  // stato dell'editor sul config prima di lanciare il motore, e il
+  // serializzatore emette `loop_unit: ptr.loopUnit || undefined`, quindi
+  // `loop_unit: 0`, `false` o `""` non arrivano mai al parser. Accusarli
+  // sarebbe un errore rosso su un render che riesce, e in disaccordo con
+  // `loopUnitInfo`, che li dà per assenti (`source: "default"`): la riga di
+  // provenienza direbbe «default: seconds» mentre quella d'errore dice che
+  // l'unità non è riconosciuta. Il caso già dichiarato — `loop_unit:` vuoto,
+  // cioè null in YAML, che il bridge scarta in parse (`ptr.loop_unit != null`)
+  // — è lo stesso caso: qui si estende alle altre grafie falsy, che il parse
+  // lascia passare e il serialize toglie.
   function loopUnitError(pointer) {
     const u = pointer && pointer.loopUnit;
-    if (u == null || u === "") return null;
+    if (!u) return null;
     return LOOP_UNITS.indexOf(u) >= 0 ? null : { value: u, units: LOOP_UNITS.slice() };
   }
 

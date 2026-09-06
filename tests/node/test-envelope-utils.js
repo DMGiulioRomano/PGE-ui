@@ -450,6 +450,20 @@ console.log("\n── loopUnitError (vocabolario) ──");
      funzione non deve inventarsi un errore su uno stato che l'editor produce. */
   assert("null (loop_unit: vuoto, scartato dal bridge) → null", err(null) === null);
   assert("stringa vuota → null", err("") === null);
+
+  /* E lo stesso vale per OGNI grafia falsy, non solo per quelle due: il parse
+     lascia passare `loop_unit: 0` e `loop_unit: false` (scarta solo il null),
+     ma il serializzatore emette `ptr.loopUnit || undefined`, quindi la chiave
+     non arriva mai al motore — e `/render` scrive lo stato dell'editor sul
+     config prima di lanciarlo. Accusarle sarebbe un rosso su un render che
+     riesce, e in disaccordo con loopUnitInfo, che le da' per assenti: la riga
+     di provenienza direbbe «default: seconds» accanto a una riga d'errore. */
+  for (const falsy of [0, false, NaN]) {
+    assert(`${String(falsy)} → null (il serializzatore toglie la chiave)`,
+      err(falsy) === null);
+    assert(`…e loopUnitInfo concorda: ${String(falsy)} e' la chiave assente`,
+      U.loopUnitInfo({ pointer: { loopUnit: falsy } }).source === "default");
+  }
 }
 
 // ---------------------------------------------------------------------------

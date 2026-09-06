@@ -491,7 +491,12 @@ shown under the Inspector's selector. Picking the **default** deletes the key
 rather than materializing a redundant one; that rule survives #222 only because
 "redundant" is finally a property of the key and not of the stream hosting it.
 Switching the unit re-clamps scalar endpoints; envelope endpoints are per-grain
-and exempt.
+and exempt. `loopUnitError` judges only spellings the engine will actually see:
+a *falsy* one (`loop_unit: 0`, `false`, `""`) is dropped by the serializer
+(`ptr.loopUnit || undefined`) and `/render` writes the editor's state to the
+config before launching, so the key never reaches the parser — accusing it would
+be a red on a render that succeeds, and would contradict `loopUnitInfo`, which
+reports those as absent (`source: "default"`).
 
 Two consequences the editor had to be taught, both of which turned a healthy
 stream into an exposed one. `Seg` calls `onChange` on the already-active button,
