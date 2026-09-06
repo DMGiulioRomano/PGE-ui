@@ -1585,6 +1585,7 @@ function App() {
     grainJson: tweaks.renderGrainJson !== false,
     pageDuration: tweaks.renderPageDuration ?? 15,
     plotEnvelopes: Array.isArray(tweaks.renderPlotEnvelopes) ? tweaks.renderPlotEnvelopes : [],
+    bw: !!tweaks.renderBw,
     magnify: !!tweaks.renderMagnify,
     magnifyAt: tweaks.renderMagnifyAt || "",
     reaper: !!tweaks.renderReaper,
@@ -1608,6 +1609,7 @@ function App() {
     setTweak("renderGrainJson", next.grainJson);
     setTweak("renderPageDuration", next.pageDuration);
     setTweak("renderPlotEnvelopes", Array.isArray(next.plotEnvelopes) ? next.plotEnvelopes : []);
+    setTweak("renderBw",        next.bw);
     setTweak("renderMagnify",   next.magnify);
     setTweak("renderMagnifyAt", next.magnifyAt || "");
     setTweak("renderReaper",    next.reaper);
@@ -1685,6 +1687,13 @@ function App() {
         ? true : undefined,
       plotEnvelopes: renderOptions.visualize && renderOptions.plotEnvelopes.length
         ? renderOptions.plotEnvelopes : undefined,
+      // Preset di stampa in bianco e nero della partitura (PGE #248 /
+      // issue #152). Interruttore puro: niente da validare prima di mandarlo,
+      // e niente da temere da un motore che non lo conosce — la CLI ignora i
+      // flag che non sa. Il gate su `visualize` e' quello delle altre opzioni
+      // di partitura: senza `--visualize` il flag non avrebbe niente da
+      // colorare, e l'argv che l'utente legge nel log direbbe il contrario.
+      bw: renderOptions.visualize && renderOptions.bw ? true : undefined,
       // Lente della partitura (PGE #214 / issue #120). Lo SPEC dei target
       // espliciti parte solo se la grammatica regge: il motore lo rifiuterebbe
       // con exit 1, portandosi via anche l'audio gia' renderizzato.
