@@ -67,7 +67,8 @@ exists):
   `test-suite-harness.js` (the suite's own
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
-  positional exit gate), and `test-tracks.js` (the track model: `deriveTracks`
+  positional exit gate — and a check on `source-guard.js` itself, the reading
+  every other guard in the repo rests on), and `test-tracks.js` (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -192,6 +193,32 @@ bracket depth of the `process.on("exit"` occurrence (`tests/node/source-guard.js
 reads the source as *code*: comments stripped, strings kept, and a masked copy
 of the same length for the depth walk), because that depth is the only
 difference between a healthy file and a broken one.
+
+**And the scanner that reads the source as code is itself guarded**, because
+when it loses the thread every guard in the repo goes quiet at once. It is not
+a parser: it recognizes comments, the three string spellings and regex
+literals. An apostrophe inside JSX text (`each page's densest…`) used to open a
+string that never closed, and from there down the file stopped being read as
+code — in `RenderButton.jsx` that covered the whole of `buildCommand`, i.e.
+exactly the lines `test-score-options.js` and `test-magnify-spec.js` watch:
+commenting out `parts.push("--bw")` left the guard green, which is the one
+failure `source-guard.js` exists to prevent. A quoted string cannot contain a
+raw newline (only a template literal can), so a quote left unclosed at
+end-of-line is text.
+
+The other half is Python. `server.py` and `engine_introspect.py` go through
+`codeOf` in three guards, and reading them with the JS scanner was a category
+error — there `#` is not a comment and `"""` is three strings, so what came
+back was a scramble that answered by luck. `codeOf` (and `maskOf`) now pick the
+scanner from the extension. One consequence worth knowing: a Python **docstring
+is a string**, so it survives like a JS string does — a guard meant to tell code
+from prose needs a code-shaped needle (`opts.get("bw"`, not `bw`).
+
+`test-suite-harness.js` pins all of it twice: minimal examples for both
+scanners, and a census over `src/lib/`, `src/components/` and the bridge's
+`.py` where no line that *starts* with its language's comment marker may
+survive `codeOf`, and both readings must keep the file's length (the premise of
+`depthAt`, which walks the mask at offsets found on the code).
 
 **And the verdict has to be delivered, not only printed.** `Oracle.close()`
 kills the python if it doesn't leave on its own — `stdin.end()` + `unref()` was

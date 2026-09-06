@@ -37,39 +37,28 @@ const srvFile = path.join(__dirname, "../../server.py");
 
 const rbSrc  = SG.codeOf(rbFile);
 const appSrc = SG.codeOf(appFile);
-const srvSrc = fs.readFileSync(srvFile, "utf8");
+const srvSrc = SG.codeOf(srvFile);      // python: `#` via, stringhe leggibili
 
 /* Il gate è metà del contratto: `--bw` fuori dal blocco `visualize` sarebbe un
  * flag mandato a un render senza partitura, cioè un'argv che dice una cosa che
  * non succede. Cercarlo con un regex non basta — un `options.visualize ?`
  * qualunque, anche tre righe più su e già chiuso, farebbe verde.
  *
- * Le due metà del file si misurano in due modi perché sono due linguaggi.
- * `buildCommand` è JS ordinario e si misura sulle parentesi: profondità
- * maggiore del suo `if` = dentro il suo blocco. Il JSX no: lo scanner di
- * source-guard riconosce le stringhe, e un apostrofo dentro un testo JSX
- * (`each page's densest…`) apre una stringa che non si chiude più — da lì in
- * poi la maschera è cieca. Lì il marcatore è l'idioma del file: ogni riga
- * condizionale è `{options.visualize ? ( … ) : null}`, quindi la riga sta
- * dentro il gate se fra il gate e lei non c'è la chiusura di un blocco. */
-function inJsBlock(file, fnMarker, gate, needle) {
-  // La misura riparte dall'inizio della funzione: JS puro, niente JSX davanti.
-  const raw = fs.readFileSync(file, "utf8");
-  const from = raw.indexOf(fnMarker);
-  if (from < 0) return false;
-  const code = SG.stripComments(raw.slice(from));
-  const mask = SG.maskLiterals(raw.slice(from));
+ * Si misura quindi sulle parentesi, e la stessa misura vale per le due metà
+ * del file benché siano due linguaggi: profondità della riga maggiore di
+ * quella del gate che la precede = dentro il suo blocco. Nel JSX il gate è
+ * `{options.visualize ? (`, in `buildCommand` è `if (o.visualize)`; in
+ * entrambi i casi la riga guardata sta una o più parentesi più a fondo, e
+ * spostarla fuori pareggia le due profondità. */
+function inGate(file, gate, needle) {
+  const raw  = fs.readFileSync(file, "utf8");
+  const code = SG.stripComments(raw);   // il needle si cerca senza commenti
+  const mask = SG.maskLiterals(raw);    // la profondità sul mascherato
   const at = code.indexOf(needle);
   if (at < 0) return false;
   const gateAt = code.lastIndexOf(gate, at);
   if (gateAt < 0) return false;
   return SG.depthAt(mask, at) > SG.depthAt(mask, gateAt);
-}
-
-function inJsxGate(code, gate, close, needle) {
-  const at = code.indexOf(needle);
-  if (at < 0) return false;
-  return code.lastIndexOf(gate, at) > code.lastIndexOf(close, at);
 }
 
 console.log("\n── popover: la casella esiste ed è dentro la partitura ──");
@@ -79,14 +68,14 @@ assert("RenderButton ha una riga per il preset b/n",
 assert("...e legge lo stato da options.bw",
   /options\.bw/.test(rbSrc));
 assert("...ed è dentro il blocco `visualize`, come lente e voice offsets",
-  inJsxGate(rbSrc, "options.visualize ?", ") : null}", 'toggle("bw"'),
+  inGate(rbFile, "options.visualize ?", 'toggle("bw"'),
   "la casella comparirebbe anche senza partitura, dove il flag non ha effetto");
 
 console.log("\n── anteprima argv: mostra quello che parte ──");
 assert("buildCommand stampa --bw", /parts\.push\("--bw"\)/.test(rbSrc),
   "l'anteprima direbbe un comando diverso da quello che il bridge esegue");
 assert("...dentro il ramo o.visualize, come nel bridge",
-  inJsBlock(rbFile, "function buildCommand", "if (o.visualize)", 'parts.push("--bw")'));
+  inGate(rbFile, "if (o.visualize)", 'parts.push("--bw")'));
 
 console.log("\n── app.jsx: il tweak, il corpo della POST, il gate ──");
 assert("l'opzione è persistita nei tweaks", /renderBw\b/.test(appSrc),
@@ -101,7 +90,9 @@ assert("...solo con la partitura accesa",
 
 console.log("\n── server.py: il corpo diventa argv ──");
 /* Il bridge è testato davvero in pytest (corpo → argv, route inclusa); qui
- * basta l'anello: la chiave letta dal corpo e il kwarg passato al builder. */
+ * basta l'anello: la chiave letta dal corpo e il kwarg passato al builder.
+ * Anche questo passa da `codeOf`: da quando lo scanner sa leggere il python,
+ * un anello commentato via non tiene più su la guardia. */
 assert("il bridge legge bw dal corpo", /opts\.get\("bw"/.test(srvSrc));
 assert("...e lo passa a build_render_command", /\bbw=bw\b/.test(srvSrc));
 
@@ -111,24 +102,44 @@ console.log("\n── canarino: il motore parsa ancora questo token ──");
  * di peggio, lascia una casella che non fa nulla senza un solo test rosso.
  * Le tre uscite sono quelle delle fixture del motore (#132): salto legittimo
  * SOLO senza checkout, FAIL se il checkout c'è e il token no, e nessun salto
- * quando PGE_REQUIRE_ENGINE_FIXTURES=1 dice che il checkout è riuscito. */
+ * quando PGE_REQUIRE_ENGINE_FIXTURES=1 dice che il checkout è riuscito.
+ *
+ * Il salto va quindi appeso al CHECKOUT, non al singolo file: la CLI ha
+ * cambiato casa due volte (`src/main.py` → `src/cli.py` → `src/pge/cli.py`,
+ * PGE #162), e chiedere solo dell'ultimo indirizzo avrebbe rimesso in piedi
+ * proprio la riga di mezzo della tabella — motore affiancato, sorgente
+ * spostato, SKIP verde. I candidati sono quelli di
+ * `engine_introspect.engine_supports_samples_dir`, dal più recente al più
+ * vecchio, e nessuno di essi che esista è il FAIL che dice di aggiornare la
+ * lista. */
 const ENGINE_ROOT = path.resolve(process.env.PGE_ENGINE_ROOT
                                  || path.join(__dirname, "../../..", "PythonGranularEngine"));
-const ENGINE_CLI  = path.join(ENGINE_ROOT, "src", "pge", "cli.py");
+const ENGINE_PRESENT = fs.existsSync(path.join(ENGINE_ROOT, "src"));
+const CLI_CANDIDATES = [["src", "pge", "cli.py"], ["src", "cli.py"], ["src", "main.py"]]
+  .map(parts => path.join(ENGINE_ROOT, ...parts));
 const REQUIRE_ENGINE = process.env.PGE_REQUIRE_ENGINE_FIXTURES === "1";
 
-if (fs.existsSync(ENGINE_CLI)) {
-  // Il token come lo scrive il motore, e nel codice: un `--bw` citato in un
-  // commento o in una riga d'uso non è un flag che qualcuno parsa.
-  const cliSrc = fs.readFileSync(ENGINE_CLI, "utf8")
-    .replace(/^\s*#.*$/gm, "");
-  assert("la CLI del motore parsa '--bw'",
-    /['"]--bw['"]\s+in\s+sys\.argv/.test(cliSrc),
-    "flag rinominato o rimosso a monte: la casella del popover non fa più nulla — "
-    + "aggiorna il nome qui e in render_pipeline.py, non zittire la guardia");
+if (ENGINE_PRESENT) {
+  const found = CLI_CANDIDATES.filter(p => fs.existsSync(p));
+  assert("i sorgenti della CLI del motore sono dove ce li si aspetta",
+    found.length > 0,
+    "nessuno di " + CLI_CANDIDATES.join(", ") + " esiste: la CLI ha cambiato "
+    + "casa un'altra volta — aggiungi il nuovo indirizzo alla lista");
+  if (found.length) {
+    // Il token come lo scrive il motore, e nel codice: un `--bw` citato in un
+    // commento o in una riga d'uso non è un flag che qualcuno parsa. Il
+    // commento lo toglie lo scanner python di source-guard, non un regex per
+    // riga: cosi' cade anche quello in coda a una riga di codice.
+    const parses = found.some(p => /['"]--bw['"]\s+in\s+sys\.argv/.test(SG.codeOf(p)));
+    assert("la CLI del motore parsa '--bw'", parses,
+      "flag rinominato o rimosso a monte: la casella del popover non fa più nulla — "
+      + "aggiorna il nome qui, in render_pipeline.py e in buildCommand "
+      + "(RenderButton.jsx), non zittire la guardia");
+  }
 } else if (REQUIRE_ENGINE) {
   assert("checkout del motore presente (PGE_REQUIRE_ENGINE_FIXTURES=1)", false,
-    "atteso " + ENGINE_CLI + " — il checkout ha riportato successo ma i sorgenti non sono lì");
+    "atteso " + path.join(ENGINE_ROOT, "src") + " — il checkout ha riportato "
+    + "successo ma i sorgenti non sono lì");
 } else {
   console.log(`  SKIP canarino --bw (nessun checkout del motore in ${ENGINE_ROOT})`);
 }

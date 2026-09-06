@@ -418,16 +418,17 @@ console.log("\n── la radice del motore: una convenzione per tre meta' ──
   const repo = path.join(__dirname, "..", "..");
 
   const readers = [
-    ["node/test-yaml-bridge.js", path.join(repo, "tests/node/test-yaml-bridge.js"), true],
-    ["parity/harness.js",        PARITY_HARNESS,                                    true],
-    ["python/engine_corpus.py",  path.join(repo, "tests/python/engine_corpus.py"),  false],
+    ["node/test-yaml-bridge.js", path.join(repo, "tests/node/test-yaml-bridge.js")],
+    ["parity/harness.js",        PARITY_HARNESS],
+    ["python/engine_corpus.py",  path.join(repo, "tests/python/engine_corpus.py")],
   ];
-  for (const [label, file, isJs] of readers) {
+  for (const [label, file] of readers) {
     if (!fs.existsSync(file)) continue;
-    // Il .py non passa da source-guard (e' uno scanner JS): li' vale il testo
-    // grezzo, e un `#` che citasse il nome starebbe comunque accanto alla
-    // lettura vera, non al posto suo.
-    const src = isJs ? SG.codeOf(file) : fs.readFileSync(file, "utf8");
+    // Anche il .py passa da source-guard: `codeOf` sceglie lo scanner
+    // dall'estensione, quindi li' a sparire sono i `#` e non i `//`. Prima non
+    // era cosi' e il python veniva letto grezzo, cioe' un `#` che citasse il
+    // nome bastava a tenere su la guardia.
+    const src = SG.codeOf(file);
     assert(`${label} — legge PGE_ENGINE_ROOT`, /PGE_ENGINE_ROOT/.test(src),
       "cerca il motore solo come repo fratello: ROOT= non ci arriva");
   }
@@ -478,6 +479,134 @@ console.log("\n── la radice del motore: una convenzione per tre meta' ──
       fs.rmSync(fake, { recursive: true, force: true });
     }
   }
+}
+
+/* ============================================================
+ * 6 — lo scanner di source-guard non deve perdere il filo
+ *
+ * Ogni guardia sorgente della suite — comprese quelle di questo file, che
+ * misurano la profondita' dell'handler `exit` — si fida di `SG.codeOf`: il
+ * sorgente SENZA commenti. Se lo scanner si desincronizza, quel contratto
+ * salta in silenzio e una guardia torna verde su una riga COMMENTATA, che e'
+ * esattamente il difetto per cui source-guard.js esiste.
+ *
+ * E' successo: un apostrofo dentro un testo JSX (`each page's densest…`) veniva
+ * preso per l'apertura di una stringa, e da li' in giu' il file non veniva piu'
+ * letto come codice. In RenderButton.jsx la desincronizzazione copriva tutto
+ * `buildCommand`, cioe' proprio le righe che test-score-options.js e
+ * test-magnify-spec.js presidiano: commentare `parts.push("--bw")` lasciava la
+ * guardia verde. Fra apici un a capo non ci puo' stare, quindi un apice non
+ * chiuso a fine riga e' testo, non un letterale.
+ *
+ * L'altra meta' e' il python: server.py e engine_introspect.py passano da
+ * `codeOf` in tre guardie, e leggerli con lo scanner JS era un errore di
+ * categoria — `#` non e' un commento, le virgolette triple non sono una
+ * stringa. `codeOf` sceglie lo scanner dall'estensione.
+ *
+ * Due misure: gli esempi minimi qui sotto, e il censimento sui sorgenti veri —
+ * nessuna riga che COMINCIA per il commento della sua lingua puo' sopravvivere
+ * a `codeOf`. La seconda e' derivata dai file, quindi resta vera mentre i file
+ * cambiano.
+ * ============================================================ */
+
+console.log("\n── source-guard: il sorgente resta leggibile come codice ──");
+{
+  const jsx = [
+    "const a = <div>each page's densest cluster</div>;",
+    "// questa riga e' un commento e deve sparire",
+    'const b = "vero";',
+  ].join("\n");
+  const jsxCode = SG.stripComments(jsx);
+  assert("un apostrofo in un testo JSX non apre una stringa",
+    !/questa riga/.test(jsxCode),
+    "lo scanner si desincronizza: da li' in poi i commenti non vengono piu' visti");
+  assert("...e il codice dopo resta leggibile",
+    /const b = "vero";/.test(jsxCode));
+
+  // Le stringhe vere restano stringhe: `codeOf` le lascia leggibili (una
+  // guardia che cerca "/semantics-version" deve trovarlo), `maskOf` le vuota.
+  const str = "const r = '/render'; // via\nconst q = 1;";
+  assert("una stringa su una riga sola resta un letterale",
+    /'\/render'/.test(SG.stripComments(str)) && !/via/.test(SG.stripComments(str)));
+  assert("...e mascherata perde il contenuto, non la lunghezza",
+    !/render/.test(SG.maskLiterals(str)) &&
+    SG.maskLiterals(str).length === str.length);
+
+  // Il template literal e' l'unica grafia che un a capo lo puo' contenere:
+  // la regola nuova non deve toccarlo.
+  const tpl = "const t = `riga\nunaltra`; // via\nconst z = 2;";
+  assert("il template literal continua a stare su piu' righe",
+    !/via/.test(SG.stripComments(tpl)) && /const z = 2;/.test(SG.stripComments(tpl)));
+
+
+  /* Il python ha il suo scanner, scelto dall'estensione: `#` e' un commento,
+   * le virgolette triple sono UNA stringa su piu' righe. Con lo scanner JS
+   * addosso — che e' come veniva letto — nessuna delle due cose e' vera, e
+   * `codeOf("server.py")` restituiva un rimescolamento. */
+  const py = [
+    'def render():',
+    '    """Docstring: cita --bw e non e\' un commento."""',
+    '    # questa riga e\' un commento python',
+    '    bw = bool(opts.get("bw", False))',
+  ].join("\n");
+  const pyCode = SG.stripPyComments(py);
+  assert("nel python il commento comincia per #",
+    !/questa riga/.test(pyCode),
+    "il `#` non viene tolto: una riga commentata tiene su la guardia");
+  assert("...e il codice accanto resta leggibile",
+    /opts\.get\("bw", False\)/.test(pyCode));
+  assert("le virgolette triple sono una stringa, non tre",
+    /Docstring: cita --bw/.test(pyCode) && SG.stripPyComments(py).length === py.length);
+  assert("...e mascherate perdono il contenuto",
+    !/Docstring/.test(SG.maskPyLiterals(py)) &&
+    SG.maskPyLiterals(py).length === py.length);
+  assert("un `#` dentro una stringa non apre un commento",
+    /"#ff0000"/.test(SG.stripPyComments('c = "#ff0000"  # colore\n')) &&
+    !/colore/.test(SG.stripPyComments('c = "#ff0000"  # colore\n')));
+
+  // Censimento sui sorgenti veri: nessun commento di riga sopravvive, e le due
+  // letture conservano la lunghezza (e' la premessa di `depthAt`, che conta la
+  // profondita' sulla maschera agli offset trovati sul codice).
+  const repoRoot = path.join(__dirname, "..", "..");
+  const srcFiles = ["src/lib", "src/components"].flatMap((d) => {
+    const dir = path.join(repoRoot, d);
+    return fs.existsSync(dir)
+      ? fs.readdirSync(dir).filter((f) => /\.(js|jsx)$/.test(f)).map((f) => path.join(dir, f))
+      : [];
+  }).concat(
+    // Il bridge: e' python, e tre guardie lo leggono da `codeOf`. La riga di
+    // commento li' comincia per `#`, e la docstring e' una stringa — che
+    // sopravvive, come una stringa JS: si censiscono solo le righe che
+    // COMINCIANO per `#`, e una dentro una docstring non e' una di quelle.
+    ["server.py", "render_pipeline.py", "audio_pipeline.py", "engine_introspect.py"]
+      .map((f) => path.join(repoRoot, f)).filter((f) => fs.existsSync(f)));
+  assert("ci sono sorgenti da censire", srcFiles.length > 0);
+  const leaky = [];
+  const skewed = [];
+  for (const file of srcFiles) {
+    const py = /\.py$/.test(file);
+    const raw = fs.readFileSync(file, "utf8");
+    const code = SG.codeOf(file);
+    if (code.length !== raw.length || SG.maskOf(file).length !== raw.length) {
+      skewed.push(path.basename(file));
+    }
+    const rawLines = raw.split("\n");
+    const codeLines = code.split("\n");
+    const lineComment = py ? /^\s*#/ : /^\s*\/\//;
+    // Una riga di commento dentro una docstring e' contenuto di stringa, non
+    // un commento: si guardano solo quelle che stanno fuori da un letterale,
+    // ed e' la maschera a dirlo (li' la stringa e' vuotata).
+    const maskLines = py ? SG.maskOf(file).split("\n") : codeLines;
+    for (let i = 0; i < rawLines.length; i++) {
+      if (!lineComment.test(rawLines[i])) continue;
+      if (py && !lineComment.test(maskLines[i])) continue;   // dentro una docstring
+      if (codeLines[i].trim() !== "") { leaky.push(`${path.basename(file)}:${i + 1}`); break; }
+    }
+  }
+  assert("nessun sorgente lascia passare un commento di riga", leaky.length === 0,
+    "codeOf non li toglie in: " + leaky.join(", "));
+  assert("...e le due letture conservano la lunghezza del file", skewed.length === 0,
+    "offset disallineati in: " + skewed.join(", "));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
