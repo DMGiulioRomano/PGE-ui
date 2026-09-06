@@ -69,8 +69,10 @@ function listEnvelopes(stream, sampleDur) {
   // …e il suffisso segue la stessa risoluzione, come nell'Inspector (issue
   // #126): in normalized le coordinate del loop non sono secondi, e un "s"
   // qui contraddirebbe l'asse tappato a 1 e la riga dell'Inspector accanto.
+  // Su una grafia fuori vocabolario non c'è suffisso: lo decide loopUnitSuffix,
+  // una sola volta per i due componenti.
   // La precisione NON viaggia sull'unità — vedi `fine` sotto.
-  const loopUnitSuffix = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized" ? "" : "s";
+  const loopUnitSuffix = window.PGEEnvUtils.loopUnitSuffix(stream.pointer);
   // Stessa storia sulla durata del grano (PGE #158, tre unità da #171): i bound
   // statici sono in secondi, i valori dell'envelope no. Presi come sono, una
   // curva in millisecondi resta tappata a 10 — dieci millisecondi invece di

@@ -659,16 +659,52 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // sample-driven hardMax the EnvelopeEditor applies to the same params.
   const loopMax = window.PGEEnvUtils.loopEnvMax(stream, sampleDur);
   // Which unit the loop coordinates are in, and where it comes from (issue
-  // #126). Every stream the editor creates is born `time_mode: normalized`, so
-  // the loop window silently lives in [0,1] and the cap of 1 reads as arbitrary
-  // — the YAML never mentions loop_unit. `loopUnitInherited` is what would be in
-  // force with the key absent: picking it in the control deletes the key instead
-  // of materializing a redundant one.
+  // #126, poi #149). L'unita' in vigore NON dipende piu' dallo stream: PGE #222
+  // ha tolto l'ereditarieta' da time_mode e il default e' `seconds`, una
+  // costante. Da cui la regola del selettore qui sotto — la chiave e' ridondante
+  // solo quando vale il default, e "ridondante" e' finalmente una proprieta'
+  // della chiave e non dello stream che la ospita.
   const loopUnit = window.PGEEnvUtils.loopUnitInfo(stream);
-  const loopUnitInherited = window.PGEEnvUtils.loopUnitInfo({ timeMode: stream.timeMode }).unit;
+  const LOOP_UNIT_DEFAULT = window.PGEEnvUtils.LOOP_UNIT_DEFAULT;
+  // Il refuso nel vocabolario (`normalised`) non rende: dopo #222 il motore
+  // alza InvalidFieldValueError invece di leggerlo come assoluto.
+  const loopUnitErr = window.PGEEnvUtils.loopUnitError(stream.pointer);
+  // Quale bottone del selettore e' acceso: la LETTURA in vigore, cosi' un
+  // `absolute` esplicito accende "seconds" (stessa lettura) e la riga di
+  // provenienza qui accanto dice quale delle due grafie e' scritta. Con una
+  // grafia fuori vocabolario non si accende niente — nessuna delle due e' vera
+  // — e ogni click scrive, che e' l'unico modo per uscire dal refuso.
+  const loopUnitSel = loopUnitErr ? null
+    : (loopUnit.unit === "normalized" ? "normalized" : LOOP_UNIT_DEFAULT);
+  // Gli stream a cui #222 ha cambiato il significato dei numeri sotto i piedi:
+  // `time_mode: normalized` senza `loop_unit`, cioe' quelli che prima
+  // ereditavano. Il motore li avvisa a render ([LOOP_UNIT] … ora in secondi),
+  // ma quel messaggio e' marcato `# ponytail` e va via dopo una release.
+  //
+  // «Cambiato il significato» va preso alla lettera, ed e' per questo che la
+  // condizione non si ferma alle due chiavi: uno zero resta zero sotto
+  // qualunque fattore di scala, e `start: 0` senza loop e' la forma piu'
+  // comune del corpus — lo stesso motivo per cui il motore filtra il suo
+  // avviso con `_rescaling_would_change` invece di parlare a tutta la
+  // popolazione. Senza il filtro l'editor griderebbe dove il motore tace, e
+  // chi seguisse il consiglio scriverebbe una chiave che non muove un
+  // campione, pagandola con un fingerprint mosso: un render in piu' su uno
+  // stem che era giusto.
+  // Le chiavi su cui l'unita' morde davvero — un valore che la conversione
+  // muoverebbe. Non dipende dallo stream: e' la domanda «questa chiave governa
+  // qualcosa?», e ha due lettori. L'avviso di migrazione e' il sottoinsieme
+  // gated su time_mode; la visibilita' del controllo, sotto, no.
+  const loopUnitScaledKeys = window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer);
+  const loopUnitMigratedKeys = (stream.timeMode === "normalized" && loopUnit.source === "default")
+    ? loopUnitScaledKeys : [];
+  const loopUnitMigrated = loopUnitMigratedKeys.length > 0;
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
-  // contraddirebbe la riga di hint due righe più sotto.
-  const loopUnitSuffix = loopUnit.unit === "normalized" ? "" : "s";
+  // contraddirebbe la riga di hint due righe più sotto. E su una grafia fuori
+  // vocabolario il suffisso non c'è affatto — etichettare «s» mentre la riga
+  // d'errore qui sotto dice che l'unità non è riconosciuta sarebbero due
+  // affermazioni opposte. La regola è la stessa di grainUnitSuffix, e sta nel
+  // modulo perché la condivide l'EnvelopeEditor.
+  const loopUnitSuffix = window.PGEEnvUtils.loopUnitSuffix(stream.pointer);
   // grain.duration_unit (PGE #158, tre unità da PGE v5.2.0 / #171). È un
   // meta-parametro: governa insieme grain.duration e grain.duration_range, e
   // con qualunque unità che non sia 'seconds' il motore pretende una duration
@@ -693,21 +729,37 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     samples: [1, 100, 1000, 10000],
   };
   const grainSteps = GRAIN_STEPS[grainUnit] || GRAIN_STEPS.seconds;
-  // Il blocco loop — controllo dell'unità e riga di hint — compare solo se una
-  // chiave di loop esiste. pointer.start sta fuori ma il motore lo scala con lo
-  // stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere dal
-  // loop), quindi senza blocco resterebbe senza suffisso e senza nessuno che
-  // dica perché: uno YAML scritto a mano con time_mode: normalized e nessun
-  // loop cade proprio lì. La scala sì, il bound no: 'start' è dichiarato
-  // is_smart=False nello schema del motore — valore raw, nessun Parameter e
-  // quindi nessun clamp — perciò qui NON passa da clampLoop e il Seg non lo
-  // include nel ri-clamp: sarebbe la UI a inventarsi un vincolo che il motore
-  // non ha.
-  const loopBlockShown = !!(stream.pointer && (
+  // Le righe della finestra di loop: ci sono solo se una chiave di loop esiste.
+  const loopWindowShown = !!(stream.pointer && (
     stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
     stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
-    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null ||
-    stream.pointer.loopUnit  != null));
+    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null));
+  // Il controllo dell'unita' e' un'altra cosa, e per questo ha un flag suo: non
+  // governa solo il loop, governa anche pointer.start, che il motore scala con
+  // lo stesso criterio (_pre_normalize_loop_params scala 'start' a prescindere
+  // dal loop). Finche' i due flag erano uno solo, la × "Remove loop" portava via
+  // anche loop_unit — cioe' l'unita' in vigore, non una chiave ridondante — e la
+  // riga con il suffisso spariva insieme. Uno stream che dichiara l'unita' tiene
+  // il controllo visibile anche senza nessun loop.
+  // La scala sì, il bound no: 'start' è dichiarato is_smart=False nello schema
+  // del motore — valore raw, nessun Parameter e quindi nessun clamp — perciò qui
+  // NON passa da clampLoop e il Seg non lo include nel ri-clamp: sarebbe la UI a
+  // inventarsi un vincolo che il motore non ha.
+  // …e per la stessa ragione il controllo compare ovunque l'unita' governi un
+  // valore che si muove — `loopUnitScaledKeys`, non `loopUnitMigrated`. La
+  // condizione dell'avviso porta dentro `time_mode`, e usarla anche qui
+  // rimetteva la dipendenza dallo stream che #222 ha tolto, con l'effetto di un
+  // controllo che si cancella da se': su `time_mode: absolute` + `loop_unit:
+  // normalized` + `start: 0.5` — la coesistenza dei due assi che #222 ha reso
+  // legittima — un click su "seconds" toglie la chiave, il controllo sparisce
+  // (loop_unit non e' nell'AddParamMenu, il selettore E' l'unica via) e start
+  // resta a leggere 0.5 s dove leggeva 0.5 × sample_dur, senza ritorno.
+  // La condizione e' strettamente piu' larga della vecchia — loopUnitMigrated
+  // implica loopUnitScaledKeys non vuoto — quindi la popolazione che #222 ha
+  // spostato continua a vedere il controllo insieme al suo avviso.
+  const loopUnitShown = loopWindowShown
+    || !!(stream.pointer && stream.pointer.loopUnit != null)
+    || loopUnitScaledKeys.length > 0;
   // `cap` overrides the current loop cap — the unit control needs to clamp
   // against the cap the NEW unit brings, before the new pointer is state.
   const clampLoop = (key, v, cap) => {
@@ -724,10 +776,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // rejected at render (InvalidFieldValueError) → warn pre-render. loopActive
   // gates the offset_range confinement note; loopEndMode the loop_dur hint.
   const loopBoundsErr = window.PGEEnvUtils.loopBoundsError(stream.pointer);
-  const loopActive = !!(stream.pointer && (
-    stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
-    stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
-    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null));
+  // Stessa domanda di loopWindowShown — «esiste una chiave di loop?» — quindi
+  // stessa risposta, non una seconda copia dell'elenco da tenere allineata:
+  // finché il flag del blocco portava anche loop_unit le due erano diverse,
+  // ora coincidono e le righe del loop compaiono esattamente quando il loop c'è.
+  const loopActive = loopWindowShown;
   const loopEndMode = !!(stream.pointer && (stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null));
 
   return (
@@ -992,16 +1045,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit={loopUnitSuffix}
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
-              {loopUnit.unit === "normalized" && !loopBlockShown ? (
-                <div className="pge-prow hint" style={{paddingTop:0}}>
-                  <span className="k" /><span />
-                  <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                    pointer.start è scalato per sample_dur dal motore ({loopUnit.source === "loop_unit" ? "loop_unit" : "time_mode"}: normalized) — valore raw, senza bound
-                  </span>
-                  <span />
-                </div>
-              ) : null}
-              {loopBlockShown ? (
+              {loopWindowShown ? (
                 <>
                   <ParamRow name="loop_start"
                             mode={getMode("loopStart")} onMode={(m) => toggleMode("loopStart", m)}
@@ -1015,7 +1059,12 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                                 delete np.loopStart; delete np.loopStartEnv;
                                 delete np.loopEnd; delete np.loopEndEnv;
                                 delete np.loopDur; delete np.loopDurEnv;
-                                delete np.loopUnit;
+                                // loop_unit resta: non e' una chiave del loop,
+                                // e' l'unita' in cui sono scritte queste
+                                // coordinate E pointer.start, che sopravvive
+                                // al loop. Portarla via qui cambiava di 8x il
+                                // significato di start su ogni clip nato
+                                // nell'editor, che la chiave ce l'ha sempre.
                                 onChange({ pointer: np }); }}>
                               <Icon name="x" size={11} />
                             </button>} />
@@ -1055,50 +1104,6 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                               onEditEnv={focusEnv("loopDur")}
                               onValue={(v) => onChange({pointer: {...stream.pointer, loopDur: clampLoop("loopDur", v)}})} />
                   )}
-                  <div className="pge-prow">
-                    <span className="k" title="unità delle coordinate del loop: absolute → secondi, cap = durata del sample · normalized → [0,1] × sample_dur. Assente = ereditata da time_mode (motore: loop_unit or time_mode)">loop_unit</span>
-                    <Seg size="xs" value={loopUnit.unit}
-                         onChange={(u) => {
-                           const np = { ...stream.pointer };
-                           // The unit already in force needs no key: absence
-                           // means "inherit from time_mode", and writing it out
-                           // would change the YAML without changing the render.
-                           if (u === loopUnitInherited) delete np.loopUnit; else np.loopUnit = u;
-                           // The cap travels with the unit (1 in normalized,
-                           // sample_dur in seconds), so the endpoints get the
-                           // same clamp a typed edit gets — otherwise switching
-                           // to normalized would leave a 12 s loop_start sitting
-                           // in a [0,1] field, which the engine silently clamps
-                           // at render. Envelope endpoints are per-grain and
-                           // exempt, as everywhere else in the loop block.
-                           const cap = window.PGEEnvUtils.loopEnvMax({ ...stream, pointer: np }, sampleDur);
-                           for (const k of ["loopStart", "loopEnd", "loopDur"]) {
-                             if (typeof np[k] === "number") np[k] = clampLoop(k, np[k], cap);
-                           }
-                           onChange({ pointer: np });
-                         }}
-                         options={[{label:"absolute",value:"absolute"},{label:"normalized",value:"normalized"}]} />
-                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)"}}>
-                      {loopUnit.source === "loop_unit"
-                        ? (stream.pointer.loopUnit === loopUnit.unit
-                            ? "esplicito"
-                            : ("esplicito: " + stream.pointer.loopUnit))
-                        : loopUnit.source === "time_mode" ? ("da time_mode: " + stream.timeMode)
-                        : "default"}
-                    </span>
-                    <span />
-                  </div>
-                  <div className="pge-prow hint" style={{paddingTop:0}}>
-                    <span className="k" /><span />
-                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                      {loopUnit.unit === "normalized"
-                        ? "loop_start/end/dur ∈ [0, 1] · pointer.start è scalato per sample_dur ma resta un valore raw, senza bound (is_smart=False)"
-                        : (loopMax != null
-                            ? ("loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
-                            : "loop_start/end/dur in secondi · durata del sample ignota, cap statico")}
-                    </span>
-                    <span />
-                  </div>
                   {loopBoundsErr ? (
                     <div className="pge-prow" style={{paddingTop:0}}>
                       <span className="k" /><span />
@@ -1121,6 +1126,79 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
               ) : (
                 <div className="pge-prow"><span className="k" style={{color:"var(--fg-3)"}}>loop</span><span /><span className="v" style={{color:"var(--fg-3)"}}>—</span><span /></div>
               )}
+              {loopUnitShown ? (
+                <>
+                  <div className="pge-prow">
+                    <span className="k" title="unità di pointer.start e delle coordinate del loop: seconds (grafia canonica) o absolute (alias storico) → secondi, cap = durata del sample · normalized → [0,1] × sample_dur. Assente = seconds: dal motore v9 (PGE #222) loop_unit non eredita più da time_mode">loop_unit</span>
+                    <Seg size="xs" value={loopUnitSel}
+                         onChange={(u) => {
+                           // Seg chiama onChange anche sul bottone gia' acceso
+                           // (primitives.jsx): un click che non cambia niente
+                           // non deve cambiare niente. Prima cancellava la
+                           // chiave — su uno stream normalized nato
+                           // nell'editor bastava quel click per fargli leggere
+                           // i secondi al posto di [0,1], senza che il
+                           // selettore mostrasse alcuna differenza.
+                           if (u === loopUnitSel) return;
+                           const np = { ...stream.pointer };
+                           // La chiave che vale il default e' ridondante:
+                           // assente significa gia' `seconds`. Ora e' vero a
+                           // prescindere dallo stream — prima "ridondante"
+                           // dipendeva da time_mode, ed e' li' che la
+                           // cancellazione diventava un cambio di semantica.
+                           if (u === LOOP_UNIT_DEFAULT) delete np.loopUnit; else np.loopUnit = u;
+                           // The cap travels with the unit (1 in normalized,
+                           // sample_dur in seconds), so the endpoints get the
+                           // same clamp a typed edit gets — otherwise switching
+                           // to normalized would leave a 12 s loop_start sitting
+                           // in a [0,1] field, which the engine silently clamps
+                           // at render. Envelope endpoints are per-grain and
+                           // exempt, as everywhere else in the loop block.
+                           const cap = window.PGEEnvUtils.loopEnvMax({ ...stream, pointer: np }, sampleDur);
+                           for (const k of ["loopStart", "loopEnd", "loopDur"]) {
+                             if (typeof np[k] === "number") np[k] = clampLoop(k, np[k], cap);
+                           }
+                           onChange({ pointer: np });
+                         }}
+                         options={[{label:"seconds",value:"seconds"},{label:"normalized",value:"normalized"}]} />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)"}}>
+                      {loopUnit.source === "loop_unit" ? ("esplicito: " + loopUnit.spelling) : "default: seconds"}
+                    </span>
+                    <span />
+                  </div>
+                  {loopUnitErr ? (
+                    <div className="pge-prow" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+                        loop_unit: {JSON.stringify(loopUnitErr.value)} non è un'unità riconosciuta — il motore rifiuta lo stream.
+                        Unità disponibili: {loopUnitErr.units.join(", ")}.
+                      </span>
+                      <span />
+                    </div>
+                  ) : loopUnitMigrated ? (
+                    <div className="pge-prow hint" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                        {loopUnitMigratedKeys.join(", ")}: ora in secondi — time_mode: normalized non implica più loop_unit: normalized.
+                        Per la lettura precedente ([0,1] × sample_dur) scegli normalized qui sopra.
+                      </span>
+                      <span />
+                    </div>
+                  ) : (
+                    <div className="pge-prow hint" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                        {loopUnit.unit === "normalized"
+                          ? "start e loop_start/end/dur ∈ [0, 1] × sample_dur · start resta un valore raw, senza bound (is_smart=False)"
+                          : (loopMax != null
+                              ? ("start e loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
+                              : "start e loop_start/end/dur in secondi · durata del sample ignota, cap statico")}
+                      </span>
+                      <span />
+                    </div>
+                  )}
+                </>
+              ) : null}
               {(stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null) ? (
                 <ParamRow name="offset_range"
                           mode={getMode("offsetRange")} onMode={(m) => toggleMode("offsetRange", m)}

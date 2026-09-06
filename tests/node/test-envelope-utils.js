@@ -31,13 +31,17 @@ function assert(label, cond, extra) {
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log("\n── module surface ──");
-assert("PGEEnvUtils exposes the 18 helpers",
+assert("PGEEnvUtils exposes the 21 helpers",
   ["sliceEnvArray", "sliceStreamEnvelopes", "rescaleEnvArray", "truncateEnvArray", "envArrayWouldTruncate", "_applyEnvFields",
    "rescaleStreamEnvelopes", "truncateStreamEnvelopes", "streamWouldTruncate", "nudgeBreakpoint",
-   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopBoundsError", "grainDurationUnitError",
-   "snapDirection", "snapForDomain", "readDirectionError"]
+   "computeYFit", "loopEnvMax", "loopUnitInfo", "loopUnitError", "loopUnitSuffix", "loopUnitRescaleKeys",
+   "loopBoundsError", "grainDurationUnitError", "snapDirection", "snapForDomain", "readDirectionError"]
     .every(k => typeof U[k] === "function"),
   JSON.stringify(Object.keys(U)));
+// Il vocabolario non e' una funzione: viaggia con loro perche' il selettore
+// dell'Inspector ci costruisca sopra i bottoni invece di ricopiarli.
+assert("espone il vocabolario del motore e il suo default",
+  eq(U.LOOP_UNITS, ["seconds", "absolute", "normalized"]) && U.LOOP_UNIT_DEFAULT === "seconds");
 
 console.log("\n── rescaleEnvArray ──");
 assert("breakpoints scaled by ratio",
@@ -308,25 +312,28 @@ console.log("\n── deviationProbability typed {type,points} envelopes (cubic 
 // loopEnvMax — sample-driven upper bound for loop_start/end/dur. The engine's
 // max_val for these is None (the real cap is sample_dur_sec, injected at render
 // time); the editor mirrors that. Unit follows PointerController:
-// pointer.loopUnit || stream.timeMode (engine default "absolute").
+// pointer.loopUnit, default "seconds" — dopo PGE #222 time_mode non c'entra.
 // ---------------------------------------------------------------------------
 console.log("\n── loopEnvMax (sample-driven loop bound) ──");
 {
   const ptr = (extra) => ({ pointer: Object.assign({ loopStartEnv: [[0, 0], [1, 1]] }, extra || {}) });
 
   // absolute/seconds (default): cap is the sample duration
-  assert("absolute (no unit/timeMode) → cap = sampleDur",
+  assert("no loop_unit → cap = sampleDur",
     U.loopEnvMax(ptr(), 12.5) === 12.5);
-  assert("explicit timeMode absolute → cap = sampleDur",
-    U.loopEnvMax(Object.assign({ timeMode: "absolute" }, ptr()), 8) === 8);
+  assert("loopUnit seconds → cap = sampleDur",
+    U.loopEnvMax(ptr({ loopUnit: "seconds" }), 8) === 8);
+  assert("loopUnit absolute (alias storico) → cap = sampleDur",
+    U.loopEnvMax(ptr({ loopUnit: "absolute" }), 8) === 8);
 
   // normalized: loop coords live in [0,1] → cap 1, regardless of sampleDur
   assert("loopUnit normalized → cap = 1",
     U.loopEnvMax(ptr({ loopUnit: "normalized" }), 30) === 1);
-  assert("timeMode normalized (no loopUnit) → cap = 1",
-    U.loopEnvMax(Object.assign({ timeMode: "normalized" }, ptr()), 30) === 1);
-  assert("loopUnit overrides timeMode (absolute unit wins over normalized stream)",
-    U.loopEnvMax(Object.assign({ timeMode: "normalized" }, ptr({ loopUnit: "absolute" })), 9) === 9);
+  // Il caso che PGE #222 ha rovesciato: prima ereditava e tappava a 1, ora no.
+  assert("timeMode normalized senza loopUnit → cap = sampleDur (niente eredita')",
+    U.loopEnvMax(Object.assign({ timeMode: "normalized" }, ptr()), 30) === 30);
+  assert("timeMode non tocca il cap nemmeno in absolute",
+    U.loopEnvMax(Object.assign({ timeMode: "absolute" }, ptr({ loopUnit: "normalized" })), 30) === 1);
 
   // unknown / invalid sample duration → null so callers keep the static cap
   assert("undefined sampleDur → null (keep static fallback)",
@@ -340,46 +347,211 @@ console.log("\n── loopEnvMax (sample-driven loop bound) ──");
 
   // null/empty stream is tolerated (no throw); absolute with no duration → null
   assert("null stream → null", U.loopEnvMax(null, undefined) === null);
+
+  // Una grafia fuori vocabolario legge come il default: e' la direzione
+  // conservativa (il render muore comunque, lo dice loopUnitError).
+  assert("grafia ignota → cap = sampleDur, come l'assente",
+    U.loopEnvMax(ptr({ loopUnit: "normalised" }), 7) === 7);
 }
 
 // ---------------------------------------------------------------------------
 // loopUnitInfo — which unit the loop window is written in, and where that unit
-// comes from. Same resolution as the engine (loop_unit or time_mode), plus the
-// provenance the Inspector needs to label the control as inherited and to drop
-// a redundant key instead of materializing it (issue #126).
+// comes from. Specchio del motore (PointerController): la chiave si legge dal
+// blocco pointer e non eredita NIENTE — PGE #222 ha tolto il ramo
+// `or self._config.time_mode` e il default e' `seconds`, una costante.
+// La provenienza resta perche' l'Inspector deve sapere se materializzare la
+// chiave o lasciarla assente (issue #126), ma i valori sono due, non tre.
 // ---------------------------------------------------------------------------
 console.log("\n── loopUnitInfo (unit + provenance) ──");
 {
   const info = (stream) => U.loopUnitInfo(stream);
 
   assert("no keys → absolute from the engine default",
-    eq(info({}), { unit: "absolute", source: "default" }));
+    eq(info({}), { unit: "absolute", source: "default", spelling: null }));
   assert("null stream tolerated → absolute/default",
-    eq(info(null), { unit: "absolute", source: "default" }));
+    eq(info(null), { unit: "absolute", source: "default", spelling: null }));
 
-  assert("timeMode normalized → normalized, inherited",
-    eq(info({ timeMode: "normalized" }), { unit: "normalized", source: "time_mode" }));
-  assert("timeMode absolute → absolute, inherited",
-    eq(info({ timeMode: "absolute" }), { unit: "absolute", source: "time_mode" }));
+  /* Le tre righe che seguono sono il cuore di #149: prima asserivano
+     l'ereditarieta' — «timeMode normalized → normalized, inherited» — cioe' il
+     contratto che il motore non ha piu'. Su uno YAML scritto a mano con
+     `time_mode: normalized` e nessun `loop_unit`, la vecchia risposta mandava
+     lo split a scrivere 0.075 dove il motore legge 0.6 s: sbagliato di 8x. */
+  assert("timeMode normalized senza loop_unit → absolute, default (niente eredita')",
+    eq(info({ timeMode: "normalized" }), { unit: "absolute", source: "default", spelling: null }));
+  assert("timeMode absolute senza loop_unit → absolute, default",
+    eq(info({ timeMode: "absolute" }), { unit: "absolute", source: "default", spelling: null }));
+  assert("nessun time_mode puo' produrre la lettura normalized",
+    ["normalized", "absolute", "weird", undefined]
+      .every(tm => info({ timeMode: tm }).unit === "absolute"));
 
-  assert("explicit loop_unit normalized wins over an absolute stream",
+  assert("explicit loop_unit normalized on an absolute stream",
     eq(info({ timeMode: "absolute", pointer: { loopUnit: "normalized" } }),
-       { unit: "normalized", source: "loop_unit" }));
-  assert("explicit loop_unit absolute wins over a normalized stream (the #126 escape)",
+       { unit: "normalized", source: "loop_unit", spelling: "normalized" }));
+  assert("explicit loop_unit absolute on a normalized stream",
     eq(info({ timeMode: "normalized", pointer: { loopUnit: "absolute" } }),
-       { unit: "absolute", source: "loop_unit" }));
+       { unit: "absolute", source: "loop_unit", spelling: "absolute" }));
 
-  // The engine only ever tests `!= 'normalized'`, so anything else is seconds.
-  assert("unknown loop_unit string → absolute (engine tests != normalized)",
-    eq(info({ pointer: { loopUnit: "seconds" } }), { unit: "absolute", source: "loop_unit" }));
-  assert("unknown time_mode string → absolute",
-    eq(info({ timeMode: "weird" }), { unit: "absolute", source: "time_mode" }));
+  /* Due grafie per la stessa lettura: `seconds` e' quella canonica del motore,
+     `absolute` l'alias storico. `unit` e' la LETTURA, quindi ne ha una sola;
+     `spelling` porta la stringa com'e' scritta, che e' quel che l'Inspector
+     mostra accanto al selettore. Prima `seconds` compariva qui come esempio di
+     «stringa ignota» — dopo #222 e' la grafia principale. */
+  assert("loop_unit seconds → absolute, esplicito",
+    eq(info({ pointer: { loopUnit: "seconds" } }),
+       { unit: "absolute", source: "loop_unit", spelling: "seconds" }));
+  assert("seconds e absolute danno la stessa lettura",
+    info({ pointer: { loopUnit: "seconds" } }).unit === info({ pointer: { loopUnit: "absolute" } }).unit);
+  assert("ma restano distinguibili nella grafia",
+    info({ pointer: { loopUnit: "seconds" } }).spelling !== info({ pointer: { loopUnit: "absolute" } }).spelling);
+
+  // Una grafia fuori vocabolario legge come il default — la direzione
+  // conservativa — ma non e' silenzio: a dirlo e' loopUnitError, qui sotto.
+  assert("grafia fuori vocabolario → absolute, ma esplicita",
+    eq(info({ pointer: { loopUnit: "normalised" } }),
+       { unit: "absolute", source: "loop_unit", spelling: "normalised" }));
 
   // loopEnvMax must agree with it — one resolution, two readers.
-  assert("loopEnvMax agrees: inherited normalized still caps at 1",
-    U.loopEnvMax({ timeMode: "normalized" }, 30) === 1);
-  assert("loopEnvMax agrees: explicit absolute on a normalized stream caps at sampleDur",
-    U.loopEnvMax({ timeMode: "normalized", pointer: { loopUnit: "absolute" } }, 30) === 30);
+  assert("loopEnvMax agrees: normalized esplicito tappa a 1",
+    U.loopEnvMax({ timeMode: "absolute", pointer: { loopUnit: "normalized" } }, 30) === 1);
+  assert("loopEnvMax agrees: uno stream normalized senza chiave tappa a sampleDur",
+    U.loopEnvMax({ timeMode: "normalized" }, 30) === 30);
+}
+
+// ---------------------------------------------------------------------------
+// loopUnitError — lo specchio del rifiuto del motore, sulla forma di
+// window.PGEDeviationProb.error. Prima di #222 qualunque stringa valeva
+// "assoluto" per esclusione (il motore testava solo `!= 'normalized'`); ora
+// e' InvalidFieldValueError e il render muore, quindi normalizzare in silenzio
+// significherebbe mostrare verde uno stream che non rende.
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitError (vocabolario) ──");
+{
+  const err = (loopUnit) => U.loopUnitError({ loopUnit });
+
+  for (const u of ["seconds", "absolute", "normalized"]) {
+    assert(`${u} e' nel vocabolario → null`, err(u) === null);
+  }
+  assert("chiave assente → null (e' il default, non un errore)", err(undefined) === null);
+  assert("pointer nullo → null", U.loopUnitError(null) === null);
+  assert("pointer assente → null", U.loopUnitError(undefined) === null);
+
+  assert("refuso normalised → errore", err("normalised") !== null);
+  assert("l'errore riporta il valore scritto", err("normalised").value === "normalised");
+  assert("…e il vocabolario da mostrare",
+    eq(err("normalised").units, ["seconds", "absolute", "normalized"]));
+  assert("il vocabolario esposto e' una copia, non l'originale",
+    err("x").units !== U.LOOP_UNITS && eq(err("x").units, U.LOOP_UNITS));
+  assert("maiuscole: il motore confronta stringhe esatte", err("Seconds") !== null);
+  assert("secondi (italiano) → errore", err("secondi") !== null);
+
+  /* La chiave scritta vuota e' un errore del motore ma non arriva fin qui: il
+     bridge la scarta in parse (`ptr.loop_unit != null`) e non la riserializza,
+     quindi in editor quel caso E' gia' la chiave assente. Asserito perche' la
+     funzione non deve inventarsi un errore su uno stato che l'editor produce. */
+  assert("null (loop_unit: vuoto, scartato dal bridge) → null", err(null) === null);
+  assert("stringa vuota → null", err("") === null);
+
+  /* E lo stesso vale per OGNI grafia falsy, non solo per quelle due: il parse
+     lascia passare `loop_unit: 0` e `loop_unit: false` (scarta solo il null),
+     ma il serializzatore emette `ptr.loopUnit || undefined`, quindi la chiave
+     non arriva mai al motore — e `/render` scrive lo stato dell'editor sul
+     config prima di lanciarlo. Accusarle sarebbe un rosso su un render che
+     riesce, e in disaccordo con loopUnitInfo, che le da' per assenti: la riga
+     di provenienza direbbe «default: seconds» accanto a una riga d'errore. */
+  for (const falsy of [0, false, NaN]) {
+    assert(`${String(falsy)} → null (il serializzatore toglie la chiave)`,
+      err(falsy) === null);
+    assert(`…e loopUnitInfo concorda: ${String(falsy)} e' la chiave assente`,
+      U.loopUnitInfo({ pointer: { loopUnit: falsy } }).source === "default");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// loopUnitSuffix — l'etichetta di pointer.start e delle tre righe del loop.
+// Stessa regola di grainUnitSuffix, e per lo stesso motivo: su un'unita' che
+// il motore non riconosce non c'e' suffisso, perche' una «s» accanto alla riga
+// d'errore che dichiara l'unita' non riconosciuta sarebbero due affermazioni
+// opposte. Vive nel modulo perche' lo leggono Inspector ed EnvelopeEditor.
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitSuffix (etichetta di start e del loop) ──");
+{
+  const suf = (loopUnit) => U.loopUnitSuffix(loopUnit === undefined ? {} : { loopUnit });
+
+  assert("chiave assente → s (assente E' seconds)", suf(undefined) === "s");
+  assert("pointer nullo → s", U.loopUnitSuffix(null) === "s");
+  assert("seconds → s", suf("seconds") === "s");
+  assert("absolute (alias storico) → s", suf("absolute") === "s");
+  assert("normalized → nessun suffisso", suf("normalized") === "");
+
+  /* Il caso che questa funzione esiste per coprire: prima il suffisso era un
+     ternario su `unit`, e una grafia fuori vocabolario legge "absolute" —
+     quindi la riga mostrava «0.4 s» sotto un rosso che diceva che l'unita' non
+     e' riconosciuta. */
+  assert("grafia fuori vocabolario → nessun suffisso", suf("normalised") === "");
+  assert("…e per ogni grafia che loopUnitError rifiuta",
+    ["Seconds", "secondi", "x"].every(u => suf(u) === "" && U.loopUnitError({ loopUnit: u }) !== null));
+  assert("il suffisso tace esattamente dove parla loopUnitError, o in normalized",
+    ["seconds", "absolute", "normalized", "normalised", "", undefined]
+      .every(u => (suf(u) === "") === (!!U.loopUnitError({ loopUnit: u }) || u === "normalized")));
+
+  // Il timeMode non entra piu' nemmeno qui: e' loopUnitInfo, un livello sotto.
+  assert("timeMode non tocca il suffisso",
+    U.loopUnitSuffix({}) === "s" && U.loopUnitInfo({ timeMode: "normalized" }).unit === "absolute");
+}
+
+// ---------------------------------------------------------------------------
+// loopUnitRescaleKeys — quali chiavi cambiano DAVVERO lettura per uno stream
+// che #222 ha spostato. Specchio di `_rescaling_would_change` sul giro di
+// `_LOOP_UNIT_SCOPE`: e' il filtro con cui il motore decide se emettere
+// l'avviso [LOOP_UNIT], e l'avviso dell'Inspector e' quello stesso avviso.
+// Senza filtro l'editor parla su `start: 0` — la forma piu' comune del corpus,
+// e quella con cui nasce ogni clip — dove non si muove un campione.
+// ---------------------------------------------------------------------------
+console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──");
+{
+  const K = (pointer) => U.loopUnitRescaleKeys(pointer);
+
+  assert("pointer nullo → nessuna chiave", eq(K(null), []));
+  assert("pointer vuoto → nessuna chiave", eq(K({}), []));
+
+  /* Il caso che il filtro esiste per tacere: zero resta zero sotto qualunque
+     fattore di scala. E' il pointer con cui l'editor crea ogni clip. */
+  assert("start: 0 senza loop → nessuna chiave (zero non si muove)",
+    eq(K({ start: 0, speedRatio: 1, loopStart: null, loopDur: null }), []));
+  assert("loop_start: 0 esplicito → nessuna chiave", eq(K({ loopStart: 0 }), []));
+
+  assert("start non nullo → start", eq(K({ start: 0.5 }), ["start"]));
+  assert("start negativo → start", eq(K({ start: -0.25 }), ["start"]));
+  assert("loop_start scalare → loop_start", eq(K({ loopStart: 0.2 }), ["loop_start"]));
+  assert("loop_end scalare → loop_end", eq(K({ loopEnd: 1 }), ["loop_end"]));
+  assert("loop_dur scalare → loop_dur", eq(K({ loopDur: 0.5 }), ["loop_dur"]));
+
+  /* Un envelope si muove tutto: `scale_raw_param_values` scala i valori y, e
+     `is_envelope_like` e' proprio il ramo che glielo fa fare. Nel bridge la
+     forma envelope vive nel gemello `*Env`, mai nello scalare. */
+  assert("loop_start envelope → loop_start",
+    eq(K({ loopStart: null, loopStartEnv: [[0, 0.1], [1, 0.9]] }), ["loop_start"]));
+  assert("loop_dur envelope → loop_dur",
+    eq(K({ loopDurEnv: { type: "linear", points: [[0, 0.1], [1, 0.9]] } }), ["loop_dur"]));
+  assert("start envelope (passa grezzo dal bridge) → start",
+    eq(K({ start: [[0, 0.1], [1, 0.9]] }), ["start"]));
+
+  /* Ordine e grafia: sono le chiavi che il messaggio del motore nomina
+     (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), nell'ordine di
+     `_LOOP_UNIT_SCOPE`. */
+  assert("le chiavi escono in grafia YAML e nell'ordine del motore",
+    eq(K({ loopEnd: 2, start: 0.5, loopDur: null, loopStart: 0 }), ["start", "loop_end"]));
+  assert("tutte e quattro insieme",
+    eq(K({ start: 0.1, loopStart: 0.2, loopEnd: 0.3, loopDur: 0.4 }),
+       ["start", "loop_start", "loop_end", "loop_dur"]));
+
+  /* Quel che la conversione lasciava passare invariato non si muoveva nemmeno
+     prima: `_rescaling_would_change` esclude None e i bool, e una stringa non
+     e' envelope-like. */
+  assert("null/undefined → nessuna chiave", eq(K({ start: null, loopStart: undefined }), []));
+  assert("booleano → nessuna chiave (il motore esclude bool prima dei numeri)",
+    eq(K({ start: true }), []));
+  assert("stringa → nessuna chiave (non e' envelope-like)", eq(K({ start: "0.5" }), []));
 }
 
 // loopBoundsError — mirrors the engine's static loop-window validation (PGE
@@ -619,33 +791,98 @@ assert("envelope: forma dict {points}",
  * test-magnify-spec.js.
  * ============================================================ */
 
-console.log("\n── cablaggio loop_unit (issue #126) ──");
+console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
 {
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("l'Inspector risolve unità e provenienza con loopUnitInfo",
     /window\.PGEEnvUtils\.loopUnitInfo\(stream\)/.test(inspSrc));
-  assert("calcola anche l'unità ereditata (per sapere quando togliere la chiave)",
-    /loopUnitInherited/.test(inspSrc));
-  assert("loop_unit è un controllo, non più una riga di sola lettura",
-    /options=\{\[\{label:"absolute",value:"absolute"\},\{label:"normalized",value:"normalized"\}\]\}/.test(inspSrc));
-  assert("scegliere l'unità già in vigore cancella la chiave invece di scriverla",
-    /u === loopUnitInherited\) delete np\.loopUnit; else np\.loopUnit = u/.test(inspSrc));
+  /* Il default non si calcola piu' dallo stream: e' la costante del modulo.
+     `loopUnitInfo({ timeMode: stream.timeMode })` era la riga che rendeva
+     "ridondante" una proprieta' dello stream invece che della chiave, ed e'
+     quella che trasformava uno stream sano in uno esposto. */
+  assert("il default arriva dal modulo, non da un secondo giro su timeMode",
+    /const LOOP_UNIT_DEFAULT = window\.PGEEnvUtils\.LOOP_UNIT_DEFAULT/.test(inspSrc)
+    && !/loopUnitInfo\(\{ timeMode/.test(inspSrc)
+    && !/loopUnitInherited/.test(inspSrc));
+  assert("il selettore scrive la grafia canonica del motore",
+    /options=\{\[\{label:"seconds",value:"seconds"\},\{label:"normalized",value:"normalized"\}\]\}/.test(inspSrc));
+  /* La regressione del punto 1 di #149, in forma di guardia: Seg chiama
+     onChange anche sul bottone gia' acceso, quindi senza questo ritorno
+     anticipato un click su "normalized" — la selezione corrente di ogni clip
+     nato nell'editor — cancellava la chiave. Il comportamento e' verificato
+     anche eseguendo la funzione, poco piu' sotto. */
+  assert("un click che non cambia unità non tocca lo YAML",
+    /if \(u === loopUnitSel\) return;/.test(inspSrc));
+  assert("si cancella solo la chiave che vale il default",
+    /u === LOOP_UNIT_DEFAULT\) delete np\.loopUnit; else np\.loopUnit = u/.test(inspSrc));
   assert("una riga dichiara il cap effettivo del loop",
     /durata del sample/.test(inspSrc));
   assert("loop_unit non è più nell'AddParamMenu (il controllo lo rimpiazza)",
     !/key: "loopUnit"/.test(inspSrc));
+  /* Il suffisso lo decide il modulo, non un ternario nel JSX: e' l'unico modo
+     perche' taccia anche su una grafia fuori vocabolario, dove una «s» starebbe
+     sotto la riga rossa che dichiara l'unita' non riconosciuta. */
   assert("in normalized le righe del loop non mostrano il suffisso in secondi",
-    /const loopUnitSuffix = loopUnit\.unit === "normalized" \? "" : "s"/.test(inspSrc)
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(inspSrc)
+    && !/loopUnit\.unit === "normalized" \? "" : "s"/.test(inspSrc)
     && (inspSrc.match(/unit=\{stream\.pointer\.loop\w+Env \? "" : loopUnitSuffix\}/g) || []).length === 3);
   assert("anche pointer.start segue l'unità (il motore scala pure quello)",
     /name="start"[\s\S]{0,160}unit=\{loopUnitSuffix\}/.test(inspSrc)
-    && /pointer\.start è scalato per sample_dur ma resta un valore raw/.test(inspSrc));
-  assert("un loop_unit ignoto scritto a mano si mostra per quello che dice lo YAML",
-    /"esplicito: " \+ stream\.pointer\.loopUnit/.test(inspSrc));
-  assert("senza blocco loop una riga spiega perché start ha perso il suffisso",
-    /loopUnit\.unit === "normalized" && !loopBlockShown/.test(inspSrc)
-    && /pointer\.start è scalato per sample_dur dal motore/.test(inspSrc));
+    && /start e loop_start\/end\/dur ∈ \[0, 1\] × sample_dur/.test(inspSrc));
+  assert("un loop_unit scritto a mano si mostra per quello che dice lo YAML",
+    /"esplicito: " \+ loopUnit\.spelling/.test(inspSrc));
+  /* Il blocco dell'unita' ha un flag suo: la × "Remove loop" toglie il loop,
+     non l'unita' in cui e' scritto pointer.start. Finche' i flag erano uno,
+     quella × portava via `loop_unit: normalized` da ogni clip nato
+     nell'editor — un click, e start cambiava significato di 8x. */
+  const unitDecl = (/const loopUnitShown = [\s\S]*?;/.exec(inspSrc) || [""])[0];
+  assert("il controllo dell'unità sopravvive alla rimozione del loop",
+    /loopWindowShown/.test(unitDecl) && /loopUnit != null/.test(unitDecl)
+    && !/loopBlockShown/.test(inspSrc));
+  /* E compare ovunque l'unita' governi un valore che si muove, non solo sulla
+     popolazione che #222 ha spostato: la condizione dell'avviso porta dentro
+     `time_mode`, e usarla anche per la visibilita' rimetteva la dipendenza
+     dallo stream che #222 ha tolto. La reachability e' verificata eseguendo le
+     due dichiarazioni, poco piu' sotto. */
+  assert("…e compare ovunque l'unità morda, senza passare da time_mode",
+    /loopUnitScaledKeys\.length > 0/.test(unitDecl)
+    && !/loopUnitMigrated\b/.test(unitDecl)
+    && /const loopUnitScaledKeys = window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc));
+  assert("la × del loop non cancella più loop_unit",
+    !/delete np\.loopDur; delete np\.loopDurEnv;\s*delete np\.loopUnit/.test(inspSrc));
+  /* Sulla dichiarazione, non su una finestra di caratteri: una `{0,400}` qui
+     scavalcava la fine dell'istruzione e trovava il `loopUnit != null` di
+     quella DOPO, cioe' passava anche col difetto. */
+  const winDecl = (/const loopWindowShown = [\s\S]*?;/.exec(inspSrc) || [""])[0];
+  assert("la finestra di loop guarda le sei chiavi del loop…",
+    /loopStartEnv/.test(winDecl) && /loopEndEnv/.test(winDecl) && /loopDurEnv/.test(winDecl));
+  assert("…e loop_unit non è fra queste",
+    winDecl.length > 0 && !/loopUnit/.test(winDecl));
+  /* Il refuso nel vocabolario non rende: dopo #222 e' InvalidFieldValueError,
+     non piu' una stringa letta come "assoluto" per esclusione. */
+  assert("una grafia fuori vocabolario ha la sua riga d'errore",
+    /const loopUnitErr = window\.PGEEnvUtils\.loopUnitError\(stream\.pointer\)/.test(inspSrc)
+    && /non è un'unità riconosciuta/.test(inspSrc)
+    && /loopUnitErr\.units\.join/.test(inspSrc));
+  assert("con una grafia rotta nessun bottone è acceso",
+    /const loopUnitSel = loopUnitErr \? null/.test(inspSrc));
+  /* L'avviso alla popolazione che #222 ha spostato: normalized senza chiave.
+     Il motore lo dice a render (`[LOOP_UNIT] … ora in secondi`) ma quel
+     messaggio e' marcato `# ponytail` e va via dopo una release. */
+  /* …ma solo quella a cui i numeri si muovono davvero. Il motore filtra il suo
+     avviso con `_rescaling_would_change` perche' `start: 0` e' la forma piu'
+     comune del corpus — ed e' quella con cui nasce ogni clip dell'editor —
+     quindi un avviso non filtrato parlerebbe dove il motore tace, e chi lo
+     seguisse scriverebbe una chiave che non muove un campione: fingerprint
+     mosso, un render in piu' su uno stem che era giusto. */
+  assert("uno stream normalized senza loop_unit viene avvisato",
+    /const loopUnitMigratedKeys = \(stream\.timeMode === "normalized" && loopUnit\.source === "default"\)/.test(inspSrc)
+    && /window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc)
+    && /const loopUnitMigrated = loopUnitMigratedKeys\.length > 0/.test(inspSrc)
+    && /non implica più loop_unit: normalized/.test(inspSrc));
+  assert("…e l'avviso nomina le chiavi che cambiano, come fa il motore",
+    /\{loopUnitMigratedKeys\.join\(", "\)\}: ora in secondi/.test(inspSrc));
   // start è is_smart=False lato motore (valore raw, nessun bound): clamparlo
   // qui sarebbe la UI a inventarsi un vincolo che il render non ha.
   assert("il ri-clamp resta sui tre estremi del loop, start fuori",
@@ -654,6 +891,148 @@ console.log("\n── cablaggio loop_unit (issue #126) ──");
   assert("cambiare unità ri-clampa gli estremi scalari col cap della nuova unità",
     /const cap = window\.PGEEnvUtils\.loopEnvMax\(\{ \.\.\.stream, pointer: np \}, sampleDur\)/.test(inspSrc)
     && /np\[k\] = clampLoop\(k, np\[k\], cap\)/.test(inspSrc));
+
+  /* ── e ora il comportamento, non la presenza di una riga ──────────────────
+     Le guardie sopra dicono che il sorgente contiene certe stringhe; questa
+     ESEGUE l'onChange del selettore, estratto dal JSX per brace matching e
+     istanziato con le sue variabili libere. E' il pezzo di #149 che una
+     guardia testuale non copre: la catena «Seg chiama anche sul bottone
+     acceso → il ramo cancella la chiave → loopUnitInfo continua a mostrare
+     normalized per ereditarieta'» era invisibile a chi leggeva le tre righe
+     una per una. Il JSX non gira in node, ma il corpo di questa funzione e'
+     JavaScript puro: girano i byte del file, non una copia. */
+  const segAt = inspSrc.indexOf('<Seg size="xs" value={loopUnitSel}');
+  const onChAt = inspSrc.indexOf("onChange={(u) => {", segAt);
+  let body = "";
+  if (segAt >= 0 && onChAt >= 0) {
+    const open = inspSrc.indexOf("{", inspSrc.indexOf("=>", onChAt));
+    let depth = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") depth++;
+      else if (inspSrc[j] === "}" && --depth === 0) { body = inspSrc.slice(open, j + 1); break; }
+    }
+  }
+  assert("l'onChange del selettore è estraibile dal sorgente", body.length > 0);
+
+  const makeHandler = (stream, sampleDur) => {
+    // Le tre variabili libere che l'Inspector calcola una riga sopra il Seg,
+    // ricostruite qui con le stesse funzioni del modulo: il bottone acceso e'
+    // la LETTURA in vigore, e non e' acceso niente su una grafia rotta.
+    const info = U.loopUnitInfo(stream);
+    const sel = U.loopUnitError(stream.pointer) ? null
+      : (info.unit === "normalized" ? "normalized" : U.LOOP_UNIT_DEFAULT);
+    let out = null;
+    const fn = new Function(
+      "loopUnitSel", "stream", "LOOP_UNIT_DEFAULT", "window", "sampleDur", "clampLoop", "onChange",
+      "return (u) => " + body)(
+      sel, stream, U.LOOP_UNIT_DEFAULT, window, sampleDur,
+      // clampLoop dell'Inspector, ridotto al suo effetto: tappare al cap
+      (k, v, cap) => Math.min(cap != null ? cap : Infinity, Math.max(0, v)),
+      (patch) => { out = patch; });
+    return { fn, get: () => out, sel };
+  };
+
+  {
+    // Il caso di regressione: clip nato nell'editor, chiave esplicita, click
+    // sul bottone che e' gia' acceso. Prima cancellava `loop_unit` e lo
+    // stream cominciava a leggere secondi mostrando ancora "normalized".
+    const stream = { timeMode: "normalized", pointer: { start: 0.4, loopUnit: "normalized" } };
+    const h = makeHandler(stream, 8);
+    h.fn("normalized");
+    assert("click sul bottone già acceso: nessuna modifica", h.get() === null);
+  }
+  {
+    // Lo stesso click su uno stream che porta l'alias storico: la lettura non
+    // cambia, quindi non si riscrive la grafia (e non si marca stale lo stem).
+    const stream = { timeMode: "normalized", pointer: { loopUnit: "absolute" } };
+    const h = makeHandler(stream, 8);
+    h.fn("seconds");
+    assert("absolute + click su seconds: stessa lettura, nessuna riscrittura", h.get() === null);
+  }
+  {
+    // Cambio vero: normalized → seconds. La chiave vale il default, quindi
+    // sparisce — assente E' `seconds`, e stavolta e' vero a prescindere dallo
+    // stream.
+    const stream = { timeMode: "normalized", pointer: { loopUnit: "normalized", loopStart: 0.5 } };
+    const h = makeHandler(stream, 8);
+    h.fn("seconds");
+    assert("normalized → seconds: la chiave sparisce (assente = seconds)",
+      h.get() !== null && !("loopUnit" in h.get().pointer));
+    assert("…e gli estremi scalari si ri-clampano col cap nuovo",
+      h.get().pointer.loopStart === 0.5);
+  }
+  {
+    // Cambio vero nell'altro verso, su uno stream normalized senza chiave:
+    // e' la popolazione che #222 ha spostato, e qui la chiave si materializza.
+    const stream = { timeMode: "normalized", pointer: { loopStart: 3 } };
+    const h = makeHandler(stream, 8);
+    h.fn("normalized");
+    assert("seconds → normalized: la chiave si scrive",
+      h.get() !== null && h.get().pointer.loopUnit === "normalized");
+    assert("…e loop_start rientra nel cap di 1", h.get().pointer.loopStart === 1);
+  }
+  {
+    // Grafia rotta: nessun bottone acceso, quindi qualunque click scrive. E'
+    // l'unica strada per uscire dal refuso dall'interfaccia.
+    const stream = { timeMode: "absolute", pointer: { loopUnit: "normalised" } };
+    const h = makeHandler(stream, 8);
+    h.fn("seconds");
+    assert("refuso + click su seconds: la chiave rotta viene rimossa",
+      h.get() !== null && !("loopUnit" in h.get().pointer));
+    const h2 = makeHandler(stream, 8);
+    h2.fn("normalized");
+    assert("refuso + click su normalized: la chiave viene corretta",
+      h2.get() !== null && h2.get().pointer.loopUnit === "normalized");
+  }
+
+  /* ── il controllo non deve cancellarsi da se' ─────────────────────────────
+     Stessa tecnica un livello sopra: si eseguono le DICHIARAZIONI che decidono
+     se il selettore esiste, estratte dal sorgente, invece di cercarci dentro
+     una stringa. La domanda e' di raggiungibilita', e una guardia testuale non
+     la sa porre: `loop_unit` non e' nell'AddParamMenu, quindi il selettore e'
+     l'unica via per scriverlo, e se sparisce dopo averlo usato la modifica
+     resta senza ritorno. Il caso che la pone e' la coesistenza dei due assi
+     che #222 ha reso legittima — `time_mode: absolute` con `loop_unit:
+     normalized` — dove un click su "seconds" toglie la chiave e cambia il
+     significato di `start` senza lasciare in interfaccia il modo di tornare
+     indietro. */
+  const declOf = (name) =>
+    (new RegExp("const " + name + " = [\\s\\S]*?;").exec(inspSrc) || [""])[0];
+  /* Si porta dentro anche la catena dell'avviso — `loopUnit`,
+     `loopUnitMigratedKeys`, `loopUnitMigrated` — benche' la formulazione
+     corrente non la usi: e' quella la scorciatoia che il caso esiste per
+     escludere, e senza le sue variabili in scope una regressione morirebbe con
+     un ReferenceError invece di dare un rosso che si legge. */
+  const declNames = ["loopUnit", "loopWindowShown", "loopUnitScaledKeys",
+                     "loopUnitMigratedKeys", "loopUnitMigrated", "loopUnitShown"];
+  const decls = declNames.map(declOf);
+  assert("le dichiarazioni della visibilità sono estraibili dal sorgente",
+    decls.every(d => d.length > 0), declNames.filter((_, i) => !decls[i].length).join(", "));
+  const shownFor = (stream) => new Function("stream", "window",
+    decls.join("\n") + "\nreturn loopUnitShown;")(stream, window);
+
+  {
+    const stream = { timeMode: "absolute", pointer: { start: 0.5, loopUnit: "normalized" } };
+    assert("i due assi che coesistono: il controllo c'è", shownFor(stream) === true);
+    const h = makeHandler(stream, 8);
+    h.fn("seconds");
+    const after = { ...stream, pointer: h.get().pointer };
+    assert("…e sopravvive al click che cancella la chiave", shownFor(after) === true);
+    const back = makeHandler(after, 8);
+    back.fn("normalized");
+    assert("…quindi la modifica ha un ritorno",
+      back.get() !== null && back.get().pointer.loopUnit === "normalized");
+  }
+  {
+    // La popolazione che #222 ha spostato continua a vedere il controllo: la
+    // condizione e' strettamente piu' larga di quella dell'avviso.
+    assert("normalized senza chiave, con valori che si muovono: il controllo c'è",
+      shownFor({ timeMode: "normalized", pointer: { start: 0.5 } }) === true);
+    // …e non si e' allargata dove il motore tace: zero non si muove, e quel
+    // pointer e' quello con cui nasce ogni clip dell'editor.
+    assert("start: 0 senza loop né chiave: niente controllo, come niente avviso",
+      shownFor({ timeMode: "normalized", pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null } }) === false);
+  }
 }
 
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
@@ -662,7 +1041,7 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
-    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitInfo\(stream\)\.unit === "normalized" \? "" : "s"/.test(eeSrc)
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(eeSrc)
     && (eeSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
   assert("nessun consumatore deduce più la precisione dal suffisso",
     !/unit === "s"/.test(eeSrc));

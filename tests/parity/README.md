@@ -64,7 +64,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
-| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free) | tutti |
+| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto) | tutti |
 
 ## Come si lancia
 
@@ -228,6 +228,40 @@ giusta — il bridge deve funzionare ovunque, la parita' deve dire la verita' su
 *questo* checkout: su un layout vecchio il caso cade nominando «il motore
 dichiara ENVELOPE_COLORS», invece di confrontare due letture di cui una ha
 ripiegato.
+
+## Il vocabolario di `loop_unit`, la terza lista scritta per esteso
+
+`LOOP_UNITS` → `engine_introspect.engine_loop_units` (AST) → `loopUnitError` in
+`envelope-utils.js` → la riga rossa sotto il selettore dell'Inspector.
+
+Prima di PGE #222 non c'era niente da rispecchiare: la chiave non aveva un
+insieme dichiarato, il motore testava `!= 'normalized'` e ogni altra stringa
+valeva «assoluto» per esclusione. Ora una grafia fuori lista è
+`InvalidFieldValueError`, cioè un render che muore, e l'editor la nomina mentre
+si scrive invece di lasciarla scoprire al render.
+
+Il prezzo è una lista di stringhe del motore scritta in questo repo, cioè
+esattamente ciò che il CLAUDE.md vieta senza una parità che la tenga onesta: con
+il motore davanti i due lati coincidono sempre, e divergerebbero solo dopo un
+rename upstream, che nessuna suite node vedrebbe. Le domande, in
+`test-bounds-parity.js`:
+
+- la UI ha la stessa lista **nello stesso ordine** — la prima grafia è la
+  canonica, ed è quella che il selettore scrive quando si sceglie l'assoluto;
+- `LOOP_UNIT_DEFAULT` è quella prima grafia: è ciò che il selettore manda allo
+  YAML, quindi una scelta fuori vocabolario sarebbe un render ucciso
+  dall'editor stesso;
+- `loopUnitError` **usa** la lista — accetta ogni grafia del motore e rifiuta
+  quel che il motore non dichiara. Senza, una `LOOP_UNITS` allineata e un
+  mirror che la ignora starebbero verdi insieme;
+- e l'ereditarietà da `time_mode` è morta davvero: nessun `time_mode` può far
+  leggere le coordinate come normalized. È la divergenza che PGE-ui #149 ha
+  chiuso — su uno YAML `time_mode: normalized` senza `loop_unit` lo split
+  scriveva `0.075` dove il motore legge `0.6` s.
+
+Solo AST, e non per eleganza: `pointer_controller` importa
+`pge.envelopes.envelope` e quindi numpy, che nel job node della CI non esiste —
+ed è lì che la parità gira.
 
 ## Divergenze dichiarate
 

@@ -510,3 +510,59 @@ def engine_supports_samples_dir(root: Path) -> bool:
             break
     _SAMPLES_DIR_CACHE[key] = (stamp, found)
     return found
+
+
+_LOOP_UNITS_CACHE: dict = {}
+
+
+def engine_loop_units(root: Path) -> list:
+    """`LOOP_UNITS` del motore (`controllers/pointer_controller.py`), in ordine.
+
+    E' il vocabolario di `pointer.loop_unit` da PGE #222: prima la chiave non
+    aveva un insieme dichiarato — il motore testava solo `!= 'normalized'` e
+    qualunque altra stringa valeva "assoluto" — e ora una grafia fuori lista e'
+    `InvalidFieldValueError`, cioe' un render che muore. La UI ne ha bisogno per
+    dirlo mentre si scrive invece di scoprirlo al render (`loopUnitError` in
+    `envelope-utils.js`), e questa lettura e' cio' che impedisce alla lista di
+    diventare una trascrizione: la parita' pretende che le due coincidano.
+
+    AST come il resto del modulo, e qui non e' solo eleganza: importare
+    `pointer_controller` tira dentro `pge.envelopes.envelope` e quindi numpy,
+    che nel job node della CI non esiste — l'oracolo di parita' gira senza venv
+    del motore.
+
+    L'ordine e' significativo (la prima grafia e' quella canonica), quindi si
+    restituisce una lista e non un insieme. `[]` = un motore senza la costante,
+    piu' vecchio di #222: chi chiama non deve inventarsi un vocabolario."""
+    candidates = (
+        root / "src" / "pge" / "controllers" / "pointer_controller.py",
+        root / "src" / "controllers" / "pointer_controller.py",
+        root / "src" / "pointer_controller.py",
+    )
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _LOOP_UNITS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+
+    units: list = []
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in tree.body:
+            value = _assigned_value(node, "LOOP_UNITS")
+            if value is None:
+                continue
+            lit = _ast_literal(value)
+            if isinstance(lit, (list, tuple)) and all(isinstance(u, str) for u in lit):
+                units = list(lit)
+            # Il nome c'e': questo file ha gia' risposto, anche quando la
+            # risposta e' "non lo so". Stessa regola di _read_int_constant.
+            break
+        if units:
+            break
+
+    _LOOP_UNITS_CACHE[key] = (stamp, units)
+    return units

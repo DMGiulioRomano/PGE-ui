@@ -477,7 +477,8 @@
   // the static PGE_BOUNDS cap (3600 s) is only a placeholder. A loop window can
   // never address past the end of the sample, so the editor clamps to it.
   // Mirrors PointerController._pre_normalize_loop_params unit resolution:
-  //   unit = pointer.loopUnit || stream.timeMode (engine default "absolute")
+  //   unit = pointer.loopUnit, default "seconds" — nothing is inherited from
+  //          time_mode any more (PGE #222, see loopUnitInfo)
   //   "normalized" → loop coords live in [0,1] (the engine scales them by the
   //                  sample duration) → cap = 1
   //   otherwise (absolute seconds) → cap = sampleDur
@@ -490,32 +491,147 @@
       ? sampleDur : null;
   }
 
+  // Il vocabolario di `loop_unit`, come lo dichiara il motore
+  // (PointerController.LOOP_UNITS, PGE #222). 'seconds' è la grafia canonica
+  // — allinea loop_unit a grain.duration_unit — e 'absolute' l'alias storico
+  // che i config e la reference hanno sempre scritto: stessa lettura, valori
+  // già in secondi assoluti. Fuori da questa lista il motore alza
+  // InvalidFieldValueError: non c'è più una lettura di ripiego da indovinare.
+  const LOOP_UNITS = ["seconds", "absolute", "normalized"];
+  // La grafia che il selettore scrive per l'assoluto, ed è anche ciò che
+  // significa la chiave assente: il default del motore, indipendente dallo
+  // stream.
+  const LOOP_UNIT_DEFAULT = "seconds";
+
   // Which unit the loop window is written in, and WHERE that unit comes from.
-  // Same resolution as the engine (PointerController._pre_normalize_loop_params:
-  // `loop_unit = params.get('loop_unit') or self._config.time_mode`), but it also
-  // reports the provenance, because the provenance is the whole usability
-  // problem: every stream the editor creates is born `time_mode: normalized`, so
-  // the loop coordinates silently live in [0,1] — and the cap of 1 looks
-  // arbitrary — even though no `loop_unit` key was ever written (issue #126).
-  // The Inspector needs the source to (a) label the loop_unit control as
-  // inherited and (b) delete the key instead of materializing a redundant one
-  // when the user picks the value that was already in force.
+  // Mirror of the engine (PointerController._pre_normalize_loop_params), which
+  // reads the key from the raw pointer dict and inherits NOTHING: PGE #222 cut
+  // the `or self._config.time_mode` fallback this function used to copy,
+  // because the two keys govern different axes with different references —
+  // time_mode scales the envelopes' X axis (time) on the stream duration,
+  // loop_unit scales the Y axis (a position in the sample) on sample_dur_sec.
+  // They are independent and can coexist on the same envelope.
   //   source "loop_unit" → pointer.loop_unit is explicit in the YAML
-  //   source "time_mode" → inherited from the stream's time_mode
-  //   source "default"   → neither key present, engine default "absolute"
-  // Anything other than "normalized" means absolute seconds — the engine only
-  // ever tests `!= 'normalized'` — so an unknown string resolves to "absolute"
-  // here too, keeping the mirror faithful for hand-written YAML.
+  //   source "default"   → the key is absent → "seconds"
+  // The provenance is still what tells the Inspector whether to materialize
+  // the key or leave it absent — but it no longer has a third value, and
+  // "assente" no longer means "chiedi allo stream".
+  //
+  // `unit` is the READING the engine applies, so it stays two-valued
+  // ("normalized" | "absolute") while the vocabulary has three spellings;
+  // `spelling` carries the string as written, which is what the Inspector
+  // shows and what loopUnitError judges. A spelling outside LOOP_UNITS reads
+  // as "absolute" here — the default's reading, the conservative one — but it
+  // does not render at all: saying so is loopUnitError's job, instead of
+  // normalizing in silence a string the engine rejects.
   function loopUnitInfo(stream) {
     const explicit = stream && stream.pointer && stream.pointer.loopUnit;
     if (explicit) {
-      return { unit: explicit === "normalized" ? "normalized" : "absolute", source: "loop_unit" };
+      return {
+        unit: explicit === "normalized" ? "normalized" : "absolute",
+        source: "loop_unit",
+        spelling: explicit,
+      };
     }
-    const tm = stream && stream.timeMode;
-    if (tm) {
-      return { unit: tm === "normalized" ? "normalized" : "absolute", source: "time_mode" };
-    }
-    return { unit: "absolute", source: "default" };
+    return { unit: "absolute", source: "default", spelling: null };
+  }
+
+  // Lo specchio del rifiuto del motore su `pointer.loop_unit`, sulla forma di
+  // window.PGEDeviationProb.error: null quando va bene, altrimenti il valore
+  // scritto e il vocabolario ammesso, che l'Inspector mostra sotto il
+  // selettore. Prima di #222 qualunque stringa valeva "assoluto" per
+  // esclusione (il motore testava solo `!= 'normalized'`), quindi un refuso
+  // come `normalised` rendeva; ora è InvalidFieldValueError e il render muore.
+  //
+  // Una grafia FALSY non è un refuso, è la chiave assente — e la domanda non è
+  // cosa dice lo YAML sul disco, è cosa il motore leggerà: `/render` scrive lo
+  // stato dell'editor sul config prima di lanciare il motore, e il
+  // serializzatore emette `loop_unit: ptr.loopUnit || undefined`, quindi
+  // `loop_unit: 0`, `false` o `""` non arrivano mai al parser. Accusarli
+  // sarebbe un errore rosso su un render che riesce, e in disaccordo con
+  // `loopUnitInfo`, che li dà per assenti (`source: "default"`): la riga di
+  // provenienza direbbe «default: seconds» mentre quella d'errore dice che
+  // l'unità non è riconosciuta. Il caso già dichiarato — `loop_unit:` vuoto,
+  // cioè null in YAML, che il bridge scarta in parse (`ptr.loop_unit != null`)
+  // — è lo stesso caso: qui si estende alle altre grafie falsy, che il parse
+  // lascia passare e il serialize toglie.
+  function loopUnitError(pointer) {
+    const u = pointer && pointer.loopUnit;
+    if (!u) return null;
+    return LOOP_UNITS.indexOf(u) >= 0 ? null : { value: u, units: LOOP_UNITS.slice() };
+  }
+
+  // Il suffisso con cui si etichettano `pointer.start` e le tre righe del loop.
+  // Vive qui, e non nel JSX, per la stessa ragione di `grainUnitSuffix`: lo
+  // condividono Inspector ed EnvelopeEditor, e la risposta su un'unità che il
+  // motore non riconosce è «nessun suffisso». Una «s» accanto alla riga
+  // d'errore che dichiara l'unità non riconosciuta sarebbero due affermazioni
+  // opposte — è la regola che `grainUnitSuffix` scrive per esteso, e prima di
+  // `loopUnitError` qui non c'era una riga d'errore da contraddire.
+  function loopUnitSuffix(pointer) {
+    if (loopUnitError(pointer)) return "";
+    return loopUnitInfo({ pointer }).unit === "normalized" ? "" : "s";
+  }
+
+  // Le chiavi del blocco pointer che `loop_unit` interpreta, nella grafia dello
+  // YAML e nell'ordine in cui il motore le elenca (`_LOOP_UNIT_SCOPE` in
+  // pointer_controller.py). 'start' è fra queste benché loop non sia: è una
+  // posizione nel sample come loop_start, stesso dominio e stessa unità. Accanto
+  // a ciascuna, i campi con cui il bridge la tiene in stato — il valore scalare
+  // e il gemello `*Env`, che `unpackValueOrEnv` riempie solo su una forma
+  // envelope.
+  const LOOP_UNIT_SCOPE = [
+    ["start",      "start",     null],
+    ["loop_start", "loopStart", "loopStartEnv"],
+    ["loop_end",   "loopEnd",   "loopEndEnv"],
+    ["loop_dur",   "loopDur",   "loopDurEnv"],
+  ];
+
+  // Quali di quelle chiavi cambiano DAVVERO lettura su uno stream che PGE #222
+  // ha spostato — `time_mode: normalized` senza `loop_unit`, cioè quelli che
+  // prima ereditavano. Specchio di `_rescaling_would_change`: uno zero resta
+  // zero sotto qualunque fattore di scala, e quel che la conversione lasciava
+  // passare invariato non si muoveva nemmeno prima.
+  //
+  // Il filtro non è un di più: il motore lo ha messo apposta nel suo avviso, e
+  // il suo docstring dice perché — «senza il filtro sarebbero undici avvisi su
+  // stream in cui non si muove un campione, con i tre casi veri in mezzo al
+  // rumore». `start: 0` è la forma più comune nel corpus dei config, ed è anche
+  // quella con cui nasce ogni clip dell'editor. La riga d'avviso dell'Inspector
+  // È quell'avviso, quindi porta lo stesso filtro: senza, l'editor griderebbe
+  // dove il motore tace, e chi seguisse il consiglio scriverebbe una chiave che
+  // non cambia un campione — pagandola con un fingerprint mosso, cioè un render
+  // in più su uno stem che era giusto.
+  //
+  // Si restituiscono le chiavi, non un booleano: sono quelle che il messaggio
+  // del motore nomina (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), e
+  // l'Inspector le nomina uguale.
+  //
+  // Niente patto di parità su questa, a differenza di LOOP_UNITS: la funzione
+  // del motore che rispecchia è marcata `# ponytail` (PGE #242) e va via dopo
+  // una release, mentre `Envelope.is_envelope_like` — da cui dipende — non è
+  // raggiungibile senza numpy, che il job node della CI non ha. Le divergenze
+  // residue sono tutte nella direzione sicura (avvisare di troppo): `isEnvValue`
+  // dice sì anche su una lista vuota, dove `is_envelope_like` dice no.
+  function loopUnitRescaleKeys(pointer) {
+    if (!pointer) return [];
+    const moves = (v) => {
+      if (v == null) return false;
+      if (typeof v === "number") return v !== 0;
+      // Stesso discriminatore che il resto del modulo usa per «il motore lo
+      // tratterà da envelope», invece di una seconda lettura della stessa cosa.
+      // Qui copre anche i booleani: `_rescaling_would_change` deve escluderli a
+      // mano perché in Python `bool` è un `int` e cadrebbe nel ramo numerico,
+      // mentre in JS `typeof true !== "number"` e il booleano arriva intero
+      // fin qui, dove `isEnvValue` dice no. Un ramo esplicito sarebbe copia
+      // muta di un pericolo che questo linguaggio non ha — la riga che lo
+      // tiene onesto è l'assert «booleano → nessuna chiave» in
+      // test-envelope-utils.js, che sopravvive a qualunque riscrittura.
+      return window.PGEDeviationProb.isEnvValue(v);
+    };
+    return LOOP_UNIT_SCOPE
+      .filter(([, scalar, env]) => moves(pointer[scalar]) || (env != null && pointer[env] != null))
+      .map(([yamlKey]) => yamlKey);
   }
 
   // Mirror of the engine's static loop-window validation (PGE issue #97 / engine
@@ -831,6 +947,11 @@
     computeYFit,
     loopEnvMax,
     loopUnitInfo,
+    loopUnitError,
+    loopUnitSuffix,
+    loopUnitRescaleKeys,
+    LOOP_UNITS,
+    LOOP_UNIT_DEFAULT,
     loopBoundsError,
     grainDurationUnitError,
     GRAIN_DURATION_UNITS,
