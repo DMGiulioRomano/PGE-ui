@@ -1,0 +1,13 @@
+{
+  "name": "pge-ui-e2e",
+  "private": true,
+  "//vendor": "react, react-dom, @babel/standalone e js-yaml stanno qui per essere serviti OFFLINE al posto della CDN: le versioni devono essere le stesse che PGE Editor.html chiede, e verifyVendor() in browser.js confronta gli hash SRI, non solo i numeri. Una divergenza farebbe girare il boot su un React diverso da quello dell'utente.",
+  "//playwright": "pinnata esatta, non con la caret: la revisione del browser e' scelta dalla versione della libreria, e un `npm install` che passa a una minor successiva pretende un browser che la macchina non ha scaricato — un fallimento che parla di revisioni invece che dell'editor.",
+  "dependencies": {
+    "playwright": "1.56.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@babel/standalone": "7.29.0",
+    "js-yaml": "4.1.0"
+  }
+}

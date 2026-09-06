@@ -1,0 +1,93 @@
+# Progetto di prova del boot headless (#139).
+#
+# Versionato QUI e non preso dai configs/ del motore: il test deve poter dire
+# "l'applicazione esiste e risponde" su un clone appena fatto, senza il repo
+# fratello. Il corpus del motore ha gia' i suoi presidi — le sette fixture
+# nominate in tests/node/test-yaml-bridge.js — e sono un'altra domanda: li' si
+# verifica il round-trip su YAML veri, qui che l'app parta.
+#
+# Piccolo e stabile per costruzione: tre stream, uno per forma che il boot deve
+# attraversare (scalare, envelope a breakpoint, blocco compatto) e un
+# `ui_tracks` che ne raggruppa due su una lane sola — l'unica strada in cui un
+# `_extra` di primo livello torna dal YAML fino al layout.
+#
+# `smoke.wav` NON esiste, e non e' una svista: la refs/ del bridge finto resta
+# vuota di proposito. Un file audio li' dentro farebbe disegnare al
+# SampleBrowser la sua forma d'onda, cioe' una GET /media_peaks che senza numpy
+# risponde 500 — un errore in console che comparirebbe o no a seconda di cosa
+# ha installato chi lancia il test. Ogni stream dichiara la sua `duration`, il
+# campione mancante e' uno stato che l'editor gestisce, e il boot resta lo
+# stesso su qualunque macchina. Determinismo prima di realismo: e' un test di
+# fumo.
+
+title: smoke
+duration: 12
+bpm: 120
+ui_tracks:
+  - id: t1
+    name: coppia
+    streams: [stream1, stream2]
+streams:
+  - stream_id: stream1
+    onset: 0
+    duration: 4
+    sample: smoke.wav
+    time_mode: normalized
+    distribution_mode: gaussian
+    density: [[0, 10], [0.5, 40], [1, 10]]
+    distribution: [[0, 0], [0.5, 1], [1, 0]]
+    grain:
+      duration: [[0, 0.05], [0.5, 0.08], [1, 0.05]]
+      duration_range: 0.01
+      envelope: hanning
+    pointer:
+      start: 0
+      loop_unit: normalized
+      speed_ratio: [[0, -1], [1, 1]]
+    pitch:
+      semitones: 0
+    pan: 0
+    volume: -6
+    deviation_probability: [[0, 50], [0.5, 0], [1, 30]]
+  - stream_id: stream2
+    onset: 4
+    duration: 4
+    sample: smoke.wav
+    time_mode: absolute
+    distribution_mode: uniform
+    density: 12
+    distribution: 0
+    grain:
+      duration: 0.05
+      envelope: hanning
+    pointer:
+      start: 0
+      loop_unit: normalized
+      speed_ratio: 1
+    pitch:
+      semitones: 0
+    pan: 0
+    volume: -6
+    deviation_probability: 30
+  - stream_id: stream3
+    onset: 8
+    duration: 4
+    sample: smoke.wav
+    time_mode: normalized
+    distribution_mode: uniform
+    density: [[[[0, 5], [50, 40], [100, 5]], 1, 6, cubic, exponential]]
+    distribution: 0
+    grain:
+      duration: 0.05
+      envelope: hanning
+    pointer:
+      start: 0
+      loop_unit: normalized
+      speed_ratio: 1
+    pitch:
+      semitones: 0
+    pan: 0
+    volume: -6
+    deviation_probability:
+      volume: 50
+      pan: 30
