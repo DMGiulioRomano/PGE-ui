@@ -757,10 +757,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // rejected at render (InvalidFieldValueError) → warn pre-render. loopActive
   // gates the offset_range confinement note; loopEndMode the loop_dur hint.
   const loopBoundsErr = window.PGEEnvUtils.loopBoundsError(stream.pointer);
-  const loopActive = !!(stream.pointer && (
-    stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
-    stream.pointer.loopEnd   != null || stream.pointer.loopEndEnv   != null ||
-    stream.pointer.loopDur   != null || stream.pointer.loopDurEnv   != null));
+  // Stessa domanda di loopWindowShown — «esiste una chiave di loop?» — quindi
+  // stessa risposta, non una seconda copia dell'elenco da tenere allineata:
+  // finché il flag del blocco portava anche loop_unit le due erano diverse,
+  // ora coincidono e le righe del loop compaiono esattamente quando il loop c'è.
+  const loopActive = loopWindowShown;
   const loopEndMode = !!(stream.pointer && (stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null));
 
   return (
