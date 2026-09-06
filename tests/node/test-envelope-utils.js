@@ -840,11 +840,15 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
   assert("il controllo dell'unità sopravvive alla rimozione del loop",
     /loopWindowShown/.test(unitDecl) && /loopUnit != null/.test(unitDecl)
     && !/loopBlockShown/.test(inspSrc));
-  /* E compare anche sugli stream che #222 ha spostato: altrimenti l'unico
-     avviso sarebbe una riga di testo che chiede di scrivere una chiave, e in
-     interfaccia non ci sarebbe modo di scriverla. */
-  assert("…e compare sulla popolazione esposta, che deve poterci rispondere",
-    /loopUnitMigrated/.test(unitDecl));
+  /* E compare ovunque l'unita' governi un valore che si muove, non solo sulla
+     popolazione che #222 ha spostato: la condizione dell'avviso porta dentro
+     `time_mode`, e usarla anche per la visibilita' rimetteva la dipendenza
+     dallo stream che #222 ha tolto. La reachability e' verificata eseguendo le
+     due dichiarazioni, poco piu' sotto. */
+  assert("…e compare ovunque l'unità morda, senza passare da time_mode",
+    /loopUnitScaledKeys\.length > 0/.test(unitDecl)
+    && !/loopUnitMigrated\b/.test(unitDecl)
+    && /const loopUnitScaledKeys = window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc));
   assert("la × del loop non cancella più loop_unit",
     !/delete np\.loopDur; delete np\.loopDurEnv;\s*delete np\.loopUnit/.test(inspSrc));
   /* Sulla dichiarazione, non su una finestra di caratteri: una `{0,400}` qui
@@ -979,6 +983,55 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
     h2.fn("normalized");
     assert("refuso + click su normalized: la chiave viene corretta",
       h2.get() !== null && h2.get().pointer.loopUnit === "normalized");
+  }
+
+  /* ── il controllo non deve cancellarsi da se' ─────────────────────────────
+     Stessa tecnica un livello sopra: si eseguono le DICHIARAZIONI che decidono
+     se il selettore esiste, estratte dal sorgente, invece di cercarci dentro
+     una stringa. La domanda e' di raggiungibilita', e una guardia testuale non
+     la sa porre: `loop_unit` non e' nell'AddParamMenu, quindi il selettore e'
+     l'unica via per scriverlo, e se sparisce dopo averlo usato la modifica
+     resta senza ritorno. Il caso che la pone e' la coesistenza dei due assi
+     che #222 ha reso legittima — `time_mode: absolute` con `loop_unit:
+     normalized` — dove un click su "seconds" toglie la chiave e cambia il
+     significato di `start` senza lasciare in interfaccia il modo di tornare
+     indietro. */
+  const declOf = (name) =>
+    (new RegExp("const " + name + " = [\\s\\S]*?;").exec(inspSrc) || [""])[0];
+  /* Si porta dentro anche la catena dell'avviso — `loopUnit`,
+     `loopUnitMigratedKeys`, `loopUnitMigrated` — benche' la formulazione
+     corrente non la usi: e' quella la scorciatoia che il caso esiste per
+     escludere, e senza le sue variabili in scope una regressione morirebbe con
+     un ReferenceError invece di dare un rosso che si legge. */
+  const declNames = ["loopUnit", "loopWindowShown", "loopUnitScaledKeys",
+                     "loopUnitMigratedKeys", "loopUnitMigrated", "loopUnitShown"];
+  const decls = declNames.map(declOf);
+  assert("le dichiarazioni della visibilità sono estraibili dal sorgente",
+    decls.every(d => d.length > 0), declNames.filter((_, i) => !decls[i].length).join(", "));
+  const shownFor = (stream) => new Function("stream", "window",
+    decls.join("\n") + "\nreturn loopUnitShown;")(stream, window);
+
+  {
+    const stream = { timeMode: "absolute", pointer: { start: 0.5, loopUnit: "normalized" } };
+    assert("i due assi che coesistono: il controllo c'è", shownFor(stream) === true);
+    const h = makeHandler(stream, 8);
+    h.fn("seconds");
+    const after = { ...stream, pointer: h.get().pointer };
+    assert("…e sopravvive al click che cancella la chiave", shownFor(after) === true);
+    const back = makeHandler(after, 8);
+    back.fn("normalized");
+    assert("…quindi la modifica ha un ritorno",
+      back.get() !== null && back.get().pointer.loopUnit === "normalized");
+  }
+  {
+    // La popolazione che #222 ha spostato continua a vedere il controllo: la
+    // condizione e' strettamente piu' larga di quella dell'avviso.
+    assert("normalized senza chiave, con valori che si muovono: il controllo c'è",
+      shownFor({ timeMode: "normalized", pointer: { start: 0.5 } }) === true);
+    // …e non si e' allargata dove il motore tace: zero non si muove, e quel
+    // pointer e' quello con cui nasce ogni clip dell'editor.
+    assert("start: 0 senza loop né chiave: niente controllo, come niente avviso",
+      shownFor({ timeMode: "normalized", pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null } }) === false);
   }
 }
 

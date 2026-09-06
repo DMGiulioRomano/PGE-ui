@@ -518,6 +518,21 @@ also governs `pointer.start`, which outlives the loop: the loop rows
 (`loopWindowShown`) and the unit control (`loopUnitShown`) are separate blocks
 now, so removing the loop leaves the unit standing.
 
+The unit control's own visibility must not go through `time_mode` either, and
+that is a third way the same dependency crept back. `loopUnitShown` shows the
+selector wherever the unit *governs a value that moves*
+(`loopUnitScaledKeys`, below), never on the migration warning's condition, which
+carries `time_mode` inside it. With the warning's condition the control erased
+itself: on `time_mode: absolute` + `loop_unit: normalized` + `start: 0.5` — the
+coexistence of the two axes that #222 made legitimate — a click on "seconds"
+deletes the key, the selector disappears (`loop_unit` is not in the
+AddParamMenu, so the selector *is* the only way to write it) and `start` is left
+reading `0.5` s where it read `0.5 × sample_dur`, with no way back short of the
+Raw tab. The live condition is strictly wider than the old one — a migrated
+stream always has keys that move — so the population #222 displaced still sees
+the control together with its warning, and `start: 0` with no loop still shows
+nothing, exactly where the engine is also silent.
+
 The Inspector also warns the population #222 moved under the feet — `time_mode:
 normalized` with no `loop_unit`, which the engine reads as seconds now — but
 only where the numbers actually move. `loopUnitRescaleKeys` in

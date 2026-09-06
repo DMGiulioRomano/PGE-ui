@@ -690,8 +690,13 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // chi seguisse il consiglio scriverebbe una chiave che non muove un
   // campione, pagandola con un fingerprint mosso: un render in piu' su uno
   // stem che era giusto.
+  // Le chiavi su cui l'unita' morde davvero — un valore che la conversione
+  // muoverebbe. Non dipende dallo stream: e' la domanda «questa chiave governa
+  // qualcosa?», e ha due lettori. L'avviso di migrazione e' il sottoinsieme
+  // gated su time_mode; la visibilita' del controllo, sotto, no.
+  const loopUnitScaledKeys = window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer);
   const loopUnitMigratedKeys = (stream.timeMode === "normalized" && loopUnit.source === "default")
-    ? window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer) : [];
+    ? loopUnitScaledKeys : [];
   const loopUnitMigrated = loopUnitMigratedKeys.length > 0;
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
   // contraddirebbe la riga di hint due righe più sotto. E su una grafia fuori
@@ -740,11 +745,21 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // del motore — valore raw, nessun Parameter e quindi nessun clamp — perciò qui
   // NON passa da clampLoop e il Seg non lo include nel ri-clamp: sarebbe la UI a
   // inventarsi un vincolo che il motore non ha.
-  // …e per la stessa ragione il controllo compare anche sugli stream che #222
-  // ha spostato: senza, l'unico avviso sarebbe una riga di testo che dice di
-  // scrivere una chiave, e in interfaccia non ci sarebbe modo di scriverla.
-  const loopUnitShown = loopWindowShown || loopUnitMigrated
-    || !!(stream.pointer && stream.pointer.loopUnit != null);
+  // …e per la stessa ragione il controllo compare ovunque l'unita' governi un
+  // valore che si muove — `loopUnitScaledKeys`, non `loopUnitMigrated`. La
+  // condizione dell'avviso porta dentro `time_mode`, e usarla anche qui
+  // rimetteva la dipendenza dallo stream che #222 ha tolto, con l'effetto di un
+  // controllo che si cancella da se': su `time_mode: absolute` + `loop_unit:
+  // normalized` + `start: 0.5` — la coesistenza dei due assi che #222 ha reso
+  // legittima — un click su "seconds" toglie la chiave, il controllo sparisce
+  // (loop_unit non e' nell'AddParamMenu, il selettore E' l'unica via) e start
+  // resta a leggere 0.5 s dove leggeva 0.5 × sample_dur, senza ritorno.
+  // La condizione e' strettamente piu' larga della vecchia — loopUnitMigrated
+  // implica loopUnitScaledKeys non vuoto — quindi la popolazione che #222 ha
+  // spostato continua a vedere il controllo insieme al suo avviso.
+  const loopUnitShown = loopWindowShown
+    || !!(stream.pointer && stream.pointer.loopUnit != null)
+    || loopUnitScaledKeys.length > 0;
   // `cap` overrides the current loop cap — the unit control needs to clamp
   // against the cap the NEW unit brings, before the new pointer is state.
   const clampLoop = (key, v, cap) => {
