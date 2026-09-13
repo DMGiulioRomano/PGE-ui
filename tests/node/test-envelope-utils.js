@@ -1033,6 +1033,88 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
     assert("start: 0 senza loop né chiave: niente controllo, come niente avviso",
       shownFor({ timeMode: "normalized", pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null } }) === false);
   }
+
+  /* ── e il menu che crea quelle righe parla la stessa unità ────────────────
+     Il selettore è metà della storia: l'altra è il menu «add parameter»,
+     l'unico punto da cui loop_start/loop_end/loop_dur nascono. Le sue tre voci
+     erano scritte per una sola unità — «(s)», «∈ [0, sample_dur]» — e il suo
+     seme era un 1 nudo. Sotto l'ereditarietà quel seme non poteva sbagliare:
+     `time_mode: normalized` rendeva la chiave normalized, dove 1 È la fine del
+     file. Dopo #222 la stessa popolazione legge secondi e 1 è un secondo —
+     oltre il cap su ogni sample più corto, cioè il menu che scrive un valore
+     che una modifica digitata avrebbe clampato. È la stessa cura di #114 sul
+     seme di duration_range, un livello più in là.
+     Stessa tecnica del blocco sopra: si ESEGUONO le dichiarazioni estratte dal
+     sorgente, invece di cercarci dentro una stringa. */
+  {
+    const seedNames = ["loopMax", "loopUnit", "loopNormalized", "loopSeedWhole",
+                       "loopDomain", "loopEndDomain", "loopEndRange", "loopFileEnd"];
+    const seedDecls = seedNames.map(declOf);
+    assert("le dichiarazioni del seme e del dominio sono estraibili dal sorgente",
+      seedDecls.every(d => d.length > 0),
+      seedNames.filter((_, i) => !seedDecls[i].length).join(", "));
+    const menuFor = (stream, sampleDur) => new Function("stream", "sampleDur", "window",
+      seedDecls.join("\n")
+      + "\nreturn { seed: loopSeedWhole, domain: loopDomain, endDomain: loopEndDomain,"
+      + "         endRange: loopEndRange, fileEnd: loopFileEnd };")(stream, sampleDur, window);
+
+    {
+      // Clip nato nell'editor: `loop_unit: normalized` esplicito. «Tutto il
+      // file» vale 1, come prima — qui il seme non doveva muoversi.
+      const m = menuFor({ pointer: { loopUnit: "normalized" } }, 8);
+      assert("normalized: il seme resta 1, la fine del file", m.seed === 1);
+      assert("…e le tre frasi dichiarano il dominio normalizzato",
+        m.domain === "∈ [0,1] × sample_dur" && m.endRange === "∈ [0, 1]" && m.fileEnd === "1");
+    }
+    {
+      // La chiave assente, cioè ogni YAML che non la scrive e la popolazione
+      // che #222 ha spostato: ora legge secondi, e «tutto il file» è sample_dur.
+      const m = menuFor({ timeMode: "normalized", pointer: {} }, 8);
+      assert("seconds: il seme è la durata del sample, non 1", m.seed === 8);
+      assert("…e le frasi tornano a parlare di secondi",
+        m.domain === "(s)" && m.endDomain === "(s) ∈ [0, sample_dur]" && m.fileEnd === "sample_dur");
+    }
+    {
+      // Il caso in cui il seme fisso sbagliava davvero: un sample più corto di
+      // un secondo. `loop_end: 1` lì indirizza oltre la fine del file.
+      assert("sample più corto di 1 s: il seme non esce dal cap",
+        menuFor({ pointer: {} }, 0.4).seed === 0.4);
+      // Troncato, non arrotondato: su una durata che non sta in quattro
+      // decimali l'arrotondamento supererebbe il cap che il seme insegue.
+      const odd = menuFor({ pointer: {} }, 3.33335);
+      assert("durata che non sta in quattro decimali: il seme resta sotto il cap",
+        odd.seed === 3.3333 && odd.seed <= 3.33335);
+    }
+    {
+      // Durata ignota (file:// / server giù / sample non trovato): loopEnvMax
+      // non risponde, e resta l'unico numero disponibile — quello di prima.
+      assert("durata del sample ignota: si ripiega su 1",
+        menuFor({ pointer: {} }, undefined).seed === 1);
+    }
+
+    // …e il cablaggio, perché le dichiarazioni sopra servono solo se il menu le usa.
+    assert("le tre voci prendono il dominio dall'unità, non da una stringa fissa",
+      /desc: `loop window start \$\{loopDomain\}/.test(inspSrc)
+      && /desc: `loop end \$\{loopEndDomain\}/.test(inspSrc)
+      && /desc: `loop window length \$\{loopDomain\}/.test(inspSrc)
+      && /loop_start\+loop_dur > \$\{loopFileEnd\}/.test(inspSrc)
+      && !/desc: "loop window start \(s\)/.test(inspSrc)
+      && !/desc: "loop end \(s\) ∈ \[0, sample_dur\]/.test(inspSrc));
+    assert("i due semi del menu non sono più un 1 nudo",
+      (inspSrc.match(/def: loopSeedWhole \}/g) || []).length === 2
+      && !/loopDurEnv != null, def: 1 \}/.test(inspSrc)
+      && !/loopEndEnv != null, def: 1 \}/.test(inspSrc));
+    assert("la riga di hint del loop_end segue l'unità",
+      /loop_end \{loopEndRange\}/.test(inspSrc)
+      && !/loop_end ∈ \[0, sample_dur\] · per un loop/.test(inspSrc));
+    // La terza porta dello stesso 1: il toggle loop_end ↔ loop_dur, quando
+    // loop_start sta da solo e non c'è nessuna lunghezza da cui partire.
+    assert("anche il ripiego del toggle loop_end ↔ loop_dur è nell'unità in vigore",
+      /stream\.pointer\.loopDur : loopSeedWhole\)\)/.test(inspSrc)
+      && !/stream\.pointer\.loopDur != null \? stream\.pointer\.loopDur : 1\)/.test(inspSrc));
+    assert("…e passa dal cap, che quel ramo non applicava affatto",
+      /const le = stream\.pointer\.loopEnd != null \? stream\.pointer\.loopEnd\s*\n\s*: clampLoop\("loopEnd",/.test(inspSrc));
+  }
 }
 
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
