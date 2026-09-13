@@ -1223,6 +1223,23 @@ third folder, against a stub `server.py` — to check that the path resolution a
 the argument forwarding really work. That last half needs neither flask nor the
 sibling engine, so it runs in the node CI job too.
 
+**The install side has its own two rules, and both had the same failure mode:
+a `pge-ui` on the `PATH` that doesn't run, announced as installed.** The link's
+source is `CLI_SRC`, resolved on the *Makefile's* folder
+(`$(dir $(lastword $(MAKEFILE_LIST)))`) and not on `$PWD` — with
+`$(abspath bin/pge-ui)` a `make -f /path/PGE-ui/Makefile install-cli` given from
+elsewhere linked a `bin/pge-ui` that doesn't exist there, and `ln -s` doesn't
+look at its target, so the dangling link was born under the success line. And
+every expansion in the recipe is quoted, because a space in the checkout's path
+or in `BINDIR` (`~/Documents/…`) made the unquoted `mkdir -p` fabricate a
+relative folder *inside the repo* and then `ln` fail naming the destination,
+which existed. `make` itself can't carry a space through
+`$(lastword $(MAKEFILE_LIST))`, so that one residual case (`make -f` on a
+checkout whose path has a space) is covered by the `test -f "$(CLI_SRC)"` guard
+at the top of the recipe: it fails the install instead of writing the wrong
+link. All of it is measured by running `make install-cli` against temporary
+`BINDIR`s, in the same section of the harness.
+
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
