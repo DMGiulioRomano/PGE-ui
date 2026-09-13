@@ -1145,9 +1145,10 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       return "";
     };
     const seedFromDecl = declOf("loopSeedFrom");
-    assert("i due rami scalare↔env del loop sono estraibili dal sorgente",
+    assert("i tre rami scalare↔env del loop sono estraibili dal sorgente",
       blockOf('if (k === "loopDur") {').length > 0
       && blockOf('if (k === "loopEnd") {').length > 0
+      && blockOf('if (k === "loopStart") {').length > 0
       && seedFromDecl.length > 0);
     const modeFor = (key, newMode, pointer, seed) => {
       let out = null;
@@ -1175,6 +1176,50 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       assert("env→scalare senza curva da leggere: resta il seme",
         modeFor("loopDur", "scalar", { loopStart: 0 }, 8).loopDur === 8);
     }
+    {
+      /* «Il primo breakpoint» non e' `env[0]`: la stessa lezione di
+         wouldEmptyEnv nell'EnvelopeEditor, chi ha in mano una forma wrappata
+         deve passare da unwrapEnv. E la forma wrappata qui non e' esotica —
+         e' quella che l'editor SCRIVE da se' appena l'interp globale di una
+         curva di soli BP non e' lineare (wrapEnv → {type, points}), quindi la
+         si raggiunge senza scrivere una riga di YAML a mano. Letta con
+         `env[0][1]`, una curva ferma su 6 tornava «tutto il file»: di nuovo la
+         costante al posto della curva, cioe' il difetto che questo blocco
+         esiste per chiudere. */
+      assert("env→scalare su una curva wrappata {type, points}: la y si legge lo stesso",
+        modeFor("loopEnd", "scalar", { loopEndEnv: { type: "cubic", points: [[0, 6], [1, 6]] } }, 8).loopEnd === 6);
+      assert("…e sul dict con i soli points, che il motore accetta",
+        modeFor("loopEnd", "scalar", { loopEndEnv: { points: [[0, 6], [1, 6]] } }, 8).loopEnd === 6);
+      assert("…e su un BP group, che si desugara prima di leggere",
+        modeFor("loopDur", "scalar", { loopDurEnv: [[[[0, 3], [1, 3]], "cubic"]] }, 8).loopDur === 3);
+      /* Le due forme che una y davvero non ce l'hanno ripiegano — ed e' quel
+         che il commento del sorgente dichiarava gia' mentre il codice faceva
+         un'altra cosa: in un blocco compatto `env[0][1]` e' il RATIO della
+         distribuzione, un numero che con una posizione nel sample non c'entra
+         niente, e il `typeof … === "number"` lo lasciava passare. */
+      assert("blocco compatto: ripiega sul seme, non scrive il ratio come lunghezza",
+        modeFor("loopDur", "scalar", { loopDurEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, 8).loopDur === 8);
+      assert("breakpoint {t, v}: ripiega sul seme",
+        modeFor("loopEnd", "scalar", { loopEndEnv: [{ t: 0, v: 6 }] }, 8).loopEnd === 8);
+    }
+    {
+      // La terza riga del loop legge dallo stesso posto, con il ripiego suo:
+      // `loop_start` riparte da 0, come il suo seme nel menu.
+      assert("loop_start: anche la sua curva wrappata si legge",
+        modeFor("loopStart", "scalar", { loopStartEnv: { type: "cubic", points: [[0, 2], [1, 4]] } }, 8).loopStart === 2);
+      assert("loop_start: il ratio di un blocco compatto non diventa una posizione",
+        modeFor("loopStart", "scalar", { loopStartEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, 8).loopStart === 0);
+      assert("loop_start: uno zero letto e' uno zero, non il ripiego",
+        modeFor("loopStart", "scalar", { loopStartEnv: [[0, 0], [1, 0.5]] }, 8).loopStart === 0);
+    }
+
+    assert("loopSeedFrom passa da unwrapEnv e da isBreakpoint, non da env[0][1]",
+      /window\.PGEEnv\.unwrapEnv\(env\)\.items/.test(seedFromDecl)
+      && /window\.PGEEnv\.isBreakpoint\(bp\)/.test(seedFromDecl)
+      && !/typeof env\[0\]\[1\] === "number"/.test(inspSrc));
+    assert("anche loop_start legge dal lettore condiviso, non da una sua copia",
+      /loopSeedFrom\(cur\.loopStartEnv, 0\)/.test(inspSrc)
+      && !/cur\.loopStartEnv\[0\]\[1\]\) \|\| 0/.test(inspSrc));
 
     // …e il Seg che sceglie fra le due righe: il click che non chiede niente.
     const selDecls = ["loopEndMode", "loopEndSel"].map(declOf);
