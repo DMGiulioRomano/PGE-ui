@@ -12,9 +12,11 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 
 ```bash
 make install          # pip install -r requirements.txt  (flask, flask-cors, gunicorn, numpy, soundfile)
-make serve            # python server.py --root ../PythonGranularEngine --port 7878
+make serve            # python server.py --root $(ENGINE_ROOT) --workspace $(ENGINE_ROOT) --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
+cd ~/un-brano && python /path/to/PGE-ui/server.py        # #165: workspace = $PWD,
+                                                         # engine from $PGE_ENGINE_ROOT
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
 make tests-e2e        # headless boot of the editor (needs a playwright browser)
@@ -84,7 +86,19 @@ exists, the fourth only when a browser is installed):
   sources, not from a table of declared dependencies).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
-  and a Flask `make_app` smoke test via `test_client`), `test_audio_pipeline.py`
+  and a Flask `make_app` smoke test via `test_client`), `test_cli_resolve.py`
+  (the pure resolution of engine root and workspace — the precedence, the
+  bounded walk up, the error text, the banner lines, plus the bridge launched
+  as a real subprocess from an empty folder and a `make -n serve` that answers
+  whether the Makefile still has the *same* precedence — that probe reads the
+  **value of `--root`** on the recipe line, not "the path appears somewhere in
+  the output", because `WS_FLAG` carries `$(ENGINE_ROOT)` too and would answer
+  yes through `--workspace` while `--root` regressed; and it strips `MAKEFLAGS`
+  from the child's environment, or a `make tests ROOT=/path` (the invocation
+  this Makefile's own help suggests) would reach the nested make as a
+  command-line `ROOT=` and turn the test red with the Makefile unchanged. It
+  also asks **git** whether the four working folders are ignored at the repo
+  root and *not* deeper), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), and `test_engine_render.py`
@@ -344,14 +358,73 @@ of what didn't run.
 
 `PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it works inside `configs/`, `output/`, `cache/` and `refs/`, all four of which can live in a workspace of their own (#147, and #148 for `refs/`; see below).
 
-### Workspace: the project folder is not the engine checkout (#147, #148)
+### Workspace: the project folder is not the engine checkout (#147, #148, #165)
 
 `--root` is engine **source** (`src/main.py`, `.venv/`, `csound/`, `logs/`).
 `--workspace` is where the *work* lives: `configs/`, `output/`, `cache/` and —
-since #148 — `refs/`. Omit it and they coincide — the historical behavior, where
-every piece is a file inside the engine checkout and `/render` rewrites it there.
-`_ensure_venv_events` and the csound paths stay on `--root` on purpose — engine
-code, not the author's work.
+since #148 — the samples. `_ensure_venv_events` and the csound paths stay on
+`--root` on purpose — engine code, not the author's work.
+
+**Neither has a default written for someone standing inside this checkout any
+more** (#165). The bridge is launched from the folder holding the piece, so:
+
+- the **workspace** is `--workspace`, else the current folder. (`make serve`
+  passes it explicitly — it runs from inside PGE-ui, where inheriting that
+  default would create `configs/ output/ cache/` in the editor's own repo and
+  make the author's projects vanish from the list.) `make_app(root)` with no
+  workspace still means "= root": that is the *factory's* default, the one the
+  tests and `tests/e2e/bridge.py` lean on, and `main()` always passes one.
+- the **engine** is `--root`, else `$PGE_ENGINE_ROOT`, else an `engine/`
+  containing `src/main.py` found walking up from the current folder, else an
+  `EngineRootError` naming those three. `resolve_engine_root` returns the
+  *source* along with the path, and the banner prints it: with three ways to
+  declare an engine, "which one" is no longer enough to debug a launch.
+
+Three properties of that resolution are load-bearing, and each is a test:
+
+- **The precedence is the Makefile's** (explicit flag > environment > default).
+  Kept identical on purpose — two precedences for one variable in one repo only
+  show up when one of them is wrong. `make serve` used to pass `--root $(ROOT)`
+  raw, i.e. ignore `PGE_ENGINE_ROOT` while `make tests` honoured it: it passes
+  `$(ENGINE_ROOT)` now, and `test_cli_resolve.py` asks `make -n serve` rather
+  than transcribing what it does.
+- **A declaration that is wrong is an error, not a search.** A `--root` or
+  `$PGE_ENGINE_ROOT` pointing at a folder without `src/main.py` stops the
+  bridge naming it; falling through to the walk-up would run a *different*
+  engine than the one asked for, which is exactly how an editor and a piece's
+  own `make` end up on two engines without anyone writing it down.
+- **The walk up is bounded** — it stops after looking at the git root (or the
+  home directory when there is no repo). It is the fallback for a repo that has
+  the submodule but not the `.envrc`; an `engine/` five folders up was declared
+  by nobody.
+
+Empty is absent, in both readings (`_declared`): `PGE_ENGINE_ROOT=` is the
+commonest way to cancel an inherited one, and make's `$(if …)` reads it the same
+way.
+
+**The samples folder is `refs/`, or the `samples/` the workspace already has**
+(#165). With the workspace on the current folder the name the bridge creates and
+the name a piece already uses (`samples/`, matching the `--samples-dir samples`
+of its own Makefile) meet for the first time, and an empty `refs/` beside a full
+`samples/` is the worst outcome: two names for one thing, with the editor
+listing the empty one. `resolve_media_dir` adopts the one that **exists** —
+`refs/` first, it is the canonical name — and creates `refs/` only when neither
+does; nothing is renamed. It is one rule in one place, so the hot switch goes
+through it too. The chosen folder is what goes out as `--samples-dir`, so the
+engine reads the folder the editor lists; `GET /workspace` carries
+`samplesDirAdopted` because from a path the browser would see only a name, and
+"the bridge creates it empty" said over a full folder sends the author looking
+for samples that aren't missing.
+
+`samplesDirAdopted` answers **which name won**, not "was it already there": a
+`refs/` the workspace already had, full, is adopted just as much and reports
+`false`. That is the right question for the sentence it drives (*why* the line
+says `samples/`), so the other sentence must not promise emptiness — Settings
+says "the bridge creates it if it's missing", true in all four cases, and
+`tests/node/test-workspace.js` guards that none of the three phrases promises a
+void the server never declared. For the same reason the name is printed
+wherever the folder is named: the banner line and the `/diagnose` label both
+read `refs.name`, never the literal `refs/`.
 
 **`refs/` follows the workspace only where the engine can be told about it.**
 The subprocess runs with `cwd=root`, and without `--samples-dir` the engine

@@ -13,9 +13,9 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
 ├── PythonGranularEngine/        ← the renderer (pure CLI, untouched)
 │   ├── src/main.py
 │   ├── refs/*.wav               ┐
-│   ├── configs/*.yml            ├ default workspace: pass --workspace to
-│   ├── output/                  │ keep these four next to your own work
-│   └── cache/                   ┘
+│   ├── configs/*.yml            ├ where `make serve` keeps them; the bridge
+│   ├── output/                  │ launched by hand uses the current folder
+│   └── cache/                   ┘ (--workspace to choose)
 │
 └── PGE-ui/                      ← this repo
     ├── PGE Editor.html          ← open this in a browser
@@ -42,13 +42,16 @@ git clone https://github.com/DMGiulioRomano/PythonGranularEngine
 git clone https://github.com/DMGiulioRomano/PGE-ui
 ```
 
-(They can also be anywhere else — just pass `--root /path/to/engine` to `server.py`.)
+(They can also be anywhere else — the engine is resolved by `--root`, then
+`$PGE_ENGINE_ROOT`, then an `engine/` next to your work: see
+[Which engine, which folder](#which-engine-which-folder).)
 
-Your own pieces don't have to live inside the engine checkout: `--workspace
-/path/to/brani` puts `configs/ output/ cache/` wherever you keep your work, so
-editing a composition stops dirtying the engine repo and `git` rollback becomes
-your own. Sample files (`refs/`) come along too, on an engine that has
-`--samples-dir` — see [Workspace](#workspace) below.
+Your own pieces don't have to live inside the engine checkout — and by default
+they don't: the bridge works in the folder you launch it from. `--workspace
+/path/to/brani` picks another one. Either way `configs/ output/ cache/` live
+where you keep your work, so editing a composition stops dirtying the engine
+repo and `git` rollback becomes your own. Sample files come along too, on an
+engine that has `--samples-dir` — see [Workspace](#workspace) below.
 
 ### 2) Set up the engine
 
@@ -66,11 +69,16 @@ pip install -r requirements.txt
 ### 4) Start the bridge
 
 ```bash
+# from your own piece: the current folder is the workspace, and the engine
+# comes from $PGE_ENGINE_ROOT (one line of .envrc) or from an engine/ beside it
+cd ~/brani/mare-nostrum && python ~/projects/PGE-ui/server.py
+
+# from this checkout: make serve keeps the historical layout (workspace = the
+# engine repo), unless you say otherwise
 make serve
-# or directly:
-python server.py --root ../PythonGranularEngine
-# with your own project folder:
 make serve WORKSPACE=~/brani
+
+# or spell both out
 python server.py --root ../PythonGranularEngine --workspace ~/brani
 ```
 
@@ -78,14 +86,18 @@ You'll see:
 
 ```
 PGE bridge
-  root:      /Users/you/projects/PythonGranularEngine
-  workspace: /Users/you/brani
-  refs/:     /Users/you/brani/refs
-  configs/:  /Users/you/brani/configs
-  output/:   /Users/you/brani/output
-  cache/:    /Users/you/brani/cache
+  root:      /Users/you/projects/PythonGranularEngine  (PGE_ENGINE_ROOT)
+  workspace: /Users/you/brani/mare-nostrum  (= $PWD)
+  refs/:     /Users/you/brani/mare-nostrum/refs
+  configs/:  /Users/you/brani/mare-nostrum/configs
+  output/:   /Users/you/brani/mare-nostrum/output
+  cache/:    /Users/you/brani/mare-nostrum/cache
   listen:    http://127.0.0.1:7878
 ```
+
+The first two lines carry **who said so** next to the path — `--root`,
+`PGE_ENGINE_ROOT`, `engine/` for the engine; `= $PWD` or `--workspace` for the
+folder. With three ways to declare an engine, *which one* is not enough.
 
 ### 5) Open the editor
 
@@ -101,12 +113,51 @@ If the server isn't running the editor shows a "start server.py" notice — ther
 
 ---
 
+## Which engine, which folder
+
+The bridge is launched from wherever your piece lives, so neither of the two
+answers can come from a default written for someone standing inside this
+checkout. **Which engine** is resolved in this order:
+
+1. `--root /path/to/PythonGranularEngine` on the command line
+2. `$PGE_ENGINE_ROOT`
+3. an `engine/` containing `src/main.py`, walking up from the current folder
+   and stopping at the git root
+4. otherwise an error naming those three — not a traceback
+
+It is the precedence the Makefile already implements for `ROOT=` /
+`PGE_ENGINE_ROOT`, kept identical on purpose: two precedences for one variable
+in one repo only show up when one of them is wrong.
+
+The first two are *declarations*: if they point at a folder without
+`src/main.py` the bridge stops and says so, instead of quietly searching
+elsewhere and running a different engine than the one you asked for.
+
+So a piece declares its engine once, next to the work, in a line of `.envrc`:
+
+```sh
+export PGE_ENGINE_ROOT=$PWD/engine
+```
+
+and `cd mare-nostrum && pge-ui` opens the editor on that piece using the pinned
+submodule — the same code its `make` uses, by construction rather than by
+coincidence. Step 3 is the fallback for a repo that has the submodule but not
+the `.envrc`.
+
+**Which folder** is simpler: `--workspace`, else the current one. (`make serve`
+is the exception — it runs from inside this checkout, where "the current folder"
+would mean creating `configs/ output/ cache/` in the editor's repo, so it passes
+`--workspace` explicitly and keeps the historical layout.)
+
+---
+
 ## Workspace
 
 `--root` is engine *source* (`src/main.py`, `.venv`, `csound/`). `--workspace` is
-where the work lives: `configs/`, `output/`, `cache/`. Leave it out and the two
-coincide, which is what the bridge always did — your pieces end up inside the
-engine checkout, and `/render` rewrites them there.
+where the work lives: `configs/`, `output/`, `cache/`. Leave it out and it is the
+folder you launched the bridge from; pass `--workspace <engine root>` (what
+`make serve` does) for the historical layout, where your pieces live inside the
+engine checkout and `/render` rewrites them there.
 
 - Missing **sub**directories are created; the workspace folder itself is not — a
   mistyped path is refused instead of scattered across the disk.
@@ -115,14 +166,21 @@ engine checkout, and `/render` rewrites them there.
   describes the previous `output/` — stem index, durations, peaks, grains, the
   engine-semantics versions — so unsaved edits to the open project are lost.
   Refused mid-render, from the first instant of the render stream.
-- **`refs/` follows too**, on an engine that has `--samples-dir`
+- **The samples folder follows too**, on an engine that has `--samples-dir`
   ([PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)):
-  the bridge sends it on every render, so the samples are yours as well. The
-  folder is created empty — copy your files in, or point it at the library you
-  already use with a symlink. On an older engine the flag is ignored and samples
-  are resolved against the engine's own `./refs/`, so the bridge leaves `refs/`
-  there rather than listing a folder no render would read; Settings says which
-  of the two you are on.
+  the bridge sends it on every render, so the samples are yours as well. On an
+  older engine the flag is ignored and samples are resolved against the engine's
+  own `./refs/`, so the bridge leaves them there rather than listing a folder no
+  render would read; Settings says which of the two you are on.
+- **It is `refs/`, or the `samples/` the folder already has.** With the
+  workspace on the current folder the bridge's name for that folder (`refs/`)
+  and the one a piece may already use (`samples/`, matching the `--samples-dir
+  samples` of its own Makefile) finally meet. The rule is to **adopt the one
+  that exists** and rename nothing: `refs/` wins if it is there, `samples/`
+  takes over when it isn't, and if neither exists `refs/` is created. An empty
+  `refs/` next to a full `samples/` would be the worst outcome — two names for
+  one thing, and the editor listing the empty one. Whichever is chosen is what
+  goes out as `--samples-dir`, so the engine reads the folder the editor lists.
 
 ---
 
