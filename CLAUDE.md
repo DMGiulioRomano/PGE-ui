@@ -635,8 +635,8 @@ also governs `pointer.start`, which outlives the loop: the loop rows
 now, so removing the loop leaves the unit standing.
 
 The **AddParamMenu is the other half of that lesson**, and it was written for one
-unit. It is the only door `loop_start` / `loop_end` / `loop_dur` come through,
-and its three entries stated the seconds domain flat — `(s)`,
+unit. It is the widest door `loop_start` / `loop_end` / `loop_dur` come through
+— not the only one, see below — and its three entries stated the seconds domain flat — `(s)`,
 `∈ [0, sample_dur]`, `loop_start+loop_dur > sample_dur` — under a control whose
 whole point is that the unit varies; the very rows those entries create have had
 a unit-aware suffix since `loopUnitSuffix`, so the menu contradicted the row it
@@ -655,9 +655,31 @@ again when the sample duration is unknown — the only number available there, a
 what the menu wrote before. `loop_start` keeps its `0`: zero is zero under any
 scale factor, the same reason the migration warning filters on
 `loopUnitRescaleKeys`. Same fix as #114's `grainSecondsToUnit(0.01, grainUnit)`
-one section down, one level over. The third door for that literal is the
-`loop_end ↔ loop_dur` toggle, which with `loop_start` standing alone had no
+one section down, one level over.
+
+The menu is not the only door, and the others don't go through a menu at all.
+The `loop_end ↔ loop_dur` toggle, with `loop_start` standing alone, had no
 length to start from and fell back to a bare `1` — and did not clamp at all.
+The **scalar↔env toggle of the two rows** is the next one: with `loop_start`
+alone the `loop_dur` row is already there and the key is not, so that branch
+*seeds* (and the row is the third, since the number it shows while the key is
+absent is where a `NumberField` drag starts from — it was a bare `1` too). Its
+other half was `|| 1` on the way back: an envelope opening on `0` — a
+legitimate `loop_end` — collapsed onto a value the curve never had, so the
+first breakpoint's y is read as it is. Every one of them is `loopSeedWhole`
+now; `loop_start` keeps its `0` everywhere.
+
+And the `loop_end ↔ loop_dur` Seg needed #149's other lesson, the one the unit
+selector learned one block down: **`Seg` calls `onChange` on the already-lit
+button**, and both branches write the scalar and null the envelope — so a click
+that asked for nothing replaced a `loop_end` curve with a seed, or a `loop_dur`
+curve with `0.01`. It returns early now, on `loopEndSel`: the condition that
+recognizes the no-op is *the same one* that lights the button, not a second
+copy of it, because two copies is how such a guard stops covering the case it
+exists for. From the scalar side that click was an `onChange` for nothing — an
+undo step and a stem marked dirty. (The scalar↔env Seg has the same defect one
+level up, in `toggleMode`, where it costs the envelope of *any* parameter: a
+guard there belongs to its own change, not to this one.)
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
