@@ -531,13 +531,25 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
       }
       return;
     }
+    // Il passaggio scalare↔env e' la quarta porta dello stesso 1, e ci si
+    // arriva senza toccare il menu: con `loop_start` da solo la riga loop_dur
+    // c'e' gia' e la chiave no, quindi il ramo `env` semina. Il seme e'
+    // «tutto il file nell'unita' in vigore» (loopSeedWhole), non un 1 nudo —
+    // che dopo #222 e' la fine del file solo in normalized. Dichiarato piu'
+    // sotto: qui ci si arriva solo da un handler, a corpo del componente gia'
+    // eseguito.
+    // E la y del primo breakpoint si legge com'e': con `|| 1` un envelope che
+    // parte da 0 — un loop_end legittimo — collassava a un valore che non
+    // aveva mai avuto.
+    const loopSeedFrom = (env) =>
+      (env && env[0] && typeof env[0][1] === "number") ? env[0][1] : loopSeedWhole;
     if (k === "loopDur") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopDur != null ? cur.loopDur : 1;
+        const v = cur.loopDur != null ? cur.loopDur : loopSeedWhole;
         onChange({ pointer: { ...cur, loopDur: null, loopDurEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopDurEnv && cur.loopDurEnv[0] && cur.loopDurEnv[0][1]) || 1;
+        const v = loopSeedFrom(cur.loopDurEnv);
         onChange({ pointer: { ...cur, loopDur: v, loopDurEnv: null } });
       }
       return;
@@ -545,10 +557,10 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     if (k === "loopEnd") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopEnd != null ? cur.loopEnd : 1;
+        const v = cur.loopEnd != null ? cur.loopEnd : loopSeedWhole;
         onChange({ pointer: { ...cur, loopEnd: null, loopEndEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopEndEnv && cur.loopEndEnv[0] && cur.loopEndEnv[0][1]) || 1;
+        const v = loopSeedFrom(cur.loopEndEnv);
         onChange({ pointer: { ...cur, loopEnd: v, loopEndEnv: null } });
       }
       return;
@@ -813,6 +825,14 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // ora coincidono e le righe del loop compaiono esattamente quando il loop c'è.
   const loopActive = loopWindowShown;
   const loopEndMode = !!(stream.pointer && (stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null));
+  // Quale dei due bottoni del Seg e' acceso, calcolato una volta sola. Il Seg
+  // chiama onChange anche sul bottone gia' acceso (primitives.jsx), quindi il
+  // ramo deve saper riconoscere il click che non chiede niente — ed e' la
+  // stessa lezione di #149 un blocco piu' sotto, sull'altro Seg di questo
+  // riquadro. La condizione che riconosce il no-op dev'essere LA STESSA che
+  // accende il bottone: due copie e il ritorno anticipato smette di coprire
+  // proprio il caso che esiste per coprire.
+  const loopEndSel = loopEndMode ? "loop_end" : "loop_dur";
 
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
@@ -1102,8 +1122,17 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
-                         value={(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? "loop_end" : "loop_dur"}
+                         value={loopEndSel}
                          onChange={(u) => {
+                           // Click sul bottone gia' acceso: non cambia niente,
+                           // e senza questo ritorno cambiava tutto. In
+                           // modalita' envelope i due rami scrivono comunque lo
+                           // scalare e azzerano la curva — loop_endEnv
+                           // sostituito da un seme, loop_durEnv da 0.01 — cioe'
+                           // un envelope sparito per un click che non lo
+                           // chiedeva. Da scalare era un onChange a vuoto: un
+                           // passo di undo e lo stem marcato sporco per niente.
+                           if (u === loopEndSel) return;
                            if (u === "loop_end") {
                              // Con loop_start da solo (il menu lo sa scrivere) qui non
                              // c'e' nessuna lunghezza da cui partire, e il ripiego era
@@ -1125,10 +1154,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <span />
                     <span />
                   </div>
+                  {/* Il valore che la riga mostra quando la chiave non c'e'
+                      ancora: e' il seme, non un 1 nudo. Con `loop_start` da
+                      solo la riga loop_dur c'e' gia' e la chiave no, e quel
+                      numero non e' solo scritto — e' il punto da cui parte il
+                      trascinamento del NumberField. Sul ramo loop_end il caso
+                      non si da' (la condizione qui sopra garantisce una delle
+                      due chiavi), ma le due righe non devono dire numeri
+                      diversi per la stessa domanda. */}
                   {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
                     <ParamRow name="loop_end"
                               mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
-                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : loopSeedWhole)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopEndEnv != null}
                               envValue={stream.pointer.loopEndEnv}
                               onEditEnv={focusEnv("loopEnd")}
@@ -1136,7 +1173,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
-                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
+                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : loopSeedWhole)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
