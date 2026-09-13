@@ -9,7 +9,14 @@ logs/
 # Cartelle di lavoro di un bridge lanciato da dentro questo checkout: da #165
 # il workspace di default e' la cwd, quindi `python server.py` qui dentro le
 # crea qui. `make serve` passa il workspace del motore e non le tocca.
-configs/
-output/
-cache/
-refs/
+#
+# Ancorate alla radice (`/configs/`, non `configs/`): sono le quattro cartelle
+# che il bridge crea NEL workspace, e il workspace qui e' la radice del repo.
+# Senza lo slash iniziale il pattern vale a ogni profondita', e la prima
+# vittima sarebbe tests/e2e/fixtures/ — il progetto che l'e2e apre e' versionato
+# qui dentro (#139), quindi una fixture aggiunta sotto refs/ o configs/ finirebbe
+# ignorata: verde in locale, assente su un clone pulito.
+/configs/
+/output/
+/cache/
+/refs/

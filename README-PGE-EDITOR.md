@@ -113,7 +113,10 @@ empty folder and making the author's projects disappear from the list.
 
 **Switching at runtime.** `POST /workspace {"path": …}` commutes the four paths
 in place (they are process state, not closure constants — which is why the
-gunicorn config runs `workers: 1`); an empty path returns to `--root`. The
+gunicorn config runs `workers: 1`); an empty path returns to `--root` — to the
+engine checkout, not "to the default": since #165 a hand-launched bridge starts
+on the current folder, and this route is what is left of the historical layout
+(the one `make serve` passes explicitly). The
 response carries the new project list, because a switch invalidates what the
 browser holds: it is a replacement, not a merge. In the editor: **⚙ → Workspace**.
 

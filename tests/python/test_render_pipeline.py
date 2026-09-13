@@ -1605,6 +1605,30 @@ def test_workspace_switch_moves_refs_too(tmp_path):
     assert (due / "refs").is_dir()
 
 
+def test_diagnose_labels_the_samples_folder_by_its_name(tmp_path):
+    """Il pannello diagnose nomina la cartella che c'e', non "refs/" sempre.
+
+    Da #165 il nome puo' essere `samples/` (`resolve_media_dir`), e il banner
+    e Settings lo dicono. Una terza scrittura fissa a "refs/" qui direbbe
+    l'opposto proprio nel pannello dove si va a controllare — e il dettaglio
+    accanto porterebbe una path che finisce con un nome diverso."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "mare-nostrum"
+    (ws / "samples").mkdir(parents=True)
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    checks = {c["label"]: c for c in client.get("/diagnose").get_json()["checks"]}
+
+    assert "samples/" in checks, sorted(checks)
+    assert "refs/" not in checks
+    assert str(ws / "samples") in checks["samples/"]["detail"]
+    # ...e dove la cartella si chiama davvero refs/ l'etichetta non si muove.
+    altro = tmp_path / "brani"; altro.mkdir()
+    c2 = server.make_app(root, render_timeout=600.0, workspace=altro).test_client()
+    assert "refs/" in {c["label"] for c in c2.get("/diagnose").get_json()["checks"]}
+
+
 def test_workspace_switch_adopts_samples_too(tmp_path):
     """Quale sia la cartella dei sample e' una domanda sola, quindi la
     commutazione a caldo la fa come l'avvio: `_set_workspace` chiama

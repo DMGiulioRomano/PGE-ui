@@ -19,6 +19,7 @@ questi test leggerebbero il motore vero della macchina invece della fixture.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -369,11 +370,45 @@ def test_launching_with_the_env_var_gets_past_the_engine_check(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _make_serve(env_extra, *args):
-    env = {**os.environ, **env_extra}
+    """`make -n serve` in un'invocazione PULITA, cioe' senza i MAKEFLAGS di
+    chi ci ha lanciati.
+
+    make esporta nell'ambiente di ogni ricetta i propri MAKEFLAGS, e le
+    variabili passate da riga di comando ci viaggiano dentro: un `make tests
+    ROOT=/path` — l'invocazione che l'help di questo Makefile suggerisce, e che
+    CLAUDE.md documenta — arriverebbe qui dentro come un `ROOT=` da riga di
+    comando del make FIGLIO. `$(origin ROOT)` risponderebbe `command line`, il
+    ramo esplicito vincerebbe sempre, e la seconda meta' della domanda ("senza
+    ROOT= vince PGE_ENGINE_ROOT?") diventerebbe rossa senza che il Makefile
+    sia cambiato di una riga: un rosso che non parla della modifica in corso,
+    che e' il modo piu' veloce di far smettere di leggere una suite.
+
+    Le uniche variabili da riga di comando devono essere quelle in `args`."""
+    env = {k: v for k, v in os.environ.items() if k not in ("MAKEFLAGS", "MFLAGS")}
+    env.update(env_extra)
     proc = subprocess.run(["make", "--no-print-directory", "-n", "serve", *args],
                           cwd=REPO, env=env, capture_output=True, text=True,
                           timeout=120)
     return proc.stdout + proc.stderr
+
+
+def _serve_flag(out, flag):
+    """Il VALORE di `flag` nella riga che lancia server.py, non "la riga lo
+    contiene da qualche parte".
+
+    Cercare la path nell'output intero non discrimina: da #165 `WS_FLAG` porta
+    anche lui `$(ENGINE_ROOT)`, quindi il motore dell'ambiente compare sulla
+    riga pure quando `--root` e' regredito a `$(ROOT)` secco — cioe' esattamente
+    il difetto che questo confronto esiste per vedere, e che passerebbe in
+    verde attraverso `--workspace`."""
+    for line in out.splitlines():
+        if "server.py" not in line:
+            continue
+        toks = shlex.split(line)
+        if flag in toks:
+            i = toks.index(flag)
+            return toks[i + 1] if i + 1 < len(toks) else None
+    return None
 
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
@@ -383,10 +418,43 @@ def test_make_serve_has_the_same_precedence(tmp_path):
 
     dal_flag = _make_serve({server.ENGINE_ENV_VAR: str(env_root)},
                            f"ROOT={flag}")
-    assert str(flag) in dal_flag
-    assert str(env_root) not in dal_flag, \
+    assert _serve_flag(dal_flag, "--root") == str(flag), \
         "ROOT= da riga di comando batte l'ambiente, in make come in server.py"
+    assert str(env_root) not in dal_flag, \
+        "e l'ambiente non deve comparire da nessun'altra parte sulla riga"
 
     dall_env = _make_serve({server.ENGINE_ENV_VAR: str(env_root)})
-    assert str(env_root) in dall_env, \
+    assert _serve_flag(dall_env, "--root") == str(env_root), \
         "senza ROOT= esplicito vince PGE_ENGINE_ROOT, in make come in server.py"
+    # E il workspace di `make serve` resta esplicito: e' il motivo per cui la
+    # riga porta due volte la stessa path, ed e' anche cio' che rendeva cieca
+    # una ricerca sull'output intero. Detto qui, cosi' se cambia lo si legge.
+    assert _serve_flag(dall_env, "--workspace") == str(env_root), \
+        "make serve passa il workspace, non eredita il default sulla cwd"
+
+
+# ---------------------------------------------------------------------------
+# Il workspace di default e' la cwd, quindi un `python server.py` lanciato da
+# dentro QUESTO checkout ci semina configs/ output/ cache/ refs/. Il .gitignore
+# le copre — ma alla radice soltanto: chiesto a git, non trascritto.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git assente")
+def test_the_working_folders_are_ignored_at_the_root_only():
+    """Le quattro cartelle sono ignorate dove il bridge le crea, e NON piu' giu'.
+
+    Un pattern senza slash iniziale vale a ogni profondita', e la prima vittima
+    sarebbe `tests/e2e/fixtures/`: il progetto che l'e2e apre e' versionato qui
+    dentro (#139), quindi una fixture aggiunta sotto `refs/` o `configs/`
+    sparirebbe dall'indice senza un rosso — verde in locale, assente su un clone
+    pulito. E' il modo silenzioso di rompere la suite che non ha bisogno del
+    motore."""
+    def ignored(rel):
+        return subprocess.run(["git", "check-ignore", "-q", rel], cwd=REPO,
+                              capture_output=True).returncode == 0
+
+    for name in ("configs", "output", "cache", "refs"):
+        assert ignored(f"{name}/x"), f"{name}/ alla radice deve restare ignorata"
+        assert not ignored(f"tests/e2e/fixtures/{name}/x"), (
+            f"tests/e2e/fixtures/{name}/ non e' una cartella di lavoro del "
+            f"bridge: ignorarla fa sparire una fixture senza dirlo")

@@ -323,6 +323,29 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     assert("ne' promette una cartella vuota dove l'ha adottata",
            /wsInfo\.samplesDirAdopted/.test(sp) &&
            /samplesDirAdopted/.test(SG.codeOf(path.join(__dirname, "../../server.py"))));
+    // Quarto caso, ed e' quello che i tre rami non coprivano: una refs/ che
+    // nel workspace c'era gia', piena. `samplesDirAdopted` guarda l'ALTRO nome
+    // (e' la domanda "perche' la riga dice samples/"), quindi qui si cade nel
+    // ramo finale — dove "vuota" era una promessa falsa, la stessa che il ramo
+    // isRoot esiste per non fare. Nessuna delle tre frasi promette un vuoto
+    // che il server non ha dichiarato. #165
+    {
+      // Letto come CODICE: i commenti qui accanto la vecchia frase la citano
+      // apposta (dicono perche' non si dice piu'), e una guardia che li legge
+      // resterebbe rossa per sempre — o, peggio, verde su un commento.
+      const spCode = SG.codeOf(path.join(__dirname, "../../src/components/SettingsPanel.jsx"));
+      const frasi = spCode.slice(spCode.indexOf("Anche i sample seguono"),
+                                 spCode.indexOf("a ogni render"));
+      assert("nessuna delle frasi sui sample promette una cartella vuota",
+             frasi.length > 0 && !/crea il bridge, vuota/.test(frasi) &&
+             /Se manca la crea/.test(frasi));
+    }
+    // E il workspace sul motore non e' piu' "il default": da #165 un bridge
+    // lanciato a mano parte sulla cwd. La frase resta (il layout storico,
+    // quello che `make serve` passa), l'etichetta no.
+    assert("e non chiama 'default' il workspace sul motore",
+           /wsInfo\.isRoot/.test(sp) &&
+           !/repo del motore \(default\)/.test(sp));
     // Anche lo specchio delle path nella sezione Paths lo chiede al server.
     // Scritto come condizione da districare ("a meno che il motore non abbia
     // --samples-dir, nel qual caso restano i suoi") diceva l'opposto di quel

@@ -90,7 +90,15 @@ exists, the fourth only when a browser is installed):
   (the pure resolution of engine root and workspace — the precedence, the
   bounded walk up, the error text, the banner lines, plus the bridge launched
   as a real subprocess from an empty folder and a `make -n serve` that answers
-  whether the Makefile still has the *same* precedence), `test_audio_pipeline.py`
+  whether the Makefile still has the *same* precedence — that probe reads the
+  **value of `--root`** on the recipe line, not "the path appears somewhere in
+  the output", because `WS_FLAG` carries `$(ENGINE_ROOT)` too and would answer
+  yes through `--workspace` while `--root` regressed; and it strips `MAKEFLAGS`
+  from the child's environment, or a `make tests ROOT=/path` (the invocation
+  this Makefile's own help suggests) would reach the nested make as a
+  command-line `ROOT=` and turn the test red with the Makefile unchanged. It
+  also asks **git** whether the four working folders are ignored at the repo
+  root and *not* deeper), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), and `test_engine_render.py`
@@ -407,6 +415,16 @@ engine reads the folder the editor lists; `GET /workspace` carries
 `samplesDirAdopted` because from a path the browser would see only a name, and
 "the bridge creates it empty" said over a full folder sends the author looking
 for samples that aren't missing.
+
+`samplesDirAdopted` answers **which name won**, not "was it already there": a
+`refs/` the workspace already had, full, is adopted just as much and reports
+`false`. That is the right question for the sentence it drives (*why* the line
+says `samples/`), so the other sentence must not promise emptiness — Settings
+says "the bridge creates it if it's missing", true in all four cases, and
+`tests/node/test-workspace.js` guards that none of the three phrases promises a
+void the server never declared. For the same reason the name is printed
+wherever the folder is named: the banner line and the `/diagnose` label both
+read `refs.name`, never the literal `refs/`.
 
 **`refs/` follows the workspace only where the engine can be told about it.**
 The subprocess runs with `cwd=root`, and without `--samples-dir` the engine

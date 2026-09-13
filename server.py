@@ -553,7 +553,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
         add("main.py", main_py.exists(), str(main_py))
 
         # folders
-        for label, p in (("refs/", refs), ("configs/", configs),
+        # `refs.name` e non la stringa "refs/": da #165 la cartella dei sample
+        # e' quella che il workspace aveva gia' (`resolve_media_dir`), quindi
+        # puo' chiamarsi samples/. Etichettarla "refs/" sarebbe la seconda
+        # scrittura del nome, e direbbe l'opposto del banner e di Settings
+        # proprio nel pannello dove si va a controllare.
+        for label, p in ((refs.name + "/", refs), ("configs/", configs),
                          ("output/", output), ("cache/", cache)):
             if p.exists():
                 try:
@@ -673,7 +678,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
     @app.post("/workspace")
     def set_workspace():
         """Cambia la cartella di lavoro a caldo. Corpo: {"path": "..."};
-        vuoto o assente riporta al root del motore, cioe' al default.
+        vuoto o assente riporta al root del motore.
+
+        Al root, non "al default": da #165 il default di un bridge lanciato a
+        mano e' la cwd, e questa route e' rimasta l'unico modo di tornare
+        dentro il checkout del motore (il layout storico di #147, quello che
+        `make serve` passa esplicito). Il bottone in Settings si chiama "al
+        motore" per la stessa ragione.
 
         La cartella deve esistere. Le *sotto*directory si creano, il workspace
         no: un percorso digitato male e' un refuso, e un refuso non deve
