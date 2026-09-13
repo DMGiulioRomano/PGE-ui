@@ -707,11 +707,28 @@ one the curve stated. Both branches used to ignore the envelope outright
 `loop_dur: 0.01`, the floor, and a `loop_durEnv` at `3` came back as the end of
 the file. That is the `|| 1` of `toggleMode` one level over, on the same panel,
 which is why `loopSeedFrom` is declared **once** in the component body and read
-by both handlers rather than living inside the one that found it first: its
-fallback is `loopSeedWhole`, honest for a shape with no y to read (a compact
-block, a `{t,v}` breakpoint). The `loop_dur` branch got the cap too, for the
-symmetry the `loop_end` branch had just been given — a length longer than the
-file is exactly what the row clamps when the number is typed.
+by all three loop handlers rather than living inside the one that found it
+first. The `loop_dur` branch got the cap too, for the symmetry the `loop_end`
+branch had just been given — a length longer than the file is exactly what the
+row clamps when the number is typed.
+
+**"The first breakpoint" is not `env[0]`**, and reading it that way put the
+constant straight back. It is the same rule `wouldEmptyEnv` states one section
+up — a caller holding a wrapped value must `unwrapEnv` first — and the wrapped
+spelling here is not exotic: `wrapEnv` produces `{type, points}` the moment a
+pure-BP curve's global interp stops being linear, so the EnvelopeEditor writes
+it by itself. Indexed at `[0]` that dict has nothing, and a `loop_end` curve
+sitting at `6` came back as the whole file. A **compact block** as the first
+item was the other half and worse than the fallback: there `env[0][1]` is the
+distribution's *ratio*, so a `typeof … === "number"` guard meant to reject the
+shape let it through and wrote a geometric ratio as a position in the sample.
+`loopSeedFrom` desugars the BP groups and asks `isBreakpoint` — the module's
+own predicate, not a third copy of the rule — so every spelling that states a y
+gives it up, and only the two that genuinely have none (a compact block, a
+`{t,v}` breakpoint) fall back. The fallback is `loopSeedWhole` except where the
+caller has one of its own: `loop_start` passes `0`, the same seed the menu
+gives it, and reads through the shared reader instead of the `|| 0` that could
+not tell a curve worth zero from a curve it could not read.
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
