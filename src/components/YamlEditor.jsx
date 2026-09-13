@@ -58,11 +58,32 @@ function computeAnnotations(stream, sampleRec) {
     byKey.set("sample", { kind: "err", msg: `sample not found: ${stream.sample}` });
   } else {
     const ptr = stream.pointer || {};
-    if (!ptr.loopEndEnv && ptr.loopEnd != null && ptr.loopEnd > sampleRec.duration) {
-      byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` });
+    // Il tetto della finestra di loop NON e' la durata del sample: e' la durata
+    // nell'UNITA' in vigore. `loop_unit` (PGE #222, #149) decide se questi
+    // numeri sono secondi — e allora il tetto e' sample_dur — oppure
+    // [0,1] × sample_dur, dove il tetto e' 1 e la durata del file nel confronto
+    // non entra affatto. Misurato in secondi, il controllo sbagliava in
+    // entrambe le direzioni: rosso su `loop_end: 0.9` normalized (= 0.36 s) di
+    // un sample da 0.4 — cioe' su ogni clip nato nell'editor, che
+    // `loop_unit: normalized` ce l'ha sempre — e silenzio su `loop_end: 5`
+    // normalized, cinque volte oltre la fine del file. Ed era la stessa unita'
+    // fissa che l'Inspector ha smesso di dichiarare: un rosso qui contro il
+    // suffisso unit-aware della riga di la' sono due affermazioni opposte.
+    // Il tetto viene da loopEnvMax, la sorgente unica gia' letta dall'Inspector
+    // e dall'EnvelopeEditor, non da una seconda copia della regola.
+    const loopCap = window.PGEEnvUtils.loopEnvMax(stream, sampleRec.duration);
+    const loopNormalized = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized";
+    // loopCap null = secondi con la durata ignota: non c'e' niente contro cui
+    // misurare, e un controllo che non sa tace.
+    const capMsg = loopNormalized
+      ? "1 (loop_unit: normalized — coordinates are [0,1] × sample duration)"
+      : `sample duration (${loopCap != null ? loopCap.toFixed(3) : "?"} s)`;
+    const overCap = (v) => loopCap != null && v > loopCap;
+    if (!ptr.loopEndEnv && ptr.loopEnd != null && overCap(ptr.loopEnd)) {
+      byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ ${capMsg}` });
     }
-    if (!ptr.loopDurEnv && ptr.loopDur != null && ptr.loopDur > sampleRec.duration) {
-      byKey.set("loop_dur", { kind: "err", msg: `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` });
+    if (!ptr.loopDurEnv && ptr.loopDur != null && overCap(ptr.loopDur)) {
+      byKey.set("loop_dur", { kind: "err", msg: `loop_dur must be ≤ ${capMsg}` });
     }
   }
   if (Array.isArray(stream.panEnv) && stream.panEnv.some(p => Math.abs(p[1]) > 3600)) {
