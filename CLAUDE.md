@@ -623,6 +623,23 @@ never reaches the parser — accusing it would be a red on a render that succeed
 and would contradict `loopUnitInfo`, which reports those as absent
 (`source: "default"`).
 
+**The Raw tab is on that list too**, and it was the last place still measuring
+the loop window in seconds flat. `computeAnnotations` (`YamlEditor.jsx`)
+compared `loop_end` / `loop_dur` against `sampleRec.duration`, which is only
+the cap when the unit *is* seconds; under `normalized` the coordinates live in
+`[0,1]` and the cap is `1`, the file's length not entering the comparison at
+all. So it was wrong in both directions, and the loud one hit the commonest
+population: `loop_end: 0.9` normalized on a 0.4 s sample is 0.36 s, inside the
+file, and it drew a red naming seconds — on a stream the engine accepts, three
+rows away from the unit-aware suffix of the Preview tab saying the opposite.
+The quiet one is `loop_end: 5` normalized on an 8 s sample: five times past the
+file end, and `5 > 8` is false. The cap comes from `loopEnvMax` now, the same
+single source the Inspector and the EnvelopeEditor read, and a `null` cap
+(seconds with the duration unknown) makes the check say nothing rather than
+compare against `undefined`. Its node coverage lives in `test-yaml-bridge.js`,
+which therefore loads `envelope-loops` / `deviation-probability` /
+`envelope-utils` beside the bridge, in the editor's own order.
+
 Two consequences the editor had to be taught, both of which turned a healthy
 stream into an exposed one. `Seg` calls `onChange` on the already-active button,
 so a click on the lit "normalized" used to delete the explicit key of every clip
@@ -679,7 +696,22 @@ copy of it, because two copies is how such a guard stops covering the case it
 exists for. From the scalar side that click was an `onChange` for nothing — an
 undo step and a stem marked dirty. (The scalar↔env Seg has the same defect one
 level up, in `toggleMode`, where it costs the envelope of *any* parameter: a
-guard there belongs to its own change, not to this one.)
+guard there belongs to its own change, not to this one.) The row under it picks
+its key from `loopEndMode` for the same reason — a third copy of that condition
+would be the row free to disagree with the selector that chooses it.
+
+A **real** click on that Seg converts between two mutually exclusive keys, so
+the curve cannot survive either way — but the number replacing it has to be the
+one the curve stated. Both branches used to ignore the envelope outright
+(`stream.pointer.loopEnd || 0`), so a `loop_endEnv` sitting at `6` came back as
+`loop_dur: 0.01`, the floor, and a `loop_durEnv` at `3` came back as the end of
+the file. That is the `|| 1` of `toggleMode` one level over, on the same panel,
+which is why `loopSeedFrom` is declared **once** in the component body and read
+by both handlers rather than living inside the one that found it first: its
+fallback is `loopSeedWhole`, honest for a shape with no y to read (a compact
+block, a `{t,v}` breakpoint). The `loop_dur` branch got the cap too, for the
+symmetry the `loop_end` branch had just been given — a length longer than the
+file is exactly what the row clamps when the number is typed.
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
