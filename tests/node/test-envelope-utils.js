@@ -1036,8 +1036,9 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
 
   /* ── e il menu che crea quelle righe parla la stessa unità ────────────────
      Il selettore è metà della storia: l'altra è il menu «add parameter»,
-     l'unico punto da cui loop_start/loop_end/loop_dur nascono. Le sue tre voci
-     erano scritte per una sola unità — «(s)», «∈ [0, sample_dur]» — e il suo
+     il punto più largo da cui loop_start/loop_end/loop_dur nascono (non
+     l'unico: il blocco qui sotto conta le altre porte dello stesso 1).
+     Le sue tre voci erano scritte per una sola unità — «(s)», «∈ [0, sample_dur]» — e il suo
      seme era un 1 nudo. Sotto l'ereditarietà quel seme non poteva sbagliare:
      `time_mode: normalized` rendeva la chiave normalized, dove 1 È la fine del
      file. Dopo #222 la stessa popolazione legge secondi e 1 è un secondo —
@@ -1114,6 +1115,127 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       && !/stream\.pointer\.loopDur != null \? stream\.pointer\.loopDur : 1\)/.test(inspSrc));
     assert("…e passa dal cap, che quel ramo non applicava affatto",
       /const le = stream\.pointer\.loopEnd != null \? stream\.pointer\.loopEnd\s*\n\s*: clampLoop\("loopEnd",/.test(inspSrc));
+  }
+
+  /* ── le altre porte dello stesso 1: il menu non era l'unica ─────────────
+     Il seme del menu ne chiude una. Le altre non passano da nessun menu: il
+     toggle scalare↔env delle due righe — con `loop_start` da solo la riga
+     loop_dur c'e' gia' e la chiave no, quindi quel ramo SEMINA — e il numero
+     che la riga mostra mentre la chiave manca, che non e' solo scritto: e' il
+     punto da cui parte il trascinamento del NumberField.
+     E sullo stesso Seg vale la lezione di #149 un blocco piu' sotto: Seg
+     chiama onChange anche sul bottone gia' acceso, e li' i due rami scrivono
+     comunque lo scalare azzerando la curva — un envelope che sparisce per un
+     click che non lo chiedeva.
+     Stessa tecnica del blocco sopra: si ESEGUONO i rami estratti dal sorgente. */
+  {
+    const blockOf = (needle) => {
+      const at = inspSrc.indexOf(needle);
+      if (at < 0) return "";
+      const open = inspSrc.indexOf("{", at + needle.length - 1);
+      let d = 0;
+      for (let j = open; j < inspSrc.length; j++) {
+        if (inspSrc[j] === "{") d++;
+        else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(at, j + 1);
+      }
+      return "";
+    };
+    const seedFromDecl = declOf("loopSeedFrom");
+    assert("i due rami scalare↔env del loop sono estraibili dal sorgente",
+      blockOf('if (k === "loopDur") {').length > 0
+      && blockOf('if (k === "loopEnd") {').length > 0
+      && seedFromDecl.length > 0);
+    const modeFor = (key, newMode, pointer, seed) => {
+      let out = null;
+      new Function("k", "newMode", "stream", "onChange", "loopSeedWhole",
+        seedFromDecl + "\n" + blockOf('if (k === "' + key + '") {'))(
+        key, newMode, { pointer }, (p) => { out = p; }, seed);
+      return out && out.pointer;
+    };
+
+    {
+      // `loop_start` da solo: la chiave non c'e', e il ramo semina. Prima
+      // seminava 1 — dopo #222 un secondo — su un sample di 8.
+      assert("scalare→env con la chiave assente: semina tutto il file, non 1",
+        eq(modeFor("loopDur", "env", { loopStart: 0 }, 8).loopDurEnv, [[0, 8], [1, 8]]));
+      assert("…e lo stesso sul loop_end",
+        eq(modeFor("loopEnd", "env", { loopStart: 0 }, 8).loopEndEnv, [[0, 8], [1, 8]]));
+    }
+    {
+      // L'altro verso, su un envelope che parte da zero: con `|| 1` quello
+      // zero — un loop_end legittimo — diventava un valore che la curva non
+      // aveva mai avuto.
+      const p = modeFor("loopEnd", "scalar", { loopEndEnv: [[0, 0], [1, 0.5]] }, 8);
+      assert("env→scalare: la y del primo breakpoint si legge com'è, zero compreso",
+        p.loopEnd === 0 && p.loopEndEnv === null);
+      assert("env→scalare senza curva da leggere: resta il seme",
+        modeFor("loopDur", "scalar", { loopStart: 0 }, 8).loopDur === 8);
+    }
+
+    // …e il Seg che sceglie fra le due righe: il click che non chiede niente.
+    const selDecls = ["loopEndMode", "loopEndSel"].map(declOf);
+    assert("le dichiarazioni del bottone acceso sono estraibili dal sorgente",
+      selDecls.every(d => d.length > 0));
+    const selFor = (stream) => new Function("stream",
+      selDecls.join("\n") + "\nreturn loopEndSel;")(stream);
+    const segAt2 = inspSrc.indexOf("value={loopEndSel}");
+    const onCh2 = inspSrc.indexOf("onChange={(u) => {", segAt2);
+    let body2 = "";
+    if (segAt2 >= 0 && onCh2 >= 0) {
+      const open = inspSrc.indexOf("{", inspSrc.indexOf("=>", onCh2));
+      let d = 0;
+      for (let j = open; j < inspSrc.length; j++) {
+        if (inspSrc[j] === "{") d++;
+        else if (inspSrc[j] === "}" && --d === 0) { body2 = inspSrc.slice(open, j + 1); break; }
+      }
+    }
+    assert("l'onChange del toggle loop_end ↔ loop_dur è estraibile dal sorgente", body2.length > 0);
+    const toggleFor = (pointer, seed) => {
+      const stream = { pointer };
+      let out = null;
+      const sel = selFor(stream);
+      const fn = new Function("stream", "loopEndSel", "loopSeedWhole", "clampLoop", "onChange",
+        "return (u) => " + body2)(
+        stream, sel, seed,
+        // clampLoop dell'Inspector, ridotto al suo effetto: tappare al cap
+        (k, v) => Math.min(seed, Math.max(0, v)),
+        (p) => { out = p; });
+      return { fn, sel, get: () => out };
+    };
+
+    {
+      // Il caso di regressione: la curva in piedi e un click sul bottone che
+      // e' gia' acceso. Prima il ramo scriveva lo scalare e azzerava l'envelope.
+      const t = toggleFor({ loopStart: 0.2, loopEndEnv: [[0, 0.3], [1, 0.9]] }, 8);
+      assert("in modalità envelope il bottone acceso è loop_end", t.sel === "loop_end");
+      t.fn(t.sel);
+      assert("click sul bottone già acceso: nessuna modifica, la curva resta", t.get() === null);
+      const t2 = toggleFor({ loopStart: 0.2, loopDurEnv: [[0, 0.3], [1, 0.9]] }, 8);
+      t2.fn(t2.sel);
+      assert("…e lo stesso sull'altro bottone", t2.sel === "loop_dur" && t2.get() === null);
+    }
+    {
+      // Il cambio vero, dalla forma che il menu sa scrivere: loop_start da
+      // solo, nessuna lunghezza da cui partire. Il seme e poi il cap.
+      const t = toggleFor({ loopStart: 3 }, 8);
+      t.fn("loop_end");
+      assert("loop_dur → loop_end con loop_start da solo: seme nell'unità, tappato al cap",
+        t.get() !== null && t.get().pointer.loopEnd === 8);
+    }
+
+    assert("il bottone acceso e il ritorno anticipato leggono la stessa cosa",
+      /value=\{loopEndSel\}/.test(inspSrc)
+      && /if \(u === loopEndSel\) return;/.test(inspSrc)
+      && !/value=\{\(stream\.pointer\.loopEnd != null \|\| stream\.pointer\.loopEndEnv != null\) \? "loop_end"/.test(inspSrc));
+    assert("i semi dello scalare↔env non sono più un 1 nudo",
+      /cur\.loopDur != null \? cur\.loopDur : loopSeedWhole/.test(inspSrc)
+      && /cur\.loopEnd != null \? cur\.loopEnd : loopSeedWhole/.test(inspSrc)
+      && !/cur\.loopDurEnv\[0\]\[1\]\) \|\| 1/.test(inspSrc)
+      && !/cur\.loopEndEnv\[0\]\[1\]\) \|\| 1/.test(inspSrc));
+    assert("e il numero mostrato quando la chiave manca è il seme, su entrambe le righe",
+      (inspSrc.match(/Env \? "—" : loopSeedWhole\)\}/g) || []).length === 2
+      && !/loopEndEnv \? "—" : 1\)\}/.test(inspSrc)
+      && !/loopDurEnv \? "—" : 1\)\}/.test(inspSrc));
   }
 }
 
