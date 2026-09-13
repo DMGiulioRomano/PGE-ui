@@ -12,6 +12,10 @@ WORKSPACE ?=
 WS_FLAG  := $(if $(WORKSPACE),--workspace $(WORKSPACE),)
 VENV     := .venv
 VENV_BIN := $(VENV)/bin
+# Dove `install-cli` mette il symlink `pge-ui`. ~/.local/bin e' il posto in cui
+# si aggiunge un comando senza sudo; se non e' nel PATH il target lo dice, ed e'
+# il modo piu' comune in cui questa cosa sembra non funzionare. #164
+BINDIR   ?= $(HOME)/.local/bin
 
 # I test di parita' girano da tests/parity/, quindi il path del motore va
 # assolutizzato qui: relativo si romperebbe al primo cd.
@@ -29,12 +33,13 @@ else
 ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
 endif
 
-.PHONY: help serve install dev-clean tests tests-node tests-python tests-parity tests-e2e
+.PHONY: help serve install install-cli dev-clean tests tests-node tests-python tests-parity tests-e2e
 
 help:
 	@echo " PGE-ui · targets"
 	@echo ""
 	@echo "  make install         crea .venv e installa requirements.txt"
+	@echo "  make install-cli     mette \`pge-ui\` sul PATH ($(BINDIR))"
 	@echo "  make serve           avvia il bridge locale su :$(PORT)"
 	@echo "                       (default ROOT=$(ROOT))"
 	@echo "                       WORKSPACE=~/brani per lavorare fuori dal repo engine"
@@ -49,6 +54,7 @@ help:
 	@echo "  WORKSPACE=~/brani    cartella con configs/ output/ cache/"
 	@echo "                       (default: = ROOT, i progetti nel repo engine)"
 	@echo "  PYTHON=python3       interprete usato per creare il venv"
+	@echo "  BINDIR=~/.local/bin  dove install-cli mette il symlink pge-ui"
 	@echo "  PGE_PARITY_STRICT=1  un caso di parita' saltato diventa un errore"
 	@echo "  PGE_REQUIRE_E2E=1    un e2e saltato (browser assente) diventa un errore"
 
@@ -60,6 +66,27 @@ install: $(VENV_BIN)/pip
 
 serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) $(WS_FLAG) --port $(PORT)
+
+# Un nome sul PATH per il bridge (#164): `cd ~/qualsiasi-brano && pge-ui`.
+# E' un symlink, non una copia, cosi' un `git pull` aggiorna anche il comando.
+# `-sfn` lo rende idempotente: lanciarlo due volte di fila non e' un errore e
+# non lascia un link dentro un link.
+#
+# Nessuna dipendenza dal venv: `install-cli` e' un gesto di installazione, non
+# di setup, e chi tiene le dipendenze fuori dal repo non deve vedersi creare un
+# .venv per avere il comando. Il venv, se c'e', lo preferisce bin/pge-ui.
+install-cli:
+	@mkdir -p $(BINDIR)
+	@ln -sfn $(abspath bin/pge-ui) $(BINDIR)/pge-ui
+	@echo "pge-ui -> $(BINDIR)/pge-ui"
+	@case ":$$PATH:" in \
+	  *:"$(BINDIR)":*) ;; \
+	  *) echo ""; \
+	     echo "  attenzione: $(BINDIR) non e' nel PATH, quindi \`pge-ui\` non si"; \
+	     echo "  trova ancora. Aggiungilo alla tua shell, per esempio:"; \
+	     echo ""; \
+	     echo "      export PATH=\"$(BINDIR):\$$PATH\"" ;; \
+	esac
 
 .PHONY: tests tests-node tests-python tests-parity tests-e2e
 

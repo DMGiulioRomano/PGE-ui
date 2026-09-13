@@ -1,0 +1,19 @@
+#!/bin/sh
+# pge-ui — il bridge sotto un nome, lanciabile da qualunque cartella (#164).
+#
+# Qui non c'e' logica, e non deve entrarcene: la risoluzione del motore, il
+# default del workspace e tutto il resto stanno in server.py, dove i test li
+# vedono. Questo file risolve due path e passa la mano.
+#
+# `realpath` perche' il comando si raggiunge attraverso un symlink
+# (`make install-cli`): senza, il doppio `dirname` darebbe la cartella del
+# symlink — tipicamente ~/.local/bin — invece di quella del repo.
+#
+# L'interprete e' il venv del repo quando c'e', perche' e' li' che `make
+# install` mette flask: con `python3` secco il comando partirebbe dal PATH di
+# sistema e morirebbe sull'import, cioe' proprio nel setup che il README
+# documenta. Senza venv resta `python3`, per chi le dipendenze le ha altrove.
+REPO=$(dirname "$(dirname "$(realpath "$0")")")
+PY="$REPO/.venv/bin/python"
+[ -x "$PY" ] || PY=python3
+exec "$PY" "$REPO/server.py" "$@"
