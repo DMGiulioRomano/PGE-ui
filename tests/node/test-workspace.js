@@ -25,6 +25,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 let pass = 0, fail = 0;
 // Il corpo della suite e' un IIFE async: se muore a meta', i suoi assert non
@@ -314,6 +315,14 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /wsInfo\.isRoot \?/.test(sp.slice(sp.indexOf("Anche i sample seguono"))));
     assert("e non trascrive la vecchia promessa",
            !/Seguiranno il workspace quando il motore/.test(sp));
+    // Terzo caso della stessa frase: la cartella dei sample il bridge puo'
+    // averla ADOTTATA (un workspace che teneva gia' il corpus in samples/,
+    // #165). Anche questo lo dice il server: dal path il browser vedrebbe solo
+    // un nome, e "la crea il bridge, vuota" su una cartella piena manda a
+    // cercare sample che non mancano.
+    assert("ne' promette una cartella vuota dove l'ha adottata",
+           /wsInfo\.samplesDirAdopted/.test(sp) &&
+           /samplesDirAdopted/.test(SG.codeOf(path.join(__dirname, "../../server.py"))));
     // Anche lo specchio delle path nella sezione Paths lo chiede al server.
     // Scritto come condizione da districare ("a meno che il motore non abbia
     // --samples-dir, nel qual caso restano i suoi") diceva l'opposto di quel

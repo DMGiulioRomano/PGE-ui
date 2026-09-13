@@ -4,7 +4,8 @@ PythonGranularEngine renderer.
 
 Lives in the PGE-ui repo. Talks to a separately-cloned PythonGranularEngine.
 
-Default layout (clones side-by-side):
+A common layout (clones side-by-side) — but no longer a default the bridge
+assumes: since #165 the engine is declared, see below.
     ~/projects/PythonGranularEngine/
     ~/projects/PGE-ui/
                  ├── server.py        ← this file
@@ -12,10 +13,14 @@ Default layout (clones side-by-side):
                  ├── PGE Editor.html
                  └── ...
 
-Run from PGE-ui:
+Run it from wherever your piece lives:
     pip install -r requirements.txt
-    python server.py
-    # or, if PythonGranularEngine is elsewhere:
+    cd ~/un-brano && python /path/to/PGE-ui/server.py
+
+The current folder is the workspace; the engine comes from --root, else
+$PGE_ENGINE_ROOT (a line of .envrc, versioned next to the piece), else an
+engine/ found walking up from here. See "Risoluzione" below. #165
+
     python server.py --root /path/to/PythonGranularEngine --port 7878
 
 Then in the browser:
@@ -32,8 +37,10 @@ can read events incrementally. All other endpoints are plain JSON.
 The engine checkout (--root) and the folder your pieces live in (--workspace)
 are two different things: --root is engine source (src/main.py, .venv, csound/),
 --workspace holds configs/ output/ cache/ and — since #148, on an engine that
-has `--samples-dir` — refs/ too. Without --workspace they coincide, which is the
-historical behavior. See #147/#148.
+has `--samples-dir` — the samples too. Without --workspace the workspace is the
+current folder (#165; it used to be --root, i.e. your pieces inside the engine
+checkout). The samples folder is refs/, or samples/ when that's the one the
+workspace already has. See #147/#148/#165.
 
 Endpoints:
     GET  /health                — sanity check + resolved paths
@@ -189,6 +196,240 @@ def _ensure_venv_events(root: Path):
 
 
 # -------------------------------------------------------------------------
+# Risoluzione: quale motore, quale cartella di lavoro
+#
+# Funzioni pure — niente Flask, niente stato, nessun side effect — perche'
+# sono la prima cosa che si incontra lanciando il bridge e l'ultima che si
+# riesce a capire da un traceback. I test le chiamano direttamente. #165
+# -------------------------------------------------------------------------
+
+# Non e' una variabile nuova: il Makefile la onora gia' e ne documenta la
+# precedenza, e i test di parita' la leggono. Qui smette di essere una
+# variabile dei test e diventa una variabile del prodotto.
+ENGINE_ENV_VAR = "PGE_ENGINE_ROOT"
+
+# Il nome che una cartella di lavoro da' al motore che si pinna accanto
+# (submodule o clone): `mare-nostrum` ha `engine/`, ed e' quello che il suo
+# `make brano` usa.
+ENGINE_SUBDIR = "engine"
+
+# I due nomi che un workspace da' alla cartella dei sample, in ordine di
+# precedenza. Vedi `resolve_media_dir`.
+MEDIA_DIR_NAMES = ("refs", "samples")
+
+
+class EngineRootError(RuntimeError):
+    """Nessun motore risolvibile.
+
+    Il messaggio E' quello che l'utente legge: `main()` lo passa a
+    `sys.exit`. Un traceback qui direbbe dove il bridge si e' rotto, mentre
+    la domanda e' quale motore usare — e la risposta sono tre righe."""
+
+
+def _declared(value):
+    """Una dichiarazione c'e' o non c'e': vuoto e' assente.
+
+    Stessa lettura del Makefile, dove `$(if $(PGE_ENGINE_ROOT),...)` tratta la
+    stringa vuota come non definita. Un `PGE_ENGINE_ROOT=` esportato (il modo
+    piu' comune di annullarne uno ereditato) deve spegnere la dichiarazione,
+    non far fallire il bridge su una cartella che si chiama ''."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def _as_path(value, base=None) -> Path:
+    """`~` espanso, e un relativo risolto sulla cartella da cui il comando e'
+    stato dato — non sulla cwd del processo, che per `main()` e' la stessa ma
+    per un test no. E' cio' che rende pure le funzioni qui sotto: la cwd e' un
+    argomento, non un ambiente."""
+    try:
+        p = Path(value).expanduser()
+    except (OSError, ValueError, RuntimeError):
+        # `~utente-che-non-esiste`: resta com'e' scritto, e sara' il predicato
+        # a dire che un motore li' non c'e'.
+        p = Path(value)
+    return p if p.is_absolute() else Path(base or Path.cwd()) / p
+
+
+def is_engine_root(path) -> bool:
+    """Un checkout del motore e' una cartella che contiene `src/main.py`.
+
+    E' lo stesso criterio che `main()` applicava al solo `--root`, promosso a
+    predicato perche' adesso ci passano tre candidati e uno solo vince."""
+    try:
+        return (Path(path).expanduser() / "src" / "main.py").is_file()
+    except (OSError, ValueError, RuntimeError):
+        # Un path con un NUL dentro, o un `~utente-inesistente`: non e' un
+        # motore. Rispondere "no" e' la risposta giusta, non un crash — il
+        # messaggio che segue nomina comunque il candidato.
+        return False
+
+
+def find_engine_upwards(cwd=None):
+    """Cerca `<dir>/engine/src/main.py` risalendo da `cwd`. `None` se non c'e'.
+
+    E' il fallback, non la regola: serve al repo che il submodule ce l'ha ma
+    l'`.envrc` no. Per questo la risalita e' limitata — si ferma DOPO aver
+    guardato la radice del repo git (o la home, quando repo non ce n'e'): un
+    `engine/` trovato cinque cartelle piu' su non l'ha dichiarato nessuno, e
+    prenderlo sarebbe esattamente il modo in cui la UI e il `make` di un brano
+    finiscono a girare su due motori diversi."""
+    try:
+        cur = Path(cwd or Path.cwd()).expanduser().resolve()
+        home = Path.home().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    for d in (cur, *cur.parents):
+        cand = d / ENGINE_SUBDIR
+        if is_engine_root(cand):
+            return cand.resolve()
+        # `.git` e' una cartella nel repo normale e un FILE nel submodule o
+        # nel worktree: `exists()` copre tutt'e due.
+        if (d / ".git").exists() or d == home:
+            break
+    return None
+
+
+def _no_engine_message(cwd, bad=None, source=None):
+    """Il testo dell'errore: le tre righe della precedenza, nell'ordine vero."""
+    if bad is None:
+        head = ["Non so quale motore usare."]
+    else:
+        head = [f"{source} punta a {bad},",
+                "che non e' un checkout di PythonGranularEngine (manca src/main.py)."]
+    return "\n".join(head + [
+        "",
+        "Tre modi, in ordine di precedenza:",
+        "",
+        "  1. esplicito       server.py --root /path/to/PythonGranularEngine",
+        f"  2. per cartella    export {ENGINE_ENV_VAR}=/path/to/PythonGranularEngine",
+        "                     (una riga di .envrc, versionata accanto al brano)",
+        f"  3. automatico      un {ENGINE_SUBDIR}/ con dentro src/main.py, risalendo",
+        f"                     da {cwd} fino alla radice del repo",
+        "",
+        "Il motore si clona da:",
+        "  git clone https://github.com/DMGiulioRomano/PythonGranularEngine",
+    ])
+
+
+def resolve_engine_root(cli_root=None, env=None, cwd=None):
+    """Quale motore, e chi l'ha detto. Ritorna `(root assoluto, sorgente)`.
+
+    Precedenza:
+
+      1. `--root` sulla riga di comando
+      2. `$PGE_ENGINE_ROOT`
+      3. `./engine` risalendo dalla cwd, se contiene `src/main.py`
+      4. `EngineRootError` che dice le tre righe qui sopra
+
+    E' la precedenza del Makefile (flag esplicito > ambiente > default), tenuta
+    IDENTICA di proposito: due precedenze diverse per la stessa variabile nello
+    stesso repo sono un difetto che si manifesta solo quando una delle due e'
+    in errore, cioe' nel momento peggiore per scoprirlo.
+
+    Le prime due sono dichiarazioni, e una dichiarazione sbagliata e' un
+    errore, non un invito a cercare altrove: se `--root` o `$PGE_ENGINE_ROOT`
+    puntano a una cartella senza `src/main.py`, si esce nominandola. Ricadere
+    in silenzio sulla ricerca vorrebbe dire girare su un motore diverso da
+    quello chiesto — ed e' precisamente il caso in cui l'editor e il `make` di
+    un brano smettono di usare lo stesso codice."""
+    env = os.environ if env is None else env
+    cwd = Path(cwd or Path.cwd())
+
+    for value, source in ((_declared(cli_root), "--root"),
+                          (_declared(env.get(ENGINE_ENV_VAR)), ENGINE_ENV_VAR)):
+        if value is None:
+            continue
+        candidate = _as_path(value, cwd)
+        if not is_engine_root(candidate):
+            # Nominato com'e' stato scritto: e' la stringa che l'utente
+            # riconosce, e su un `~utente-inesistente` non c'e' niente da
+            # espandere.
+            raise EngineRootError(_no_engine_message(cwd, bad=value,
+                                                     source=source))
+        return candidate.resolve(), source
+
+    found = find_engine_upwards(cwd)
+    if found is not None:
+        return found, f"{ENGINE_SUBDIR}/"
+
+    raise EngineRootError(_no_engine_message(cwd))
+
+
+def resolve_workspace(cli_workspace=None, cwd=None) -> Path:
+    """La cartella di lavoro: `configs/ output/ cache/` — e i sample, dove il
+    motore ha `--samples-dir`.
+
+    Assente = la cwd. Il default storico era "= --root", cioe' i brani dentro
+    il checkout del motore: sensato per un bridge che si lanciava da dentro il
+    repo, il contrario di quel che serve a un comando che si lancia da
+    ovunque. Se sono in `~/un-brano`, e' quella la cartella di lavoro. #165"""
+    declared = _declared(cli_workspace)
+    if declared is None:
+        return Path(cwd or Path.cwd()).expanduser().resolve()
+    return _as_path(declared, cwd).resolve()
+
+
+def resolve_media_dir(workspace) -> Path:
+    """Quale sottocartella del workspace tiene i sample.
+
+    `refs/` e' il nome canonico: e' quello che il bridge crea e quello che il
+    motore risolve da solo quando `--samples-dir` non c'e'. Ma con il
+    workspace sulla cwd (#165) il workspace e' per la prima volta una cartella
+    di lavoro vera, e una cartella di lavoro il proprio corpus lo chiama anche
+    `samples/` — `mare-nostrum` lo fa, ed e' il nome che passa al
+    `--samples-dir` del suo Makefile. Creare li' una `refs/` vuota accanto a
+    una `samples/` piena e' il peggiore dei risultati: due nomi per la stessa
+    cosa, e la UI elenca quello vuoto.
+
+    La regola e' adottare la cartella che C'E', non rinominare niente:
+    `refs/` vince se esiste (il nome canonico, trovarlo e' gia' una
+    dichiarazione), `samples/` subentra solo se `refs/` non c'e', e se non
+    c'e' nessuna delle due si crea `refs/`. Il bridge manda `--samples-dir`
+    con la cartella scelta, quindi il motore legge quella che l'editor
+    elenca — che e' l'unica invariante che conta qui (PGE-ui #148)."""
+    ws = Path(workspace)
+    for name in MEDIA_DIR_NAMES:
+        if (ws / name).is_dir():
+            return ws / name
+    return ws / MEDIA_DIR_NAMES[0]
+
+
+def banner_path_lines(root, root_source, paths, samples_follow,
+                      workspace_source) -> list:
+    """Le righe del banner che dicono DOVE: root, workspace, le quattro
+    cartelle. Pura, e separata dalle sonde dei binari (sox, soundfile) che
+    restano in `main()`.
+
+    Root e workspace escono con la provenienza accanto perche' con tre modi di
+    dichiarare il motore (#165) "quale" non basta piu': serve "chi l'ha detto".
+    Sono le due righe da cui si capisce cosa sta succedendo, ed e' anche il
+    posto in cui l'autore impara dove mettere i sample — per questo le path
+    arrivano gia' risolte da `_set_workspace` (via `app.pge_paths()`) invece di
+    essere riderivate qui: una copia che diverge, letta di qui, si legge come
+    verita'. #148"""
+    media = Path(paths["refs"]).name
+    if not samples_follow:
+        nota = "   (dal motore: --samples-dir non c'e' — PythonGranularEngine#235)"
+    elif media != MEDIA_DIR_NAMES[0]:
+        nota = f"   (adottata: il workspace non ha {MEDIA_DIR_NAMES[0]}/)"
+    else:
+        nota = ""
+    same = Path(paths["workspace"]) == Path(root)
+    return [
+        f"  root:      {root}  ({root_source})",
+        f"  workspace: {paths['workspace']}  ({workspace_source})"
+        + ("  (= root)" if same else ""),
+        f"  {media + '/:':10s} {paths['refs']}{nota}",
+        f"  configs/:  {paths['configs']}",
+        f"  output/:   {paths['output']}",
+        f"  cache/:    {paths['cache']}",
+    ]
+
+
+# -------------------------------------------------------------------------
 # App factory
 # -------------------------------------------------------------------------
 
@@ -203,7 +444,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
     proprio non sporca piu' il repo del motore, e il rollback torna a essere
     il git della propria cartella. #147
 
-    Anche refs/ segue il workspace, ma solo su un motore che ha
+    Resta il default della FABBRICA, non quello della riga di comando: da #165
+    `main()` un workspace lo passa sempre (senza `--workspace` e' la cwd), e
+    `make_app(root)` senza workspace e' la chiamata dei test e di
+    `tests/e2e/bridge.py`, dove "le due cose coincidono" e' l'ipotesi piu'
+    semplice e quella che le guardie presidiano.
+
+    Anche la cartella dei sample segue il workspace, ma solo su un motore che ha
     `--samples-dir` (PythonGranularEngine#235, PGE-ui #148): il bridge glielo
     manda a ogni render, quindi i sample smettono di dover stare nel checkout
     del motore. Su un motore piu' vecchio il flag viene ignorato in silenzio e
@@ -242,8 +489,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
         nonlocal ws, refs, configs, output, cache, samples_follow_ws
         target = Path(path).expanduser().resolve()
         follow = engine_supports_samples_dir(root)
-        names = ("configs", "output", "cache") + (("refs",) if follow else ())
-        subs = {name: target / name for name in names}
+        subs = {name: target / name for name in ("configs", "output", "cache")}
+        if follow:
+            # Non `target / "refs"` secco: quale sia la cartella dei sample di
+            # QUESTO workspace e' una domanda sola, e la risposta sta in
+            # `resolve_media_dir`. #165
+            subs["refs"] = resolve_media_dir(target)
         for p in subs.values():
             p.mkdir(parents=True, exist_ok=True)
         ws      = target
@@ -401,6 +652,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
             # due cartelle coincidono comunque), e Settings ne ha bisogno per
             # dire all'autore dove metterli. #148
             "samplesFollowWorkspace": bool(samples_follow_ws),
+            # ...e se quella cartella il bridge l'ha ADOTTATA invece di
+            # crearla: un workspace che il corpus lo teneva gia' in samples/
+            # (#165). Anche questo il browser non lo deduce — dal path
+            # vedrebbe solo un nome, e "la crea il bridge, vuota" detto su una
+            # cartella piena manda a cercare un problema che non c'e'.
+            "samplesDirAdopted": bool(samples_follow_ws
+                                      and refs.name != MEDIA_DIR_NAMES[0]),
             "paths": _resolved_paths(),
             "projects": _project_entries(),
         }
@@ -1054,16 +1312,17 @@ def main():
     )
     ap.add_argument("--port", type=int, default=7878,
                     help="port to listen on (default: 7878)")
-    ap.add_argument("--root", default="../PythonGranularEngine",
-                    help="path to the PythonGranularEngine repo root "
-                         "(default: ../PythonGranularEngine, "
-                         "i.e. cloned side-by-side with PGE-ui)")
+    ap.add_argument("--root", default=None,
+                    help="path to the PythonGranularEngine repo root. "
+                         f"Without it: ${ENGINE_ENV_VAR}, then an "
+                         f"{ENGINE_SUBDIR}/ found walking up from the current "
+                         "folder, then an error naming the three")
     ap.add_argument("--workspace", default=None,
-                    help="folder holding configs/ output/ cache/ — and refs/ "
-                         "too, on an engine with --samples-dir — your own "
-                         "pieces, outside the engine checkout. Subdirectories "
-                         "are created if missing. Default: same as --root "
-                         "(historical behavior)")
+                    help="folder holding configs/ output/ cache/ — and the "
+                         "samples too, on an engine with --samples-dir — your "
+                         "own pieces, outside the engine checkout. "
+                         "Subdirectories are created if missing. "
+                         "Default: the current folder")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default: 127.0.0.1, localhost only)")
     ap.add_argument("--render-timeout", type=float, default=600.0,
@@ -1071,36 +1330,26 @@ def main():
                          "subprocess is killed; 0 disables (default: 600)")
     args = ap.parse_args()
 
-    root = Path(args.root).expanduser().resolve()
-    main_py = root / "src" / "main.py"
-    if not main_py.exists():
-        sys.exit(
-            f"Can't find src/main.py under {root}.\n"
-            f"\n"
-            f"Pass --root to point at your PythonGranularEngine clone:\n"
-            f"    python server.py --root /path/to/PythonGranularEngine\n"
-            f"\n"
-            f"Or clone the engine side-by-side with PGE-ui:\n"
-            f"    cd ..\n"
-            f"    git clone https://github.com/DMGiulioRomano/PythonGranularEngine\n"
-            f"    cd PGE-ui && python server.py\n"
-        )
+    # Il motore e la cartella di lavoro si risolvono qui, con le funzioni pure
+    # in testa al file: `main()` non decide niente, stampa. #165
+    try:
+        root, root_source = resolve_engine_root(args.root)
+    except EngineRootError as e:
+        sys.exit(str(e))
 
-    workspace = None
-    if args.workspace:
-        workspace = Path(args.workspace).expanduser().resolve()
-        # Stessa regola della route POST /workspace: le sottodirectory si
-        # creano, il workspace no. Un refuso sulla riga di comando deve
-        # fermare il bridge, non fabbricare una cartella vuota e far sparire
-        # i progetti dell'autore.
-        if not workspace.is_dir():
-            sys.exit(
-                f"--workspace {workspace} non esiste (o non e' una directory).\n"
-                f"\n"
-                f"Crea la cartella e riprova: le sottodirectory (configs/, "
-                f"output/, cache/ e — su un motore con --samples-dir — refs/) "
-                f"le crea il bridge.\n"
-            )
+    workspace = resolve_workspace(args.workspace)
+    # Stessa regola della route POST /workspace: le sottodirectory si creano,
+    # il workspace no. Un refuso sulla riga di comando deve fermare il bridge,
+    # non fabbricare una cartella vuota e far sparire i progetti dell'autore.
+    # (Senza --workspace e' la cwd, che una directory lo e' per forza.)
+    if not workspace.is_dir():
+        sys.exit(
+            f"--workspace {workspace} non esiste (o non e' una directory).\n"
+            f"\n"
+            f"Crea la cartella e riprova: le sottodirectory (configs/, "
+            f"output/, cache/ e — su un motore con --samples-dir — refs/) "
+            f"le crea il bridge.\n"
+        )
 
     app = make_app(root, render_timeout=args.render_timeout, workspace=workspace)
 
@@ -1136,14 +1385,10 @@ def main():
     _paths  = app.pge_paths()
     _follow = app.pge_samples_follow()
     print(f"PGE bridge")
-    print(f"  root:      {root}")
-    print(f"  workspace: {_paths['workspace']}"
-          + ("" if workspace else "  (= root, default)"))
-    print(f"  refs/:     {_paths['refs']}" + ("" if _follow else
-          "   (dal motore: --samples-dir non c'e' — PythonGranularEngine#235)"))
-    print(f"  configs/:  {_paths['configs']}")
-    print(f"  output/:   {_paths['output']}")
-    print(f"  cache/:    {_paths['cache']}")
+    for line in banner_path_lines(
+            root, root_source, _paths, _follow,
+            "--workspace" if args.workspace else "= $PWD"):
+        print(line)
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")

@@ -6,3 +6,10 @@ __pycache__
 .DS_Store
 # output del clip-logger del motore, generato girando il bridge
 logs/
+# Cartelle di lavoro di un bridge lanciato da dentro questo checkout: da #165
+# il workspace di default e' la cwd, quindi `python server.py` qui dentro le
+# crea qui. `make serve` passa il workspace del motore e non le tocca.
+configs/
+output/
+cache/
+refs/

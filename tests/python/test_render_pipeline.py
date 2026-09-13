@@ -1509,6 +1509,84 @@ def test_workspace_leaves_refs_to_an_engine_without_the_flag(tmp_path):
     )
 
 
+def test_workspace_adopts_the_samples_folder_it_already_has(tmp_path):
+    """Una cartella di lavoro che il corpus lo tiene in `samples/` non si
+    ritrova accanto una `refs/` vuota.
+
+    E' l'incontro che #165 rende possibile per la prima volta: con il
+    workspace sulla cwd, il nome che il bridge crea (`refs/`) e quello che la
+    cartella usa gia' (`samples/`, simmetrico al `--samples-dir samples` del
+    suo Makefile) finiscono nello stesso posto. Due nomi per la stessa cosa,
+    uno pieno e uno che la UI elenca, e' il peggiore dei risultati: si adotta
+    quella che c'e'."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "mare-nostrum"
+    (ws / "samples").mkdir(parents=True)
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    h = client.get("/health").get_json()
+
+    assert h["refs"] == str(ws / "samples")
+    assert not (ws / "refs").exists(), (
+        "una refs/ vuota accanto a una samples/ piena e' esattamente il "
+        "disaccordo che si scopre al primo render")
+    # ...e il motore legge quella che la UI elenca: `refs` e' cio' che finisce
+    # in --samples-dir (render_pipeline.build_render_command).
+    assert h["configs"] == str(ws / "configs")
+
+
+def test_the_payload_says_the_folder_was_adopted(tmp_path):
+    """Il browser non deduce: `samplesDirAdopted` distingue "il bridge l'ha
+    creata vuota" da "c'era gia'", e Settings ne cambia la frase.
+
+    Dal path si vedrebbe solo un nome, e "la crea il bridge, vuota" detto su
+    una cartella piena manda a cercare sample che non mancano."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    adottato = tmp_path / "mare-nostrum"
+    (adottato / "samples").mkdir(parents=True)
+    creato = tmp_path / "brani"
+    creato.mkdir()
+
+    c = server.make_app(root, render_timeout=600.0, workspace=adottato).test_client()
+    assert c.get("/workspace").get_json()["samplesDirAdopted"] is True
+
+    c = server.make_app(root, render_timeout=600.0, workspace=creato).test_client()
+    assert c.get("/workspace").get_json()["samplesDirAdopted"] is False
+
+    # Su un motore senza --samples-dir non c'e' niente di adottato: la
+    # cartella e' quella del motore, e la frase che conta e' l'altra (#148).
+    vecchio = _engine_stub(tmp_path / "vecchio", samples_dir=False)
+    c = server.make_app(vecchio, render_timeout=600.0, workspace=adottato).test_client()
+    assert c.get("/workspace").get_json()["samplesDirAdopted"] is False
+
+
+def test_refs_wins_over_samples_when_both_exist(tmp_path):
+    """`refs/` e' il nome canonico: trovarlo e' gia' una dichiarazione."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "brani"
+    (ws / "refs").mkdir(parents=True)
+    (ws / "samples").mkdir()
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    assert client.get("/health").get_json()["refs"] == str(ws / "refs")
+
+
+def test_samples_is_not_adopted_on_an_engine_without_the_flag(tmp_path):
+    """Senza `--samples-dir` non c'e' niente da adottare: il motore risolve i
+    sample su ./refs/ del proprio cwd, che e' root, e la regola di #148 viene
+    prima di quella di #165."""
+    import server
+    root = _engine_stub(tmp_path / "engine", samples_dir=False)
+    ws = tmp_path / "mare-nostrum"
+    (ws / "samples").mkdir(parents=True)
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    assert client.get("/health").get_json()["refs"] == str(root / "refs")
+
+
 def test_workspace_switch_moves_refs_too(tmp_path):
     """La commutazione a caldo porta con se' anche refs/: `_bases()` e
     `_resolved_paths()` la rileggono, non e' una costante della closure."""
@@ -1525,6 +1603,24 @@ def test_workspace_switch_moves_refs_too(tmp_path):
     assert r.get_json()["paths"]["refs"] == str(due / "refs")
     assert client.get("/health").get_json()["refs"] == str(due / "refs")
     assert (due / "refs").is_dir()
+
+
+def test_workspace_switch_adopts_samples_too(tmp_path):
+    """Quale sia la cartella dei sample e' una domanda sola, quindi la
+    commutazione a caldo la fa come l'avvio: `_set_workspace` chiama
+    `resolve_media_dir`, e un `target / "refs"` secco rimasto qui sarebbe una
+    seconda regola che diverge al primo cambio di cartella."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    uno = tmp_path / "uno"; uno.mkdir()
+    due = tmp_path / "due"; (due / "samples").mkdir(parents=True)
+
+    client = server.make_app(root, render_timeout=600.0, workspace=uno).test_client()
+    r = client.post("/workspace", json={"path": str(due)})
+
+    assert r.status_code == 200
+    assert r.get_json()["paths"]["refs"] == str(due / "samples")
+    assert not (due / "refs").exists()
 
 
 @pytest.mark.parametrize("samples_dir", [True, False])

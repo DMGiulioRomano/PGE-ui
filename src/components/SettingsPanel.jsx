@@ -226,6 +226,14 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
                   // cercare un problema che non c'e', e proprio nel caso di
                   // default. La frase sotto vale quando il workspace e' altrove.
                   <> E' quella del motore, perche' il workspace coincide col suo repo.</>
+                ) : wsInfo.samplesDirAdopted ? (
+                  // Stessa ragione, altro caso: la cartella c'era gia' e il
+                  // bridge l'ha adottata invece di crearne una vuota accanto
+                  // (#165). "La crea il bridge, vuota" qui sarebbe falso su una
+                  // cartella piena — e chi la legge va a cercare i sample che
+                  // "mancano".
+                  <> Il bridge ha adottato la cartella che il workspace aveva gia',
+                  invece di creargliene una vuota accanto.</>
                 ) : (
                   <> La cartella la crea il bridge, vuota: copiaci i file, o falla
                   puntare alla libreria che usi gia' con un symlink.</>
