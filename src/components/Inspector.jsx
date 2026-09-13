@@ -526,7 +526,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.loopStart != null ? cur.loopStart : 0;
         onChange({ pointer: { ...cur, loopStart: null, loopStartEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopStartEnv && cur.loopStartEnv[0] && cur.loopStartEnv[0][1]) || 0;
+        // Stessa lettura delle altre due righe del loop, con il ripiego di
+        // questa: un `|| 0` non distingue la curva che vale zero da quella che
+        // non si sa leggere, e su un blocco compatto restituiva il ratio come
+        // posizione nel sample.
+        const v = loopSeedFrom(cur.loopStartEnv, 0);
         onChange({ pointer: { ...cur, loopStart: v, loopStartEnv: null } });
       }
       return;
@@ -734,14 +738,29 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // curva: la y del primo breakpoint, letta com'e'. Con `|| 1` un envelope che
   // parte da 0 — un loop_end legittimo — collassava su un valore che non aveva
   // mai avuto; senza leggerla affatto — il Seg loop_end ↔ loop_dur — la curva
-  // spariva dietro una costante. Il ripiego e' loopSeedWhole: una forma che non
-  // e' un array di coppie (blocco compatto, breakpoint {t,v}) non ha una y da
-  // leggere, e li' «tutto il file» e' l'unica risposta onesta.
-  // Una sola dichiarazione per i due handler che ne hanno bisogno — toggleMode
-  // qui sopra e il Seg qui sotto — perche' due copie e' il modo in cui una di
-  // esse smette di valere.
-  const loopSeedFrom = (env) =>
-    (env && env[0] && typeof env[0][1] === "number") ? env[0][1] : loopSeedWhole;
+  // spariva dietro una costante.
+  // «Il primo breakpoint» non e' `env[0]`, ed e' la stessa lezione di
+  // wouldEmptyEnv nell'EnvelopeEditor: chi ha in mano una forma wrappata deve
+  // passare da unwrapEnv. Un envelope di soli BP con interp globale non
+  // lineare l'editor stesso lo scrive `{type, points}` (wrapEnv), e li'
+  // `env[0]` non esiste: una curva ferma su 6 tornava «tutto il file», cioe'
+  // di nuovo la costante che questo blocco esiste per togliere. E un blocco
+  // compatto come primo item e' peggio del ripiego: `env[0][1]` li' e' il
+  // RATIO della distribuzione, un numero che con la posizione nel sample non
+  // c'entra niente, e il `typeof … === "number"` lo lasciava passare proprio
+  // mentre il commento dichiarava di escluderlo. Si desugarano i BP group e si
+  // chiede a isBreakpoint — il predicato del modulo, non una terza copia della
+  // regola — cosi' ogni grafia che una y ce l'ha la dichiara, e solo le due
+  // che non ce l'hanno (blocco compatto, breakpoint {t,v}) ripiegano.
+  // Il ripiego e' loopSeedWhole, tranne dove il chiamante ne ha uno proprio:
+  // `loop_start` riparte da 0, come il suo seme.
+  // Una sola dichiarazione per i tre handler che ne hanno bisogno — i due rami
+  // di toggleMode qui sopra e il Seg qui sotto — perche' due copie e' il modo
+  // in cui una di esse smette di valere.
+  const loopSeedFrom = (env, fallback) =>
+    ((bp) => window.PGEEnv.isBreakpoint(bp) ? bp[1]
+             : (fallback !== undefined ? fallback : loopSeedWhole))(
+      window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(env).items)[0]);
   // E la prosa segue l'unita' come il suffisso: «(s)» e «∈ [0, sample_dur]»
   // sotto `loop_unit: normalized` descrivono il dominio sbagliato — li' i
   // valori vivono in [0,1] e li scala il motore. Sono le stesse frasi che
