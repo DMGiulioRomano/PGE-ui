@@ -628,6 +628,191 @@ console.log("\n── source-guard: il sorgente resta leggibile come codice ─�
     "offset disallineati in: " + skewed.join(", "));
 }
 
+/* ============================================================
+ * 7 — bin/pge-ui: un lanciatore che non puo' diventare un programma (#164)
+ *
+ * `bin/pge-ui` esiste per una ragione sola: dare un nome sul PATH al bridge,
+ * cosi' che `cd ~/qualsiasi-brano && pge-ui` apra l'editor su quella cartella.
+ * Tutto cio' che DECIDE qualcosa — dove sta il motore, quale workspace, se
+ * aprire il browser — sta in server.py, dove pytest e le guardie lo vedono.
+ * Uno script in /bin invece non lo guarda nessuno: la sua tentazione naturale
+ * e' crescere (un default qui, un flag li'), e crescendo diventa la seconda
+ * copia di quelle decisioni — quella che non ha test.
+ *
+ * Il presidio ha percio' due meta'. Una guardia sorgente che pretende che il
+ * file resti quello che e': poche righe di codice, un solo `exec`, e nessun
+ * flag di server.py scritto dentro. E una verifica ESEGUENDO, perche' la
+ * proprieta' che l'issue chiede — "funziona attraverso il symlink" — e' proprio
+ * quella che una lettura non puo' dare: senza `realpath`, `dirname` darebbe la
+ * cartella del symlink e il comando cercherebbe server.py in ~/.local/.
+ * Quella prova gira su un repo finto (uno `server.py` che stampa i suoi argv),
+ * quindi non ha bisogno ne' di flask ne' del repo fratello — cioe' gira anche
+ * nel job node, che il bridge non lo installa.
+ * ============================================================ */
+
+console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
+{
+  const repo = path.join(__dirname, "..", "..");
+  const BIN  = path.join(repo, "bin", "pge-ui");
+
+  assert("bin/pge-ui esiste", fs.existsSync(BIN),
+    "il comando dell'issue #164 non c'e'");
+
+  if (fs.existsSync(BIN)) {
+    const raw = fs.readFileSync(BIN, "utf8");
+    // source-guard sceglie lo scanner dall'estensione e di `sh` non sa niente
+    // (li' `//` non e' un commento e `#` si'). Per quattro righe la regola per
+    // riga e' esatta e onesta: codice = riga non vuota che non comincia per
+    // `#`. Lo shebang, che comincia per `#`, si controlla sul grezzo.
+    const code = raw.split("\n").map((l) => l.trim())
+                    .filter((l) => l && !l.startsWith("#"));
+
+    assert("bin/pge-ui parte da /bin/sh", raw.startsWith("#!/bin/sh\n"),
+      "uno shebang su una shell che puo' non esserci e' un comando che non parte");
+
+    assert("...e resta corto", code.length <= 4,
+      `${code.length} righe di codice: se e' cresciuto, qualcosa che andava in ` +
+      `server.py e' finito qui — dove nessun test lo guarda\n      ` +
+      code.join(" | "));
+
+    const execLines = code.filter((l) => /^exec\b/.test(l));
+    assert("...con un solo exec, che e' l'ultima riga", execLines.length === 1 &&
+      code[code.length - 1] === execLines[0], code.join(" | "));
+
+    const execLine = execLines[0] || "";
+    assert("l'exec passa la mano a server.py", /server\.py/.test(execLine), execLine);
+    assert("...e gli inoltra gli argomenti", /"\$@"/.test(execLine),
+      'senza "$@" (o con $@ nudo) `pge-ui --port 9000` perde i flag, o li spezza ' +
+      "sugli spazi");
+
+    assert("il path si risolve con realpath", /realpath/.test(code.join("\n")),
+      "il comando si raggiunge via symlink: senza realpath, dirname da' la " +
+      "cartella del symlink e server.py non si trova");
+
+    // Nessun default del bridge scritto qui dentro: e' il modo preciso in cui
+    // lo script diventa la seconda copia delle decisioni di server.py.
+    const flag = code.join("\n").match(/--(root|workspace|port|host|render-timeout)\b/);
+    assert("nessun flag di server.py e' cablato nel lanciatore", !flag,
+      flag ? `trovato ${flag[0]}: quel default va in server.py, non qui` : "");
+
+    assert("bin/pge-ui e' eseguibile sul disco",
+      (fs.statSync(BIN).mode & 0o111) !== 0,
+      "chmod +x bin/pge-ui");
+
+    // Il bit sul disco puo' essere giusto mentre git registra 100644: dopo un
+    // clone il comando non parte, e il symlink di install-cli neanche. E' la
+    // meta' che un `chmod` locale non dimostra.
+    const ls = spawnSync("git", ["ls-files", "-s", "bin/pge-ui"],
+      { cwd: repo, encoding: "utf8" });
+    if (ls.status !== 0 || !ls.stdout.trim()) {
+      console.log("  SKIP il bit eseguibile nell'indice git (git assente, o file non tracciato)");
+    } else {
+      assert("...e anche per git (100755)", /^100755\s/.test(ls.stdout.trim()),
+        ls.stdout.trim());
+    }
+  }
+
+  /* Eseguendo. Il repo e' finto: `bin/pge-ui` vero (copiato, bit compreso) e
+     uno `server.py` che stampa chi e' e con cosa e' stato chiamato. Il comando
+     si raggiunge da un PATH, attraverso un symlink, da una terza cartella —
+     cioe' esattamente la forma che `make install-cli` produce. */
+  const py3 = spawnSync("python3", ["-c", "print(1)"], { encoding: "utf8" });
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-cli-")));
+  try {
+    const fakeRepo = path.join(tmp, "repo");
+    const binDir   = path.join(tmp, "bin");
+    const elsewhere = path.join(tmp, "brano");
+    fs.mkdirSync(path.join(fakeRepo, "bin"), { recursive: true });
+    fs.mkdirSync(binDir);
+    fs.mkdirSync(elsewhere);
+    fs.copyFileSync(BIN, path.join(fakeRepo, "bin", "pge-ui"));
+    fs.chmodSync(path.join(fakeRepo, "bin", "pge-ui"), 0o755);
+    fs.writeFileSync(path.join(fakeRepo, "server.py"), [
+      "import os, sys",
+      'print("STUB " + os.path.abspath(__file__))',
+      'print("ARGV " + " ".join(sys.argv[1:]))',
+      'print("CWD " + os.getcwd())',
+    ].join("\n") + "\n");
+    fs.symlinkSync(path.join(fakeRepo, "bin", "pge-ui"), path.join(binDir, "pge-ui"));
+
+    const run = (env) => spawnSync("/bin/sh", ["-c", "pge-ui --port 9000 --root /altrove"], {
+      cwd: elsewhere,
+      env: { ...process.env, PATH: binDir + path.delimiter + process.env.PATH, ...env },
+      encoding: "utf8",
+    });
+
+    if (py3.status !== 0) {
+      console.log("  SKIP la verifica eseguendo (python3 assente)");
+    } else {
+      const r = run({});
+      const out = (r.stdout || "") + (r.stderr || "");
+      assert("attraverso il symlink trova il server.py del SUO repo",
+        out.includes("STUB " + path.join(fakeRepo, "server.py")),
+        out.trim() || `exit ${r.status}`);
+      assert("...inoltrando gli argomenti intatti",
+        /ARGV --port 9000 --root \/altrove/.test(out), out.trim());
+      // La ragione per cui il comando esiste: il bridge parte dalla cartella da
+      // cui l'hai chiamato, non da quella del repo.
+      assert("...e partendo dalla cartella da cui l'hai chiamato",
+        out.includes("CWD " + elsewhere), out.trim());
+    }
+
+    /* L'interprete: col venv del repo presente e' quello a vincere. Senza
+       questa regola `pge-ui` userebbe il python3 di sistema e morirebbe
+       sull'import di flask, cioe' proprio nel setup che `make install`
+       produce — il README ci manda tutti li'. La sonda non ha bisogno di un
+       python vero: il "venv" e' uno script che dichiara di essere stato
+       chiamato, ed e' l'unica cosa che serve sapere. */
+    const venvBin = path.join(fakeRepo, ".venv", "bin");
+    fs.mkdirSync(venvBin, { recursive: true });
+    fs.writeFileSync(path.join(venvBin, "python"),
+      '#!/bin/sh\necho "VENV-PY $*"\n');
+    fs.chmodSync(path.join(venvBin, "python"), 0o755);
+    const r2 = run({});
+    const out2 = (r2.stdout || "") + (r2.stderr || "");
+    assert("col venv nel repo, e' il suo python a girare",
+      out2.includes("VENV-PY " + path.join(fakeRepo, "server.py")),
+      out2.trim() || `exit ${r2.status}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  /* `make install-cli`: idempotente (lanciarlo due volte non e' un errore) e
+     rumoroso quando BINDIR non e' nel PATH — che e' il modo piu' comune in cui
+     il comando sembra non funzionare. Misurato lanciandolo: la ricetta e'
+     quattro righe di shell dentro un Makefile, cioe' proprio il genere di cosa
+     che una guardia sorgente dichiara presente e non funzionante. */
+  const mk = spawnSync("make", ["--version"], { encoding: "utf8" });
+  if (mk.status !== 0) {
+    console.log("  SKIP make install-cli (make assente)");
+  } else {
+    const tmp2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-bindir-")));
+    const dest = path.join(tmp2, "bin");
+    const runMake = (env) => spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest],
+      { env: { ...process.env, ...env }, encoding: "utf8" });
+    try {
+      const a = runMake({});
+      const b = runMake({});
+      assert("make install-cli va a buon fine", a.status === 0,
+        (a.stdout || "") + (a.stderr || ""));
+      assert("...e due volte di fila non e' un errore", b.status === 0,
+        (b.stdout || "") + (b.stderr || ""));
+      const link = path.join(dest, "pge-ui");
+      assert("...lasciando un symlink al bin/pge-ui del repo",
+        fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink() &&
+        fs.realpathSync(link) === fs.realpathSync(BIN),
+        fs.existsSync(link) ? fs.readlinkSync(link) : "nessun link");
+      assert("BINDIR fuori dal PATH e' un avviso", /PATH/.test(a.stdout || ""),
+        "senza, l'utente vede 'command not found' e nessuna spiegazione");
+      const quiet = runMake({ PATH: dest + path.delimiter + process.env.PATH });
+      assert("...e dentro il PATH l'avviso tace", !/attenzione/.test(quiet.stdout || ""),
+        quiet.stdout || "");
+    } finally {
+      fs.rmSync(tmp2, { recursive: true, force: true });
+    }
+  }
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
