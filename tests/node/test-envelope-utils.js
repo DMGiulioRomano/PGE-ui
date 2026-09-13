@@ -1110,8 +1110,12 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       && !/loop_end ∈ \[0, sample_dur\] · per un loop/.test(inspSrc));
     // La terza porta dello stesso 1: il toggle loop_end ↔ loop_dur, quando
     // loop_start sta da solo e non c'è nessuna lunghezza da cui partire.
+    // La catena del ripiego e' loopDur → loopDurEnv → loopSeedFrom →
+    // loopSeedWhole: nessun anello e' un 1 nudo. I due estremi si guardano qui,
+    // l'anello di mezzo lo misura il caso eseguito poco sotto.
     assert("anche il ripiego del toggle loop_end ↔ loop_dur è nell'unità in vigore",
-      /stream\.pointer\.loopDur : loopSeedWhole\)\)/.test(inspSrc)
+      /: loopSeedFrom\(stream\.pointer\.loopDurEnv\)/.test(inspSrc)
+      && /: loopSeedWhole;/.test(inspSrc)
       && !/stream\.pointer\.loopDur != null \? stream\.pointer\.loopDur : 1\)/.test(inspSrc));
     assert("…e passa dal cap, che quel ramo non applicava affatto",
       /const le = stream\.pointer\.loopEnd != null \? stream\.pointer\.loopEnd\s*\n\s*: clampLoop\("loopEnd",/.test(inspSrc));
@@ -1194,9 +1198,13 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       const stream = { pointer };
       let out = null;
       const sel = selFor(stream);
-      const fn = new Function("stream", "loopEndSel", "loopSeedWhole", "clampLoop", "onChange",
+      const fn = new Function("stream", "loopEndSel", "loopSeedWhole", "loopSeedFrom", "clampLoop", "onChange",
         "return (u) => " + body2)(
         stream, sel, seed,
+        // Il vero loopSeedFrom, costruito dalla sua dichiarazione nel sorgente:
+        // e' lo stesso che usa toggleMode qui sopra, e il Seg lo condivide
+        // proprio perche' non ce ne siano due versioni.
+        new Function("loopSeedWhole", seedFromDecl + "\nreturn loopSeedFrom;")(seed),
         // clampLoop dell'Inspector, ridotto al suo effetto: tappare al cap
         (k, v) => Math.min(seed, Math.max(0, v)),
         (p) => { out = p; });
@@ -1223,6 +1231,45 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
         t.get() !== null && t.get().pointer.loopEnd === 8);
     }
 
+    {
+      // Il cambio VERO da una curva. Le due chiavi sono mutuamente esclusive,
+      // quindi l'envelope non sopravvive comunque — ma il numero che lo
+      // sostituisce dev'essere quello che la curva diceva, non una costante.
+      // Prima i due rami la ignoravano del tutto: `loop_endEnv` fermo su 6
+      // diventava `loop_dur: 0.01` (il pavimento) e `loop_durEnv` su 3
+      // diventava la fine del file. E' il `|| 1` di toggleMode, un livello
+      // piu' in la', sullo stesso riquadro.
+      const t = toggleFor({ loopStart: 0.2, loopEndEnv: [[0, 6], [1, 6]] }, 8);
+      t.fn("loop_dur");
+      assert("loop_end envelope → loop_dur: la lunghezza esce dalla curva, non dal pavimento",
+        t.get() !== null && Math.abs(t.get().pointer.loopDur - 5.8) < 1e-9, JSON.stringify(t.get()));
+      const t2 = toggleFor({ loopStart: 0.2, loopDurEnv: [[0, 3], [1, 3]] }, 8);
+      t2.fn("loop_end");
+      assert("loop_dur envelope → loop_end: la posizione esce dalla curva, non dal seme",
+        t2.get() !== null && Math.abs(t2.get().pointer.loopEnd - 3.2) < 1e-9, JSON.stringify(t2.get()));
+      // Il pavimento resta dov'era, per la differenza che non e' positiva.
+      const t3 = toggleFor({ loopStart: 5, loopEndEnv: [[0, 1], [1, 2]] }, 8);
+      t3.fn("loop_dur");
+      assert("…e una differenza non positiva resta al pavimento",
+        t3.get() !== null && t3.get().pointer.loopDur === 0.01, JSON.stringify(t3.get()));
+      // E il cap vale anche di qua: una curva che dichiara piu' del file non
+      // produce una lunghezza piu' lunga del file — lo stesso tetto che la
+      // riga applica al numero digitato, e che questo ramo non aveva.
+      const t4 = toggleFor({ loopStart: 0, loopEndEnv: [[0, 20], [1, 20]] }, 8);
+      t4.fn("loop_dur");
+      assert("loop_dur esce tappato al cap, come un valore digitato",
+        t4.get() !== null && t4.get().pointer.loopDur === 8, JSON.stringify(t4.get()));
+    }
+
+    assert("i due rami del Seg leggono la curva invece di ignorarla",
+      /loopSeedFrom\(stream\.pointer\.loopDurEnv\)/.test(inspSrc)
+      && /loopSeedFrom\(stream\.pointer\.loopEndEnv\)/.test(inspSrc)
+      && !/Math\.max\(0\.01, \(stream\.pointer\.loopEnd \|\| 0\)/.test(inspSrc));
+    assert("loopSeedFrom e' dichiarato una volta sola, nel corpo del componente",
+      (inspSrc.match(/const loopSeedFrom = /g) || []).length === 1);
+    assert("anche la riga che segue il Seg chiede a loopEndMode, non a una terza copia",
+      /\{loopEndMode \? \(/.test(inspSrc)
+      && !/\{\(stream\.pointer\.loopEnd != null \|\| stream\.pointer\.loopEndEnv != null\) \? \(/.test(inspSrc));
     assert("il bottone acceso e il ritorno anticipato leggono la stessa cosa",
       /value=\{loopEndSel\}/.test(inspSrc)
       && /if \(u === loopEndSel\) return;/.test(inspSrc)

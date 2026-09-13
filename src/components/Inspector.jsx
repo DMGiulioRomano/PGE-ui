@@ -535,14 +535,10 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     // arriva senza toccare il menu: con `loop_start` da solo la riga loop_dur
     // c'e' gia' e la chiave no, quindi il ramo `env` semina. Il seme e'
     // «tutto il file nell'unita' in vigore» (loopSeedWhole), non un 1 nudo —
-    // che dopo #222 e' la fine del file solo in normalized. Dichiarato piu'
-    // sotto: qui ci si arriva solo da un handler, a corpo del componente gia'
-    // eseguito.
-    // E la y del primo breakpoint si legge com'e': con `|| 1` un envelope che
-    // parte da 0 — un loop_end legittimo — collassava a un valore che non
-    // aveva mai avuto.
-    const loopSeedFrom = (env) =>
-      (env && env[0] && typeof env[0][1] === "number") ? env[0][1] : loopSeedWhole;
+    // che dopo #222 e' la fine del file solo in normalized. loopSeedWhole e
+    // loopSeedFrom sono dichiarati piu' sotto, nel corpo del componente: qui ci
+    // si arriva solo da un handler, a corpo gia' eseguito, e la stessa coppia
+    // serve al Seg loop_end ↔ loop_dur — una sola dichiarazione, non due copie.
     if (k === "loopDur") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
@@ -734,6 +730,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // decimillesimo, ed e' proprio il cap che questo seme sta cercando di non
   // superare.
   const loopSeedWhole = loopMax != null ? Math.floor(loopMax * 1e4) / 1e4 : 1;
+  // E il valore da cui si riparte quando al posto dello scalare c'e' una
+  // curva: la y del primo breakpoint, letta com'e'. Con `|| 1` un envelope che
+  // parte da 0 — un loop_end legittimo — collassava su un valore che non aveva
+  // mai avuto; senza leggerla affatto — il Seg loop_end ↔ loop_dur — la curva
+  // spariva dietro una costante. Il ripiego e' loopSeedWhole: una forma che non
+  // e' un array di coppie (blocco compatto, breakpoint {t,v}) non ha una y da
+  // leggere, e li' «tutto il file» e' l'unica risposta onesta.
+  // Una sola dichiarazione per i due handler che ne hanno bisogno — toggleMode
+  // qui sopra e il Seg qui sotto — perche' due copie e' il modo in cui una di
+  // esse smette di valere.
+  const loopSeedFrom = (env) =>
+    (env && env[0] && typeof env[0][1] === "number") ? env[0][1] : loopSeedWhole;
   // E la prosa segue l'unita' come il suffisso: «(s)» e «∈ [0, sample_dur]»
   // sotto `loop_unit: normalized` descrivono il dominio sbagliato — li' i
   // valori vivono in [0,1] e li scala il motore. Sono le stesse frasi che
@@ -1133,6 +1141,17 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                            // chiedeva. Da scalare era un onChange a vuoto: un
                            // passo di undo e lo stem marcato sporco per niente.
                            if (u === loopEndSel) return;
+                           // I due rami convertono fra due chiavi mutuamente
+                           // esclusive, quindi la curva di partenza non
+                           // sopravvive comunque — ma il numero che la
+                           // sostituisce dev'essere quello che la curva diceva,
+                           // non una costante. Letti con `|| 0` e ignorando del
+                           // tutto l'envelope, un `loop_endEnv` fermo su 6
+                           // diventava `loop_dur: 0.01` (il pavimento) e un
+                           // `loop_durEnv` su 3 diventava la fine del file: la
+                           // stessa lezione del `|| 1` di toggleMode, sullo
+                           // stesso riquadro. Da qui loopSeedFrom, condiviso.
+                           const ls = stream.pointer.loopStart || 0;
                            if (u === "loop_end") {
                              // Con loop_start da solo (il menu lo sa scrivere) qui non
                              // c'e' nessuna lunghezza da cui partire, e il ripiego era
@@ -1140,13 +1159,20 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                              // secondi. Stessa cura del seme del menu — «tutto il file»
                              // nell'unita' in vigore — e poi il cap, che il ramo non
                              // applicava affatto.
+                             const dur = stream.pointer.loopDur != null ? stream.pointer.loopDur
+                               : loopSeedFrom(stream.pointer.loopDurEnv);
                              const le = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
-                               : clampLoop("loopEnd", (stream.pointer.loopStart || 0)
-                                   + (stream.pointer.loopDur != null ? stream.pointer.loopDur : loopSeedWhole));
+                               : clampLoop("loopEnd", ls + dur);
                              onChange({ pointer: { ...stream.pointer, loopEnd: le, loopEndEnv: null, loopDur: null, loopDurEnv: null } });
                            } else {
+                             // Simmetrico, cap compreso: una lunghezza piu' lunga del
+                             // file e' esattamente quel che la riga clampa quando la si
+                             // digita, e il pavimento resta 0.01 — sopra il minimo
+                             // statico, cosi' il clamp non lo puo' riportare a zero.
+                             const end = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
+                               : loopSeedFrom(stream.pointer.loopEndEnv);
                              const ld = stream.pointer.loopDur != null ? stream.pointer.loopDur
-                               : Math.max(0.01, (stream.pointer.loopEnd || 0) - (stream.pointer.loopStart || 0));
+                               : clampLoop("loopDur", Math.max(0.01, end - ls));
                              onChange({ pointer: { ...stream.pointer, loopDur: ld, loopDurEnv: null, loopEnd: null, loopEndEnv: null } });
                            }
                          }}
@@ -1161,8 +1187,12 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                       trascinamento del NumberField. Sul ramo loop_end il caso
                       non si da' (la condizione qui sopra garantisce una delle
                       due chiavi), ma le due righe non devono dire numeri
-                      diversi per la stessa domanda. */}
-                  {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
+                      diversi per la stessa domanda.
+                      E quale delle due righe si veda lo dice loopEndMode, la
+                      stessa domanda che accende il bottone del Seg qui sopra:
+                      una terza copia della condizione sarebbe la riga libera di
+                      dissentire dal selettore che la sceglie. */}
+                  {loopEndMode ? (
                     <ParamRow name="loop_end"
                               mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
                               value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : loopSeedWhole)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
