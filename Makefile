@@ -16,6 +16,12 @@ VENV_BIN := $(VENV)/bin
 # si aggiunge un comando senza sudo; se non e' nel PATH il target lo dice, ed e'
 # il modo piu' comune in cui questa cosa sembra non funzionare. #164
 BINDIR   ?= $(HOME)/.local/bin
+# Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
+# quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un
+# `make -f /path/PGE-ui/Makefile install-cli` dato da un'altra cartella linkava
+# `$PWD/bin/pge-ui`, che li' non esiste — e `ln -s` non guarda il target, quindi
+# il link pendente nasceva annunciato come riuscito.
+CLI_SRC  := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/bin/pge-ui
 
 # I test di parita' girano da tests/parity/, quindi il path del motore va
 # assolutizzato qui: relativo si romperebbe al primo cd.
@@ -75,12 +81,21 @@ serve: $(VENV_BIN)/pip
 # Nessuna dipendenza dal venv: `install-cli` e' un gesto di installazione, non
 # di setup, e chi tiene le dipendenze fuori dal repo non deve vedersi creare un
 # .venv per avere il comando. Il venv, se c'e', lo preferisce bin/pge-ui.
+#
+# Ogni espansione e' quotata: uno spazio nel path del checkout o del BINDIR
+# (~/Documents/…, ~/Library/Mobile Documents/…) faceva fabbricare a `mkdir -p`
+# una cartella relativa dentro il repo e poi fallire `ln` nominando la
+# destinazione, che invece esisteva. bin/pge-ui lo spazio lo reggeva gia'.
 install-cli:
-	@mkdir -p $(BINDIR)
-	@ln -sfn $(abspath bin/pge-ui) $(BINDIR)/pge-ui
+	@test -f "$(CLI_SRC)" || { \
+	  echo "install-cli: non trovo $(CLI_SRC)" >&2; \
+	  echo "  (lancialo dal checkout: make install-cli, oppure make -C /path/PGE-ui install-cli)" >&2; \
+	  exit 1; }
+	@mkdir -p "$(BINDIR)"
+	@ln -sfn "$(CLI_SRC)" "$(BINDIR)/pge-ui"
 	@echo "pge-ui -> $(BINDIR)/pge-ui"
 	@case ":$$PATH:" in \
-	  *:"$(BINDIR)":*) ;; \
+	  *:"$(BINDIR)":*|*:"$(BINDIR)/":*) ;; \
 	  *) echo ""; \
 	     echo "  attenzione: $(BINDIR) non e' nel PATH, quindi \`pge-ui\` non si"; \
 	     echo "  trova ancora. Aggiungilo alla tua shell, per esempio:"; \

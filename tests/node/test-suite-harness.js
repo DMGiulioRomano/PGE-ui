@@ -805,10 +805,94 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("BINDIR fuori dal PATH e' un avviso", /PATH/.test(a.stdout || ""),
         "senza, l'utente vede 'command not found' e nessuna spiegazione");
       const quiet = runMake({ PATH: dest + path.delimiter + process.env.PATH });
-      assert("...e dentro il PATH l'avviso tace", !/attenzione/.test(quiet.stdout || ""),
-        quiet.stdout || "");
+      // Lo `status` fa parte dell'assert, non e' un di piu': `!/attenzione/`
+      // da' verde anche su una ricetta che e' morta prima di stampare, cioe'
+      // proprio il "dichiarato presente e non funzionante" da cui nasce questo
+      // file. Il silenzio va misurato su una install-cli riuscita.
+      assert("...e dentro il PATH l'avviso tace", quiet.status === 0 &&
+        !/attenzione/.test(quiet.stdout || ""),
+        `exit ${quiet.status}\n      ` + ((quiet.stdout || "") + (quiet.stderr || "")));
     } finally {
       fs.rmSync(tmp2, { recursive: true, force: true });
+    }
+
+    /* Uno spazio nel path — del checkout o del BINDIR — non e' un caso
+       esotico: `~/Documents/…` e `~/Library/Mobile Documents/…` ce l'hanno, e
+       il lanciatore lo regge (ogni espansione dentro bin/pge-ui e' quotata).
+       A cedere era la ricetta: `mkdir -p $(BINDIR)` con uno spazio fabbricava
+       una cartella relativa DENTRO il repo e poi `ln` falliva nominando la
+       destinazione, che invece esisteva. */
+    const tmp3 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-spazi-")));
+    try {
+      const spaced = path.join(tmp3, "mio repo");
+      // Il nome della seconda parola non e' indifferente: con "dest bin" la
+      // cartella spuria che `mkdir -p` non quotato fabbrica si chiamerebbe
+      // `bin` e si confonderebbe con quella vera del checkout, lasciando muto
+      // l'assert qui sotto.
+      const dest3  = path.join(tmp3, "dest cartella");
+      fs.mkdirSync(path.join(spaced, "bin"), { recursive: true });
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(spaced, "Makefile"));
+      fs.copyFileSync(BIN, path.join(spaced, "bin", "pge-ui"));
+      fs.chmodSync(path.join(spaced, "bin", "pge-ui"), 0o755);
+      const m = spawnSync("make", ["-C", spaced, "install-cli", "BINDIR=" + dest3],
+        { env: process.env, encoding: "utf8" });
+      assert("uno spazio nel path del checkout e del BINDIR non rompe install-cli",
+        m.status === 0, (m.stdout || "") + (m.stderr || ""));
+      const link3 = path.join(dest3, "pge-ui");
+      assert("...e il link punta al lanciatore di quel checkout",
+        fs.existsSync(link3) &&
+        fs.realpathSync(link3) === fs.realpathSync(path.join(spaced, "bin", "pge-ui")),
+        fs.existsSync(link3) ? fs.readlinkSync(link3) : "nessun link (o pendente)");
+      assert("...senza fabbricare cartelle dentro il checkout",
+        fs.readdirSync(spaced).sort().join(",") === "Makefile,bin",
+        fs.readdirSync(spaced).join(", "));
+    } finally {
+      fs.rmSync(tmp3, { recursive: true, force: true });
+    }
+
+    /* Il sorgente del symlink e' relativo al Makefile, non a $PWD. Con
+       `$(abspath bin/pge-ui)` un `make -f /path/PGE-ui/Makefile install-cli`
+       lanciato da un'altra cartella linkava `$PWD/bin/pge-ui` — un file che li'
+       non c'e'. `ln -s` non verifica il target: il link pendente nasceva
+       annunciato come riuscito, e il primo segnale era `pge-ui` che non parte.
+       Lo spazio resta fuori da questa sonda perche' `$(lastword
+       $(MAKEFILE_LIST))` spezza sugli spazi — limite di make, non della
+       ricetta: li' il `test -f` fa fallire l'installazione invece di fabbricare
+       il link sbagliato, ed e' la seconda meta' della stessa sonda. */
+    const tmp4 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-altrove-")));
+    try {
+      const copy  = path.join(tmp4, "checkout");
+      const dest4 = path.join(tmp4, "bin");
+      const from  = path.join(tmp4, "cwd");
+      fs.mkdirSync(path.join(copy, "bin"), { recursive: true });
+      fs.mkdirSync(from);
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(copy, "Makefile"));
+      fs.copyFileSync(BIN, path.join(copy, "bin", "pge-ui"));
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o755);
+      const m = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=" + dest4], { cwd: from, env: process.env, encoding: "utf8" });
+      assert("make -f da una terza cartella: install-cli riesce", m.status === 0,
+        (m.stdout || "") + (m.stderr || ""));
+      const link4 = path.join(dest4, "pge-ui");
+      assert("...e il link e' vivo, non pendente su $PWD/bin",
+        fs.existsSync(link4) &&
+        fs.realpathSync(link4) === fs.realpathSync(path.join(copy, "bin", "pge-ui")),
+        fs.lstatSync(link4, { throwIfNoEntry: false })
+          ? "punta a " + fs.readlinkSync(link4)
+          : "nessun link");
+      assert("...senza toccare la cartella da cui hai lanciato make",
+        fs.readdirSync(from).length === 0, fs.readdirSync(from).join(", "));
+
+      // E quando il sorgente davvero non c'e', install-cli si ferma invece di
+      // lasciare un nome sul PATH che non esegue niente.
+      fs.rmSync(path.join(copy, "bin", "pge-ui"));
+      const gone = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=" + path.join(tmp4, "bin2")], { cwd: from, env: process.env, encoding: "utf8" });
+      assert("sorgente assente → install-cli fallisce invece di linkare il nulla",
+        gone.status !== 0 && !fs.existsSync(path.join(tmp4, "bin2", "pge-ui")),
+        `exit ${gone.status}\n      ` + ((gone.stdout || "") + (gone.stderr || "")));
+    } finally {
+      fs.rmSync(tmp4, { recursive: true, force: true });
     }
   }
 }
