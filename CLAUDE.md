@@ -15,6 +15,7 @@ make install          # pip install -r requirements.txt  (flask, flask-cors, gun
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
+make install-cli      # symlinks bin/pge-ui into ~/.local/bin (BINDIR= to choose)
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
 make tests-e2e        # headless boot of the editor (needs a playwright browser)
@@ -69,7 +70,11 @@ exists, the fourth only when a browser is installed):
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
   positional exit gate — and a check on `source-guard.js` itself, the reading
-  every other guard in the repo rests on), and `test-tracks.js` (the track model: `deriveTracks`
+  every other guard in the repo rests on; plus, since #164, the presidio on
+  `bin/pge-ui`: it must stay a launcher — four code lines, one trailing `exec`,
+  no bridge flag written inside — and it is *run* through a symlink against a
+  stub `server.py`, which is the only way to show that `realpath` is doing its
+  job), and `test-tracks.js` (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -1198,6 +1203,25 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 ## File layout & load order (matters)
 
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
+
+`bin/pge-ui` (#164) is the one thing in the repo that is neither editor nor
+bridge: a four-line `sh` launcher that `make install-cli` symlinks onto `$PATH`,
+so the bridge can be started from the folder you are working in. It resolves its
+own path with `realpath` — it is reached *through* a symlink, so a plain
+`dirname` would name `~/.local/bin` — and execs `server.py` with the repo's
+`.venv/bin/python` when there is one (that is where `make install` puts flask;
+with a bare `python3` the documented setup dies on the import).
+
+**Nothing else may go in there.** The engine root, the workspace default, the
+flags — every decision stays in `server.py`, where pytest and the source guards
+see it; a script in `bin/` is looked at by nobody, and its natural tendency is
+to grow into a second, untested copy of those decisions. That is a rule with
+teeth: `test-suite-harness.js` requires the file to stay at most four code
+lines with a single trailing `exec`, refuses any `--root`/`--workspace`/
+`--port`/`--host` written inside it, and *runs* it — through a symlink, from a
+third folder, against a stub `server.py` — to check that the path resolution and
+the argument forwarding really work. That last half needs neither flask nor the
+sibling engine, so it runs in the node CI job too.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
