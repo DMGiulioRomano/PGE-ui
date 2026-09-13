@@ -634,6 +634,31 @@ also governs `pointer.start`, which outlives the loop: the loop rows
 (`loopWindowShown`) and the unit control (`loopUnitShown`) are separate blocks
 now, so removing the loop leaves the unit standing.
 
+The **AddParamMenu is the other half of that lesson**, and it was written for one
+unit. It is the only door `loop_start` / `loop_end` / `loop_dur` come through,
+and its three entries stated the seconds domain flat — `(s)`,
+`∈ [0, sample_dur]`, `loop_start+loop_dur > sample_dur` — under a control whose
+whole point is that the unit varies; the very rows those entries create have had
+a unit-aware suffix since `loopUnitSuffix`, so the menu contradicted the row it
+opened. They read the unit now (`loopDomain` / `loopEndDomain` / `loopEndRange` /
+`loopFileEnd`, one `loopNormalized` behind them), as does the `loop_end` hint
+under the loop rows.
+
+The **seed** moved for a sharper reason than prose. `def: 1` could not be wrong
+under inheritance: `time_mode: normalized` made the key normalized, and there `1`
+*is* the end of the file. Post-#222 that same population reads seconds, where `1`
+is one second — past the cap on any sample shorter than that, i.e. the menu
+writing a value a typed edit would have clamped. The seed is `loopSeedWhole` now,
+"the whole file in the unit in force", which is the cap itself (`loopEnvMax`,
+already computed as `loopMax`): `1` normalized, `sample_dur` in seconds, and `1`
+again when the sample duration is unknown — the only number available there, and
+what the menu wrote before. `loop_start` keeps its `0`: zero is zero under any
+scale factor, the same reason the migration warning filters on
+`loopUnitRescaleKeys`. Same fix as #114's `grainSecondsToUnit(0.01, grainUnit)`
+one section down, one level over. The third door for that literal is the
+`loop_end ↔ loop_dur` toggle, which with `loop_start` standing alone had no
+length to start from and fell back to a bare `1` — and did not clamp at all.
+
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
 selector wherever the unit *governs a value that moves*
