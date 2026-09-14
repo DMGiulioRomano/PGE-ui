@@ -538,7 +538,7 @@ Per-param key lists — important distinction:
 
 The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGE.deviationProbInertReason` (one function, shared).
 
-`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `loopSeedFrom`, which reads the same point's y.
+`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
@@ -722,8 +722,8 @@ sitting at `6` came back as the whole file. A **compact block** as the first
 item was the other half and worse than the fallback: there `env[0][1]` is the
 distribution's *ratio*, so a `typeof … === "number"` guard meant to reject the
 shape let it through and wrote a geometric ratio as a position in the sample.
-`loopSeedFrom` desugars the BP groups and asks the module's own predicates, not
-a third copy of the rule, so every spelling that states a y gives it up — and
+`firstBreakpointY` desugars the BP groups and asks the module's own predicates,
+not a third copy of the rule, so every spelling that states a y gives it up — and
 there are **two** predicates because a point has two spellings. The dict
 `{t, v}` is one of them: the engine's builder normalizes it to `[t, v]` before
 looking at it (`envelope_builder.py:132`) and `wouldEmptyEnv` already counts it
@@ -731,16 +731,44 @@ as a real point, so a y it has, and it is `v`. `isBreakpoint` alone cannot see
 it (it demands `Array.isArray`) and must not be widened — it also says what the
 canvas can drag, and a dict is not drawn — hence `isDictBreakpoint` beside it in
 `envelope-loops.js`, the one predicate shared by the two readers of that
-spelling (`wouldEmptyEnv` counting points, `loopSeedFrom` reading one). Counting
-it among the shapes without a y put the constant back on exactly that spelling.
-Only the compact block falls back, which genuinely has none. The fallback is
-`loopSeedWhole` except where the caller has one of its own: `loop_start` passes
-`0`, the same seed the menu gives it, and reads through the shared reader
-instead of the `|| 0` that could not tell a curve worth zero from a curve it
-could not read — and that is also true of the `loop_start` the Seg's own
-conversion needs, since the length it computes is the distance *from* there: a
-`loop_startEnv` sitting at `3` under a `loop_end` of `6` produced a window of
-`6` instead of `3`, doubled by one click.
+spelling (`wouldEmptyEnv` counting points, `firstBreakpointY` reading one).
+Counting it among the shapes without a y put the constant back on exactly that
+spelling. Only the compact block falls back, which genuinely has none. The
+fallback belongs to the **caller**, because it is the default of its parameter
+and the module knows none of them: `loopSeedFrom` is the loop's thin wrapper
+that supplies `loopSeedWhole`, `loop_start` passes `0` — the same seed the menu
+gives it — and reads through the shared reader instead of the `|| 0` that could
+not tell a curve worth zero from a curve it could not read; that is also true of
+the `loop_start` the Seg's own conversion needs, since the length it computes is
+the distance *from* there: a `loop_startEnv` sitting at `3` under a `loop_end` of
+`6` produced a window of `6` instead of `3`, doubled by one click.
+
+**That reading is not a loop question, and leaving it in one handler is what
+kept twelve others broken.** `env[0][1] || default` was the spelling of every
+env→scalar branch in `toggleMode` and of both `deviation_probability` Segs, so
+the three failures above were live on `pan`, `density`, `pitch`, `speed_ratio`,
+the `_range` keys and the probability alike — and on a BP group the worst of
+them is worse still, since `env[0][1]` there is the interp's **string**: a
+`|| default` waves it through and writes `pan: "cubic"` into the YAML. So the
+reader lives in `envelope-loops.js` as `firstBreakpointY(env, fallback)` and all
+fifteen sites call it — the twelve `toggleMode` branches directly, the three
+loop keys through `loopSeedFrom`, the two Segs by their own name — with its own
+coverage in `test-bp-groups.js`, beside the predicates it rests on.
+
+**And `Seg` fires on the already-lit button — that is a property of the
+control, so every one of its `onChange`s owes a guard.** `loop_unit` learned it
+in #149 and `loop_end ↔ loop_dur` here, but the widest one is the scalar↔env
+`Seg` of every `ParamRow`: it goes through `toggleMode`, whose `env` branch does
+not look at the envelope at all — it reads the scalar, which in env mode is
+`null`, and seeds a flat ramp on the default. A click on the lit "env" therefore
+replaced *any* parameter's curve with a straight line, and the two
+`deviation_probability` Segs did the same thing by their own route (there the
+per-param branch seeds from `val`, which is the envelope itself, so the flat
+line reads `1`). All three return early now, each on the expression that is
+literally its Seg's `value` — `getMode(k)` for `toggleMode`, `dMode` and `pMode`
+for the other two — never on a second copy of it, for the reason `loopEndSel`
+states. From the scalar side the same click was already a write for nothing: an
+undo step and a stem marked dirty.
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
