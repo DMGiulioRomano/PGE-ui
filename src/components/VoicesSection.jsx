@@ -110,8 +110,13 @@ function toggleStratParam(v, dim, paramKey, defaultVal, newMode, onChange) {
     const val = cur[paramKey] != null ? cur[paramKey] : defaultVal;
     onChange({ voices: { ...v, [dim]: { ...cur, [paramKey]: null, [envKey]: [[0, val], [1, val]] } } });
   } else {
-    const arr = cur[envKey];
-    const val = (arr && arr[0] && arr[0][1]) != null ? (arr[0][1]) : defaultVal;
+    // La y del primo breakpoint la legge il modulo, non questa riga: «il primo
+    // breakpoint» non e' `env[0]` — una curva di soli BP con interp globale non
+    // lineare l'editor la SCRIVE `{type, points}` (wrapEnv), un BP group come
+    // primo item ha in `[1]` la stringa dell'interp, e in un blocco compatto
+    // `[1]` e' il ratio della distribuzione. Le dodici righe delle strategie
+    // passano tutte di qui, quindi la copia locale le sbagliava tutte insieme.
+    const val = window.PGEEnv.firstBreakpointY(cur[envKey], defaultVal);
     onChange({ voices: { ...v, [dim]: { ...cur, [paramKey]: val, [envKey]: null } } });
   }
 }
@@ -280,7 +285,10 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
       const val = v.num != null ? v.num : 1;
       update({ num: null, numEnv: [[0, val], [1, val]] });
     } else {
-      const val = (v.numEnv && v.numEnv[0] && v.numEnv[0][1]) || 1;
+      // Stesso lettore condiviso: `|| 1` non distingue nemmeno la curva che
+      // vale zero da quella che non si sa leggere (qui num 0 non e' un valore
+      // legittimo, ma la regola e' del lettore, non della riga che lo chiama).
+      const val = window.PGEEnv.firstBreakpointY(v.numEnv, 1);
       update({ num: val, numEnv: null });
     }
   }
@@ -289,7 +297,9 @@ function VoicesSection({ stream, onChange, onFocusEnvParam }) {
       const val = v.scatter != null ? v.scatter : 0;
       update({ scatter: null, scatterEnv: [[0, val], [1, val]] });
     } else {
-      const val = (v.scatterEnv && v.scatterEnv[0] && v.scatterEnv[0][1]) || 0;
+      // …e qui lo zero e' un valore vero — scatter 0 e' «nessuno sparpaglio» —
+      // che il `|| 0` restituiva per caso e su una curva illeggibile.
+      const val = window.PGEEnv.firstBreakpointY(v.scatterEnv, 0);
       update({ scatter: val, scatterEnv: null });
     }
   }

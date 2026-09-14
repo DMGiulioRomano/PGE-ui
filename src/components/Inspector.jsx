@@ -878,6 +878,15 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // accende il bottone: due copie e il ritorno anticipato smette di coprire
   // proprio il caso che esiste per coprire.
   const loopEndSel = loopEndMode ? "loop_end" : "loop_dur";
+  // …e la stessa regola per l'altra coppia mutuamente esclusiva del pannello,
+  // density ↔ fill_factor: quale bottone e' acceso si dichiara una volta sola,
+  // qui, ed e' sia il `value` del Seg sia la condizione con cui il suo handler
+  // riconosce il click che non chiede niente. Li' il no-op costava piu' che
+  // altrove — i due rami scrivono la costante e azzerano l'envelope, quindi un
+  // fill_factor scelto dall'utente tornava 2.0 e una curva di density spariva
+  // sotto un 8 — per un click che non chiedeva niente.
+  const densityUnitSel = (stream.fillFactor != null || stream.fillFactorEnv != null)
+    ? "fill_factor" : "density";
 
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
@@ -1078,8 +1087,24 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span />
                 <span className="v">
                   <Seg size="xs"
-                       value={(stream.fillFactor != null || stream.fillFactorEnv != null) ? "fill_factor" : "density"}
+                       value={densityUnitSel}
                        onChange={(u) => {
+                         // Il click che non chiede niente, sulla coppia dove
+                         // costa di piu': i due rami scrivono comunque la
+                         // costante e azzerano l'envelope, quindi il bottone
+                         // gia' acceso riportava un fill_factor a 2.0 e
+                         // sostituiva una curva di density con un 8. Stessa
+                         // lezione del Seg loop_end ↔ loop_dur, e la stessa
+                         // regola: la condizione e' quella che accende il
+                         // bottone, non una seconda copia.
+                         if (u === densityUnitSel) return;
+                         // Sul click VERO le due costanti restano: density
+                         // (grani al secondo) e fill_factor (fattore di
+                         // sovrapposizione) sono grandezze diverse, e portarsi
+                         // dietro il numero vorrebbe dire convertirlo per la
+                         // durata del grano — una scelta di modello, non la
+                         // lettura di una curva che il round 3 ha rimesso a
+                         // posto altrove.
                          if (u === "fill_factor") {
                            const ff = 2.0;
                            onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null });
