@@ -770,6 +770,34 @@ for the other two — never on a second copy of it, for the reason `loopEndSel`
 states. From the scalar side the same click was already a write for nothing: an
 undo step and a stem marked dirty.
 
+**The guard belongs to `ParamRow`, and the Inspector is not where its rows
+end.** Sixteen of them go through `toggleMode`; the other **fourteen** live in
+`VoicesSection.jsx` — `num_voices`, `scatter`, and the twelve strategy
+parameters through `toggleStratParam` — and no `ParamRow` calls
+`toggleMode("voicesNum")` or `toggleMode("scatter")`, so those two branches of
+it are not the live rows. The live ones carried the whole defect, both halves:
+the flat ramp on the lit "env", and `env[0][1]` on the way back — worse there
+than a wrong number, since on a compact block `env[0][1]` is the pattern's
+*second point*, i.e. an array written as the value of `num_voices`. So the
+no-op guard sits in `ParamRow.handleMode` (`primitives.jsx`), the one place
+where the condition **is** the Seg's `value` by construction, for every row of
+the editor and for the next one added. `toggleMode` keeps its own: it reads the
+same `getMode(k)` the row was given, so it is that function's invariant rather
+than a second copy of the control's — it just no longer has to be repeated in
+each of fourteen handlers that never pass through it. The three readers in
+`VoicesSection` call `firstBreakpointY` like the twelve in `toggleMode`.
+
+**`density ↔ fill_factor` is the third mutually exclusive pair** — the shape of
+`loop_end ↔ loop_dur` one panel over, and the most expensive no-op of the
+family: both branches write their constant *and* null the envelope, so a click
+on the already-lit button took a `fill_factor` the author had chosen back to
+`2.0` and replaced a `density` curve with `8`. It returns early on
+`densityUnitSel`, which is also the Seg's `value`. What it deliberately does
+not do is carry the number across on a **real** click: grains per second and an
+overlap factor are different quantities, and converting one into the other
+(`fill = density × grain_dur`) is a modelling decision, not the curve-reading
+fix above.
+
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
 selector wherever the unit *governs a value that moves*
