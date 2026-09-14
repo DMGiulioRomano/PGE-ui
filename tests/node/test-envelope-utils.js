@@ -1531,6 +1531,255 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
     && /const pMode = isEnv \? "env" : "scalar";/.test(inspSrc));
 }
 
+/* ============================================================================
+ * Le porte dello stesso click che non stavano nell'Inspector
+ *
+ * Il blocco sopra chiude il no-op e il lettore per le sedici ParamRow
+ * dell'Inspector e per i due Seg di deviation_probability. Ma le righe
+ * scalare↔env dell'editor non sono sedici: quattordici stanno in
+ * VoicesSection.jsx — num_voices, scatter e le dodici delle strategie — e
+ * hanno la stessa coppia di difetti, intatta. I due rami `voicesNum` e
+ * `scatter` di toggleMode non le coprono: nessuna ParamRow li chiama (il
+ * blocco sopra conta sedici chiamate, e quelle due chiavi non sono fra loro),
+ * quindi la riga viva e' quella di VoicesSection.
+ * Da cui le due meta' di questo blocco:
+ *   · la guardia sul no-op sta in ParamRow (primitives.jsx), l'unico posto
+ *     dove la condizione E' il `value` del Seg per costruzione e per ogni riga
+ *     dell'editor — riscriverla in ognuno dei quattordici chiamanti sarebbe la
+ *     copia che, per la ragione che loopEndSel dichiara, smette di valere;
+ *   · il lettore e' quello del modulo, firstBreakpointY, come nei dodici rami
+ *     di toggleMode.
+ * E il terzo Seg della famiglia, density ↔ fill_factor: coppia mutuamente
+ * esclusiva come loop_end ↔ loop_dur, e li' il click sul bottone acceso
+ * costava di piu' che altrove — i due rami scrivono la costante e azzerano
+ * l'envelope.
+ * Stessa tecnica dei blocchi sopra: si ESEGUONO le dichiarazioni e i rami
+ * estratti dal sorgente.
+ * ========================================================================== */
+console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor ──");
+{
+  const primSrc = SG.codeOf(path.join(__dirname, "../../src/components/primitives.jsx"));
+  const vsSrc   = SG.codeOf(path.join(__dirname, "../../src/components/VoicesSection.jsx"));
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  // Brace matching: i corpi hanno `;` dentro, quindi una regex fino al primo
+  // punto e virgola non basta — si conta la profondita' come fa depthAt in
+  // source-guard.js.
+  const blockIn = (src, needle, tail) => {
+    const at = src.indexOf(needle);
+    if (at < 0) return "";
+    const open = src.indexOf("{", at + needle.length - 1);
+    let d = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === "{") d++;
+      else if (src[j] === "}" && --d === 0) return src.slice(at, j + 1) + (tail || "");
+    }
+    return "";
+  };
+  const lineIn = (src, name) =>
+    (new RegExp("const " + name + " = .*").exec(src) || [""])[0];
+
+  /* ── la guardia, dove la condizione e' il `value` del Seg ──────────────── */
+  const handleModeSrc = blockIn(primSrc, "const handleMode = (m) => {", ";");
+  assert("handleMode di ParamRow è estraibile dal sorgente", handleModeSrc.length > 0);
+  // Sentinella: `undefined` sarebbe indistinguibile da un onMode chiamato con
+  // un valore assente, e qui la domanda e' proprio se sia stato chiamato.
+  const NIENTE = Symbol("mai chiamato");
+  const clickMode = (mode, m) => {
+    let got = NIENTE;
+    new Function("mode", "onMode", "m", handleModeSrc + "\nhandleMode(m);")(
+      mode, (x) => { got = x; }, m);
+    return got;
+  };
+  assert("click sul bottone già acceso: onMode non viene nemmeno chiamato",
+    clickMode("env", "env") === NIENTE && clickMode("scalar", "scalar") === NIENTE);
+  assert("…e il click che chiede davvero passa, nei due versi",
+    clickMode("env", "scalar") === "scalar" && clickMode("scalar", "env") === "env");
+  assert("la condizione della guardia è il `value` del Seg, non una sua copia",
+    /value=\{mode\} onChange=\{handleMode\}/.test(primSrc)
+    && /if \(m === mode\) return;/.test(handleModeSrc));
+
+  /* ── le quattordici righe di Voices: il lettore ────────────────────────── */
+  const numSrc     = blockIn(vsSrc, "function toggleNumMode(newMode) {");
+  const scatterSrc = blockIn(vsSrc, "function toggleScatterMode(newMode) {");
+  const stratSrc   = blockIn(vsSrc,
+    "function toggleStratParam(v, dim, paramKey, defaultVal, newMode, onChange) {");
+  assert("i tre toggle di VoicesSection sono estraibili dal sorgente",
+    numSrc.length > 0 && scatterSrc.length > 0 && stratSrc.length > 0);
+
+  const runVoice = (which, voices, newMode) => {
+    let patch = null;
+    new Function("v", "update", "window", "newMode",
+      (which === "num" ? numSrc : scatterSrc)
+      + "\ntoggle" + (which === "num" ? "Num" : "Scatter") + "Mode(newMode);")(
+      voices, (p) => { patch = p; }, window, newMode);
+    return patch;
+  };
+  const runStrat = (voices, dim, key, def, newMode) => {
+    let out = null;
+    new Function("window", "v", "dim", "paramKey", "defaultVal", "newMode", "onChange",
+      stratSrc + "\ntoggleStratParam(v, dim, paramKey, defaultVal, newMode, onChange);")(
+      window, voices, dim, key, def, newMode, (p) => { out = p; });
+    return out && out.voices[dim];
+  };
+
+  {
+    /* Le stesse grafie del blocco sopra, sulle righe che quel blocco non
+       tocca. La wrappata l'editor la scrive da se' (wrapEnv, appena l'interp
+       globale di una curva di soli BP non e' lineare), quindi non serve
+       scrivere YAML a mano per arrivarci. */
+    assert("num_voices: la y di una curva wrappata {type, points} si legge",
+      runVoice("num", { num: null, numEnv: { type: "cubic", points: [[0, 4], [1, 9]] } }, "scalar").num === 4);
+    assert("…e quella di un BP group, che si desugara prima di leggere",
+      runVoice("num", { num: null, numEnv: [[[[0, 4], [1, 9]], "cubic"]] }, "scalar").num === 4);
+    /* Il blocco compatto e' la sola grafia senza y — e qui `env[0][1]` non era
+       nemmeno un numero: e' il secondo PUNTO del pattern, cioe' un array
+       scritto come valore del parametro. */
+    const blk = runVoice("num", { num: null, numEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, "scalar");
+    assert("…e un blocco compatto ripiega sul default, non scrive un array",
+      blk.num === 1, JSON.stringify(blk.num));
+    assert("scatter: stessa lettura, e il blocco compatto ripiega sul suo default",
+      runVoice("scatter", { scatter: null, scatterEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, "scalar").scatter === 0);
+    assert("scatter: e uno zero letto resta zero — «nessuno sparpaglio»",
+      runVoice("scatter", { scatter: null, scatterEnv: [[0, 0], [1, 0.5]] }, "scalar").scatter === 0);
+    assert("scatter: il dict {t, v} è un punto, e la sua y è `v`",
+      runVoice("scatter", { scatter: null, scatterEnv: [{ t: 0, v: 0.25 }] }, "scalar").scatter === 0.25);
+    // Il click vero nell'altro verso continua a seminare sullo scalare.
+    assert("num_voices: scalare→env semina la rampa costante sullo scalare",
+      eq(runVoice("num", { num: 3 }, "env").numEnv, [[0, 3], [1, 3]]));
+  }
+  {
+    /* Le dodici righe delle strategie passano tutte da toggleStratParam: una
+       copia sola del lettore, quindi un difetto solo — e dodici righe che lo
+       portavano. Su un BP group `arr[0][1]` e' la STRINGA dell'interp, e il
+       `!= null` la lasciava passare: `step: "cubic"` scritto nello YAML. */
+    const grp = runStrat({ pitch: { stepEnv: [[[[0, 5], [1, 9]], "cubic"]] } },
+      "pitch", "step", 3.0, "scalar");
+    assert("strategie: un BP group non scrive il nome dell'interp come valore",
+      grp.step === 5, JSON.stringify(grp.step));
+    assert("…e una curva wrappata non ripiega sul default",
+      runStrat({ pointer: { stepEnv: { type: "cubic", points: [[0, 0.4], [1, 0.9]] } } },
+        "pointer", "step", 0.1, "scalar").step === 0.4);
+    assert("…e un blocco compatto ripiega sul default della riga",
+      runStrat({ pan: { spreadEnv: [[[[0, 10], [0.5, 20]], 2, 4]] } },
+        "pan", "spread", 60.0, "scalar").spread === 60.0);
+    assert("…e uno zero letto resta zero",
+      runStrat({ onset_offset: { stepEnv: [[0, 0], [1, 0.2]] } },
+        "onset_offset", "step", 0.05, "scalar").step === 0);
+  }
+  {
+    /* E il no-op sulle righe vere, composto come in interfaccia: il `mode` che
+       accende il bottone viene dalla dichiarazione del componente, la guardia
+       da ParamRow. Prima il ramo `env` leggeva lo scalare — in quella
+       modalita' null — e seminava una rampa costante sul default: la curva
+       dell'utente sostituita da una riga piatta su 1 (num_voices), 0
+       (scatter), il default della riga (strategie). */
+    const clickRow = (which, voices) => {
+      let patch = null;
+      const mSrc = lineIn(vsSrc, which === "num" ? "numMode" : "scatterMode");
+      new Function("v", "update", "window", "m",
+        mSrc + "\n" + (which === "num" ? numSrc : scatterSrc)
+        + "\nconst mode = " + (which === "num" ? "numMode" : "scatterMode") + ";"
+        + "\nconst onMode = toggle" + (which === "num" ? "Num" : "Scatter") + "Mode;\n"
+        + handleModeSrc + "\nhandleMode(m);")(
+        voices, (p) => { patch = p; }, window, which === "num" ? "env" : "env");
+      return patch;
+    };
+    assert("num_voices: click sul bottone env già acceso, la curva resta",
+      clickRow("num", { num: null, numEnv: [[0, 2], [1, 6]] }) === null);
+    assert("scatter: idem",
+      clickRow("scatter", { scatter: null, scatterEnv: [[0, 10], [1, 40]] }) === null);
+
+    // …e le dodici righe delle strategie, dove il `mode` lo dichiara
+    // VoiceStratParamRow.
+    const clickStrat = (voices, dim, key, def, m) => {
+      let out = null;
+      new Function("window", "v", "dim", "paramKey", "defaultVal", "onChange", "valueEnv", "m",
+        stratSrc + "\n" + lineIn(vsSrc, "mode")
+        + "\nconst onMode = (mm) => toggleStratParam(v, dim, paramKey, defaultVal, mm, onChange);\n"
+        + handleModeSrc + "\nhandleMode(m);")(
+        window, voices, dim, key, def, (p) => { out = p; },
+        (voices[dim] || {})[key + "Env"], m);
+      return out;
+    };
+    assert("strategie: click sul bottone env già acceso, la curva resta",
+      clickStrat({ pitch: { stepEnv: [[0, 3], [1, 7]] } }, "pitch", "step", 3.0, "env") === null);
+    assert("strategie: e il click che chiede davvero passa",
+      clickStrat({ pitch: { step: 3 } }, "pitch", "step", 3.0, "env") !== null);
+  }
+
+  // …e il cablaggio, perché i rami sopra valgono solo se sono quelli veri.
+  assert("nessuna riga di Voices legge più la curva con env[0][1]",
+    !/\(arr && arr\[0\] && arr\[0\]\[1\]\)/.test(vsSrc)
+    && !/\w+Env && v\.\w+Env\[0\]/.test(vsSrc));
+  assert("i tre toggle di Voices chiedono al lettore del modulo",
+    (vsSrc.match(/window\.PGEEnv\.firstBreakpointY\(/g) || []).length === 3);
+  /* VoicesSection non costruisce nessun Seg scalare↔env per conto suo: le sue
+     quattordici righe passano dal ParamRow, che e' dove sta la guardia. Il
+     giorno in cui una di esse si scrivesse il Seg in casa, la guardia
+     smetterebbe di coprirla in silenzio. */
+  assert("le righe di Voices passano tutte dal ParamRow guardato",
+    !/<Seg/.test(vsSrc) && /onMode=\{onMode\}/.test(vsSrc));
+
+  /* ── density ↔ fill_factor: la terza coppia mutuamente esclusiva ───────── */
+  const densDecl = lineIn(inspSrc, "densityUnitSel");
+  assert("la dichiarazione del bottone acceso di density ↔ fill_factor è estraibile",
+    densDecl.length > 0 || /const densityUnitSel = /.test(inspSrc));
+  // La dichiarazione sta su due righe: si prende fino al `;`.
+  const densSrc = (/const densityUnitSel = [\s\S]*?;/.exec(inspSrc) || [""])[0];
+  const densBody = (() => {
+    const at = inspSrc.indexOf("value={densityUnitSel}");
+    if (at < 0) return "";
+    const on = inspSrc.indexOf("onChange={(u) => {", at);
+    if (on < 0) return "";
+    const open = inspSrc.indexOf("{", inspSrc.indexOf("=>", on));
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(open, j + 1);
+    }
+    return "";
+  })();
+  assert("il Seg density ↔ fill_factor e il suo onChange sono estraibili dal sorgente",
+    densSrc.length > 0 && densBody.length > 0);
+  const clickDensity = (stream, u) => {
+    let out = null;
+    new Function("stream", "onChange", "u",
+      densSrc + "\n(" + "(u) => " + densBody + ")(u);")(
+      stream, (p) => { out = p; }, u);
+    return out;
+  };
+  {
+    /* Il caso di regressione: i due rami scrivono la costante e azzerano
+       l'envelope, quindi il bottone gia' acceso riportava un fill_factor
+       scelto dall'utente a 2.0 e sostituiva una curva di density con un 8. */
+    assert("fill_factor acceso, click su fill_factor: il valore dell'utente resta",
+      clickDensity({ fillFactor: 3.7 }, "fill_factor") === null);
+    assert("…e una curva di fill_factor non sparisce sotto la costante",
+      clickDensity({ fillFactor: null, fillFactorEnv: [[0, 1], [1, 4]] }, "fill_factor") === null);
+    assert("density accesa, click su density: la curva resta",
+      clickDensity({ density: null, densityEnv: [[0, 3], [1, 9]] }, "density") === null);
+    assert("…e lo scalare non viene riscritto sul default",
+      clickDensity({ density: 20 }, "density") === null);
+  }
+  {
+    // Il click che chiede davvero continua a convertire, nei due versi: le due
+    // costanti restano perche' density e fill_factor sono grandezze diverse.
+    const toFill = clickDensity({ density: 20 }, "fill_factor");
+    assert("density → fill_factor: converte, e spegne l'altra chiave",
+      toFill !== null && toFill.fillFactor === 2.0 && toFill.density === null
+      && toFill.densityEnv === null && toFill.fillFactorEnv === null, JSON.stringify(toFill));
+    const toDens = clickDensity({ fillFactor: 3.7 }, "density");
+    assert("fill_factor → density: idem nell'altro verso",
+      toDens !== null && toDens.density === 8 && toDens.fillFactor === null
+      && toDens.fillFactorEnv === null && toDens.densityEnv === null, JSON.stringify(toDens));
+  }
+  assert("il bottone acceso e il ritorno anticipato leggono la stessa cosa",
+    /value=\{densityUnitSel\}/.test(inspSrc)
+    && /if \(u === densityUnitSel\) return;/.test(inspSrc)
+    && (inspSrc.match(/const densityUnitSel = /g) || []).length === 1
+    && !/value=\{\(stream\.fillFactor != null \|\| stream\.fillFactorEnv != null\) \? "fill_factor"/.test(inspSrc));
+}
+
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
 {
   const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
