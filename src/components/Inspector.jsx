@@ -749,9 +749,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // RATIO della distribuzione, un numero che con la posizione nel sample non
   // c'entra niente, e il `typeof … === "number"` lo lasciava passare proprio
   // mentre il commento dichiarava di escluderlo. Si desugarano i BP group e si
-  // chiede a isBreakpoint — il predicato del modulo, non una terza copia della
-  // regola — cosi' ogni grafia che una y ce l'ha la dichiara, e solo le due
-  // che non ce l'hanno (blocco compatto, breakpoint {t,v}) ripiegano.
+  // chiede ai predicati del modulo, non a una terza copia della regola, cosi'
+  // ogni grafia che una y ce l'ha la dichiara.
+  // I predicati sono DUE perche' le grafie di un punto sono due: la lista
+  // `[t, v]` e il dict `{t, v}`, che il builder del motore normalizza nella
+  // prima prima di guardarla (envelope_builder.py:132) — una y ce l'ha eccome,
+  // ed e' `v`. isBreakpoint da sola non lo vede (esige Array.isArray) e non va
+  // allargata, perche' dice anche cosa il canvas sa trascinare: da qui
+  // isDictBreakpoint, lo stesso predicato con cui wouldEmptyEnv conta i punti
+  // veri. Trattarlo come una forma senza y rimetteva, proprio su quella
+  // grafia, la costante al posto della curva che tutto questo blocco esiste
+  // per togliere.
+  // Ripiega quindi solo il blocco compatto, che una y non ce l'ha davvero.
   // Il ripiego e' loopSeedWhole, tranne dove il chiamante ne ha uno proprio:
   // `loop_start` riparte da 0, come il suo seme.
   // Una sola dichiarazione per i tre handler che ne hanno bisogno — i due rami
@@ -759,6 +768,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // in cui una di esse smette di valere.
   const loopSeedFrom = (env, fallback) =>
     ((bp) => window.PGEEnv.isBreakpoint(bp) ? bp[1]
+             : window.PGEEnv.isDictBreakpoint(bp) ? bp.v
              : (fallback !== undefined ? fallback : loopSeedWhole))(
       window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(env).items)[0]);
   // E la prosa segue l'unita' come il suffisso: «(s)» e «∈ [0, sample_dur]»
@@ -1170,7 +1180,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                            // `loop_durEnv` su 3 diventava la fine del file: la
                            // stessa lezione del `|| 1` di toggleMode, sullo
                            // stesso riquadro. Da qui loopSeedFrom, condiviso.
-                           const ls = stream.pointer.loopStart || 0;
+                           // …e loop_start e' il terzo numero della
+                           // conversione, non un contorno: la lunghezza e' la
+                           // distanza DA li'. Letto con `|| 0` la sua curva non
+                           // si vedeva affatto — un loop_startEnv fermo su 3 con
+                           // loop_end a 6 dava una lunghezza di 6 invece di 3,
+                           // cioe' la finestra raddoppiata da un click. Stesso
+                           // lettore delle altre due righe, con il ripiego di
+                           // questa.
+                           const ls = stream.pointer.loopStart != null ? stream.pointer.loopStart
+                             : loopSeedFrom(stream.pointer.loopStartEnv, 0);
                            if (u === "loop_end") {
                              // Con loop_start da solo (il menu lo sa scrivere) qui non
                              // c'e' nessuna lunghezza da cui partire, e il ripiego era

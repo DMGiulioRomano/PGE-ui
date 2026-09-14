@@ -37,6 +37,25 @@
            typeof item[0] === "number" && typeof item[1] === "number";
   }
 
+  /* Il breakpoint in forma dict `{t, v, type?}`: il builder del motore lo
+     normalizza in `[t, v, type?]` prima di guardarlo (envelope_builder.py:132),
+     quindi e' una grafia di prima classe e una y ce l'ha.
+     Sta accanto a isBreakpoint e NON dentro: isBreakpoint dice anche cosa il
+     canvas dell'EnvelopeEditor sa disegnare e trascinare, e un dict il canvas
+     non lo disegna — allargarla renderebbe trascinabile quel che non si vede.
+     Chi invece deve solo LEGGERE la y di un punto chiede a questa, ed e' per
+     questo che sta nel modulo: i lettori sono due (wouldEmptyEnv, che conta i
+     punti veri, e loopSeedFrom nell'Inspector, che ne legge il valore) e due
+     copie e' il modo in cui una di esse smette di valere.
+     Il `typeof` e' piu' stretto della presenza delle chiavi che il motore
+     testa — e quella lettura resta locale a deviation-probability.js, dove la
+     domanda e' se il motore costruira' il corpo, non se c'e' un numero da
+     leggere. */
+  function isDictBreakpoint(item) {
+    return !!item && typeof item === "object" && !Array.isArray(item) &&
+           typeof item.t === "number" && typeof item.v === "number";
+  }
+
   /* ---------- typed-envelope wrapper ----------
      `{type, points}` è la forma "tipata" globale per envelope di soli BP.
      Helpers per unwrappare a items[]/interp e ri-wrappare al commit.        */
@@ -813,7 +832,7 @@
 
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
-    isBreakpoint, isCompactBlock, envHasLoop,
+    isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, isPreviewFallback, expandMixed,
