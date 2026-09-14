@@ -45,8 +45,9 @@
      non lo disegna — allargarla renderebbe trascinabile quel che non si vede.
      Chi invece deve solo LEGGERE la y di un punto chiede a questa, ed e' per
      questo che sta nel modulo: i lettori sono due (wouldEmptyEnv, che conta i
-     punti veri, e loopSeedFrom nell'Inspector, che ne legge il valore) e due
-     copie e' il modo in cui una di esse smette di valere.
+     punti veri, e firstBreakpointY qui sotto, che ne legge il valore per conto
+     di ogni toggle env→scalare) e due copie e' il modo in cui una di esse
+     smette di valere.
      Il `typeof` e' piu' stretto della presenza delle chiavi che il motore
      testa — e quella lettura resta locale a deviation-probability.js, dove la
      domanda e' se il motore costruira' il corpo, non se c'e' un numero da
@@ -181,6 +182,32 @@
     }
     flushRun();
     return out;
+  }
+
+  /* La y del PRIMO breakpoint di un envelope, qualunque grafia abbia.
+     È la domanda che si fa ogni volta che una curva viene sostituita da uno
+     scalare — il toggle env→scalare dell'Inspector, la conversione
+     loop_end ↔ loop_dur — e la risposta non può essere `env[0][1]`:
+       · una curva di soli BP con interp globale non lineare l'editor stesso la
+         SCRIVE `{type, points}` (wrapEnv), e lì `env[0]` non esiste;
+       · un BP group come primo item è `[points, interp]`, dove `[1]` è la
+         STRINGA dell'interp — scritta tale e quale come valore del parametro;
+       · un blocco compatto ha in `[1]` il RATIO della distribuzione, un numero
+         che con il valore del parametro non c'entra niente.
+     Si desugara quindi dopo aver unwrappato, e si chiede ai due predicati del
+     modulo — le grafie di un punto sono due, `[t, v]` e `{t, v}` — così ogni
+     forma che una y ce l'ha la dichiara. Ripiega solo su ciò che una y non ce
+     l'ha davvero (blocco compatto, envelope vuoto o illeggibile), e il ripiego
+     lo decide il chiamante: è il default del suo parametro, che il modulo non
+     conosce.
+     Il ritorno è il valore LETTO, zero compreso: un `|| default` non distingue
+     la curva che vale zero da quella che non si sa leggere, ed è così che uno
+     zero legittimo diventava una costante che la curva non aveva mai avuto. */
+  function firstBreakpointY(env, fallback) {
+    const bp = desugarBPGroups(unwrapEnv(env).items)[0];
+    if (isBreakpoint(bp)) return bp[1];
+    if (isDictBreakpoint(bp)) return bp.v;
+    return fallback;
   }
 
   /* ---------- distribuzioni temporali (time_distribution.py) ---------- */
@@ -834,6 +861,7 @@
     DISCONTINUITY_OFFSET,
     isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
+    firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, isPreviewFallback, expandMixed,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,

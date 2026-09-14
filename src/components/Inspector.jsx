@@ -137,6 +137,11 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
   // "true", senza riscrivere lo YAML finché non lo si tocca.
   const dScalar = typeof d === "boolean" ? 1 : d;
+  // Quale bottone del Seg scalare↔env e' acceso, calcolato una volta sola: e'
+  // anche la condizione con cui i due handler qui sotto riconoscono il click
+  // che non chiede niente. Una seconda copia e il ritorno anticipato smette di
+  // coprire proprio il caso che esiste per coprire.
+  const dMode = dIsEnv ? "env" : "scalar";
 
   function setMode(next) {
     if (next === "off")       return onChange({ deviationProbability: false });
@@ -211,15 +216,23 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
 
       {mode === "global" ? (
         <ParamRow name="probability"
-                  mode={dIsEnv ? "env" : "scalar"}
+                  mode={dMode}
                   onMode={(m) => {
+                    // Click sul bottone gia' acceso: il ramo `env` non guarda
+                    // la curva, semina una rampa costante — cioe' l'envelope
+                    // dell'utente sostituito da una riga piatta per un click
+                    // che non l'aveva chiesto. Stessa lezione del Seg di
+                    // loop_unit (#149) e di quello loop_end ↔ loop_dur.
+                    if (m === dMode) return;
                     if (m === "env") {
                       const v = typeof dScalar === "number" ? dScalar : 1;
                       onChange({ deviationProbability: [[0, v], [1, v]] });
                     } else {
-                      const items = dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null;
-                      const v = (items && items[0] && items[0][1]) || 1;
-                      onChange({ deviationProbability: v });
+                      // La y del primo breakpoint, letta com'e': `items[0][1]`
+                      // non vede il dict `{t, v}` (che il motore normalizza in
+                      // `[t, v]`) e il `|| 1` scambiava per illeggibile una
+                      // probabilita' di zero, che qui significa «mai».
+                      onChange({ deviationProbability: PGEEnv.firstBreakpointY(d, 1) });
                     }
                   }}
                   value={dIsEnv ? "—" : dScalar}
@@ -238,6 +251,8 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
             // take the {type, points} form (cubic on a per-param envelope).
             const isEnv = PGEDeviationProb.isEnvValue(val);
             const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
+            // Il bottone acceso, che e' anche la condizione del no-op qui sotto.
+            const pMode = isEnv ? "env" : "scalar";
             return (
               <div key={p.key} className="pge-prow">
                 {/* Scritta ma inerte su QUESTO stream: la chiave morta
@@ -249,9 +264,13 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                       title={deviationProbInertReason(p.key, liveKeys)}>
                   {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
                 </span>
-                <Seg size="xs" value={isEnv ? "env" : "scalar"}
+                <Seg size="xs" value={pMode}
                      onChange={(m) => {
-                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : ((items && items[0] && items[0][1]) || 1);
+                       // Terzo Seg con lo stesso difetto: sul bottone `env`
+                       // gia' acceso `val` non e' un numero, quindi il ramo
+                       // seminava [[0,1],[1,1]] sopra la curva dell'utente.
+                       if (m === pMode) return;
+                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : PGEEnv.firstBreakpointY(val, 1);
                        onChange({ deviationProbability: { ...d, [p.key]: nv } });
                      }}
                      options={[{label:"scalar",value:"scalar"},{label:"env",value:"env"}]} />
@@ -460,6 +479,20 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // Toggle a parameter between scalar and env, mutating the stream.
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
+    // Il click che non chiede niente. Seg chiama onChange anche sul bottone
+    // gia' acceso (primitives.jsx), e qui sotto il ramo `env` NON guarda
+    // l'envelope: legge lo scalare, che in modalita' env e' null, e semina una
+    // rampa costante sul default — cioe' la curva dell'utente sostituita da una
+    // riga piatta per un click che non l'aveva chiesta. E' lo stesso difetto
+    // che il Seg loop_end ↔ loop_dur e il selettore di loop_unit (#149) hanno
+    // gia' imparato a riconoscere, un livello piu' su: qui pero' vale per
+    // QUALUNQUE parametro, perche' passano tutti di qui.
+    // La condizione dev'essere LA STESSA che accende il bottone — `mode` di
+    // ParamRow e' `getMode(k)` in tutti e sedici i punti di chiamata — altrimenti
+    // il ritorno anticipato smette di coprire proprio il caso che esiste per
+    // coprire. Dal lato scalare il click era gia' a vuoto: uno scalare riscritto
+    // uguale, cioe' un passo di undo e uno stem marcato sporco per niente.
+    if (newMode === getMode(k)) return;
     setMode(k, newMode);
     // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
     // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
@@ -478,7 +511,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.speedRatio != null ? cur.speedRatio : 1;
         onChange({ pointer: { ...cur, speedRatio: null, speedRatioEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.speedRatioEnv && cur.speedRatioEnv[0] && cur.speedRatioEnv[0][1]) || 1;
+        const v = window.PGEEnv.firstBreakpointY(cur.speedRatioEnv, 1);
         onChange({ pointer: { ...cur, speedRatio: v, speedRatioEnv: null } });
       }
       return;
@@ -495,7 +528,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.duration != null ? cur.duration : grainDurSeed;
         onChange({ grain: { ...cur, duration: null, durationEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || grainDurSeed;
+        const v = window.PGEEnv.firstBreakpointY(cur.durationEnv, grainDurSeed);
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
       }
       return;
@@ -513,8 +546,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         onChange({ grain: { ...cur, readDirection: null,
                             readDirectionEnv: [[0, v], [0.5, -v]] } });
       } else {
-        const first = cur.readDirectionEnv && cur.readDirectionEnv[0]
-          && cur.readDirectionEnv[0][1];
+        const first = window.PGEEnv.firstBreakpointY(cur.readDirectionEnv, null);
         onChange({ grain: { ...cur, readDirection: first != null ? S(first) : 1,
                             readDirectionEnv: null } });
       }
@@ -571,8 +603,8 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.value != null ? cur.value : (cur.unit === "ratio" ? 1.0 : 0);
         onChange({ pitch: { ...cur, value: null, valueEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.valueEnv && cur.valueEnv[0] && cur.valueEnv[0][1]);
-        onChange({ pitch: { ...cur, value: v != null ? v : (cur.unit === "ratio" ? 1.0 : 0), valueEnv: null } });
+        const v = window.PGEEnv.firstBreakpointY(cur.valueEnv, cur.unit === "ratio" ? 1.0 : 0);
+        onChange({ pitch: { ...cur, value: v, valueEnv: null } });
       }
       return;
     }
@@ -582,7 +614,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.num != null ? cur.num : 1;
         onChange({ voices: { ...cur, num: null, numEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.numEnv && cur.numEnv[0] && cur.numEnv[0][1]) || 1;
+        const v = window.PGEEnv.firstBreakpointY(cur.numEnv, 1);
         onChange({ voices: { ...cur, num: v, numEnv: null } });
       }
       return;
@@ -593,7 +625,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.scatter != null ? cur.scatter : 0;
         onChange({ voices: { ...cur, scatter: null, scatterEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.scatterEnv && cur.scatterEnv[0] && cur.scatterEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.scatterEnv, 0);
         onChange({ voices: { ...cur, scatter: v, scatterEnv: null } });
       }
       return;
@@ -603,7 +635,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = stream.panRange != null ? stream.panRange : 0;
         onChange({ panRange: null, panRangeEnv: [[0, v], [1, v]] });
       } else {
-        const v = (stream.panRangeEnv && stream.panRangeEnv[0] && stream.panRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(stream.panRangeEnv, 0);
         onChange({ panRange: v, panRangeEnv: null });
       }
       return;
@@ -613,7 +645,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = stream.volumeRange != null ? stream.volumeRange : 0;
         onChange({ volumeRange: null, volumeRangeEnv: [[0, v], [1, v]] });
       } else {
-        const v = (stream.volumeRangeEnv && stream.volumeRangeEnv[0] && stream.volumeRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(stream.volumeRangeEnv, 0);
         onChange({ volumeRange: v, volumeRangeEnv: null });
       }
       return;
@@ -624,7 +656,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.range != null ? cur.range : 0;
         onChange({ pitch: { ...cur, range: null, rangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.rangeEnv && cur.rangeEnv[0] && cur.rangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.rangeEnv, 0);
         onChange({ pitch: { ...cur, range: v, rangeEnv: null } });
       }
       return;
@@ -635,7 +667,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.durationRange != null ? cur.durationRange : 0;
         onChange({ grain: { ...cur, durationRange: null, durationRangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationRangeEnv && cur.durationRangeEnv[0] && cur.durationRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.durationRangeEnv, 0);
         onChange({ grain: { ...cur, durationRange: v, durationRangeEnv: null } });
       }
       return;
@@ -646,7 +678,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.offsetRange != null ? cur.offsetRange : 0;
         onChange({ pointer: { ...cur, offsetRange: null, offsetRangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.offsetRangeEnv && cur.offsetRangeEnv[0] && cur.offsetRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.offsetRangeEnv, 0);
         onChange({ pointer: { ...cur, offsetRange: v, offsetRangeEnv: null } });
       }
       return;
@@ -656,7 +688,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
       const v = stream[f.sk] != null ? stream[f.sk] : defaultsByKey[k];
       onChange({ [f.sk]: null, [f.ek]: [[0, v], [1, v]] });
     } else {
-      const v = (stream[f.ek] && stream[f.ek][0] && stream[f.ek][0][1]) || defaultsByKey[k];
+      const v = window.PGEEnv.firstBreakpointY(stream[f.ek], defaultsByKey[k]);
       onChange({ [f.sk]: v, [f.ek]: null });
     }
   }
@@ -735,42 +767,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // superare.
   const loopSeedWhole = loopMax != null ? Math.floor(loopMax * 1e4) / 1e4 : 1;
   // E il valore da cui si riparte quando al posto dello scalare c'e' una
-  // curva: la y del primo breakpoint, letta com'e'. Con `|| 1` un envelope che
-  // parte da 0 — un loop_end legittimo — collassava su un valore che non aveva
-  // mai avuto; senza leggerla affatto — il Seg loop_end ↔ loop_dur — la curva
-  // spariva dietro una costante.
-  // «Il primo breakpoint» non e' `env[0]`, ed e' la stessa lezione di
-  // wouldEmptyEnv nell'EnvelopeEditor: chi ha in mano una forma wrappata deve
-  // passare da unwrapEnv. Un envelope di soli BP con interp globale non
-  // lineare l'editor stesso lo scrive `{type, points}` (wrapEnv), e li'
-  // `env[0]` non esiste: una curva ferma su 6 tornava «tutto il file», cioe'
-  // di nuovo la costante che questo blocco esiste per togliere. E un blocco
-  // compatto come primo item e' peggio del ripiego: `env[0][1]` li' e' il
-  // RATIO della distribuzione, un numero che con la posizione nel sample non
-  // c'entra niente, e il `typeof … === "number"` lo lasciava passare proprio
-  // mentre il commento dichiarava di escluderlo. Si desugarano i BP group e si
-  // chiede ai predicati del modulo, non a una terza copia della regola, cosi'
-  // ogni grafia che una y ce l'ha la dichiara.
-  // I predicati sono DUE perche' le grafie di un punto sono due: la lista
-  // `[t, v]` e il dict `{t, v}`, che il builder del motore normalizza nella
-  // prima prima di guardarla (envelope_builder.py:132) — una y ce l'ha eccome,
-  // ed e' `v`. isBreakpoint da sola non lo vede (esige Array.isArray) e non va
-  // allargata, perche' dice anche cosa il canvas sa trascinare: da qui
-  // isDictBreakpoint, lo stesso predicato con cui wouldEmptyEnv conta i punti
-  // veri. Trattarlo come una forma senza y rimetteva, proprio su quella
-  // grafia, la costante al posto della curva che tutto questo blocco esiste
-  // per togliere.
-  // Ripiega quindi solo il blocco compatto, che una y non ce l'ha davvero.
-  // Il ripiego e' loopSeedWhole, tranne dove il chiamante ne ha uno proprio:
-  // `loop_start` riparte da 0, come il suo seme.
-  // Una sola dichiarazione per i tre handler che ne hanno bisogno — i due rami
-  // di toggleMode qui sopra e il Seg qui sotto — perche' due copie e' il modo
-  // in cui una di esse smette di valere.
+  // curva: la y del primo breakpoint. «Il primo breakpoint» non e' `env[0]` —
+  // una forma wrappata va unwrappata, un BP group desugarato, e in un blocco
+  // compatto `[1]` e' il RATIO della distribuzione, non una posizione nel
+  // sample — e la domanda non ha niente di loop: se la fa ogni toggle
+  // env→scalare. Quindi la risposta sta nel modulo (PGEEnv.firstBreakpointY,
+  // che la documenta) e qui resta solo il ripiego, che e' del chiamante perche'
+  // e' il default del suo parametro: «tutto il file» per le due chiavi del
+  // loop, 0 per `loop_start`. Una sola dichiarazione per i tre handler che ne
+  // hanno bisogno — i due rami di toggleMode qui sopra e il Seg qui sotto —
+  // perche' due copie e' il modo in cui una di esse smette di valere.
   const loopSeedFrom = (env, fallback) =>
-    ((bp) => window.PGEEnv.isBreakpoint(bp) ? bp[1]
-             : window.PGEEnv.isDictBreakpoint(bp) ? bp.v
-             : (fallback !== undefined ? fallback : loopSeedWhole))(
-      window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(env).items)[0]);
+    window.PGEEnv.firstBreakpointY(env, fallback !== undefined ? fallback : loopSeedWhole);
   // E la prosa segue l'unita' come il suffisso: «(s)» e «∈ [0, sample_dur]»
   // sotto `loop_unit: normalized` descrivono il dominio sbagliato — li' i
   // valori vivono in [0,1] e li scala il motore. Sono le stesse frasi che
@@ -1331,7 +1339,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <div className="pge-prow hint" style={{paddingTop:0}}>
                       <span className="k" /><span />
                       <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        {loopUnit.unit === "normalized"
+                        {loopNormalized
                           ? "start e loop_start/end/dur ∈ [0, 1] × sample_dur · start resta un valore raw, senza bound (is_smart=False)"
                           : (loopMax != null
                               ? ("start e loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
