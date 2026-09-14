@@ -1192,15 +1192,27 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
         modeFor("loopEnd", "scalar", { loopEndEnv: { points: [[0, 6], [1, 6]] } }, 8).loopEnd === 6);
       assert("…e su un BP group, che si desugara prima di leggere",
         modeFor("loopDur", "scalar", { loopDurEnv: [[[[0, 3], [1, 3]], "cubic"]] }, 8).loopDur === 3);
-      /* Le due forme che una y davvero non ce l'hanno ripiegano — ed e' quel
+      /* La sola forma che una y davvero non ce l'ha ripiega — ed e' quel
          che il commento del sorgente dichiarava gia' mentre il codice faceva
          un'altra cosa: in un blocco compatto `env[0][1]` e' il RATIO della
          distribuzione, un numero che con una posizione nel sample non c'entra
          niente, e il `typeof … === "number"` lo lasciava passare. */
       assert("blocco compatto: ripiega sul seme, non scrive il ratio come lunghezza",
         modeFor("loopDur", "scalar", { loopDurEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, 8).loopDur === 8);
-      assert("breakpoint {t, v}: ripiega sul seme",
-        modeFor("loopEnd", "scalar", { loopEndEnv: [{ t: 0, v: 6 }] }, 8).loopEnd === 8);
+      /* Il dict `{t, v}` invece una y ce l'ha, ed e' `v`: il builder del
+         motore lo normalizza in `[t, v]` prima di guardarlo
+         (envelope_builder.py:132), e wouldEmptyEnv lo conta gia' come punto
+         vero. Contarlo fra le forme «senza y» rimetteva su quella grafia
+         esattamente la costante al posto della curva che questo blocco
+         toglie. isBreakpoint da sola non lo vede e non va allargata (dice
+         anche cosa il canvas sa trascinare): il predicato accanto e'
+         isDictBreakpoint. */
+      assert("breakpoint {t, v}: la y si legge, e' `v`",
+        modeFor("loopEnd", "scalar", { loopEndEnv: [{ t: 0, v: 6 }] }, 8).loopEnd === 6);
+      assert("…anche con l'interp per-punto, e anche uno zero resta zero",
+        modeFor("loopEnd", "scalar", { loopEndEnv: [{ t: 0, v: 0, type: "step" }, { t: 1, v: 2 }] }, 8).loopEnd === 0);
+      assert("…e un dict senza una y numerica non e' un punto: ripiega",
+        modeFor("loopDur", "scalar", { loopDurEnv: [{ t: 0 }] }, 8).loopDur === 8);
     }
     {
       // La terza riga del loop legge dallo stesso posto, con il ripiego suo:
@@ -1213,10 +1225,22 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
         modeFor("loopStart", "scalar", { loopStartEnv: [[0, 0], [1, 0.5]] }, 8).loopStart === 0);
     }
 
-    assert("loopSeedFrom passa da unwrapEnv e da isBreakpoint, non da env[0][1]",
+    assert("loopSeedFrom passa da unwrapEnv e dai predicati del modulo, non da env[0][1]",
       /window\.PGEEnv\.unwrapEnv\(env\)\.items/.test(seedFromDecl)
       && /window\.PGEEnv\.isBreakpoint\(bp\)/.test(seedFromDecl)
+      && /window\.PGEEnv\.isDictBreakpoint\(bp\)/.test(seedFromDecl)
       && !/typeof env\[0\]\[1\] === "number"/.test(inspSrc));
+    /* Il predicato del dict sta nel modulo e ha DUE lettori: wouldEmptyEnv, che
+       conta i punti veri, e loopSeedFrom, che ne legge la y. Finche' ne aveva
+       una copia locale per uno, le due regole erano libere di divergere — ed e'
+       esattamente cosi' che il lettore del loop ha smesso di vedere una grafia
+       che l'editor contava. isBreakpoint resta com'e': dice anche cosa il
+       canvas sa trascinare, e un dict non lo disegna. */
+    assert("isDictBreakpoint e' nel modulo e isBreakpoint non e' stata allargata",
+      typeof window.PGEEnv.isDictBreakpoint === "function"
+      && window.PGEEnv.isDictBreakpoint({ t: 0, v: 6 }) === true
+      && window.PGEEnv.isDictBreakpoint({ t: 0 }) === false
+      && window.PGEEnv.isBreakpoint({ t: 0, v: 6 }) === false);
     assert("anche loop_start legge dal lettore condiviso, non da una sua copia",
       /loopSeedFrom\(cur\.loopStartEnv, 0\)/.test(inspSrc)
       && !/cur\.loopStartEnv\[0\]\[1\]\) \|\| 0/.test(inspSrc));
@@ -1304,12 +1328,27 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       t4.fn("loop_dur");
       assert("loop_dur esce tappato al cap, come un valore digitato",
         t4.get() !== null && t4.get().pointer.loopDur === 8, JSON.stringify(t4.get()));
+      /* E loop_start e' il terzo numero della conversione, non un contorno: la
+         lunghezza e' la distanza DA li'. Letto con `|| 0` la sua curva non si
+         vedeva affatto, quindi un loop_startEnv fermo su 3 con loop_end a 6
+         dava 6 invece di 3 — la finestra raddoppiata da un click. */
+      const t5 = toggleFor({ loopStartEnv: [[0, 3], [1, 3]], loopEndEnv: [[0, 6], [1, 6]] }, 8);
+      t5.fn("loop_dur");
+      assert("anche loop_start esce dalla curva quando lo scalare non c'e'",
+        t5.get() !== null && Math.abs(t5.get().pointer.loopDur - 3) < 1e-9, JSON.stringify(t5.get()));
+      const t6 = toggleFor({ loopStartEnv: [[0, 3], [1, 3]], loopDurEnv: [[0, 2], [1, 2]] }, 8);
+      t6.fn("loop_end");
+      assert("…e nell'altro verso la posizione parte da li'",
+        t6.get() !== null && Math.abs(t6.get().pointer.loopEnd - 5) < 1e-9, JSON.stringify(t6.get()));
     }
 
     assert("i due rami del Seg leggono la curva invece di ignorarla",
       /loopSeedFrom\(stream\.pointer\.loopDurEnv\)/.test(inspSrc)
       && /loopSeedFrom\(stream\.pointer\.loopEndEnv\)/.test(inspSrc)
       && !/Math\.max\(0\.01, \(stream\.pointer\.loopEnd \|\| 0\)/.test(inspSrc));
+    assert("…e il terzo numero della conversione, loop_start, dallo stesso lettore",
+      /loopSeedFrom\(stream\.pointer\.loopStartEnv, 0\)/.test(inspSrc)
+      && !/const ls = stream\.pointer\.loopStart \|\| 0;/.test(inspSrc));
     assert("loopSeedFrom e' dichiarato una volta sola, nel corpo del componente",
       (inspSrc.match(/const loopSeedFrom = /g) || []).length === 1);
     assert("anche la riga che segue il Seg chiede a loopEndMode, non a una terza copia",

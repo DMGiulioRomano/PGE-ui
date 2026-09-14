@@ -422,6 +422,14 @@ assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
    di un solo blocco loop si svuotava con "remove loop" o con Delete. */
 assert("il guard 'non svuotare' esiste una volta sola",
   (eeSrc.match(/function wouldEmptyEnv/g) || []).length === 1);
+/* E il breakpoint dict lo riconosce col predicato del MODULO, non con una
+   copia locale: l'altro lettore di quella grafia e' loopSeedFrom
+   nell'Inspector, che di quel punto legge la y. Due copie e le due regole
+   divergono — ed e' successo: il lettore del loop trattava `{t, v}` come una
+   forma senza y mentre questo conteggio lo contava come punto vero. */
+assert("il dict {t, v} lo riconosce il modulo, non una copia locale",
+  /E\.isDictBreakpoint\(it\)/.test(eeSrc)
+  && !/const isDictBP = /.test(eeSrc));
 /* Una asserzione NOMINATA per ciascuna via, non un conteggio: il conteggio
    includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
    e quella scoperta era proprio il ramo del breakpoint, la via storica e
