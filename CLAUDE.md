@@ -777,8 +777,10 @@ parameters through `toggleStratParam` — and no `ParamRow` calls
 `toggleMode("voicesNum")` or `toggleMode("scatter")`, so those two branches of
 it are not the live rows. The live ones carried the whole defect, both halves:
 the flat ramp on the lit "env", and `env[0][1]` on the way back — worse there
-than a wrong number, since on a compact block `env[0][1]` is the pattern's
-*second point*, i.e. an array written as the value of `num_voices`. So the
+than a wrong number, since a compact block gives up its *end time* under that
+index when it sits inside an array, and the pattern's *second point* — an array
+— in the direct spelling: neither of them a number of voices, and `|| default`
+waves both through because both are truthy. So the
 no-op guard sits in `ParamRow.handleMode` (`primitives.jsx`), the one place
 where the condition **is** the Seg's `value` by construction, for every row of
 the editor and for the next one added. `toggleMode` keeps its own: it reads the

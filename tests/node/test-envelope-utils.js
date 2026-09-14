@@ -1631,12 +1631,18 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
       runVoice("num", { num: null, numEnv: { type: "cubic", points: [[0, 4], [1, 9]] } }, "scalar").num === 4);
     assert("…e quella di un BP group, che si desugara prima di leggere",
       runVoice("num", { num: null, numEnv: [[[[0, 4], [1, 9]], "cubic"]] }, "scalar").num === 4);
-    /* Il blocco compatto e' la sola grafia senza y — e qui `env[0][1]` non era
-       nemmeno un numero: e' il secondo PUNTO del pattern, cioe' un array
-       scritto come valore del parametro. */
+    /* Il blocco compatto e' la sola grafia senza y, e le sue due scritture
+       sbagliavano ognuna a modo suo: dentro un array `env[0][1]` e' il TEMPO
+       FINALE del blocco (2), nella forma diretta — `param: [pattern, end,
+       n_reps]`, che il motore accetta — e' il secondo PUNTO del pattern, cioe'
+       un array scritto come valore del parametro. Nessuno dei due e' un numero
+       di voci, e il `|| 1` li lasciava passare entrambi perche' sono truthy. */
     const blk = runVoice("num", { num: null, numEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, "scalar");
-    assert("…e un blocco compatto ripiega sul default, non scrive un array",
+    assert("…e un blocco compatto ripiega sul default, non scrive il tempo finale",
       blk.num === 1, JSON.stringify(blk.num));
+    const bare = runVoice("num", { num: null, numEnv: [[[0, 0.1], [0.5, 0.2]], 2, 4] }, "scalar");
+    assert("…e nella forma diretta non scrive un array come numero di voci",
+      bare.num === 1, JSON.stringify(bare.num));
     assert("scatter: stessa lettura, e il blocco compatto ripiega sul suo default",
       runVoice("scatter", { scatter: null, scatterEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, "scalar").scatter === 0);
     assert("scatter: e uno zero letto resta zero — «nessuno sparpaglio»",
