@@ -1225,10 +1225,15 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
         modeFor("loopStart", "scalar", { loopStartEnv: [[0, 0], [1, 0.5]] }, 8).loopStart === 0);
     }
 
-    assert("loopSeedFrom passa da unwrapEnv e dai predicati del modulo, non da env[0][1]",
-      /window\.PGEEnv\.unwrapEnv\(env\)\.items/.test(seedFromDecl)
-      && /window\.PGEEnv\.isBreakpoint\(bp\)/.test(seedFromDecl)
-      && /window\.PGEEnv\.isDictBreakpoint\(bp\)/.test(seedFromDecl)
+    /* Il lettore non e' piu' scritto qui: la domanda «la y del primo
+       breakpoint, qualunque grafia abbia» non ha niente di loop — se la fanno
+       tutti i toggle env→scalare — e finche' la risposta stava in un solo
+       handler le altre dodici tenevano la versione rotta. loopSeedFrom resta,
+       ma come involucro che aggiunge il ripiego suo (loopSeedWhole); il corpo
+       e' window.PGEEnv.firstBreakpointY, misurato in test-bp-groups.js. */
+    assert("loopSeedFrom e' l'involucro del lettore del modulo, non una sua copia",
+      /window\.PGEEnv\.firstBreakpointY\(env, fallback !== undefined \? fallback : loopSeedWhole\)/.test(seedFromDecl)
+      && !/isBreakpoint\(bp\)/.test(inspSrc)
       && !/typeof env\[0\]\[1\] === "number"/.test(inspSrc));
     /* Il predicato del dict sta nel modulo e ha DUE lettori: wouldEmptyEnv, che
        conta i punti veri, e loopSeedFrom, che ne legge la y. Finche' ne aveva
@@ -1368,6 +1373,162 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       && !/loopEndEnv \? "—" : 1\)\}/.test(inspSrc)
       && !/loopDurEnv \? "—" : 1\)\}/.test(inspSrc));
   }
+}
+
+/* ============================================================================
+ * Il Seg scalare↔env: il click che non chiede niente, e la curva sostituita
+ *
+ * `Seg` chiama onChange anche sul bottone GIA' ACCESO (primitives.jsx). Il Seg
+ * di loop_unit l'ha imparato con #149, quello loop_end ↔ loop_dur poco fa —
+ * ma il terzo, quello scalare↔env di ogni ParamRow, passa da toggleMode, e li'
+ * il ramo `env` non guarda l'envelope: legge lo SCALARE, che in modalita' env
+ * e' null, e semina una rampa costante sul default. Cioe' la curva dell'utente
+ * sostituita da una riga piatta, su QUALUNQUE parametro, per un click che non
+ * l'aveva chiesta.
+ * E il verso opposto — env→scalare — leggeva `env[0][1] || default`, che e' la
+ * domanda a cui firstBreakpointY risponde: qui si misura che i dodici rami la
+ * facciano a lui e non ognuno per conto suo.
+ * Stessa tecnica del blocco sopra: si ESEGUE toggleMode estratto dal sorgente,
+ * con il getMode vero accanto — la condizione del no-op dev'essere la stessa
+ * che accende il bottone, e ricostruirla nel test sarebbe la seconda copia che
+ * il ritorno anticipato esiste per non avere.
+ * ========================================================================== */
+console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso ──");
+{
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  const declOf = (name) =>
+    (new RegExp("const " + name + " = [\\s\\S]*?;").exec(inspSrc) || [""])[0];
+  // Brace matching: getMode e toggleMode hanno corpi pieni di `;`, quindi la
+  // regex di declOf non basta — si conta la profondita' come fa depthAt in
+  // source-guard.js.
+  const fnOf = (needle) => {
+    const at = inspSrc.indexOf(needle);
+    if (at < 0) return "";
+    const open = inspSrc.indexOf("{", at + needle.length - 1);
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(at, j + 1) + ";";
+    }
+    return "";
+  };
+  const getModeSrc  = fnOf("const getMode = (k, fallback) => {");
+  const toggleSrc   = fnOf("function toggleMode(k, newMode) {");
+  const setModeSrc  = declOf("setMode");
+  assert("getMode, setMode e toggleMode sono estraibili dal sorgente",
+    getModeSrc.length > 0 && toggleSrc.length > 0 && setModeSrc.length > 0);
+
+  /* Il vero toggleMode, con il vero getMode accanto: quel che arriva a
+     onChange e' quel che l'Inspector scriverebbe. `paramModes` parte vuoto —
+     e' lo stato di una sessione appena aperta, dove la modalita' la dice lo
+     stream — e loopSeedFrom e' costruito dalla sua dichiarazione vera. */
+  const runToggle = (k, newMode, stream, seed) => {
+    let out = null, modeWritten = null;
+    const seedWhole = seed === undefined ? 8 : seed;
+    new Function("paramModes", "setParamModes", "stream", "onChange", "window",
+                 "loopSeedWhole", "loopSeedFrom", "k", "newMode",
+      setModeSrc + "\n" + getModeSrc + "\n" + toggleSrc + "\ntoggleMode(k, newMode);")(
+      {}, (m) => { modeWritten = m[k]; }, stream, (p) => { out = p; }, window, seedWhole,
+      new Function("loopSeedWhole", declOf("loopSeedFrom") + "\nreturn loopSeedFrom;")(seedWhole),
+      k, newMode);
+    return { out, modeWritten };
+  };
+
+  {
+    /* La regressione, su un parametro qualunque: la curva in piedi e un click
+       sul bottone `env` che e' gia' acceso. Prima il ramo seminava
+       [[0,0],[1,0]] — il default di pan — sopra i breakpoint dell'utente. */
+    const r = runToggle("pan", "env", { pan: null, panEnv: [[0, 0.3], [1, 0.9]] });
+    assert("click sul bottone env già acceso: nessuna modifica, la curva resta",
+      r.out === null && r.modeWritten === null, JSON.stringify(r.out));
+    /* …e non e' un caso di pan: i rami sono dodici, e tutti seminano allo
+       stesso modo. Uno per famiglia — stream, grain, pointer, pitch, voices. */
+    const victims = [
+      ["density",       { density: null, densityEnv: [[0, 3], [1, 9]] }],
+      ["grainDur",      { grain: { duration: null, durationEnv: [[0, 0.02], [1, 0.2]] } }],
+      ["speedRatio",    { pointer: { speedRatio: null, speedRatioEnv: [[0, 0.5], [1, 2]] } }],
+      ["pitch",         { pitch: { value: null, valueEnv: [[0, -12], [1, 12]] } }],
+      ["voicesNum",     { voices: { num: null, numEnv: [[0, 2], [1, 6]] } }],
+      ["loopEnd",       { pointer: { loopEnd: null, loopEndEnv: [[0, 1], [1, 6]] } }],
+      ["durationRange", { grain: { durationRange: null, durationRangeEnv: [[0, 0.01], [1, 0.05]] } }],
+      ["offsetRange",   { pointer: { offsetRange: null, offsetRangeEnv: [[0, 0.1], [1, 0.4]] } }],
+      ["panRange",      { panRange: null, panRangeEnv: [[0, 10], [1, 90]] }],
+    ];
+    const survived = victims.filter(([k, st]) => runToggle(k, "env", st).out === null);
+    assert("e lo stesso su ognuna delle famiglie di parametri",
+      survived.length === victims.length,
+      victims.filter(([k]) => !survived.some(([s]) => s === k)).map(([k]) => k).join(", "));
+    /* Dal lato scalare il click era gia' a vuoto: nessuna curva da perdere, ma
+       uno scalare riscritto uguale e' comunque un passo di undo e uno stem
+       marcato sporco per niente. */
+    const sc = runToggle("pan", "scalar", { pan: 0.5, panEnv: null });
+    assert("…e sul bottone scalar già acceso non si riscrive lo scalare",
+      sc.out === null && sc.modeWritten === null, JSON.stringify(sc.out));
+  }
+  {
+    // Il click che chiede davvero continua a passare, nei due versi.
+    const toEnv = runToggle("pan", "env", { pan: 0.5, panEnv: null });
+    assert("scalare→env vero: semina la rampa costante sullo scalare",
+      toEnv.out !== null && eq(toEnv.out.panEnv, [[0, 0.5], [1, 0.5]]) && toEnv.modeWritten === "env",
+      JSON.stringify(toEnv.out));
+    const toSc = runToggle("pan", "scalar", { pan: null, panEnv: [[0, 0.3], [1, 0.9]] });
+    assert("env→scalare vero: la y del primo breakpoint",
+      toSc.out !== null && toSc.out.pan === 0.3 && toSc.out.panEnv === null,
+      JSON.stringify(toSc.out));
+  }
+  {
+    /* L'altro verso del difetto: `env[0][1] || default`. Le tre grafie su cui
+       sbagliava, misurate sui rami veri — e la prima l'editor la scrive da se',
+       appena l'interp globale di una curva di soli BP non e' lineare. */
+    const wrapped = runToggle("pan", "scalar", { pan: null, panEnv: { type: "cubic", points: [[0, 0.3], [1, 0.9]] } });
+    assert("env→scalare su una curva wrappata {type, points}: la y si legge lo stesso",
+      wrapped.out !== null && wrapped.out.pan === 0.3, JSON.stringify(wrapped.out));
+    /* Un BP group come primo item: `env[0][1]` e' la STRINGA dell'interp, e
+       `|| default` la lasciava passare — `pan: "cubic"` scritto nello YAML. */
+    const group = runToggle("pan", "scalar", { pan: null, panEnv: [[[[0, 0.3], [1, 0.9]], "cubic"]] });
+    assert("…e un BP group non scrive il nome dell'interp come valore",
+      group.out !== null && group.out.pan === 0.3, JSON.stringify(group.out));
+    /* Un blocco compatto e' la sola grafia senza y: li' `[1]` e' il ratio
+       della distribuzione, e il ripiego e' la risposta giusta. */
+    const block = runToggle("pan", "scalar", { pan: null, panEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] });
+    assert("…e un blocco compatto ripiega sul default, non scrive il ratio",
+      block.out !== null && block.out.pan === 0, JSON.stringify(block.out));
+    /* E uno zero letto e' uno zero: con `|| default` un pan al centro, una
+       probabilita' «mai», un loop_end a inizio file diventavano la costante. */
+    const zero = runToggle("speedRatio", "scalar", { pointer: { speedRatio: null, speedRatioEnv: [[0, 0], [1, 2]] } });
+    assert("…e uno zero letto non diventa il default",
+      zero.out !== null && zero.out.pointer.speedRatio === 0, JSON.stringify(zero.out));
+    // Il ripiego resta quello del parametro, non uno solo per tutti.
+    const fb = runToggle("voicesNum", "scalar", { voices: { num: null, numEnv: [] } });
+    assert("il ripiego è ancora il default del parametro",
+      fb.out !== null && fb.out.voices.num === 1, JSON.stringify(fb.out));
+    /* read_direction ha il suo ramo — la y si snappa al segno, perche' il
+       dominio e' l'insieme {-1, +1} e uno 0 e' un errore di parse. */
+    const rd = runToggle("readDirection", "scalar", { grain: { readDirection: null, readDirectionEnv: { type: "step", points: [[0, -0.4], [1, 1]] } } });
+    assert("read_direction: la y wrappata si legge e si snappa al segno",
+      rd.out !== null && rd.out.grain.readDirection === -1, JSON.stringify(rd.out));
+  }
+
+  // …e il cablaggio, perché i rami sopra valgono solo se sono quelli veri.
+  assert("il ritorno anticipato legge la stessa domanda che accende il bottone",
+    /if \(newMode === getMode\(k\)\) return;/.test(inspSrc)
+    && (inspSrc.match(/mode=\{getMode\("(\w+)"\)\} onMode=\{\(m\) => toggleMode\("\1", m\)\}/g) || []).length === 16);
+  assert("nessun ramo legge più la curva con env[0][1]",
+    !/Env && \w+\.\w+Env\[0\] && /.test(inspSrc)
+    && !/stream\[f\.ek\] && stream\[f\.ek\]\[0\]/.test(inspSrc)
+    && !/\(items && items\[0\] && items\[0\]\[1\]\)/.test(inspSrc));
+  /* Dodici rami piu' loopSeedFrom, che e' l'involucro con il ripiego del loop:
+     tredici letture, nessuna scritta a mano. */
+  assert("i dodici rami di toggleMode chiedono al lettore del modulo",
+    (inspSrc.match(/window\.PGEEnv\.firstBreakpointY\(/g) || []).length === 13);
+  /* I due Seg di deviation_probability sono il terzo e il quarto con lo stesso
+     difetto, e non passano da toggleMode: la guardia e' loro, e la copertura
+     sta in test-deviation-probability.js. Qui si guarda solo che ci sia. */
+  assert("anche i due Seg di deviation_probability hanno il loro no-op",
+    /if \(m === dMode\) return;/.test(inspSrc)
+    && /if \(m === pMode\) return;/.test(inspSrc)
+    && /const dMode = dIsEnv \? "env" : "scalar";/.test(inspSrc)
+    && /const pMode = isEnv \? "env" : "scalar";/.test(inspSrc));
 }
 
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
