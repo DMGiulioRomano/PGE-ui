@@ -762,11 +762,17 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // una durata come 3.33333 l'arrotondamento scavalcherebbe il cap di un
   // decimillesimo, ed e' proprio il cap che questo seme sta cercando di non
   // superare.
-  const loopSeedWhole = loopMax != null ? Math.floor(loopMax * 1e4) / 1e4 : 1;
+  // Il `|| loopMax` e' il pavimento del troncamento: su un sample piu' corto di
+  // un decimillesimo di secondo `Math.floor(loopMax * 1e4)` e' 0, e il seme
+  // diventerebbe una finestra di loop lunga zero — sotto il minimo statico di
+  // loop_dur e degenere per loopBoundsError. Meglio il cap intero: superarlo di
+  // qualche cifra sotto la soglia del troncamento e' il male minore rispetto a
+  // seminare un valore che il motore rifiuta.
+  const loopSeedWhole = loopMax != null ? (Math.floor(loopMax * 1e4) / 1e4 || loopMax) : 1;
   // E il valore da cui si riparte quando al posto dello scalare c'e' una
   // curva: la y del primo breakpoint. «Il primo breakpoint» non e' `env[0]` —
   // una forma wrappata va unwrappata, un BP group desugarato, e in un blocco
-  // compatto `[1]` e' il RATIO della distribuzione, non una posizione nel
+  // compatto `[1]` e' l'END_TIME del blocco, non una posizione nel
   // sample — e la domanda non ha niente di loop: se la fa ogni toggle
   // env→scalare. Quindi la risposta sta nel modulo (PGEEnv.firstBreakpointY,
   // che la documenta) e qui resta solo il ripiego, che e' del chiamante perche'
@@ -782,14 +788,30 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // creano le righe il cui suffisso loopUnitSuffix fa gia' tacere: lasciarle
   // fisse sarebbe il menu che contraddice la riga che apre.
   const loopNormalized = loopUnit.unit === "normalized";
-  const loopDomain = loopNormalized ? "∈ [0,1] × sample_dur" : "(s)";
-  const loopEndDomain = loopNormalized ? "∈ [0,1] × sample_dur" : "(s) ∈ [0, sample_dur]";
+  // …e su una grafia fuori vocabolario non se ne dichiara nessuno. loopUnitInfo
+  // legge `normalised` come assoluto per esclusione, quindi senza questo filtro
+  // le tre voci direbbero «(s)» accanto alla riga rossa che dichiara l'unita'
+  // non riconosciuta e sopra righe che loopUnitSuffix lascia senza «s»: le due
+  // affermazioni opposte che questo blocco esiste per togliere, rimesse dal
+  // lato del menu. La regola e' quella di loopUnitSuffix — se non si sa che
+  // unita' sia, non si dice in che unita' sia — e le clausole qui sotto sono
+  // opzionali apposta: spariscono invece di mentire.
+  const loopUnitKnown = !loopUnitErr;
+  const loopDomain = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0,1] × sample_dur" : "(s)");
+  const loopEndDomain = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0,1] × sample_dur" : "(s) ∈ [0, sample_dur]");
   // Il solo intervallo, senza l'unita': lo usa la riga di hint sotto le righe
   // del loop, dove l'unita' la dichiara gia' il selettore due righe piu' giu'.
-  const loopEndRange = loopNormalized ? "∈ [0, 1]" : "∈ [0, sample_dur]";
+  const loopEndRange = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0, 1]" : "∈ [0, sample_dur]");
   // Il riferimento contro cui si misura «oltre la fine del file»: la fine del
   // sample vale 1 in normalized e sample_dur in secondi.
   const loopFileEnd = loopNormalized ? "1" : "sample_dur";
+  // La frase sul loop a cavallo della fine del file NOMINA quel riferimento,
+  // quindi segue la stessa regola: senza unita' riconosciuta non c'e' nemmeno
+  // un «oltre la fine» da scrivere.
+  const loopStraddle = loopUnitKnown
+    ? ` — loop_start+loop_dur > ${loopFileEnd} ⇒ loop straddling the file end` : "";
+  // Una clausola che tace non deve lasciare due spazi o una virgola orfana.
+  const loopClause = (c) => (c ? " " + c : "");
   // grain.duration_unit (PGE #158, tre unità da PGE v5.2.0 / #171). È un
   // meta-parametro: governa insieme grain.duration e grain.duration_range, e
   // con qualunque unità che non sia 'seconds' il motore pretende una duration
@@ -1325,7 +1347,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <div className="pge-prow hint" style={{paddingTop:0}}>
                       <span className="k" /><span />
                       <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        loop_end {loopEndRange} · per un loop oltre la fine del file usa loop_dur
+                        {`loop_end${loopClause(loopEndRange)} · per un loop oltre la fine del file usa loop_dur`}
                       </span>
                       <span />
                     </div>
@@ -1432,11 +1454,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
               ) : null}
               <AddParamMenu
                 options={[
-                  { key: "loopStart",   label: "loop_start",   desc: `loop window start ${loopDomain} — confines the read to [loop_start, loop_end)`,
+                  { key: "loopStart",   label: "loop_start",   desc: `loop window start${loopClause(loopDomain)} — confines the read to [loop_start, loop_end)`,
                     exists: stream.pointer.loopStart != null, def: 0 },
-                  { key: "loopEnd",     label: "loop_end",     desc: `loop end ${loopEndDomain}, must be > loop_start — mutex w/ loop_dur, has priority`,
+                  { key: "loopEnd",     label: "loop_end",     desc: `loop end${loopClause(loopEndDomain)}, must be > loop_start — mutex w/ loop_dur, has priority`,
                     exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: loopSeedWhole },
-                  { key: "loopDur",     label: "loop_dur",     desc: `loop window length ${loopDomain} — loop_start+loop_dur > ${loopFileEnd} ⇒ loop straddling the file end`,
+                  { key: "loopDur",     label: "loop_dur",     desc: `loop window length${loopClause(loopDomain)}${loopStraddle}`,
                     exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: loopSeedWhole },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },

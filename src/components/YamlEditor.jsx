@@ -71,6 +71,20 @@ function computeAnnotations(stream, sampleRec) {
     // suffisso unit-aware della riga di la' sono due affermazioni opposte.
     // Il tetto viene da loopEnvMax, la sorgente unica gia' letta dall'Inspector
     // e dall'EnvelopeEditor, non da una seconda copia della regola.
+    // …e la grafia dell'unita' viene prima del tetto, perche' e' il tetto a
+    // dipendere da lei. Fuori dal vocabolario (PGE #222) il motore alza
+    // InvalidFieldValueError sull'unita' senza mai guardare la finestra, e
+    // loopUnitInfo legge quella grafia come assoluta PER ESCLUSIONE: misurare
+    // in secondi darebbe un rosso che dichiara un'unita' diversa da quella
+    // scritta, mentre la tab Preview su quelle stesse righe non mette nemmeno
+    // la «s» (loopUnitSuffix tace apposta). Quindi il rosso qui e' quello vero
+    // — l'unita' — e il controllo sulla finestra tace, che e' la stessa regola
+    // del cap ignoto tre righe piu' giu'.
+    const loopUnitErr = window.PGEEnvUtils.loopUnitError(ptr);
+    if (loopUnitErr) {
+      byKey.set("loop_unit", { kind: "err",
+        msg: `loop_unit: ${JSON.stringify(loopUnitErr.value)} is not a recognized unit — the engine rejects the stream (${loopUnitErr.units.join(", ")})` });
+    }
     const loopCap = window.PGEEnvUtils.loopEnvMax(stream, sampleRec.duration);
     const loopNormalized = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized";
     // loopCap null = secondi con la durata ignota: non c'e' niente contro cui
@@ -78,7 +92,7 @@ function computeAnnotations(stream, sampleRec) {
     const capMsg = loopNormalized
       ? "1 (loop_unit: normalized — coordinates are [0,1] × sample duration)"
       : `sample duration (${loopCap != null ? loopCap.toFixed(3) : "?"} s)`;
-    const overCap = (v) => loopCap != null && v > loopCap;
+    const overCap = (v) => !loopUnitErr && loopCap != null && v > loopCap;
     if (!ptr.loopEndEnv && ptr.loopEnd != null && overCap(ptr.loopEnd)) {
       byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ ${capMsg}` });
     }
