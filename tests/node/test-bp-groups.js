@@ -203,9 +203,9 @@ console.log("\n── firstBreakpointY: la y del primo punto, in ogni grafia ─
   assert("BP group in forma diretta (non annidato in una lista)",
     FB([[[0, 3], [1, 4]], "cubic"], "FB") === 3);
   /* E il blocco compatto e' la grafia che una y non ce l'ha davvero: in `[1]`
-     c'e' il RATIO della distribuzione, un numero che con il valore del
+     c'e' l'END_TIME del blocco, un numero che con il valore del
      parametro non c'entra niente. Qui il ripiego e' la risposta giusta. */
-  assert("blocco compatto come primo item: ripiega, non scrive il ratio",
+  assert("blocco compatto come primo item: ripiega, non scrive l'end_time",
     FB([[[[0, 0.1], [0.5, 0.2]], 2, 4]], "FB") === "FB");
   assert("blocco compatto in forma di dict: ripiega",
     FB({ type: "geometric", ratio: 2, n_reps: 4 }, "FB") === "FB");

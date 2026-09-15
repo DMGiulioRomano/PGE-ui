@@ -557,8 +557,8 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
       } else {
         // Stessa lettura delle altre due righe del loop, con il ripiego di
         // questa: un `|| 0` non distingue la curva che vale zero da quella che
-        // non si sa leggere, e su un blocco compatto restituiva il ratio come
-        // posizione nel sample.
+        // non si sa leggere, e su un blocco compatto restituiva l'end_time del
+        // blocco come posizione nel sample.
         const v = loopSeedFrom(cur.loopStartEnv, 0);
         onChange({ pointer: { ...cur, loopStart: v, loopStartEnv: null } });
       }

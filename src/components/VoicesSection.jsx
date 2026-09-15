@@ -114,7 +114,7 @@ function toggleStratParam(v, dim, paramKey, defaultVal, newMode, onChange) {
     // breakpoint» non e' `env[0]` — una curva di soli BP con interp globale non
     // lineare l'editor la SCRIVE `{type, points}` (wrapEnv), un BP group come
     // primo item ha in `[1]` la stringa dell'interp, e in un blocco compatto
-    // `[1]` e' il ratio della distribuzione. Le dodici righe delle strategie
+    // `[1]` e' l'end_time del blocco. Le dodici righe delle strategie
     // passano tutte di qui, quindi la copia locale le sbagliava tutte insieme.
     const val = window.PGEEnv.firstBreakpointY(cur[envKey], defaultVal);
     onChange({ voices: { ...v, [dim]: { ...cur, [paramKey]: val, [envKey]: null } } });

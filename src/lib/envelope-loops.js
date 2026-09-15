@@ -192,8 +192,13 @@
          SCRIVE `{type, points}` (wrapEnv), e lì `env[0]` non esiste;
        · un BP group come primo item è `[points, interp]`, dove `[1]` è la
          STRINGA dell'interp — scritta tale e quale come valore del parametro;
-       · un blocco compatto ha in `[1]` il RATIO della distribuzione, un numero
-         che con il valore del parametro non c'entra niente.
+       · un blocco compatto ha in `[1]` il suo END_TIME — il tempo assoluto
+         finale, si veda l'intestazione del modulo — e nella forma diretta
+         `param: [pattern, end, n_reps]` ha in `[1]` l'end_time ancora, mentre
+         `[0]` e' il pattern: numeri che con il valore del parametro non
+         c'entrano niente, e truthy entrambi, quindi un `|| default` li lascia
+         passare. Il ratio della distribuzione sta altrove (dentro `dist`, in
+         `[4]`): non e' mai lui il numero che finiva nello YAML.
      Si desugara quindi dopo aver unwrappato, e si chiede ai due predicati del
      modulo — le grafie di un punto sono due, `[t, v]` e `{t, v}` — così ogni
      forma che una y ce l'ha la dichiara. Ripiega solo su ciò che una y non ce
