@@ -1236,7 +1236,7 @@ see it; a script in `bin/` is looked at by nobody, and its natural tendency is
 to grow into a second, untested copy of those decisions. That is a rule with
 teeth: `test-suite-harness.js` requires the file to stay at most four code
 lines with a single trailing `exec`, refuses any `--root`/`--workspace`/
-`--port`/`--host` written inside it, and *runs* it — through a symlink, from a
+`--port`/`--host`/`--render-timeout` written inside it, and *runs* it — through a symlink, from a
 third folder, against a stub `server.py` — to check that the path resolution and
 the argument forwarding really work. That last half needs neither flask nor the
 sibling engine, so it runs in the node CI job too.
