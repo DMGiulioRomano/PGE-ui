@@ -1590,6 +1590,39 @@ assert("#42 presentation helpers loaded",
   const noDur = computeAnnotations(streamOf(pointerYaml(["loop_end: 9"])), { name: "test.wav" });
   assert("secondi con durata ignota: nessun rosso e nessun crash",
     !noDur.byKey.has("loop_end"), JSON.stringify([...noDur.byKey]));
+
+  /* — e una grafia fuori vocabolario non ha un tetto affatto ————————————
+     Dopo PGE #222 `normalised` non e' piu' «assoluto per esclusione»: il motore
+     alza InvalidFieldValueError sull'unita' e non guarda mai la finestra.
+     loopUnitInfo pero' quella grafia la legge ancora come assoluta — e' il suo
+     ripiego — quindi misurare la finestra darebbe un rosso che dichiara
+     un'unita' diversa da quella scritta, mentre sulle stesse righe la tab
+     Preview non mette nemmeno la «s» (loopUnitSuffix tace apposta). Il rosso
+     quindi e' quello vero, l'unita', e la finestra tace: la stessa regola del
+     tetto ignoto qui sopra. */
+  const badUnit = computeAnnotations(
+    streamOf(pointerYaml(["loop_unit: normalised", "loop_end: 9"])),
+    { name: "test.wav", duration: 5 });
+  assert("unità fuori vocabolario: il rosso è sull'unità",
+    badUnit.byKey.get("loop_unit") && badUnit.byKey.get("loop_unit").kind === "err",
+    JSON.stringify([...badUnit.byKey]));
+  assert("…e nomina il vocabolario, come fa l'Inspector",
+    /normalised/.test((badUnit.byKey.get("loop_unit") || {}).msg || "")
+    && /seconds, absolute, normalized/.test((badUnit.byKey.get("loop_unit") || {}).msg || ""),
+    (badUnit.byKey.get("loop_unit") || {}).msg);
+  assert("…e la finestra tace, invece di misurarla in un'unità che non è quella scritta",
+    !badUnit.byKey.has("loop_end") && !badUnit.byKey.has("loop_dur"),
+    JSON.stringify([...badUnit.byKey]));
+  // Una grafia FALSY non e' un refuso: e' la chiave assente, che il
+  // serializzatore toglie (`ptr.loopUnit || undefined`) e il motore non vede
+  // mai. Li' il controllo torna quello dei secondi, come dice loopUnitInfo.
+  const falsyUnit = computeAnnotations(
+    streamOf(pointerYaml(["loop_unit: \"\"", "loop_end: 9"])),
+    { name: "test.wav", duration: 5 });
+  assert("grafia falsy: nessun rosso sull'unità, e la finestra si misura in secondi",
+    !falsyUnit.byKey.has("loop_unit")
+    && falsyUnit.byKey.get("loop_end") && falsyUnit.byKey.get("loop_end").kind === "err",
+    JSON.stringify([...falsyUnit.byKey]));
 }
 
 /* ============================================================

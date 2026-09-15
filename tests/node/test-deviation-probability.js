@@ -546,15 +546,41 @@ console.log("\n── i due Seg: il no-op e la y del primo breakpoint ──");
   const dModeSrc = /const dMode = [\s\S]*?;/.exec(inspSrc)[0];
   const pModeSrc = /const pMode = [\s\S]*?;/.exec(inspSrc)[0];
 
+  /* Il Seg globale e' una ParamRow, quindi il click che non chiede niente lo
+     ferma `handleMode` di primitives.jsx, non il suo onMode: una copia
+     nell'handler sarebbe la seconda, e con la sola meta' «bottone acceso» —
+     mentre la guardia vera legge anche `value` ed `envValue`, cioe' se il
+     valore e' gia' scritto. Quindi qui si compone come in interfaccia: la
+     guardia vera davanti, l'handler vero dietro, e le due props della riga
+     nella grafia con cui l'Inspector le passa. */
+  const handleModeSrc = (() => {
+    const src = require("fs").readFileSync(
+      require("path").join(__dirname, "../../src/components/primitives.jsx"), "utf8");
+    const at = src.indexOf("const handleMode = (m) => {");
+    const open = src.indexOf("{", src.indexOf("=>", at));
+    let d = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === "{") d++;
+      else if (src[j] === "}" && --d === 0) return src.slice(at, j + 1) + ";";
+    }
+    return "";
+  })();
+  assert("la guardia di ParamRow è estraibile dal sorgente", handleModeSrc.length > 0);
+
   const runGlobal = (d) => {
     const dIsEnv = D.isEnvValue(d);
     const dScalar = typeof d === "boolean" ? 1 : d;
     const mode = new Function("dIsEnv", dModeSrc + "\nreturn dMode;")(dIsEnv);
+    // value={dIsEnv ? "—" : dScalar} · envValue={dIsEnv ? desugar(unwrap(d)) : null}
+    const value = dIsEnv ? "\u2014" : dScalar;
+    const envValue = dIsEnv ? window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(d).items) : null;
     const fire = (m) => {
       let out;
       new Function("m", "d", "dIsEnv", "dScalar", "dMode", "PGEEnv", "onChange",
-        "(" + "(m) => " + globalBody + ")(m);")(
-        m, d, dIsEnv, dScalar, mode, window.PGEEnv, (p) => { out = p; });
+                   "mode", "value", "envValue",
+        "const onMode = (m) => " + globalBody + ";\n" + handleModeSrc + "\nhandleMode(m);")(
+        m, d, dIsEnv, dScalar, mode, window.PGEEnv, (p) => { out = p; },
+        mode, value, envValue);
       return out;
     };
     return { mode, fire };
@@ -623,11 +649,18 @@ console.log("\n── i due Seg: il no-op e la y del primo breakpoint ──");
   }
 
   // …e il cablaggio, perché gli handler sopra valgono solo se sono quelli veri.
-  assert("i due no-op leggono la stessa domanda che accende il bottone",
-    /mode=\{dMode\}/.test(inspSrc) && /if \(m === dMode\) return;/.test(inspSrc)
-    && /value=\{pMode\}/.test(inspSrc) && /if \(m === pMode\) return;/.test(inspSrc)
-    && !/mode=\{dIsEnv \? "env" : "scalar"\}/.test(inspSrc)
+  /* I due Seg hanno lo stesso difetto e due guardie diverse, perche' sono due
+     controlli diversi: il per-parametro il suo Seg se lo costruisce, quindi la
+     guardia e' sua; quello globale e' una ParamRow, e li' la guardia sta a
+     monte — dove la condizione oltre al bottone acceso vede anche se il valore
+     e' scritto. Una copia nell'onMode sarebbe la seconda, con meta' della
+     domanda. In tutti e due i casi la condizione e' il `value` del suo Seg. */
+  assert("il no-op del per-parametro legge la stessa domanda che accende il bottone",
+    /value=\{pMode\}/.test(inspSrc) && /if \(m === pMode\) return;/.test(inspSrc)
     && !/value=\{isEnv \? "env" : "scalar"\}/.test(inspSrc));
+  assert("…e il globale passa dalla ParamRow guardata, senza copie nell'handler",
+    /mode=\{dMode\}/.test(inspSrc) && !/if \(m === dMode\) return;/.test(inspSrc)
+    && !/mode=\{dIsEnv \? "env" : "scalar"\}/.test(inspSrc));
   assert("e la y del primo breakpoint la chiedono al lettore del modulo",
     (inspSrc.match(/PGEEnv\.firstBreakpointY\(/g) || []).length >= 2
     && !/\(items && items\[0\] && items\[0\]\[1\]\)/.test(inspSrc));

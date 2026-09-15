@@ -1048,16 +1048,25 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
      Stessa tecnica del blocco sopra: si ESEGUONO le dichiarazioni estratte dal
      sorgente, invece di cercarci dentro una stringa. */
   {
-    const seedNames = ["loopMax", "loopUnit", "loopNormalized", "loopSeedWhole",
-                       "loopDomain", "loopEndDomain", "loopEndRange", "loopFileEnd"];
+    const seedNames = ["loopMax", "loopUnit", "loopUnitErr", "loopUnitKnown",
+                       "loopNormalized", "loopSeedWhole",
+                       "loopDomain", "loopEndDomain", "loopEndRange", "loopFileEnd",
+                       "loopStraddle", "loopClause"];
     const seedDecls = seedNames.map(declOf);
     assert("le dichiarazioni del seme e del dominio sono estraibili dal sorgente",
       seedDecls.every(d => d.length > 0),
       seedNames.filter((_, i) => !seedDecls[i].length).join(", "));
+    /* Le tre voci del menu e la riga di hint si COMPONGONO qui con le stesse
+       espressioni del sorgente (loopClause, loopStraddle), non si riscrivono:
+       cosi' il test misura la frase che l'utente legge e non una sua copia. */
     const menuFor = (stream, sampleDur) => new Function("stream", "sampleDur", "window",
       seedDecls.join("\n")
       + "\nreturn { seed: loopSeedWhole, domain: loopDomain, endDomain: loopEndDomain,"
-      + "         endRange: loopEndRange, fileEnd: loopFileEnd };")(stream, sampleDur, window);
+      + "         endRange: loopEndRange, fileEnd: loopFileEnd, straddle: loopStraddle,"
+      + "         startDesc: `loop window start${loopClause(loopDomain)} \u2014 confines the read to [loop_start, loop_end)`,"
+      + "         endDesc:   `loop end${loopClause(loopEndDomain)}, must be > loop_start \u2014 mutex w/ loop_dur, has priority`,"
+      + "         durDesc:   `loop window length${loopClause(loopDomain)}${loopStraddle}`,"
+      + "         hint:      `loop_end${loopClause(loopEndRange)} \u00b7 per un loop oltre la fine del file usa loop_dur` };")(stream, sampleDur, window);
 
     {
       // Clip nato nell'editor: `loop_unit: normalized` esplicito. «Tutto il
@@ -1092,12 +1101,39 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       assert("durata del sample ignota: si ripiega su 1",
         menuFor({ pointer: {} }, undefined).seed === 1);
     }
+    {
+      /* La grafia fuori vocabolario, che PGE #222 ha reso fatale. loopUnitInfo
+         la legge come assoluta PER ESCLUSIONE, quindi senza filtro il menu
+         dichiarava i secondi — accanto alla riga rossa che dice che l'unita'
+         non e' riconosciuta e sopra righe che loopUnitSuffix lascia senza «s».
+         Sono le due affermazioni opposte che tutto questo blocco esiste per
+         togliere: qui la prosa tace, come tace il suffisso. */
+      const m = menuFor({ pointer: { loopUnit: "normalised" } }, 8);
+      assert("refuso nel vocabolario: nessuna delle tre frasi dichiara un dominio",
+        m.domain === "" && m.endDomain === "" && m.endRange === "" && m.straddle === "",
+        JSON.stringify(m));
+      assert("…e le frasi restano leggibili, senza spazi doppi né virgole orfane",
+        m.startDesc === "loop window start \u2014 confines the read to [loop_start, loop_end)"
+        && m.endDesc === "loop end, must be > loop_start \u2014 mutex w/ loop_dur, has priority"
+        && m.durDesc === "loop window length"
+        && m.hint === "loop_end \u00b7 per un loop oltre la fine del file usa loop_dur",
+        JSON.stringify([m.startDesc, m.endDesc, m.durDesc, m.hint]));
+      // …e il seme non si muove: e' il cap, che l'unita' sbagliata non cambia
+      // (loopEnvMax legge la stessa lettura per esclusione). Qui non c'e'
+      // niente da tacere, c'e' un numero.
+      assert("…e il seme resta il cap, che non dipende dalla frase", m.seed === 8);
+      /* Il troncamento a quattro decimali non deve inventare uno zero: sotto il
+         decimillesimo di secondo `Math.floor(cap * 1e4)` e' 0, e un loop lungo
+         zero e' degenere per loopBoundsError e sotto il minimo di loop_dur. */
+      assert("sample piu' corto del troncamento: il seme non collassa a zero",
+        menuFor({ pointer: {} }, 0.00005).seed === 0.00005);
+    }
 
     // …e il cablaggio, perché le dichiarazioni sopra servono solo se il menu le usa.
     assert("le tre voci prendono il dominio dall'unità, non da una stringa fissa",
-      /desc: `loop window start \$\{loopDomain\}/.test(inspSrc)
-      && /desc: `loop end \$\{loopEndDomain\}/.test(inspSrc)
-      && /desc: `loop window length \$\{loopDomain\}/.test(inspSrc)
+      /desc: `loop window start\$\{loopClause\(loopDomain\)\}/.test(inspSrc)
+      && /desc: `loop end\$\{loopClause\(loopEndDomain\)\}/.test(inspSrc)
+      && /desc: `loop window length\$\{loopClause\(loopDomain\)\}\$\{loopStraddle\}/.test(inspSrc)
       && /loop_start\+loop_dur > \$\{loopFileEnd\}/.test(inspSrc)
       && !/desc: "loop window start \(s\)/.test(inspSrc)
       && !/desc: "loop end \(s\) ∈ \[0, sample_dur\]/.test(inspSrc));
@@ -1106,8 +1142,15 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       && !/loopDurEnv != null, def: 1 \}/.test(inspSrc)
       && !/loopEndEnv != null, def: 1 \}/.test(inspSrc));
     assert("la riga di hint del loop_end segue l'unità",
-      /loop_end \{loopEndRange\}/.test(inspSrc)
+      /loop_end\$\{loopClause\(loopEndRange\)\}/.test(inspSrc)
       && !/loop_end ∈ \[0, sample_dur\] · per un loop/.test(inspSrc));
+    /* E il filtro sta a monte delle quattro frasi, una volta sola: se
+       `loopUnitKnown` smettesse di entrarci, il test sopra misurerebbe le
+       stringhe giuste di un menu che nel sorgente le compone senza. */
+    assert("la prosa del loop passa da loopUnitKnown, non dal solo loopNormalized",
+      /const loopUnitKnown = !loopUnitErr;/.test(inspSrc)
+      && (inspSrc.match(/!loopUnitKnown \? ""/g) || []).length === 3
+      && /const loopStraddle = loopUnitKnown/.test(inspSrc));
     // La terza porta dello stesso 1: il toggle loop_end ↔ loop_dur, quando
     // loop_start sta da solo e non c'è nessuna lunghezza da cui partire.
     // La catena del ripiego e' loopDur → loopDurEnv → loopSeedFrom →
@@ -1197,7 +1240,7 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
          un'altra cosa: in un blocco compatto `env[0][1]` e' il RATIO della
          distribuzione, un numero che con una posizione nel sample non c'entra
          niente, e il `typeof … === "number"` lo lasciava passare. */
-      assert("blocco compatto: ripiega sul seme, non scrive il ratio come lunghezza",
+      assert("blocco compatto: ripiega sul seme, non scrive l'end_time come lunghezza",
         modeFor("loopDur", "scalar", { loopDurEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, 8).loopDur === 8);
       /* Il dict `{t, v}` invece una y ce l'ha, ed e' `v`: il builder del
          motore lo normalizza in `[t, v]` prima di guardarlo
@@ -1219,7 +1262,7 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       // `loop_start` riparte da 0, come il suo seme nel menu.
       assert("loop_start: anche la sua curva wrappata si legge",
         modeFor("loopStart", "scalar", { loopStartEnv: { type: "cubic", points: [[0, 2], [1, 4]] } }, 8).loopStart === 2);
-      assert("loop_start: il ratio di un blocco compatto non diventa una posizione",
+      assert("loop_start: l'end_time di un blocco compatto non diventa una posizione",
         modeFor("loopStart", "scalar", { loopStartEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] }, 8).loopStart === 0);
       assert("loop_start: uno zero letto e' uno zero, non il ripiego",
         modeFor("loopStart", "scalar", { loopStartEnv: [[0, 0], [1, 0.5]] }, 8).loopStart === 0);
@@ -1435,35 +1478,18 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
   };
 
   {
-    /* La regressione, su un parametro qualunque: la curva in piedi e un click
-       sul bottone `env` che e' gia' acceso. Prima il ramo seminava
-       [[0,0],[1,0]] — il default di pan — sopra i breakpoint dell'utente. */
+    /* Il ramo che il no-op ferma, misurato senza la guardia davanti: e' quel
+       che ParamRow evita di far succedere, ed e' il motivo per cui la guardia
+       non puo' stare qui. Con la curva in piedi il ramo `env` NON la guarda:
+       legge lo scalare — null in quella modalita' — e semina la rampa costante
+       sul default, cioe' i breakpoint dell'utente sostituiti da una riga
+       piatta. La prova che il click non ci arriva sta nel blocco «Voices e
+       density ↔ fill_factor», dove la guardia vera gira col suo `mode`, la sua
+       `value` e il suo `envValue` in scope: le due meta' della condizione le ha
+       la riga, non questa funzione. */
     const r = runToggle("pan", "env", { pan: null, panEnv: [[0, 0.3], [1, 0.9]] });
-    assert("click sul bottone env già acceso: nessuna modifica, la curva resta",
-      r.out === null && r.modeWritten === null, JSON.stringify(r.out));
-    /* …e non e' un caso di pan: i rami sono dodici, e tutti seminano allo
-       stesso modo. Uno per famiglia — stream, grain, pointer, pitch, voices. */
-    const victims = [
-      ["density",       { density: null, densityEnv: [[0, 3], [1, 9]] }],
-      ["grainDur",      { grain: { duration: null, durationEnv: [[0, 0.02], [1, 0.2]] } }],
-      ["speedRatio",    { pointer: { speedRatio: null, speedRatioEnv: [[0, 0.5], [1, 2]] } }],
-      ["pitch",         { pitch: { value: null, valueEnv: [[0, -12], [1, 12]] } }],
-      ["voicesNum",     { voices: { num: null, numEnv: [[0, 2], [1, 6]] } }],
-      ["loopEnd",       { pointer: { loopEnd: null, loopEndEnv: [[0, 1], [1, 6]] } }],
-      ["durationRange", { grain: { durationRange: null, durationRangeEnv: [[0, 0.01], [1, 0.05]] } }],
-      ["offsetRange",   { pointer: { offsetRange: null, offsetRangeEnv: [[0, 0.1], [1, 0.4]] } }],
-      ["panRange",      { panRange: null, panRangeEnv: [[0, 10], [1, 90]] }],
-    ];
-    const survived = victims.filter(([k, st]) => runToggle(k, "env", st).out === null);
-    assert("e lo stesso su ognuna delle famiglie di parametri",
-      survived.length === victims.length,
-      victims.filter(([k]) => !survived.some(([s]) => s === k)).map(([k]) => k).join(", "));
-    /* Dal lato scalare il click era gia' a vuoto: nessuna curva da perdere, ma
-       uno scalare riscritto uguale e' comunque un passo di undo e uno stem
-       marcato sporco per niente. */
-    const sc = runToggle("pan", "scalar", { pan: 0.5, panEnv: null });
-    assert("…e sul bottone scalar già acceso non si riscrive lo scalare",
-      sc.out === null && sc.modeWritten === null, JSON.stringify(sc.out));
+    assert("senza guardia il ramo env pianta la rampa costante sopra la curva",
+      r.out !== null && eq(r.out.panEnv, [[0, 0], [1, 0]]), JSON.stringify(r.out));
   }
   {
     // Il click che chiede davvero continua a passare, nei due versi.
@@ -1488,10 +1514,10 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
     const group = runToggle("pan", "scalar", { pan: null, panEnv: [[[[0, 0.3], [1, 0.9]], "cubic"]] });
     assert("…e un BP group non scrive il nome dell'interp come valore",
       group.out !== null && group.out.pan === 0.3, JSON.stringify(group.out));
-    /* Un blocco compatto e' la sola grafia senza y: li' `[1]` e' il ratio
-       della distribuzione, e il ripiego e' la risposta giusta. */
+    /* Un blocco compatto e' la sola grafia senza y: li' `[1]` e' l'end_time
+       del blocco, e il ripiego e' la risposta giusta. */
     const block = runToggle("pan", "scalar", { pan: null, panEnv: [[[[0, 0.1], [0.5, 0.2]], 2, 4]] });
-    assert("…e un blocco compatto ripiega sul default, non scrive il ratio",
+    assert("…e un blocco compatto ripiega sul default, non scrive l'end_time",
       block.out !== null && block.out.pan === 0, JSON.stringify(block.out));
     /* E uno zero letto e' uno zero: con `|| default` un pan al centro, una
        probabilita' «mai», un loop_end a inizio file diventavano la costante. */
@@ -1510,9 +1536,26 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
   }
 
   // …e il cablaggio, perché i rami sopra valgono solo se sono quelli veri.
-  assert("il ritorno anticipato legge la stessa domanda che accende il bottone",
-    /if \(newMode === getMode\(k\)\) return;/.test(inspSrc)
+  /* Il ritorno anticipato non sta qui, e non e' pignoleria: la guardia ha
+     bisogno di sapere se la modalita' scelta e' GIA' SCRITTA, e «scritta» e'
+     una domanda per chiave che toggleMode non sa fare con una riga sola. Una
+     copia qui — la sola prima meta', `newMode === getMode(k)` — rifiutava anche
+     il click che materializza la chiave su una riga che mostra «—», cioe'
+     l'unico caso in cui le due domande divergono. Le sedici righe restano
+     contate: e' da li' che la guardia riceve il `mode` che le serve. */
+  assert("il no-op non e' una seconda copia dentro toggleMode",
+    !/if \(newMode === getMode\(k\)\) return;/.test(inspSrc)
     && (inspSrc.match(/mode=\{getMode\("(\w+)"\)\} onMode=\{\(m\) => toggleMode\("\1", m\)\}/g) || []).length === 16);
+  /* …e la guardia riceve anche l'altra meta': `envValue` dice se la curva
+     c'e'. Una ParamRow con onMode e senza envValue avrebbe una guardia cieca
+     su meta' della domanda — e nessun errore a dirlo. */
+  {
+    const rows = inspSrc.match(/<ParamRow[\s\S]*?\/>/g) || [];
+    const withMode = rows.filter((r) => /onMode=/.test(r));
+    assert("ogni ParamRow con onMode passa anche envValue, che la guardia legge",
+      withMode.length >= 16 && withMode.every((r) => /envValue=/.test(r)),
+      withMode.filter((r) => !/envValue=/.test(r)).map((r) => r.slice(0, 60)).join(" | "));
+  }
   assert("nessun ramo legge più la curva con env[0][1]",
     !/Env && \w+\.\w+Env\[0\] && /.test(inspSrc)
     && !/stream\[f\.ek\] && stream\[f\.ek\]\[0\]/.test(inspSrc)
@@ -1524,11 +1567,17 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
   /* I due Seg di deviation_probability sono il terzo e il quarto con lo stesso
      difetto, e non passano da toggleMode: la guardia e' loro, e la copertura
      sta in test-deviation-probability.js. Qui si guarda solo che ci sia. */
-  assert("anche i due Seg di deviation_probability hanno il loro no-op",
-    /if \(m === dMode\) return;/.test(inspSrc)
-    && /if \(m === pMode\) return;/.test(inspSrc)
-    && /const dMode = dIsEnv \? "env" : "scalar";/.test(inspSrc)
+  /* Dei due Seg di deviation_probability solo uno ha la guardia in casa: il
+     per-parametro, che il suo Seg se lo costruisce. Quello globale e' una
+     ParamRow, quindi la guardia e' quella di primitives — una copia nel suo
+     onMode sarebbe la seconda, e con la sola prima meta' della condizione. */
+  assert("il Seg per-parametro di deviation_probability ha il suo no-op",
+    /if \(m === pMode\) return;/.test(inspSrc)
     && /const pMode = isEnv \? "env" : "scalar";/.test(inspSrc));
+  assert("…e quello globale passa dalla ParamRow guardata, senza copie",
+    !/if \(m === dMode\) return;/.test(inspSrc)
+    && /const dMode = dIsEnv \? "env" : "scalar";/.test(inspSrc)
+    && /mode=\{dMode\}/.test(inspSrc));
 }
 
 /* ============================================================================
@@ -1584,19 +1633,47 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
   // Sentinella: `undefined` sarebbe indistinguibile da un onMode chiamato con
   // un valore assente, e qui la domanda e' proprio se sia stato chiamato.
   const NIENTE = Symbol("mai chiamato");
-  const clickMode = (mode, m) => {
+  /* La riga passa alla guardia tre cose e tutte e tre contano: quale bottone e'
+     acceso (`mode`), che numero mostra (`value`) e se ha una curva
+     (`envValue`). Il default riproduce la riga «piena» — uno scalare scritto,
+     nessuna curva — perche' e' lo stato in cui il no-op deve fermare tutto. */
+  const clickMode = (mode, m, opts) => {
+    const o = opts || {};
     let got = NIENTE;
-    new Function("mode", "onMode", "m", handleModeSrc + "\nhandleMode(m);")(
-      mode, (x) => { got = x; }, m);
+    new Function("mode", "value", "envValue", "onMode", "m", handleModeSrc + "\nhandleMode(m);")(
+      mode,
+      "value" in o ? o.value : (mode === "env" ? "\u2014" : 0.5),
+      "envValue" in o ? o.envValue : (mode === "env" ? [[0, 0.3], [1, 0.9]] : null),
+      (x) => { got = x; }, m);
     return got;
   };
   assert("click sul bottone già acceso: onMode non viene nemmeno chiamato",
     clickMode("env", "env") === NIENTE && clickMode("scalar", "scalar") === NIENTE);
   assert("…e il click che chiede davvero passa, nei due versi",
     clickMode("env", "scalar") === "scalar" && clickMode("scalar", "env") === "env");
+  /* …e «non chiede niente» non e' «il bottone e' acceso». Su una riga il cui
+     parametro NON c'e' — chiave assente, il motore ha un default, la riga mostra
+     «—» e nessun NumberField — quel click e' l'unica via d'ingresso: il ramo
+     scalare materializza la chiave. Rifiutarlo lasciava la riga senza modo di
+     scrivere. */
+  assert("bottone scalar acceso ma nessun valore scritto: il click passa, e materializza",
+    clickMode("scalar", "scalar", { value: "\u2014" }) === "scalar");
+  assert("…e con un numero scritto resta fermo, che e' il caso che la guardia copre",
+    clickMode("scalar", "scalar", { value: 0 }) === NIENTE);
+  /* Simmetrico dal lato env: `mode` puo' dire "env" mentre la curva non c'e'
+     (paramModes non si azzera al cambio di stream), e li' il click chiede
+     davvero — e' lo stesso ramo che semina la rampa dallo scalare. */
+  assert("bottone env acceso ma nessuna curva: il click passa",
+    clickMode("env", "env", { envValue: null }) === "env");
   assert("la condizione della guardia è il `value` del Seg, non una sua copia",
     /value=\{mode\} onChange=\{handleMode\}/.test(primSrc)
-    && /if \(m === mode\) return;/.test(handleModeSrc));
+    && /if \(m === mode && written\) return;/.test(handleModeSrc));
+  /* E le due meta' vengono da quel che la riga MOSTRA, non da una terza
+     sorgente: `value` e' il numero del campo, `envValue` la curva del mini
+     grafico — gli stessi che il render legge dieci righe piu' giu'. */
+  assert("…e «gia' scritta» si legge da value/envValue, quelli che la riga disegna",
+    /const written = m === "env" \? envValue != null : typeof value === "number";/.test(handleModeSrc)
+    && /mode === "scalar" \|\| !envValue \?/.test(primSrc));
 
   /* ── le quattordici righe di Voices: il lettore ────────────────────────── */
   const numSrc     = blockIn(vsSrc, "function toggleNumMode(newMode) {");
@@ -1682,12 +1759,19 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
     const clickRow = (which, voices) => {
       let patch = null;
       const mSrc = lineIn(vsSrc, which === "num" ? "numMode" : "scatterMode");
-      new Function("v", "update", "window", "m",
+      // `value` ed `envValue` sono quelli della riga vera: la ParamRow di
+      // num_voices mostra `N` (o «—» sotto una curva), quella di scatter lo
+      // scalare, e l'envValue e' il campo `*Env` dello stream.
+      const envValue = which === "num" ? voices.numEnv : voices.scatterEnv;
+      const value = which === "num"
+        ? (voices.num != null ? voices.num : (voices.numEnv ? "\u2014" : 1))
+        : (voices.scatter != null ? voices.scatter : (voices.scatterEnv ? "\u2014" : 0));
+      new Function("v", "update", "window", "m", "value", "envValue",
         mSrc + "\n" + (which === "num" ? numSrc : scatterSrc)
         + "\nconst mode = " + (which === "num" ? "numMode" : "scatterMode") + ";"
         + "\nconst onMode = toggle" + (which === "num" ? "Num" : "Scatter") + "Mode;\n"
         + handleModeSrc + "\nhandleMode(m);")(
-        voices, (p) => { patch = p; }, window, which === "num" ? "env" : "env");
+        voices, (p) => { patch = p; }, window, "env", value, envValue);
       return patch;
     };
     assert("num_voices: click sul bottone env già acceso, la curva resta",
@@ -1699,18 +1783,32 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
     // VoiceStratParamRow.
     const clickStrat = (voices, dim, key, def, m) => {
       let out = null;
-      new Function("window", "v", "dim", "paramKey", "defaultVal", "onChange", "valueEnv", "m",
+      // Le due props della riga vengono dalla dichiarazione vera di
+      // VoiceStratParamRow: `value={value != null ? value : "—"}` e
+      // `envValue={valueEnv || null}`.
+      const raw = (voices[dim] || {})[key];
+      new Function("window", "v", "dim", "paramKey", "defaultVal", "onChange", "valueEnv", "m", "value",
         stratSrc + "\n" + lineIn(vsSrc, "mode")
+        + "\nconst envValue = valueEnv || null;\n"
         + "\nconst onMode = (mm) => toggleStratParam(v, dim, paramKey, defaultVal, mm, onChange);\n"
         + handleModeSrc + "\nhandleMode(m);")(
         window, voices, dim, key, def, (p) => { out = p; },
-        (voices[dim] || {})[key + "Env"], m);
+        (voices[dim] || {})[key + "Env"], m, raw != null ? raw : "\u2014");
       return out;
     };
     assert("strategie: click sul bottone env già acceso, la curva resta",
       clickStrat({ pitch: { stepEnv: [[0, 3], [1, 7]] } }, "pitch", "step", 3.0, "env") === null);
     assert("strategie: e il click che chiede davvero passa",
       clickStrat({ pitch: { step: 3 } }, "pitch", "step", 3.0, "env") !== null);
+    assert("strategie: sul bottone scalar acceso con un valore scritto non si riscrive",
+      clickStrat({ pitch: { step: 3 } }, "pitch", "step", 3.0, "scalar") === null);
+    /* La regressione che la guardia «bottone acceso» avrebbe introdotto: lo
+       YAML dichiara la strategia senza il suo parametro, la riga mostra «—»,
+       e il click sul bottone scalar gia' acceso e' l'unica via per farlo
+       esistere — il ramo lo materializza sul default della riga. */
+    const born = clickStrat({ pitch: { strategy: "step" } }, "pitch", "step", 3.0, "scalar");
+    assert("strategie: con il parametro assente il click materializza il default",
+      born !== null && born.voices.pitch.step === 3.0, JSON.stringify(born));
   }
 
   // …e il cablaggio, perché i rami sopra valgono solo se sono quelli veri.
@@ -1727,11 +1825,15 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
     !/<Seg/.test(vsSrc) && /onMode=\{onMode\}/.test(vsSrc));
 
   /* ── density ↔ fill_factor: la terza coppia mutuamente esclusiva ───────── */
-  const densDecl = lineIn(inspSrc, "densityUnitSel");
-  assert("la dichiarazione del bottone acceso di density ↔ fill_factor è estraibile",
-    densDecl.length > 0 || /const densityUnitSel = /.test(inspSrc));
-  // La dichiarazione sta su due righe: si prende fino al `;`.
-  const densSrc = (/const densityUnitSel = [\s\S]*?;/.exec(inspSrc) || [""])[0];
+  /* Le quattro dichiarazioni sono una sola risposta in quattro pezzi: quale
+     bottone e' acceso, e se la coppia e' scritta — la seconda meta' serve
+     perche' nessuna delle due chiavi e' obbligatoria. */
+  const densNames = ["fillFactorWritten", "densityWritten", "densityUnitSel", "densityUnitWritten"];
+  const densDecls = densNames.map((n) => lineIn(inspSrc, n));
+  assert("le dichiarazioni del bottone acceso di density ↔ fill_factor sono estraibili",
+    densDecls.every((d) => d.length > 0),
+    densNames.filter((_, i) => !densDecls[i].length).join(", "));
+  const densSrc = densDecls.join("\n");
   const densBody = (() => {
     const at = inspSrc.indexOf("value={densityUnitSel}");
     if (at < 0) return "";
@@ -1768,6 +1870,21 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
       clickDensity({ density: 20 }, "density") === null);
   }
   {
+    /* Ma il bottone `density` e' acceso anche per ESCLUSIONE, e nessuna delle
+       due chiavi e' obbligatoria: nel corpus del motore otto stream non ne
+       dichiarano nessuna. Li' la riga sotto il Seg mostra «—», nessun
+       NumberField, e questo click e' l'unica via per far esistere una density:
+       una guardia sul solo «bottone acceso» lasciava quelle righe senza
+       ingresso. */
+    const nato = clickDensity({ density: null, densityEnv: null, fillFactor: null, fillFactorEnv: null }, "density");
+    assert("nessuna delle due chiavi scritta: il click su density materializza il default",
+      nato !== null && nato.density === 8 && nato.fillFactor === null, JSON.stringify(nato));
+    // …e l'altro bottone continua a convertire, come sempre.
+    const alFill = clickDensity({ density: null, densityEnv: null, fillFactor: null, fillFactorEnv: null }, "fill_factor");
+    assert("…e quello su fill_factor lo materializza a sua volta",
+      alFill !== null && alFill.fillFactor === 2.0, JSON.stringify(alFill));
+  }
+  {
     // Il click che chiede davvero continua a convertire, nei due versi: le due
     // costanti restano perche' density e fill_factor sono grandezze diverse.
     const toFill = clickDensity({ density: 20 }, "fill_factor");
@@ -1781,9 +1898,17 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
   }
   assert("il bottone acceso e il ritorno anticipato leggono la stessa cosa",
     /value=\{densityUnitSel\}/.test(inspSrc)
-    && /if \(u === densityUnitSel\) return;/.test(inspSrc)
+    && /if \(u === densityUnitSel && densityUnitWritten\) return;/.test(inspSrc)
     && (inspSrc.match(/const densityUnitSel = /g) || []).length === 1
     && !/value=\{\(stream\.fillFactor != null \|\| stream\.fillFactorEnv != null\) \? "fill_factor"/.test(inspSrc));
+  /* …e la stessa dichiarazione sceglie anche la riga e il badge: erano la
+     terza e la quarta copia della condizione, libere di dissentire dal
+     selettore che le governa — la ragione che loopEndMode dichiara per la
+     coppia del loop, una sezione piu' in la'. */
+  assert("la riga e il badge della sezione vengono dalla stessa dichiarazione",
+    /badge=\{densityUnitSel === "fill_factor"/.test(inspSrc)
+    && /\{densityUnitSel === "fill_factor" \? \(\s*<ParamRow name="fill_factor"/.test(inspSrc)
+    && (inspSrc.match(/stream\.fillFactor != null \|\| stream\.fillFactorEnv != null/g) || []).length === 1);
 }
 
 console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #126) ──");
@@ -2205,6 +2330,152 @@ console.log("\n── sliceStreamEnvelopes ──");
     /addStreamToTrackOf\(tr, x\.src, x\.stream\.id\)/.test(appSrc));
   assert("il tasto e' rimappabile, default d",
     /matchShortcut\(e, tweaks\.shortcutSplit \|\| "d"\)/.test(appSrc));
+}
+
+/* ============================================================================
+ * Gli altri Seg del riquadro: «ogni onChange di un Seg deve una guardia»
+ *
+ * `Seg` chiama onChange anche sul bottone GIA' ACCESO: e' una proprieta' del
+ * controllo, non del chiamante, quindi la regola vale per tutti. Quattro
+ * handler dell'Inspector non ce l'avevano, e i loro rami scrivono comunque.
+ * Due materializzano una chiave ridondante (distribution_mode, clip_strategy):
+ * un passo di undo e la fingerprint mossa su uno stream che suona identico.
+ * Gli altri due CANCELLANO, che e' il caso che #149 ha scoperto su loop_unit:
+ *   · range_anchor scrive `undefined` sul default — la regola «scegliere il
+ *     default toglie la chiave ridondante», giusta su un cambio e sbagliata su
+ *     un click che non chiede niente: un `range_anchor: center` esplicito
+ *     spariva dallo YAML;
+ *   · duration_unit passa da convertGrainDurationUnit, la cui coda fa
+ *     `delete ng.durationUnit` per 'seconds' a prescindere dalla conversione.
+ * Stessa tecnica del resto del file: si ESEGUONO gli handler estratti dal
+ * sorgente, con il `value` del loro Seg accanto.
+ * ========================================================================== */
+console.log("\n── i quattro Seg che restavano senza guardia ──");
+{
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  // L'handler di un Seg: dal suo `value=…` si scende al primo `onChange={`, e
+  // si prende il corpo della freccia bilanciando le graffe.
+  const segHandler = (valueMarker) => {
+    const at = inspSrc.indexOf(valueMarker);
+    if (at < 0) return "";
+    const on = inspSrc.indexOf("onChange={", at);
+    if (on < 0) return "";
+    const arrow = inspSrc.indexOf("=>", on);
+    const open = inspSrc.indexOf("{", arrow);
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(open, j + 1);
+    }
+    return "";
+  };
+  const NIENTE = Symbol("mai chiamato");
+
+  {
+    const body = segHandler('value={stream.distributionMode || "uniform"}');
+    assert("l'handler di distribution_mode è estraibile dal sorgente", body.length > 0);
+    const fire = (stream, v) => {
+      let out = NIENTE;
+      new Function("stream", "onChange", "v", "((v) => " + body + ")(v);")(
+        stream, (p) => { out = p; }, v);
+      return out;
+    };
+    assert("distribution_mode: la chiave assente non viene materializzata dal default",
+      fire({}, "uniform") === NIENTE);
+    assert("…né quella scritta riscritta uguale",
+      fire({ distributionMode: "gaussian" }, "gaussian") === NIENTE);
+    const real = fire({}, "gaussian");
+    assert("…e il click che chiede davvero passa",
+      real !== NIENTE && real.distributionMode === "gaussian", JSON.stringify(real));
+  }
+  {
+    const body = segHandler('value={stream.clipStrategy || "overflow_margin"}');
+    assert("l'handler di clip_strategy è estraibile dal sorgente", body.length > 0);
+    const fire = (stream, v) => {
+      let out = NIENTE;
+      new Function("stream", "onChange", "v", "((v) => " + body + ")(v);")(
+        stream, (p) => { out = p; }, v);
+      return out;
+    };
+    assert("clip_strategy: il default non si materializza da sé",
+      fire({}, "overflow_margin") === NIENTE);
+    const real = fire({}, "passthrough");
+    assert("…e il cambio vero passa",
+      real !== NIENTE && real.clipStrategy === "passthrough");
+  }
+  {
+    /* Qui il click sul bottone acceso CANCELLAVA: il ramo scrive `undefined`
+       sul default, cioe' la chiave esplicita tolta da un click che non l'aveva
+       chiesto. La regola «il default cancella la ridondante» resta, sul
+       cambio vero. */
+    const body = segHandler('value={stream.rangeAnchor || "center"}');
+    assert("l'handler di range_anchor è estraibile dal sorgente", body.length > 0);
+    const fire = (stream, v) => {
+      let out = NIENTE;
+      new Function("stream", "onChange", "v", "((v) => " + body + ")(v);")(
+        stream, (p) => { out = p; }, v);
+      return out;
+    };
+    assert("range_anchor: un `center` esplicito non sparisce per un click a vuoto",
+      fire({ rangeAnchor: "center" }, "center") === NIENTE);
+    assert("…e nemmeno la chiave assente viene materializzata",
+      fire({}, "center") === NIENTE);
+    const via = fire({ rangeAnchor: "min" }, "center");
+    assert("…ma sul cambio vero il default toglie la chiave, come prima",
+      via !== NIENTE && via.rangeAnchor === undefined && "rangeAnchor" in via,
+      JSON.stringify(Object.keys(via || {})));
+  }
+  {
+    /* duration_unit: la coda di convertGrainDurationUnit cancella la chiave
+       per 'seconds' a prescindere, quindi un `duration_unit: seconds` scritto
+       esplicito spariva — la fingerprint si muove e lo stem torna giallo senza
+       che un campione cambi. Qui l'handler gira col convertitore VERO. */
+    const body = segHandler("value={grainUnit}");
+    assert("l'handler di duration_unit è estraibile dal sorgente", body.length > 0);
+    const fire = (grain, v) => {
+      let out = NIENTE;
+      const grainUnit = (grain && grain.durationUnit) || "seconds";
+      new Function("stream", "grainUnit", "onChange", "window", "v",
+        "((v) => " + body + ")(v);")(
+        { grain }, grainUnit, (p) => { out = p; }, window, v);
+      return out;
+    };
+    assert("duration_unit: un `seconds` esplicito non viene cancellato da un click a vuoto",
+      fire({ duration: 0.05, durationUnit: "seconds" }, "seconds") === NIENTE);
+    assert("…e la chiave assente non si riscrive",
+      fire({ duration: 0.05 }, "seconds") === NIENTE);
+    assert("…e su un'unità già scelta non si riconverte",
+      fire({ duration: 50, durationUnit: "milliseconds" }, "milliseconds") === NIENTE);
+    const real = fire({ duration: 0.05 }, "milliseconds");
+    assert("…ma il cambio vero converte, come sempre",
+      real !== NIENTE && real.grain.durationUnit === "milliseconds"
+      && real.grain.duration === 50, JSON.stringify(real && real.grain));
+  }
+
+  /* …e il cablaggio: la condizione di ognuno e' il `value` del suo Seg. Le due
+     grafie del default (`stream.X || "…"`) compaiono quindi due volte per
+     controllo — il value e la guardia — e mai una terza. */
+  assert("i quattro Seg leggono la stessa espressione che accende il bottone",
+    /if \(v === \(stream\.distributionMode \|\| "uniform"\)\) return;/.test(inspSrc)
+    && /if \(v === \(stream\.clipStrategy \|\| "overflow_margin"\)\) return;/.test(inspSrc)
+    && /if \(v === \(stream\.rangeAnchor \|\| "center"\)\) return;/.test(inspSrc)
+    && /if \(v === grainUnit\) return;/.test(inspSrc));
+  /* Il censimento: ogni Seg dell'Inspector o ha la guardia, o e' uno dei due
+     che deliberatamente non la vogliono — il Seg delle tab (`onTab`, che e' un
+     setState di React, non una scrittura sullo stream) e quello di
+     read_direction, dove il click sul bottone acceso E' la via con cui si
+     risolve un conflitto `reverse`/`read_direction` ereditato da uno YAML
+     scritto a mano: la guardia li' toglierebbe l'unico rimedio. */
+  {
+    const segs = inspSrc.match(/<Seg[\s\S]*?\/>/g) || [];
+    const senza = segs.filter((g) => !/return;/.test(g)
+      && !/value=\{mode\}/.test(g) && !/value=\{pMode\}/.test(g)
+      && !/value=\{tab\}/.test(g) && !/onChange=\{handleMode\}/.test(g)
+      && !/onChange=\{setDirection\}/.test(g));
+    assert("nessun altro Seg dell'Inspector è rimasto senza guardia",
+      senza.length === 0,
+      senza.map((g) => g.slice(0, 70).replace(/\s+/g, " ")).join(" | "));
+  }
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
