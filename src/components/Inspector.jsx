@@ -144,6 +144,22 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   const dMode = dIsEnv ? "env" : "scalar";
 
   function setMode(next) {
+    // Il click che non chiede niente, sul Seg che sceglie il MODO. `Seg` chiama
+    // onChange anche sul bottone gia' acceso e tutti e quattro i rami qui sotto
+    // scrivono: su `deviation_probability: true` — un modo globale valido, che
+    // il motore legge float(True) = 1% — il bottone acceso e' «global», e quel
+    // click riscriveva la chiave come `1`. Cioe' esattamente la migrazione che
+    // `dScalar` tre righe piu' su esiste per NON fare («senza riscrivere lo
+    // YAML finche' non lo si tocca»): fingerprint mossa e stem giallo su uno
+    // stream che suona identico. Gli altri tre rami costano meno — `off` e
+    // `implicit` riscrivono lo stesso valore, `perParam` gia' si rilegge — ma
+    // sono lo stesso passo di undo a vuoto.
+    // La condizione e' `mode`, cioe' il `value` del Seg: la regola che
+    // loopEndSel dichiara nell'Inspector, qui applicata al controllo che sta
+    // un livello sopra le righe. Chi vuole normalizzare `true` in `1` ha il
+    // campo numerico della riga sotto, che su questo stream c'e' (dScalar e'
+    // un numero, quindi ParamRow disegna il NumberField).
+    if (next === mode) return;
     if (next === "off")       return onChange({ deviationProbability: false });
     if (next === "implicit")  return onChange({ deviationProbability: window.PGEYaml.DEVIATION_PROB_IMPLICIT });
     if (next === "global")    return onChange({ deviationProbability: typeof d === "number" ? d : (dIsEnv ? d : 1) });
@@ -1599,10 +1615,31 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   : g.readDirection === -1 ? "back"
                   : g.readDirection === 1 ? "forward"
                   : "invalid";
+                // L'errore si legge PRIMA di setDirection perche' e' la guardia a
+                // chiederlo: la deroga dichiarata per questo Seg non e'
+                // «read_direction non ha guardia», e' «cede dove c'e' qualcosa
+                // da riparare», e quel qualcosa ha gia' un nome.
+                const err = window.PGEEnvUtils.readDirectionError(g);
                 // Passare da uno stato all'altro riscrive SEMPRE entrambe le
                 // chiavi: è il punto in cui un conflitto ereditato da un file
                 // scritto a mano si risolve, semplicemente usando il controllo.
                 function setDirection(next) {
+                  // …e per questo il click sul bottone gia' acceso e' il rimedio
+                  // SOLO quando un conflitto c'e'. Senza errore da riparare quel
+                  // click non chiede niente e riscriveva comunque: su un
+                  // `reverse:` da solo — nessun conflitto, il motore lo legge
+                  // benissimo — cancellava la chiave e scriveva
+                  // `read_direction: -1`, cioe' una migrazione silenziosa che
+                  // muove la fingerprint e ingiallisce lo stem su un verso che
+                  // non e' cambiato; su `read_direction: 1` o su `auto`
+                  // riemetteva un grain identico, un passo di undo a vuoto.
+                  // La riga di hint qui sotto dice gia' la regola a chi legge —
+                  // «sceglierne un altro passa a read_direction» — e le altre
+                  // tre vie restano tutte aperte. Con un conflitto invece il
+                  // bottone acceso e' l'unico che tiene il verso che lo YAML
+                  // dichiara, quindi li' la guardia cede: e' la deroga, ed e'
+                  // larga esattamente quanto il suo motivo.
+                  if (next === state && !err) return;
                   const ng = { ...g };
                   delete ng.reverse;
                   delete ng.readDirection;
@@ -1615,7 +1652,6 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   }
                   onChange({ grain: ng });
                 }
-                const err = window.PGEEnvUtils.readDirectionError(g);
                 return (
                   <React.Fragment>
                     <div className={"pge-prow" + (selRow === "grain.readDirection" ? " selected" : "")}

@@ -2452,20 +2452,136 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
       && real.grain.duration === 50, JSON.stringify(real && real.grain));
   }
 
-  /* …e il cablaggio: la condizione di ognuno e' il `value` del suo Seg. Le due
-     grafie del default (`stream.X || "…"`) compaiono quindi due volte per
-     controllo — il value e la guardia — e mai una terza. */
-  assert("i quattro Seg leggono la stessa espressione che accende il bottone",
-    /if \(v === \(stream\.distributionMode \|\| "uniform"\)\) return;/.test(inspSrc)
-    && /if \(v === \(stream\.clipStrategy \|\| "overflow_margin"\)\) return;/.test(inspSrc)
-    && /if \(v === \(stream\.rangeAnchor \|\| "center"\)\) return;/.test(inspSrc)
-    && /if \(v === grainUnit\) return;/.test(inspSrc));
-  /* Il censimento: ogni Seg dell'Inspector o ha la guardia, o e' uno dei due
-     che deliberatamente non la vogliono — il Seg delle tab (`onTab`, che e' un
-     setState di React, non una scrittura sullo stream) e quello di
-     read_direction, dove il click sul bottone acceso E' la via con cui si
-     risolve un conflitto `reverse`/`read_direction` ereditato da uno YAML
-     scritto a mano: la guardia li' toglierebbe l'unico rimedio. */
+  /* ------------------------------------------------------------------------
+   * I due handler che il censimento qui sotto lasciava passare per come sono
+   * scritti: non sono frecce dentro il JSX, sono `function` con un nome, e la
+   * loro guardia non puo' stare dentro l'elemento <Seg>. Restavano quindi
+   * senza, e tutti e due i rami scrivono.
+   * Stessa tecnica: si ESEGUONO le dichiarazioni vere estratte dal sorgente.
+   * -------------------------------------------------------------------- */
+  // Il corpo di una `function NOME(…) { … }` del sorgente, bilanciando le graffe.
+  const fnDecl = (name) => {
+    const at = inspSrc.indexOf("function " + name + "(");
+    if (at < 0) return "";
+    const open = inspSrc.indexOf("{", at);
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(at, j + 1);
+    }
+    return "";
+  };
+
+  console.log("\n── deviation_probability · il Seg del MODO ──");
+  {
+    /* `deviation_probability: true` e' un modo globale valido — il motore lo
+       legge float(True) = 1% — quindi il bottone «global» e' acceso, e quel
+       click riscriveva la chiave come `1`: la migrazione che il commento di
+       `dScalar` dichiara di NON fare finche' non si tocca il valore. */
+    const body = fnDecl("setMode");
+    assert("la dichiarazione di setMode è estraibile dal sorgente",
+      body.length > 0 && /deviationProbability/.test(body));
+    const DP = window.PGEDeviationProb;
+    const fire = (d, next) => {
+      let out = NIENTE;
+      // `mode` e `dIsEnv` non sono riscritti qui: sono le stesse letture che
+      // l'Inspector fa due righe sopra il Seg, e `mode` E' il suo `value`.
+      new Function("mode", "d", "dIsEnv", "onChange", "window", "next",
+        body + "\nsetMode(next);")(
+        DP.mode(d), d, DP.isEnvValue(d), (p) => { out = p; }, window, next);
+      return out;
+    };
+    assert("`true` non viene normalizzato in `1` da un click sul bottone acceso",
+      fire(true, "global") === NIENTE);
+    assert("…né un globale numerico riscritto uguale",
+      fire(30, "global") === NIENTE);
+    assert("…né un envelope globale collassato",
+      fire([[0, 10], [1, 40]], "global") === NIENTE);
+    assert("off su off non materializza `false`",
+      fire(undefined, "off") === NIENTE);
+    assert("per-param su per-param non riemette il dict",
+      fire({ volume: 50 }, "perParam") === NIENTE);
+    const acceso = fire(true, "off");
+    assert("…ma il cambio vero passa, e `true` lo si spegne",
+      acceso !== NIENTE && acceso.deviationProbability === false,
+      JSON.stringify(acceso));
+    const glob = fire(undefined, "global");
+    assert("…e da off a global si semina 1%",
+      glob !== NIENTE && glob.deviationProbability === 1, JSON.stringify(glob));
+    // La via per normalizzare `true` resta: la riga sotto il Seg mostra
+    // dScalar = 1, che e' un numero, quindi ParamRow disegna il NumberField.
+    assert("`true` ha comunque un campo numerico da cui riscriverlo",
+      /const dScalar = typeof d === "boolean" \? 1 : d;/.test(inspSrc)
+      && /value=\{dIsEnv \? "—" : dScalar\}/.test(inspSrc));
+  }
+
+  console.log("\n── read_direction · la deroga larga quanto il suo motivo ──");
+  {
+    /* La deroga dichiarata per questo Seg e' «il click sul bottone acceso
+       risolve un conflitto reverse/read_direction ereditato». Vale finche' un
+       conflitto c'e': senza, quel click cancellava un `reverse:` legittimo per
+       scrivere `read_direction: -1` — stesso verso, fingerprint mossa, stem
+       giallo — o riemetteva un grain identico.
+       Il blocco gira intero, dalle sue dichiarazioni vere: `state` (il `value`
+       del Seg) ed `err` non sono riscritti qui. */
+    const at = inspSrc.indexOf("const g = stream.grain;");
+    const hit = inspSrc.indexOf("onChange({ grain: ng });", at);
+    const close = inspSrc.indexOf("}", hit + "onChange({ grain: ng });".length);
+    const block = at >= 0 && hit > 0 ? inspSrc.slice(at, close + 1) : "";
+    assert("il blocco di read_direction è estraibile dal sorgente",
+      block.length > 0 && /function setDirection/.test(block)
+      && /readDirectionError/.test(block) && /const state =/.test(block));
+    const fire = (grain, next, mode) => {
+      let out = NIENTE;
+      new Function("stream", "getMode", "window", "onChange", "next",
+        block + "\nsetDirection(next);")(
+        { grain }, () => mode || "scalar", window, (p) => { out = p; }, next);
+      return out;
+    };
+    assert("un `reverse:` da solo non viene migrato da un click sul bottone acceso",
+      fire({ reverse: null }, "back") === NIENTE);
+    assert("…né `read_direction: -1` riscritto uguale",
+      fire({ readDirection: -1 }, "back") === NIENTE);
+    assert("…né `read_direction: 1`",
+      fire({ readDirection: 1 }, "forward") === NIENTE);
+    assert("…né `auto`, che non ha nemmeno una chiave da riemettere",
+      fire({}, "auto") === NIENTE);
+    // La deroga: col conflitto il bottone acceso e' l'unico che tiene il verso
+    // che lo YAML dichiara, quindi li' la guardia cede — ed e' il rimedio.
+    const fix = fire({ reverse: null, readDirection: 1 }, "back");
+    assert("col conflitto il bottone acceso resta il rimedio, e tiene una chiave sola",
+      fix !== NIENTE && fix.grain.readDirection === -1
+      && !("reverse" in fix.grain), JSON.stringify(fix && fix.grain));
+    // …e le altre tre vie restano aperte su ogni stato.
+    const mig = fire({ reverse: null }, "forward");
+    assert("un `reverse:` si migra scegliendo un altro verso, come dice l'hint",
+      mig !== NIENTE && mig.grain.readDirection === 1 && !("reverse" in mig.grain),
+      JSON.stringify(mig && mig.grain));
+    const viaEnv = fire({ readDirectionEnv: [[0, 1], [0.5, -1]] }, "forward", "env");
+    assert("la × esce dall'envelope: lo stato è `env`, il verso richiesto no",
+      viaEnv !== NIENTE && viaEnv.grain.readDirection === 1
+      && viaEnv.grain.readDirectionEnv === undefined,
+      JSON.stringify(viaEnv && viaEnv.grain));
+  }
+
+  /* …e i due handler che un nome ce l'hanno: li' la guardia non puo' stare
+     dentro l'elemento <Seg>, quindi il censimento qui sotto non la vedrebbe e
+     li lasciava passare senza. Sta nella dichiarazione, sulla condizione che
+     accende il bottone — `mode` e `state` sono il `value` dei rispettivi Seg —
+     ed e' provata eseguendo le due dichiarazioni, qui sopra. */
+  // La guardia e' la PRIMA istruzione della dichiarazione: `codeOf` svuota i
+  // commenti lasciando gli spazi, quindi fra la graffa e il `return;` non deve
+  // restare altro che spazio bianco.
+  assert("i due handler con un nome hanno la guardia come prima istruzione",
+    /function setMode\(next\) \{\s*if \(next === mode\) return;/.test(inspSrc)
+    && /function setDirection\(next\) \{\s*if \(next === state && !err\) return;/.test(inspSrc));
+  /* Il censimento: ogni Seg dell'Inspector o ha la guardia dentro la freccia
+     del suo onChange, oppure il suo onChange e' un handler CON UN NOME — e
+     allora la guardia sta nella dichiarazione, che l'elemento non contiene:
+     `setMode` e `setDirection` (l'assert qui sopra, piu' i due blocchi che li
+     eseguono) e `handleMode`, che e' della ParamRow. Resta un solo Seg che
+     deliberatamente non ne vuole: quello delle tab, il cui `onTab` e' un
+     setState di React e non una scrittura sullo stream. */
   {
     const segs = inspSrc.match(/<Seg[\s\S]*?\/>/g) || [];
     const senza = segs.filter((g) => !/return;/.test(g)
