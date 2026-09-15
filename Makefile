@@ -16,6 +16,17 @@ VENV_BIN := $(VENV)/bin
 # si aggiunge un comando senza sudo; se non e' nel PATH il target lo dice, ed e'
 # il modo piu' comune in cui questa cosa sembra non funzionare. #164
 BINDIR   ?= $(HOME)/.local/bin
+# Un `~` in BINDIR non lo espande nessuno: make non fa tilde expansion, e la
+# ricetta quota ogni espansione (deve: gli spazi). `BINDIR=~/.local/bin` — la
+# grafia che l'help qui sotto suggerisce — fabbricava percio' una cartella
+# chiamata `~` dentro $PWD, ci metteva il link e stampava la riga di successo:
+# lo stesso modo di fallire dello spazio e del `make -f`, cioe' un `pge-ui`
+# annunciato installato che nessun PATH raggiunge.
+# `override` non e' ornamentale: senza, l'assegnamento verrebbe ignorato
+# proprio nel caso che cura — BINDIR arriva da riga di comando, e li' make fa
+# vincere la riga di comando sul file. Le grafie che restano (`~utente/bin`,
+# `~` nudo, HOME non esportato) make non le sa risolvere: le ferma la ricetta.
+override BINDIR := $(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR))
 # Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
 # quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un
 # `make -f /path/PGE-ui/Makefile install-cli` dato da un'altra cartella linkava
@@ -91,6 +102,15 @@ install-cli:
 	  echo "install-cli: non trovo $(CLI_SRC)" >&2; \
 	  echo "  (lancialo dal checkout: make install-cli, oppure make -C /path/PGE-ui install-cli)" >&2; \
 	  exit 1; }
+	@test -x "$(CLI_SRC)" || { \
+	  echo "install-cli: $(CLI_SRC) non e' eseguibile" >&2; \
+	  echo "  chmod +x \"$(CLI_SRC)\"  — un link a un file senza bit x e' un nome" >&2; \
+	  echo "  sul PATH che risponde 'Permission denied', annunciato come installato" >&2; \
+	  exit 1; }
+	@case "$(BINDIR)" in "~"*) \
+	  echo "install-cli: BINDIR=$(BINDIR) comincia per ~, e qui nessuno lo espande" >&2; \
+	  echo "  (make non fa tilde expansion: scrivilo per esteso, BINDIR=\$$HOME/.local/bin)" >&2; \
+	  exit 1;; esac
 	@mkdir -p "$(BINDIR)"
 	@ln -sfn "$(CLI_SRC)" "$(BINDIR)/pge-ui"
 	@echo "pge-ui -> $(BINDIR)/pge-ui"

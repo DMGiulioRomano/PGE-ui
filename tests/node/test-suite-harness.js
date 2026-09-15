@@ -906,6 +906,62 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
     } finally {
       fs.rmSync(tmp4, { recursive: true, force: true });
     }
+
+    /* Le altre due grafie di BINDIR che davano un `pge-ui` annunciato
+       installato e irraggiungibile — la stessa famiglia dello spazio e del
+       `make -f`, e le ultime due rimaste.
+
+       Il `~`: make non fa tilde expansion, e la ricetta quota ogni espansione
+       (deve, per gli spazi), quindi nemmeno la shell lo espande.
+       `BINDIR=~/.local/bin` — la grafia che l'help del Makefile suggerisce —
+       fabbricava una cartella chiamata `~` dentro il checkout, ci metteva il
+       link e stampava la riga di successo. Ora il `~/` iniziale lo espande il
+       Makefile (`override`, altrimenti l'assegnamento perde proprio contro la
+       riga di comando da cui BINDIR arriva); `~utente/` non lo sa espandere
+       nessuno, e li' il target si ferma invece di inventare una cartella.
+
+       E il bit eseguibile: la guardia sorgente qui sopra difende l'indice di
+       QUESTO repo, non il checkout di chi installa. Un file senza bit x
+       (un download, un filesystem che non lo porta) si lasciava linkare, e il
+       primo segnale era `pge-ui: Permission denied` da un nome che make aveva
+       appena dichiarato installato. */
+    const tmp5 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-tilde-")));
+    try {
+      const copy = path.join(tmp5, "checkout");
+      const home = path.join(tmp5, "casa");
+      fs.mkdirSync(path.join(copy, "bin"), { recursive: true });
+      fs.mkdirSync(home);
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(copy, "Makefile"));
+      fs.copyFileSync(BIN, path.join(copy, "bin", "pge-ui"));
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o755);
+      const runIn = (bindir) => spawnSync("make", ["-C", copy, "install-cli",
+        "BINDIR=" + bindir], { env: { ...process.env, HOME: home }, encoding: "utf8" });
+
+      const t = runIn("~/.local/bin");
+      assert("BINDIR=~/.local/bin finisce sotto HOME, non in una cartella `~`",
+        t.status === 0 &&
+        fs.existsSync(path.join(home, ".local", "bin", "pge-ui")),
+        (t.stdout || "") + (t.stderr || ""));
+      // La ricetta gira con cwd = checkout (`make -C`): e' li' che la cartella
+      // spuria nasceva.
+      assert("...senza fabbricare una cartella `~` nel checkout",
+        fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        fs.readdirSync(copy).join(", "));
+
+      const u = runIn("~nessuno/bin");
+      assert("un `~utente` che nessuno puo' espandere ferma l'installazione",
+        u.status !== 0 && fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        `exit ${u.status}\n      ` + ((u.stdout || "") + (u.stderr || "")));
+
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o644);
+      const dest5 = path.join(tmp5, "bin");
+      const nx = runIn(dest5);
+      assert("sorgente senza bit x → install-cli si ferma, invece di linkarlo",
+        nx.status !== 0 && !fs.existsSync(path.join(dest5, "pge-ui")),
+        `exit ${nx.status}\n      ` + ((nx.stdout || "") + (nx.stderr || "")));
+    } finally {
+      fs.rmSync(tmp5, { recursive: true, force: true });
+    }
   }
 }
 
