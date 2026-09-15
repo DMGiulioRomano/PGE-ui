@@ -691,7 +691,32 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
 
     // Nessun default del bridge scritto qui dentro: e' il modo preciso in cui
     // lo script diventa la seconda copia delle decisioni di server.py.
-    const flag = code.join("\n").match(/--(root|workspace|port|host|render-timeout)\b/);
+    //
+    // L'elenco dei flag NON si trascrive qui: si legge dagli `add_argument` di
+    // server.py, che e' dove vengono dichiarati. Una lista a mano e' una
+    // seconda copia della verita', e tace proprio quando il bridge cresce: il
+    // sesto flag aggiunto domani si potrebbe cablare nel lanciatore con la
+    // guardia verde. Che non sia teoria lo dice questa PR stessa, dove la
+    // stessa lista trascritta in prosa ne nominava quattro su cinque.
+    const srvSrc = fs.readFileSync(path.join(repo, "server.py"), "utf8");
+    const bridgeFlags = [...srvSrc.matchAll(/add_argument\(\s*"(--[\w-]+)"/g)]
+      .map((m) => m[1]);
+    // La lettura deve aver funzionato, o la guardia sotto e' un regex vuoto che
+    // non accusa niente — il modo silenzioso di sparire che questo repo
+    // conosce gia' (`backend.envelopeKeys()` che torna `[]` e il filtro si
+    // nasconde). `--root` e' la canarina: e' il flag che decide dove sta il
+    // motore, cioe' la prima cosa che verrebbe cablata qui.
+    assert("i flag del bridge si leggono da server.py, non da una lista",
+      bridgeFlags.length >= 3 && bridgeFlags.includes("--root"),
+      `letti ${bridgeFlags.length}: ${bridgeFlags.join(" ") || "nessuno"} — ` +
+      "se server.py ha cambiato il modo di dichiarare i flag, la lettura va " +
+      "aggiornata, non aggirata");
+    // Ordinati dal piu' lungo: `\b` cade anche fra `t` e `-`, quindi con
+    // `--port` davanti un ipotetico `--port-range` verrebbe nominato `--port`.
+    const alt = [...bridgeFlags].sort((a, b) => b.length - a.length).join("|");
+    const flag = bridgeFlags.length
+      ? code.join("\n").match(new RegExp("(" + alt + ")\\b"))
+      : null;
     assert("nessun flag di server.py e' cablato nel lanciatore", !flag,
       flag ? `trovato ${flag[0]}: quel default va in server.py, non qui` : "");
 

@@ -1235,11 +1235,24 @@ flags — every decision stays in `server.py`, where pytest and the source guard
 see it; a script in `bin/` is looked at by nobody, and its natural tendency is
 to grow into a second, untested copy of those decisions. That is a rule with
 teeth: `test-suite-harness.js` requires the file to stay at most four code
-lines with a single trailing `exec`, refuses any `--root`/`--workspace`/
-`--port`/`--host`/`--render-timeout` written inside it, and *runs* it — through a symlink, from a
-third folder, against a stub `server.py` — to check that the path resolution and
-the argument forwarding really work. That last half needs neither flask nor the
-sibling engine, so it runs in the node CI job too.
+lines with a single trailing `exec`, refuses any bridge flag written inside it,
+and *runs* it — through a symlink, from a third folder, against a stub
+`server.py` — to check that the path resolution and the argument forwarding
+really work. That last half needs neither flask nor the sibling engine, so it
+runs in the node CI job too.
+
+**Which flags those are is read from `server.py`, never transcribed.** The
+guard collects the `add_argument("--…")` names out of the bridge's own source,
+so the sixth flag added tomorrow is refused the day it is declared. A list
+written into the test would be a second copy of the truth, and the person
+adding a flag is not the person who remembers to update it — it would go mute
+exactly while the launcher was about to grow the decision. That is not a
+hypothesis: the same list, transcribed into the prose of the PR that
+introduced it, named four of the five. The read has its own assert (it must
+find a plausible number of flags, `--root` among them), because an empty list
+builds a regex that accuses nothing — the silent way to disappear this repo
+already knows from `backend.envelopeKeys()` returning `[]` and the filter
+hiding.
 
 **The install side has its own rules, and every one of them had the same
 failure mode: a `pge-ui` on the `PATH` that doesn't run, announced as
