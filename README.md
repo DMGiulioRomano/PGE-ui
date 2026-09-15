@@ -107,6 +107,10 @@ pge-ui --root ~/projects/PythonGranularEngine --workspace .
 It is a symlink, not a copy, so `git pull` updates the command too; running the
 target twice is not an error. If `BINDIR` isn't on your `PATH` the target says
 so — that is the usual reason `pge-ui` looks broken right after installing it.
+A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
+target does it); one it cannot resolve — a `~user/…`, or a `bin/pge-ui` that
+lost its executable bit — stops the install instead of leaving behind a name
+that doesn't run.
 
 What the name does *not* change yet are the defaults: `--root` is still
 `../PythonGranularEngine` *relative to the folder you are in*, and the workspace

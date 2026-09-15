@@ -74,7 +74,9 @@ exists, the fourth only when a browser is installed):
   `bin/pge-ui`: it must stay a launcher — four code lines, one trailing `exec`,
   no bridge flag written inside — and it is *run* through a symlink against a
   stub `server.py`, which is the only way to show that `realpath` is doing its
-  job), and `test-tracks.js` (the track model: `deriveTracks`
+  job; one of the forwarded arguments carries a space, which is the only way
+  that half can tell `"$@"` from a bare `$@`), and `test-tracks.js`
+  (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -1223,9 +1225,9 @@ third folder, against a stub `server.py` — to check that the path resolution a
 the argument forwarding really work. That last half needs neither flask nor the
 sibling engine, so it runs in the node CI job too.
 
-**The install side has its own two rules, and both had the same failure mode:
-a `pge-ui` on the `PATH` that doesn't run, announced as installed.** The link's
-source is `CLI_SRC`, resolved on the *Makefile's* folder
+**The install side has its own rules, and every one of them had the same
+failure mode: a `pge-ui` on the `PATH` that doesn't run, announced as
+installed.** The link's source is `CLI_SRC`, resolved on the *Makefile's* folder
 (`$(dir $(lastword $(MAKEFILE_LIST)))`) and not on `$PWD` — with
 `$(abspath bin/pge-ui)` a `make -f /path/PGE-ui/Makefile install-cli` given from
 elsewhere linked a `bin/pge-ui` that doesn't exist there, and `ln -s` doesn't
@@ -1237,8 +1239,25 @@ which existed. `make` itself can't carry a space through
 `$(lastword $(MAKEFILE_LIST))`, so that one residual case (`make -f` on a
 checkout whose path has a space) is covered by the `test -f "$(CLI_SRC)"` guard
 at the top of the recipe: it fails the install instead of writing the wrong
-link. All of it is measured by running `make install-cli` against temporary
-`BINDIR`s, in the same section of the harness.
+link.
+
+**The last two spellings of that same failure are stopped now, not announced.**
+A `BINDIR` carrying a `~` is not a path: `make` does no tilde expansion, and
+the recipe quotes every expansion (it has to — the spaces above), so the shell
+doesn't expand it either. `BINDIR=~/.local/bin` — the spelling the target's own
+`help` line suggests — therefore fabricated a folder literally named `~` inside
+the checkout, put the link in it, printed the success line, and closed with an
+`export PATH="~/…"` that expands to nothing either: two announcements of an
+install nothing can reach. The `~/` head is expanded in the Makefile now, under
+`override`, which is not ornamental — a plain assignment loses against the
+command line, and the command line is exactly where `BINDIR` comes from. What
+remains unresolvable (`~user/`, a bare `~`, an unset `HOME`) fails the target
+instead of inventing a folder. The other spelling is the executable bit: the
+source guard defends *this* repo's index, not the checkout of whoever installs,
+so `test -x` sits beside the `test -f` — linking a file without it is a name on
+the `PATH` that answers `Permission denied`, which is the same lie one layer
+further on. All of it is measured by running `make install-cli` against
+temporary `BINDIR`s and a temporary `HOME`, in the same section of the harness.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
