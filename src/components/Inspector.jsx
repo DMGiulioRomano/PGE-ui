@@ -137,10 +137,10 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
   // "true", senza riscrivere lo YAML finché non lo si tocca.
   const dScalar = typeof d === "boolean" ? 1 : d;
-  // Quale bottone del Seg scalare↔env e' acceso, calcolato una volta sola: e'
-  // anche la condizione con cui i due handler qui sotto riconoscono il click
-  // che non chiede niente. Una seconda copia e il ritorno anticipato smette di
-  // coprire proprio il caso che esiste per coprire.
+  // Quale bottone del Seg scalare↔env e' acceso, calcolato una volta sola: lo
+  // legge il `mode` della ParamRow qui sotto, che e' anche dove sta la guardia
+  // sul click che non chiede niente. Una seconda copia nell'handler sarebbe il
+  // modo in cui una delle due smette di valere.
   const dMode = dIsEnv ? "env" : "scalar";
 
   function setMode(next) {
@@ -218,12 +218,11 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
         <ParamRow name="probability"
                   mode={dMode}
                   onMode={(m) => {
-                    // Click sul bottone gia' acceso: il ramo `env` non guarda
-                    // la curva, semina una rampa costante — cioe' l'envelope
-                    // dell'utente sostituito da una riga piatta per un click
-                    // che non l'aveva chiesto. Stessa lezione del Seg di
-                    // loop_unit (#149) e di quello loop_end ↔ loop_dur.
-                    if (m === dMode) return;
+                    // Il click sul bottone gia' acceso non arriva qui: lo ferma
+                    // ParamRow, dove la condizione e' il `value` del Seg per
+                    // costruzione e sa anche se il valore e' scritto. Una copia
+                    // qui sarebbe la seconda, e `dMode` la userebbe senza la
+                    // meta' che ParamRow ha in piu'.
                     if (m === "env") {
                       const v = typeof dScalar === "number" ? dScalar : 1;
                       onChange({ deviationProbability: [[0, v], [1, v]] });
@@ -479,20 +478,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // Toggle a parameter between scalar and env, mutating the stream.
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
-    // Il click che non chiede niente. Seg chiama onChange anche sul bottone
-    // gia' acceso (primitives.jsx), e qui sotto il ramo `env` NON guarda
-    // l'envelope: legge lo scalare, che in modalita' env e' null, e semina una
-    // rampa costante sul default — cioe' la curva dell'utente sostituita da una
-    // riga piatta per un click che non l'aveva chiesta. E' lo stesso difetto
-    // che il Seg loop_end ↔ loop_dur e il selettore di loop_unit (#149) hanno
-    // gia' imparato a riconoscere, un livello piu' su: qui pero' vale per
-    // QUALUNQUE parametro, perche' passano tutti di qui.
-    // La condizione dev'essere LA STESSA che accende il bottone — `mode` di
-    // ParamRow e' `getMode(k)` in tutti e sedici i punti di chiamata — altrimenti
-    // il ritorno anticipato smette di coprire proprio il caso che esiste per
-    // coprire. Dal lato scalare il click era gia' a vuoto: uno scalare riscritto
-    // uguale, cioe' un passo di undo e uno stem marcato sporco per niente.
-    if (newMode === getMode(k)) return;
+    // Il click che non chiede niente lo ferma ParamRow, non questa funzione, e
+    // non e' un dettaglio di dove mettere una riga. La guardia ha bisogno di
+    // DUE meta': quale bottone e' acceso (`mode`, cioe' `getMode(k)`) e se la
+    // modalita' che il click sceglie e' gia' scritta — e la seconda qui non si
+    // puo' vedere, perche' «scritta» e' una domanda per chiave e i rami sono
+    // sedici. ParamRow le ha entrambe: `mode` e' il `value` del suo Seg, e
+    // `value`/`envValue` sono quel che la riga mostra. Una copia qui con la
+    // sola prima meta' rifiutava anche il click che MATERIALIZZA — la riga che
+    // mostra «—» perche' la chiave non c'e', dove quel click e' l'unica via
+    // d'ingresso — cioe' proprio il caso in cui le due domande divergono: e'
+    // il modo in cui la seconda copia smette di valere, la ragione che
+    // loopEndSel dichiara qui sotto.
     setMode(k, newMode);
     // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
     // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
@@ -881,12 +878,22 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // …e la stessa regola per l'altra coppia mutuamente esclusiva del pannello,
   // density ↔ fill_factor: quale bottone e' acceso si dichiara una volta sola,
   // qui, ed e' sia il `value` del Seg sia la condizione con cui il suo handler
-  // riconosce il click che non chiede niente. Li' il no-op costava piu' che
-  // altrove — i due rami scrivono la costante e azzerano l'envelope, quindi un
-  // fill_factor scelto dall'utente tornava 2.0 e una curva di density spariva
-  // sotto un 8 — per un click che non chiedeva niente.
-  const densityUnitSel = (stream.fillFactor != null || stream.fillFactorEnv != null)
-    ? "fill_factor" : "density";
+  // riconosce il click che non chiede niente — e la stessa che sceglie la riga
+  // sotto il Seg e il badge della sezione, che altrimenti sarebbero la terza e
+  // la quarta copia, libere di dissentire dal selettore che le governa. Li' il
+  // no-op costava piu' che altrove — i due rami scrivono la costante e azzerano
+  // l'envelope, quindi un fill_factor scelto dall'utente tornava 2.0 e una
+  // curva di density spariva sotto un 8.
+  // Ma «acceso» non basta a dire «no-op»: nessuna delle due chiavi e'
+  // obbligatoria (il motore ha un default, e otto stream del corpus non ne
+  // dichiarano nessuna), e li' il bottone `density` e' acceso per esclusione
+  // mentre la riga sotto mostra «—». Quel click chiede eccome: era l'unico modo
+  // per far esistere una density, e rifiutarlo lasciava la riga senza ingresso.
+  // Da cui il secondo flag: si tace solo su una coppia gia' scritta.
+  const fillFactorWritten = stream.fillFactor != null || stream.fillFactorEnv != null;
+  const densityWritten = stream.density != null || stream.densityEnv != null;
+  const densityUnitSel = fillFactorWritten ? "fill_factor" : "density";
+  const densityUnitWritten = fillFactorWritten || densityWritten;
 
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
@@ -1077,7 +1084,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
             </Section>
 
             <Section title="Overall density"
-                     badge={(stream.fillFactor != null || stream.fillFactorEnv != null)
+                     badge={densityUnitSel === "fill_factor"
                        ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${stream.fillFactorEnv.length} bp` : "fill_factor"}</span>
                        : (stream.densityEnv
                            ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {stream.densityEnv.length} bp</span>
@@ -1096,8 +1103,13 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                          // sostituiva una curva di density con un 8. Stessa
                          // lezione del Seg loop_end ↔ loop_dur, e la stessa
                          // regola: la condizione e' quella che accende il
-                         // bottone, non una seconda copia.
-                         if (u === densityUnitSel) return;
+                         // bottone, non una seconda copia — piu' la meta' che
+                         // la dichiarazione spiega, cioe' che una delle due
+                         // chiavi sia davvero scritta. Sul bottone `density`
+                         // acceso per esclusione su uno stream che non dichiara
+                         // nessuna delle due, questo click e' l'unica via per
+                         // farne esistere una.
+                         if (u === densityUnitSel && densityUnitWritten) return;
                          // Sul click VERO le due costanti restano: density
                          // (grani al secondo) e fill_factor (fattore di
                          // sovrapposizione) sono grandezze diverse, e portarsi
@@ -1116,7 +1128,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 </span>
                 <span />
               </div>
-              {(stream.fillFactor != null || stream.fillFactorEnv != null) ? (
+              {densityUnitSel === "fill_factor" ? (
                 <ParamRow name="fill_factor"
                   mode={getMode("fillFactor")} onMode={(m) => toggleMode("fillFactor", m)}
                   value={stream.fillFactor != null ? stream.fillFactor : "—"} unit={stream.fillFactorEnv ? "" : "×"}

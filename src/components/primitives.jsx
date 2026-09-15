@@ -269,9 +269,24 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
      e' quella che accende il bottone: `mode` e' il `value` del Seg due righe
      piu' giu', per costruzione e per ogni ParamRow dell'editor. Riscriverla a
      valle sarebbe la seconda copia, che e' il modo in cui una delle due smette
-     di valere — la ragione che loopEndSel dichiara nell'Inspector. */
+     di valere — la ragione che loopEndSel dichiara nell'Inspector.
+     Ma «non chiede niente» non e' «il bottone e' gia' acceso»: e' «la modalita'
+     che il bottone sceglie e' gia' scritta», e le due domande divergono
+     esattamente sulle righe il cui parametro NON c'e'. Il motore ha un default
+     e la chiave e' assente, quindi il chiamante passa una `value` che non e' un
+     numero («—») e la riga non disegna nessun NumberField: li' il click sul
+     bottone gia' acceso e' l'unica via d'ingresso, perche' il ramo scalare
+     materializza la chiave sul default del parametro. Rifiutarlo lasciava la
+     riga senza nessun modo di scrivere — la `density` delle stream che non la
+     dichiarano (otto nel corpus del motore) e le dodici righe delle strategie
+     di VoicesSection, dove lo YAML puo' dichiarare la strategia senza il suo
+     parametro. Quindi la guardia cede dove la riga non offre altra via, ed e'
+     la riga stessa a dirlo: `value` non numerica = nessun campo, `envValue`
+     assente = nessuna curva. Cosi' il click che il PR esiste per fermare —
+     quello che passerebbe sopra un valore gia' scritto — resta fermo. */
   const handleMode = (m) => {
-    if (m === mode) return;
+    const written = m === "env" ? envValue != null : typeof value === "number";
+    if (m === mode && written) return;
     if (onMode) onMode(m);
   };
   return (
