@@ -15,7 +15,11 @@ VENV_BIN := $(VENV)/bin
 # Dove `install-cli` mette il symlink `pge-ui`. ~/.local/bin e' il posto in cui
 # si aggiunge un comando senza sudo; se non e' nel PATH il target lo dice, ed e'
 # il modo piu' comune in cui questa cosa sembra non funzionare. #164
-BINDIR   ?= $(HOME)/.local/bin
+# Senza HOME il default non esiste: `$(HOME)/.local/bin` diventerebbe
+# `/.local/bin`, che nessun `~` ferma — e su una macchina dove `/` e'
+# scrivibile (un container, un CI) l'install ci riusciva davvero e stampava la
+# riga di successo. Vuoto, invece, lo ferma la ricetta dicendo cosa manca.
+BINDIR   ?= $(if $(HOME),$(HOME)/.local/bin,)
 # Un `~` in BINDIR non lo espande nessuno: make non fa tilde expansion, e la
 # ricetta quota ogni espansione (deve: gli spazi). `BINDIR=~/.local/bin` — la
 # grafia che l'help qui sotto suggerisce — fabbricava percio' una cartella
@@ -24,9 +28,16 @@ BINDIR   ?= $(HOME)/.local/bin
 # annunciato installato che nessun PATH raggiunge.
 # `override` non e' ornamentale: senza, l'assegnamento verrebbe ignorato
 # proprio nel caso che cura — BINDIR arriva da riga di comando, e li' make fa
-# vincere la riga di comando sul file. Le grafie che restano (`~utente/bin`,
-# `~` nudo, HOME non esportato) make non le sa risolvere: le ferma la ricetta.
-override BINDIR := $(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR))
+# vincere la riga di comando sul file.
+# `patsubst` pero' lavora a PAROLE, e li' l'espansione del `~` si portava
+# dietro la stessa bugia che toglie: `BINDIR=/tmp/a  b` tornava `/tmp/a b`, cioe'
+# il link in una cartella che non e' quella chiesta, annunciata riuscita. La
+# riscrittura si applica percio' solo al BINDIR di una parola sola — dove
+# patsubst non ha niente da spezzare; ogni altro passa verbatim, e gli spazi
+# li regge la ricetta, che quota ogni espansione. Le grafie che restano
+# (`~utente/bin`, `~` nudo, `~/con  spazi`) make non le sa risolvere: le ferma
+# la ricetta, invece di inventare una cartella.
+override BINDIR := $(if $(filter 1,$(words $(BINDIR))),$(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR)),$(BINDIR))
 # Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
 # quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un
 # `make -f /path/PGE-ui/Makefile install-cli` dato da un'altra cartella linkava
@@ -106,6 +117,11 @@ install-cli:
 	  echo "install-cli: $(CLI_SRC) non e' eseguibile" >&2; \
 	  echo "  chmod +x \"$(CLI_SRC)\"  — un link a un file senza bit x e' un nome" >&2; \
 	  echo "  sul PATH che risponde 'Permission denied', annunciato come installato" >&2; \
+	  exit 1; }
+	@test -n "$(BINDIR)" || { \
+	  echo "install-cli: BINDIR e' vuoto, quindi non c'e' dove installare" >&2; \
+	  echo "  (HOME non impostato? il default ne dipende: passa la destinazione" >&2; \
+	  echo "  a mano, make install-cli BINDIR=/path/bin)" >&2; \
 	  exit 1; }
 	@case "$(BINDIR)" in "~"*) \
 	  echo "install-cli: BINDIR=$(BINDIR) comincia per ~, e qui nessuno lo espande" >&2; \
