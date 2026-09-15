@@ -785,6 +785,56 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
     assert("col venv nel repo, e' il suo python a girare",
       out2.includes("VENV-PY " + path.join(fakeRepo, "server.py")),
       out2.trim() || `exit ${r2.status}`);
+
+    /* E quando `realpath` non risponde, il comando si ferma invece di tirare a
+       indovinare. Non e' un caso di laboratorio: `realpath` non e' POSIX e su
+       macOS arriva solo con la 12.3. `dirname` di una stringa vuota da' `.`,
+       quindi REPO diventava la cartella CORRENTE — dentro il checkout il
+       comando funzionava per caso, e da ogni altra cartella moriva nominando
+       un server.py che non c'entra niente, che e' il genere di errore da cui
+       non si torna indietro da soli.
+
+       La sonda ha bisogno di un'ESCA per essere decisiva, e la prima versione
+       non ce l'aveva: col PATH ridotto il lanciatore rotto muore comunque
+       (`python3` li' non c'e'), quindi "exit != 0" restava verde anche sul
+       difetto. L'esca e' un finto venv nella cartella CORRENTE: con REPO
+       risolto su `.` il lanciatore esegue quella, e si vede. Il controllo e'
+       lo stesso PATH ridotto con realpath dentro — deve continuare a trovare
+       lo stub del repo, e non l'esca. */
+    const which = (name) => {
+      const w = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8" });
+      return w.status === 0 ? w.stdout.trim() : "";
+    };
+    const dnPath = which("dirname"), rpPath = which("realpath");
+    if (!dnPath || !rpPath) {
+      console.log("  SKIP realpath assente (dirname/realpath non trovati sul PATH)");
+    } else {
+      const noRp = path.join(tmp, "senza-realpath");
+      const withRp = path.join(tmp, "con-realpath");
+      fs.mkdirSync(noRp); fs.mkdirSync(withRp);
+      fs.symlinkSync(dnPath, path.join(noRp, "dirname"));
+      fs.symlinkSync(dnPath, path.join(withRp, "dirname"));
+      fs.symlinkSync(rpPath, path.join(withRp, "realpath"));
+
+      fs.mkdirSync(path.join(elsewhere, ".venv", "bin"), { recursive: true });
+      fs.writeFileSync(path.join(elsewhere, ".venv", "bin", "python"),
+        '#!/bin/sh\necho "ESCA-PY $*"\n');
+      fs.chmodSync(path.join(elsewhere, ".venv", "bin", "python"), 0o755);
+      fs.writeFileSync(path.join(elsewhere, "server.py"), "");
+
+      const ctl = run({ PATH: binDir + path.delimiter + withRp });
+      const outC = (ctl.stdout || "") + (ctl.stderr || "");
+      assert("controllo: col PATH ridotto ma realpath presente, parte il repo vero",
+        outC.includes("VENV-PY " + path.join(fakeRepo, "server.py")) &&
+        !outC.includes("ESCA-PY"), outC.trim() || `exit ${ctl.status}`);
+
+      const bare = run({ PATH: binDir + path.delimiter + noRp });
+      const outB = (bare.stdout || "") + (bare.stderr || "");
+      assert("senza realpath si ferma, invece di risolvere REPO su $PWD",
+        bare.status !== 0 && !outB.includes("ESCA-PY") &&
+        !outB.includes("VENV-PY ") && !outB.includes("STUB "),
+        `exit ${bare.status}\n      ` + outB.trim());
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -814,15 +864,22 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
         fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink() &&
         fs.realpathSync(link) === fs.realpathSync(BIN),
         fs.existsSync(link) ? fs.readlinkSync(link) : "nessun link");
-      assert("BINDIR fuori dal PATH e' un avviso", /PATH/.test(a.stdout || ""),
-        "senza, l'utente vede 'command not found' e nessuna spiegazione");
+      // I due versi guardano la STESSA espressione. Con `/PATH/` di qua e
+      // `!/attenzione/` di la' bastava riscrivere l'avviso senza quella parola
+      // — `export PATH=` sarebbe rimasto a tenere verde il verso positivo — e
+      // il verso negativo diventava vero per sempre: muto proprio sul caso che
+      // deve vedere, cioe' l'avviso che parla quando BINDIR e' nel PATH.
+      const WARN = /attenzione: .* non e' nel PATH/;
+      assert("BINDIR fuori dal PATH e' un avviso", WARN.test(a.stdout || ""),
+        "senza, l'utente vede 'command not found' e nessuna spiegazione\n      " +
+        ((a.stdout || "") + (a.stderr || "")));
       const quiet = runMake({ PATH: dest + path.delimiter + process.env.PATH });
-      // Lo `status` fa parte dell'assert, non e' un di piu': `!/attenzione/`
-      // da' verde anche su una ricetta che e' morta prima di stampare, cioe'
+      // Lo `status` fa parte dell'assert, non e' un di piu': la negazione da'
+      // verde anche su una ricetta che e' morta prima di stampare, cioe'
       // proprio il "dichiarato presente e non funzionante" da cui nasce questo
       // file. Il silenzio va misurato su una install-cli riuscita.
       assert("...e dentro il PATH l'avviso tace", quiet.status === 0 &&
-        !/attenzione/.test(quiet.stdout || ""),
+        !WARN.test(quiet.stdout || ""),
         `exit ${quiet.status}\n      ` + ((quiet.stdout || "") + (quiet.stderr || "")));
     } finally {
       fs.rmSync(tmp2, { recursive: true, force: true });
@@ -858,6 +915,24 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("...senza fabbricare cartelle dentro il checkout",
         fs.readdirSync(spaced).sort().join(",") === "Makefile,bin",
         fs.readdirSync(spaced).join(", "));
+
+      /* Due spazi di fila non sono piu' esotici di uno, e li' non cedeva la
+         ricetta (che quota) ma l'espansione del `~` messa sopra di essa:
+         `patsubst` lavora a PAROLE, quindi `/tmp/a  b` tornava `/tmp/a b`. Il
+         link finiva in una cartella che non e' quella chiesta, sotto la riga
+         di successo — cioe' esattamente la bugia che quell'espansione era
+         stata aggiunta per togliere. Con uno spazio solo il difetto non si
+         vede: le parole si riattaccano identiche, ed e' il motivo per cui la
+         sonda qui sopra restava verde. */
+      const dest3b = path.join(tmp3, "due  spazi");
+      const m2 = spawnSync("make", ["-C", spaced, "install-cli", "BINDIR=" + dest3b],
+        { env: process.env, encoding: "utf8" });
+      assert("due spazi di fila in BINDIR: il link finisce dove l'hai chiesto",
+        m2.status === 0 && fs.existsSync(path.join(dest3b, "pge-ui")),
+        (m2.stdout || "") + (m2.stderr || ""));
+      assert("...e non in una cartella dal nome accorciato",
+        !fs.existsSync(path.join(tmp3, "due spazi")),
+        fs.readdirSync(tmp3).join(", "));
     } finally {
       fs.rmSync(tmp3, { recursive: true, force: true });
     }
@@ -952,6 +1027,35 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("un `~utente` che nessuno puo' espandere ferma l'installazione",
         u.status !== 0 && fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
         `exit ${u.status}\n      ` + ((u.stdout || "") + (u.stderr || "")));
+
+      /* Senza HOME il default non e' piu' un path: `$(HOME)/.local/bin`
+         diventava `/.local/bin` — non comincia per `~`, quindi nessuna delle
+         guardie lo vedeva, e su una macchina dove `/` e' scrivibile (un
+         container, un runner di CI) l'install RIUSCIVA, annunciata sotto la
+         riga di successo in una cartella che nessun PATH ha. E' la terza
+         grafia della stessa famiglia, e l'unica che il commento del Makefile
+         dichiarava gia' fermata.
+
+         Si misura sul messaggio e non solo sull'uscita: dove `/` non e'
+         scrivibile quel `mkdir` falliva comunque, cioe' un verde per il
+         motivo sbagliato. */
+      const noHomeEnv = { ...process.env };
+      delete noHomeEnv.HOME;
+      const nh = spawnSync("make", ["-C", copy, "install-cli"],
+        { env: noHomeEnv, encoding: "utf8" });
+      assert("HOME non impostato: install-cli si ferma, e nomina BINDIR",
+        nh.status !== 0 && /BINDIR/.test(nh.stderr || ""),
+        `exit ${nh.status}\n      ` + ((nh.stdout || "") + (nh.stderr || "")));
+      assert("...senza lasciare un link sotto la radice",
+        !fs.existsSync(path.join("/", ".local", "bin", "pge-ui")),
+        "/.local/bin/pge-ui: annunciato installato e irraggiungibile");
+
+      // Stessa fine per un BINDIR vuoto scritto a mano: prima era un
+      // `mkdir: cannot create directory ''`, che non dice cosa fare.
+      const ev = runIn("");
+      assert("BINDIR vuoto: si ferma anche lui, dicendo cosa manca",
+        ev.status !== 0 && /BINDIR/.test(ev.stderr || ""),
+        `exit ${ev.status}\n      ` + ((ev.stdout || "") + (ev.stderr || "")));
 
       fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o644);
       const dest5 = path.join(tmp5, "bin");
