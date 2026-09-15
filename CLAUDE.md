@@ -75,7 +75,11 @@ exists, the fourth only when a browser is installed):
   no bridge flag written inside — and it is *run* through a symlink against a
   stub `server.py`, which is the only way to show that `realpath` is doing its
   job; one of the forwarded arguments carries a space, which is the only way
-  that half can tell `"$@"` from a bare `$@`), and `test-tracks.js`
+  that half can tell `"$@"` from a bare `$@`, and a decoy `.venv` in the caller's
+  folder is the only way the `realpath`-absent probe can tell a launcher that
+  stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
+  against temporary `BINDIR`s — with a space, with two, with a `~`, empty, and
+  with no `HOME` at all), and `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
@@ -1214,6 +1218,18 @@ own path with `realpath` — it is reached *through* a symlink, so a plain
 `.venv/bin/python` when there is one (that is where `make install` puts flask;
 with a bare `python3` the documented setup dies on the import).
 
+**And it stops when `realpath` doesn't answer, rather than guessing.**
+`realpath` is not POSIX — on macOS it only arrives with 12.3 — and `dirname` of
+an empty string is `.`, so the missing binary didn't fail: it resolved `REPO`
+onto the *current* folder. Inside the checkout the command then worked by
+accident, and from anywhere else it died naming a `server.py` in the folder you
+were standing in, which is an error nobody gets out of on their own. Hence the
+`|| exit 1` on the resolution line — it costs no line, so the four-line rule
+below is untouched. The probe for it needs a **decoy**: with the PATH stripped
+of `realpath` the broken launcher dies anyway (no `python3` there either), so
+"exit != 0" stayed green on the defect; a fake `.venv` in the folder the command
+is called from is what makes the two outcomes different.
+
 **Nothing else may go in there.** The engine root, the workspace default, the
 flags — every decision stays in `server.py`, where pytest and the source guards
 see it; a script in `bin/` is looked at by nobody, and its natural tendency is
@@ -1241,7 +1257,7 @@ checkout whose path has a space) is covered by the `test -f "$(CLI_SRC)"` guard
 at the top of the recipe: it fails the install instead of writing the wrong
 link.
 
-**The last two spellings of that same failure are stopped now, not announced.**
+**The last spellings of that same failure are stopped now, not announced.**
 A `BINDIR` carrying a `~` is not a path: `make` does no tilde expansion, and
 the recipe quotes every expansion (it has to — the spaces above), so the shell
 doesn't expand it either. `BINDIR=~/.local/bin` — the spelling the target's own
@@ -1250,9 +1266,29 @@ the checkout, put the link in it, printed the success line, and closed with an
 `export PATH="~/…"` that expands to nothing either: two announcements of an
 install nothing can reach. The `~/` head is expanded in the Makefile now, under
 `override`, which is not ornamental — a plain assignment loses against the
-command line, and the command line is exactly where `BINDIR` comes from. What
-remains unresolvable (`~user/`, a bare `~`, an unset `HOME`) fails the target
-instead of inventing a folder. The other spelling is the executable bit: the
+command line, and the command line is exactly where `BINDIR` comes from.
+
+**That expansion brought the same lie back in through `patsubst`, which works
+on words.** `BINDIR=/tmp/a  b` came back `/tmp/a b`: the link in a folder that
+is not the one asked for, under the success line — the exact failure the tilde
+expansion had just been added to remove. One space hides it (the words rejoin
+identically, which is why the space probe stayed green), two don't, and a tab
+doesn't either. So the rewrite only applies to a **one-word** `BINDIR`, where
+`patsubst` has nothing to split; every other spelling passes through verbatim
+and the spaces are carried by the recipe, which quotes. What is left
+unresolvable — `~user/`, a bare `~`, `~/with  spaces` — fails the target instead
+of inventing a folder.
+
+**An unset `HOME` was the one spelling the prose here already claimed was
+stopped, and wasn't.** `$(HOME)/.local/bin` simply became `/.local/bin`: it
+doesn't start with a `~`, so no guard looked at it, and wherever `/` is writable
+(a container, a CI runner) the install *succeeded* — announced, under the root,
+reachable by no `PATH`. The default is `$(if $(HOME),…)` now, so no `HOME` means
+no default, and an empty `BINDIR` (that one, or one typed by hand) is stopped by
+a `test -n` beside the other two guards, naming what is missing instead of
+dying on `mkdir: cannot create directory ''`. The probe reads the *message*, not
+only the exit code: where `/` isn't writable that `mkdir` failed anyway, which
+is a green for the wrong reason. The other spelling is the executable bit: the
 source guard defends *this* repo's index, not the checkout of whoever installs,
 so `test -x` sits beside the `test -f` — linking a file without it is a name on
 the `PATH` that answers `Permission denied`, which is the same lie one layer

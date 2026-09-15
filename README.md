@@ -108,9 +108,10 @@ It is a symlink, not a copy, so `git pull` updates the command too; running the
 target twice is not an error. If `BINDIR` isn't on your `PATH` the target says
 so — that is the usual reason `pge-ui` looks broken right after installing it.
 A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
-target does it); one it cannot resolve — a `~user/…`, or a `bin/pge-ui` that
-lost its executable bit — stops the install instead of leaving behind a name
-that doesn't run.
+target does it), and one with spaces in it lands exactly where you wrote it.
+Anything the target cannot resolve — a `~user/…`, an empty `BINDIR` or no `HOME`
+to build the default from, or a `bin/pge-ui` that lost its executable bit —
+stops the install instead of leaving behind a name that doesn't run.
 
 What the name does *not* change yet are the defaults: `--root` is still
 `../PythonGranularEngine` *relative to the folder you are in*, and the workspace
@@ -121,6 +122,9 @@ spelled out. Making them follow the caller is a separate change.
 through the symlink (`realpath`) and hands over to `server.py`, preferring the
 repo's `.venv/bin/python` when `make install` has created one. Every decision —
 engine root, workspace, flags — stays in `server.py`, where the tests see it.
+If `realpath` isn't there to answer (it is not POSIX; macOS only ships it from
+12.3) the command stops and says so, rather than resolving the repo onto the
+folder you happen to be standing in.
 
 ### 5) Open the editor
 
