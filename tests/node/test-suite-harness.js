@@ -727,15 +727,27 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
     fs.mkdirSync(elsewhere);
     fs.copyFileSync(BIN, path.join(fakeRepo, "bin", "pge-ui"));
     fs.chmodSync(path.join(fakeRepo, "bin", "pge-ui"), 0o755);
+    // Lo stub stampa gli argomenti separati da ` | `, non incollati da uno
+    // spazio: la somma non distingue `"$@"` da `$@` — che e' precisamente la
+    // differenza che questa meta' del presidio deve vedere (sotto).
     fs.writeFileSync(path.join(fakeRepo, "server.py"), [
       "import os, sys",
       'print("STUB " + os.path.abspath(__file__))',
-      'print("ARGV " + " ".join(sys.argv[1:]))',
+      'print("ARGV " + " | ".join(sys.argv[1:]))',
       'print("CWD " + os.getcwd())',
     ].join("\n") + "\n");
     fs.symlinkSync(path.join(fakeRepo, "bin", "pge-ui"), path.join(binDir, "pge-ui"));
 
-    const run = (env) => spawnSync("/bin/sh", ["-c", "pge-ui --port 9000 --root /altrove"], {
+    /* Uno degli argomenti ha uno spazio dentro, e non e' un vezzo: con
+       `--port 9000 --root /altrove` soltanto, un lanciatore che scrive `$@`
+       nudo stampa lo stesso identico ARGV di uno che scrive `"$@"`. La sonda
+       eseguendo — quella che esiste per dimostrare cio' che una lettura non
+       puo' — restava percio' verde sull'unico difetto che l'assert sorgente
+       qui sopra nomina. `--workspace ~/Documents/mio brano` e' il caso vero. */
+    const CLI_ARGS = "--port 9000 --root /altrove --workspace '/tmp/mio brano'";
+    const WANT_ARGV =
+      "ARGV --port | 9000 | --root | /altrove | --workspace | /tmp/mio brano";
+    const run = (env) => spawnSync("/bin/sh", ["-c", "pge-ui " + CLI_ARGS], {
       cwd: elsewhere,
       env: { ...process.env, PATH: binDir + path.delimiter + process.env.PATH, ...env },
       encoding: "utf8",
@@ -749,8 +761,8 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("attraverso il symlink trova il server.py del SUO repo",
         out.includes("STUB " + path.join(fakeRepo, "server.py")),
         out.trim() || `exit ${r.status}`);
-      assert("...inoltrando gli argomenti intatti",
-        /ARGV --port 9000 --root \/altrove/.test(out), out.trim());
+      assert("...inoltrando gli argomenti intatti, spazi compresi",
+        out.includes(WANT_ARGV), out.trim());
       // La ragione per cui il comando esiste: il bridge parte dalla cartella da
       // cui l'hai chiamato, non da quella del repo.
       assert("...e partendo dalla cartella da cui l'hai chiamato",
