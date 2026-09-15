@@ -89,7 +89,14 @@ The engine was never the constraint: `src/main.py` takes absolute paths and
 ```bash
 python server.py --root ../PythonGranularEngine --workspace ~/brani
 make serve WORKSPACE=~/brani
+pge-ui --root ~/projects/PythonGranularEngine --workspace .   # after make install-cli
 ```
+
+The third form is the same bridge under a name on `$PATH` (#164): `server.py`
+resolves its own folder, so it has never needed to be started from the
+checkout — `bin/pge-ui` only supplies the name. The defaults are unchanged,
+which is why that line still spells out both flags: `--root` is relative to the
+folder you are standing in.
 
 | | comes from |
 | --- | --- |

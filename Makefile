@@ -12,6 +12,54 @@ WORKSPACE ?=
 WS_FLAG  := $(if $(WORKSPACE),--workspace $(WORKSPACE),)
 VENV     := .venv
 VENV_BIN := $(VENV)/bin
+# Dove `install-cli` mette il symlink `pge-ui`. ~/.local/bin e' il posto in cui
+# si aggiunge un comando senza sudo; se non e' nel PATH il target lo dice, ed e'
+# il modo piu' comune in cui questa cosa sembra non funzionare. #164
+# Senza HOME il default non esiste: `$(HOME)/.local/bin` diventerebbe
+# `/.local/bin`, che nessun `~` ferma — e su una macchina dove `/` e'
+# scrivibile (un container, un CI) l'install ci riusciva davvero e stampava la
+# riga di successo. Vuoto, invece, lo ferma la ricetta dicendo cosa manca.
+BINDIR   ?= $(if $(HOME),$(HOME)/.local/bin,)
+# Un `~` in BINDIR non lo espande nessuno: make non fa tilde expansion, e la
+# ricetta quota ogni espansione (deve: gli spazi). `BINDIR=~/.local/bin` — la
+# grafia che l'help qui sotto suggerisce — fabbricava percio' una cartella
+# chiamata `~` dentro $PWD, ci metteva il link e stampava la riga di successo:
+# lo stesso modo di fallire dello spazio e del `make -f`, cioe' un `pge-ui`
+# annunciato installato che nessun PATH raggiunge.
+# `override` non e' ornamentale: senza, l'assegnamento verrebbe ignorato
+# proprio nel caso che cura — BINDIR arriva da riga di comando, e li' make fa
+# vincere la riga di comando sul file.
+# `patsubst` pero' lavora a PAROLE, e li' l'espansione del `~` si portava
+# dietro la stessa bugia che toglie: `BINDIR=/tmp/a  b` tornava `/tmp/a b`, cioe'
+# il link in una cartella che non e' quella chiesta, annunciata riuscita. La
+# riscrittura si applica percio' solo al BINDIR di una parola sola — dove
+# patsubst non ha niente da spezzare; ogni altro passa verbatim, e gli spazi
+# li regge la ricetta, che quota ogni espansione. Le grafie che restano
+# (`~utente/bin`, `~` nudo, `~/con  spazi`) make non le sa risolvere: le ferma
+# la ricetta, invece di inventare una cartella.
+#
+# Nello stesso ramo cadono le barre in fondo, e per la stessa ragione di
+# prima: non cambiano dove finisce il link, ma il confronto con il PATH e'
+# testuale e `$PATH` elenca `/home/tu/.local/bin`, non `/home/tu/.local/bin/`.
+# Cioe' l'avviso «BINDIR non e' nel PATH» — l'unica cosa che qui dentro spiega
+# un `command not found` — parlava proprio sulla grafia piu' facile da
+# produrre, quella che la tab-completion della shell scrive da sola. Un avviso
+# che grida dove non c'e' niente e' il primo che si impara a non leggere.
+# `patsubst` ne toglie una per giro, quindi due giri: `…/bin/` e `…/bin//`.
+# L'ultima barra non si tocca mai (`filter-out /`), cosi' `BINDIR=/` resta `/`
+# e non si svuota, andando a sbattere nell'errore sbagliato — quello che dice
+# che BINDIR non c'e'.
+ifeq ($(words $(BINDIR)),1)
+override BINDIR := $(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR))
+override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
+override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
+endif
+# Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
+# quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un
+# `make -f /path/PGE-ui/Makefile install-cli` dato da un'altra cartella linkava
+# `$PWD/bin/pge-ui`, che li' non esiste — e `ln -s` non guarda il target, quindi
+# il link pendente nasceva annunciato come riuscito.
+CLI_SRC  := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/bin/pge-ui
 
 # I test di parita' girano da tests/parity/, quindi il path del motore va
 # assolutizzato qui: relativo si romperebbe al primo cd.
@@ -29,12 +77,13 @@ else
 ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
 endif
 
-.PHONY: help serve install dev-clean tests tests-node tests-python tests-parity tests-e2e
+.PHONY: help serve install install-cli dev-clean tests tests-node tests-python tests-parity tests-e2e
 
 help:
 	@echo " PGE-ui · targets"
 	@echo ""
 	@echo "  make install         crea .venv e installa requirements.txt"
+	@echo "  make install-cli     mette \`pge-ui\` sul PATH ($(BINDIR))"
 	@echo "  make serve           avvia il bridge locale su :$(PORT)"
 	@echo "                       (default ROOT=$(ROOT))"
 	@echo "                       WORKSPACE=~/brani per lavorare fuori dal repo engine"
@@ -49,6 +98,7 @@ help:
 	@echo "  WORKSPACE=~/brani    cartella con configs/ output/ cache/"
 	@echo "                       (default: = ROOT, i progetti nel repo engine)"
 	@echo "  PYTHON=python3       interprete usato per creare il venv"
+	@echo "  BINDIR=~/.local/bin  dove install-cli mette il symlink pge-ui"
 	@echo "  PGE_PARITY_STRICT=1  un caso di parita' saltato diventa un errore"
 	@echo "  PGE_REQUIRE_E2E=1    un e2e saltato (browser assente) diventa un errore"
 
@@ -60,6 +110,65 @@ install: $(VENV_BIN)/pip
 
 serve: $(VENV_BIN)/pip
 	$(VENV_BIN)/python server.py --root $(ROOT) $(WS_FLAG) --port $(PORT)
+
+# Un nome sul PATH per il bridge (#164): `cd ~/qualsiasi-brano && pge-ui`.
+# E' un symlink, non una copia, cosi' un `git pull` aggiorna anche il comando.
+# `-sfn` lo rende idempotente: lanciarlo due volte di fila non e' un errore e
+# non lascia un link dentro un link.
+#
+# Nessuna dipendenza dal venv: `install-cli` e' un gesto di installazione, non
+# di setup, e chi tiene le dipendenze fuori dal repo non deve vedersi creare un
+# .venv per avere il comando. Il venv, se c'e', lo preferisce bin/pge-ui.
+#
+# Ogni espansione e' quotata: uno spazio nel path del checkout o del BINDIR
+# (~/Documents/…, ~/Library/Mobile Documents/…) faceva fabbricare a `mkdir -p`
+# una cartella relativa dentro il repo e poi fallire `ln` nominando la
+# destinazione, che invece esisteva. bin/pge-ui lo spazio lo reggeva gia'.
+#
+# E un BINDIR relativo si ferma qui, che e' l'ultima grafia della stessa
+# famiglia: `mybin` non nomina una cartella finche' non si sceglie rispetto a
+# cosa: `make -C /path/PGE-ui` lo risolve dentro il checkout, `make -f
+# /path/PGE-ui/Makefile` dentro la cartella da cui l'hai lanciato — la stessa
+# ambiguita' che CLI_SRC toglie al sorgente del link, lasciata aperta sulla
+# destinazione. Riusciva, stampava la riga di successo, e chiudeva
+# consigliando `export PATH="mybin:$PATH"`: una voce di PATH relativa, cioe' un
+# comando che risponde solo dalla cartella giusta — annunciato installato.
+install-cli:
+	@test -f "$(CLI_SRC)" || { \
+	  echo "install-cli: non trovo $(CLI_SRC)" >&2; \
+	  echo "  (lancialo dal checkout: make install-cli, oppure make -C /path/PGE-ui install-cli)" >&2; \
+	  exit 1; }
+	@test -x "$(CLI_SRC)" || { \
+	  echo "install-cli: $(CLI_SRC) non e' eseguibile" >&2; \
+	  echo "  chmod +x \"$(CLI_SRC)\"  — un link a un file senza bit x e' un nome" >&2; \
+	  echo "  sul PATH che risponde 'Permission denied', annunciato come installato" >&2; \
+	  exit 1; }
+	@test -n "$(BINDIR)" || { \
+	  echo "install-cli: BINDIR e' vuoto, quindi non c'e' dove installare" >&2; \
+	  echo "  (HOME non impostato? il default ne dipende: passa la destinazione" >&2; \
+	  echo "  a mano, make install-cli BINDIR=/path/bin)" >&2; \
+	  exit 1; }
+	@case "$(BINDIR)" in "~"*) \
+	  echo "install-cli: BINDIR=$(BINDIR) comincia per ~, e qui nessuno lo espande" >&2; \
+	  echo "  (make non fa tilde expansion: scrivilo per esteso, BINDIR=\$$HOME/.local/bin)" >&2; \
+	  exit 1;; esac
+	@case "$(BINDIR)" in /*) ;; *) \
+	  echo "install-cli: BINDIR=$(BINDIR) e' relativo, e un PATH relativo non e' un PATH" >&2; \
+	  echo "  (si risolve sulla cartella di make — che \`make -C\` e \`make -f\` scelgono" >&2; \
+	  echo "  diversa — e il comando risponderebbe solo da li': scrivilo assoluto," >&2; \
+	  echo "  BINDIR=\$$HOME/.local/bin)" >&2; \
+	  exit 1;; esac
+	@mkdir -p "$(BINDIR)"
+	@ln -sfn "$(CLI_SRC)" "$(BINDIR)/pge-ui"
+	@echo "pge-ui -> $(BINDIR)/pge-ui"
+	@case ":$$PATH:" in \
+	  *:"$(BINDIR)":*|*:"$(BINDIR)/":*) ;; \
+	  *) echo ""; \
+	     echo "  attenzione: $(BINDIR) non e' nel PATH, quindi \`pge-ui\` non si"; \
+	     echo "  trova ancora. Aggiungilo alla tua shell, per esempio:"; \
+	     echo ""; \
+	     echo "      export PATH=\"$(BINDIR):\$$PATH\"" ;; \
+	esac
 
 .PHONY: tests tests-node tests-python tests-parity tests-e2e
 

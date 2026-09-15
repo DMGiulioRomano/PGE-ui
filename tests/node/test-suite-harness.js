@@ -628,6 +628,527 @@ console.log("\n── source-guard: il sorgente resta leggibile come codice ─�
     "offset disallineati in: " + skewed.join(", "));
 }
 
+/* ============================================================
+ * 7 — bin/pge-ui: un lanciatore che non puo' diventare un programma (#164)
+ *
+ * `bin/pge-ui` esiste per una ragione sola: dare un nome sul PATH al bridge,
+ * cosi' che `cd ~/qualsiasi-brano && pge-ui` apra l'editor su quella cartella.
+ * Tutto cio' che DECIDE qualcosa — dove sta il motore, quale workspace, se
+ * aprire il browser — sta in server.py, dove pytest e le guardie lo vedono.
+ * Uno script in /bin invece non lo guarda nessuno: la sua tentazione naturale
+ * e' crescere (un default qui, un flag li'), e crescendo diventa la seconda
+ * copia di quelle decisioni — quella che non ha test.
+ *
+ * Il presidio ha percio' due meta'. Una guardia sorgente che pretende che il
+ * file resti quello che e': poche righe di codice, un solo `exec`, e nessun
+ * flag di server.py scritto dentro. E una verifica ESEGUENDO, perche' la
+ * proprieta' che l'issue chiede — "funziona attraverso il symlink" — e' proprio
+ * quella che una lettura non puo' dare: senza `realpath`, `dirname` darebbe la
+ * cartella del symlink e il comando cercherebbe server.py in ~/.local/.
+ * Quella prova gira su un repo finto (uno `server.py` che stampa i suoi argv),
+ * quindi non ha bisogno ne' di flask ne' del repo fratello — cioe' gira anche
+ * nel job node, che il bridge non lo installa.
+ * ============================================================ */
+
+console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
+{
+  const repo = path.join(__dirname, "..", "..");
+  const BIN  = path.join(repo, "bin", "pge-ui");
+
+  assert("bin/pge-ui esiste", fs.existsSync(BIN),
+    "il comando dell'issue #164 non c'e'");
+
+  if (fs.existsSync(BIN)) {
+    const raw = fs.readFileSync(BIN, "utf8");
+    // source-guard sceglie lo scanner dall'estensione e di `sh` non sa niente
+    // (li' `//` non e' un commento e `#` si'). Per quattro righe la regola per
+    // riga e' esatta e onesta: codice = riga non vuota che non comincia per
+    // `#`. Lo shebang, che comincia per `#`, si controlla sul grezzo.
+    const code = raw.split("\n").map((l) => l.trim())
+                    .filter((l) => l && !l.startsWith("#"));
+
+    assert("bin/pge-ui parte da /bin/sh", raw.startsWith("#!/bin/sh\n"),
+      "uno shebang su una shell che puo' non esserci e' un comando che non parte");
+
+    assert("...e resta corto", code.length <= 4,
+      `${code.length} righe di codice: se e' cresciuto, qualcosa che andava in ` +
+      `server.py e' finito qui — dove nessun test lo guarda\n      ` +
+      code.join(" | "));
+
+    const execLines = code.filter((l) => /^exec\b/.test(l));
+    assert("...con un solo exec, che e' l'ultima riga", execLines.length === 1 &&
+      code[code.length - 1] === execLines[0], code.join(" | "));
+
+    const execLine = execLines[0] || "";
+    assert("l'exec passa la mano a server.py", /server\.py/.test(execLine), execLine);
+    assert("...e gli inoltra gli argomenti", /"\$@"/.test(execLine),
+      'senza "$@" (o con $@ nudo) `pge-ui --port 9000` perde i flag, o li spezza ' +
+      "sugli spazi");
+
+    assert("il path si risolve con realpath", /realpath/.test(code.join("\n")),
+      "il comando si raggiunge via symlink: senza realpath, dirname da' la " +
+      "cartella del symlink e server.py non si trova");
+
+    // Nessun default del bridge scritto qui dentro: e' il modo preciso in cui
+    // lo script diventa la seconda copia delle decisioni di server.py.
+    //
+    // L'elenco dei flag NON si trascrive qui: si legge dagli `add_argument` di
+    // server.py, che e' dove vengono dichiarati. Una lista a mano e' una
+    // seconda copia della verita', e tace proprio quando il bridge cresce: il
+    // sesto flag aggiunto domani si potrebbe cablare nel lanciatore con la
+    // guardia verde. Che non sia teoria lo dice questa PR stessa, dove la
+    // stessa lista trascritta in prosa ne nominava quattro su cinque.
+    const srvSrc = fs.readFileSync(path.join(repo, "server.py"), "utf8");
+    const bridgeFlags = [...srvSrc.matchAll(/add_argument\(\s*"(--[\w-]+)"/g)]
+      .map((m) => m[1]);
+    // La lettura deve aver funzionato, o la guardia sotto e' un regex vuoto che
+    // non accusa niente — il modo silenzioso di sparire che questo repo
+    // conosce gia' (`backend.envelopeKeys()` che torna `[]` e il filtro si
+    // nasconde). `--root` e' la canarina: e' il flag che decide dove sta il
+    // motore, cioe' la prima cosa che verrebbe cablata qui.
+    assert("i flag del bridge si leggono da server.py, non da una lista",
+      bridgeFlags.length >= 3 && bridgeFlags.includes("--root"),
+      `letti ${bridgeFlags.length}: ${bridgeFlags.join(" ") || "nessuno"} — ` +
+      "se server.py ha cambiato il modo di dichiarare i flag, la lettura va " +
+      "aggiornata, non aggirata");
+    // Ordinati dal piu' lungo: `\b` cade anche fra `t` e `-`, quindi con
+    // `--port` davanti un ipotetico `--port-range` verrebbe nominato `--port`.
+    const alt = [...bridgeFlags].sort((a, b) => b.length - a.length).join("|");
+    const flag = bridgeFlags.length
+      ? code.join("\n").match(new RegExp("(" + alt + ")\\b"))
+      : null;
+    assert("nessun flag di server.py e' cablato nel lanciatore", !flag,
+      flag ? `trovato ${flag[0]}: quel default va in server.py, non qui` : "");
+
+    assert("bin/pge-ui e' eseguibile sul disco",
+      (fs.statSync(BIN).mode & 0o111) !== 0,
+      "chmod +x bin/pge-ui");
+
+    // Il bit sul disco puo' essere giusto mentre git registra 100644: dopo un
+    // clone il comando non parte, e il symlink di install-cli neanche. E' la
+    // meta' che un `chmod` locale non dimostra.
+    const ls = spawnSync("git", ["ls-files", "-s", "bin/pge-ui"],
+      { cwd: repo, encoding: "utf8" });
+    if (ls.status !== 0 || !ls.stdout.trim()) {
+      console.log("  SKIP il bit eseguibile nell'indice git (git assente, o file non tracciato)");
+    } else {
+      assert("...e anche per git (100755)", /^100755\s/.test(ls.stdout.trim()),
+        ls.stdout.trim());
+    }
+  }
+
+  /* Eseguendo. Il repo e' finto: `bin/pge-ui` vero (copiato, bit compreso) e
+     uno `server.py` che stampa chi e' e con cosa e' stato chiamato. Il comando
+     si raggiunge da un PATH, attraverso un symlink, da una terza cartella —
+     cioe' esattamente la forma che `make install-cli` produce. */
+  const py3 = spawnSync("python3", ["-c", "print(1)"], { encoding: "utf8" });
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-cli-")));
+  try {
+    const fakeRepo = path.join(tmp, "repo");
+    const binDir   = path.join(tmp, "bin");
+    const elsewhere = path.join(tmp, "brano");
+    fs.mkdirSync(path.join(fakeRepo, "bin"), { recursive: true });
+    fs.mkdirSync(binDir);
+    fs.mkdirSync(elsewhere);
+    fs.copyFileSync(BIN, path.join(fakeRepo, "bin", "pge-ui"));
+    fs.chmodSync(path.join(fakeRepo, "bin", "pge-ui"), 0o755);
+    // Lo stub stampa gli argomenti separati da ` | `, non incollati da uno
+    // spazio: la somma non distingue `"$@"` da `$@` — che e' precisamente la
+    // differenza che questa meta' del presidio deve vedere (sotto).
+    fs.writeFileSync(path.join(fakeRepo, "server.py"), [
+      "import os, sys",
+      'print("STUB " + os.path.abspath(__file__))',
+      'print("ARGV " + " | ".join(sys.argv[1:]))',
+      'print("CWD " + os.getcwd())',
+    ].join("\n") + "\n");
+    fs.symlinkSync(path.join(fakeRepo, "bin", "pge-ui"), path.join(binDir, "pge-ui"));
+
+    /* Uno degli argomenti ha uno spazio dentro, e non e' un vezzo: con
+       `--port 9000 --root /altrove` soltanto, un lanciatore che scrive `$@`
+       nudo stampa lo stesso identico ARGV di uno che scrive `"$@"`. La sonda
+       eseguendo — quella che esiste per dimostrare cio' che una lettura non
+       puo' — restava percio' verde sull'unico difetto che l'assert sorgente
+       qui sopra nomina. `--workspace ~/Documents/mio brano` e' il caso vero. */
+    const CLI_ARGS = "--port 9000 --root /altrove --workspace '/tmp/mio brano'";
+    const WANT_ARGV =
+      "ARGV --port | 9000 | --root | /altrove | --workspace | /tmp/mio brano";
+    const run = (env) => spawnSync("/bin/sh", ["-c", "pge-ui " + CLI_ARGS], {
+      cwd: elsewhere,
+      env: { ...process.env, PATH: binDir + path.delimiter + process.env.PATH, ...env },
+      encoding: "utf8",
+    });
+
+    if (py3.status !== 0) {
+      console.log("  SKIP la verifica eseguendo (python3 assente)");
+    } else {
+      const r = run({});
+      const out = (r.stdout || "") + (r.stderr || "");
+      assert("attraverso il symlink trova il server.py del SUO repo",
+        out.includes("STUB " + path.join(fakeRepo, "server.py")),
+        out.trim() || `exit ${r.status}`);
+      assert("...inoltrando gli argomenti intatti, spazi compresi",
+        out.includes(WANT_ARGV), out.trim());
+      // La ragione per cui il comando esiste: il bridge parte dalla cartella da
+      // cui l'hai chiamato, non da quella del repo.
+      assert("...e partendo dalla cartella da cui l'hai chiamato",
+        out.includes("CWD " + elsewhere), out.trim());
+    }
+
+    /* L'interprete: col venv del repo presente e' quello a vincere. Senza
+       questa regola `pge-ui` userebbe il python3 di sistema e morirebbe
+       sull'import di flask, cioe' proprio nel setup che `make install`
+       produce — il README ci manda tutti li'. La sonda non ha bisogno di un
+       python vero: il "venv" e' uno script che dichiara di essere stato
+       chiamato, ed e' l'unica cosa che serve sapere. */
+    const venvBin = path.join(fakeRepo, ".venv", "bin");
+    fs.mkdirSync(venvBin, { recursive: true });
+    fs.writeFileSync(path.join(venvBin, "python"),
+      '#!/bin/sh\necho "VENV-PY $*"\n');
+    fs.chmodSync(path.join(venvBin, "python"), 0o755);
+    const r2 = run({});
+    const out2 = (r2.stdout || "") + (r2.stderr || "");
+    assert("col venv nel repo, e' il suo python a girare",
+      out2.includes("VENV-PY " + path.join(fakeRepo, "server.py")),
+      out2.trim() || `exit ${r2.status}`);
+
+    /* E quando `realpath` non risponde, il comando si ferma invece di tirare a
+       indovinare. Non e' un caso di laboratorio: `realpath` non e' POSIX e su
+       macOS arriva solo con la 12.3. `dirname` di una stringa vuota da' `.`,
+       quindi REPO diventava la cartella CORRENTE — dentro il checkout il
+       comando funzionava per caso, e da ogni altra cartella moriva nominando
+       un server.py che non c'entra niente, che e' il genere di errore da cui
+       non si torna indietro da soli.
+
+       La sonda ha bisogno di un'ESCA per essere decisiva, e la prima versione
+       non ce l'aveva: col PATH ridotto il lanciatore rotto muore comunque
+       (`python3` li' non c'e'), quindi "exit != 0" restava verde anche sul
+       difetto. L'esca e' un finto venv nella cartella CORRENTE: con REPO
+       risolto su `.` il lanciatore esegue quella, e si vede. Il controllo e'
+       lo stesso PATH ridotto con realpath dentro — deve continuare a trovare
+       lo stub del repo, e non l'esca. */
+    const which = (name) => {
+      const w = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8" });
+      return w.status === 0 ? w.stdout.trim() : "";
+    };
+    const dnPath = which("dirname"), rpPath = which("realpath");
+    if (!dnPath || !rpPath) {
+      console.log("  SKIP realpath assente (dirname/realpath non trovati sul PATH)");
+    } else {
+      const noRp = path.join(tmp, "senza-realpath");
+      const withRp = path.join(tmp, "con-realpath");
+      fs.mkdirSync(noRp); fs.mkdirSync(withRp);
+      fs.symlinkSync(dnPath, path.join(noRp, "dirname"));
+      fs.symlinkSync(dnPath, path.join(withRp, "dirname"));
+      fs.symlinkSync(rpPath, path.join(withRp, "realpath"));
+
+      fs.mkdirSync(path.join(elsewhere, ".venv", "bin"), { recursive: true });
+      fs.writeFileSync(path.join(elsewhere, ".venv", "bin", "python"),
+        '#!/bin/sh\necho "ESCA-PY $*"\n');
+      fs.chmodSync(path.join(elsewhere, ".venv", "bin", "python"), 0o755);
+      fs.writeFileSync(path.join(elsewhere, "server.py"), "");
+
+      const ctl = run({ PATH: binDir + path.delimiter + withRp });
+      const outC = (ctl.stdout || "") + (ctl.stderr || "");
+      assert("controllo: col PATH ridotto ma realpath presente, parte il repo vero",
+        outC.includes("VENV-PY " + path.join(fakeRepo, "server.py")) &&
+        !outC.includes("ESCA-PY"), outC.trim() || `exit ${ctl.status}`);
+
+      const bare = run({ PATH: binDir + path.delimiter + noRp });
+      const outB = (bare.stdout || "") + (bare.stderr || "");
+      assert("senza realpath si ferma, invece di risolvere REPO su $PWD",
+        bare.status !== 0 && !outB.includes("ESCA-PY") &&
+        !outB.includes("VENV-PY ") && !outB.includes("STUB "),
+        `exit ${bare.status}\n      ` + outB.trim());
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  /* `make install-cli`: idempotente (lanciarlo due volte non e' un errore) e
+     rumoroso quando BINDIR non e' nel PATH — che e' il modo piu' comune in cui
+     il comando sembra non funzionare. Misurato lanciandolo: la ricetta e'
+     quattro righe di shell dentro un Makefile, cioe' proprio il genere di cosa
+     che una guardia sorgente dichiara presente e non funzionante. */
+  const mk = spawnSync("make", ["--version"], { encoding: "utf8" });
+  if (mk.status !== 0) {
+    console.log("  SKIP make install-cli (make assente)");
+  } else {
+    const tmp2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-bindir-")));
+    const dest = path.join(tmp2, "bin");
+    const runMake = (env) => spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest],
+      { env: { ...process.env, ...env }, encoding: "utf8" });
+    try {
+      const a = runMake({});
+      const b = runMake({});
+      assert("make install-cli va a buon fine", a.status === 0,
+        (a.stdout || "") + (a.stderr || ""));
+      assert("...e due volte di fila non e' un errore", b.status === 0,
+        (b.stdout || "") + (b.stderr || ""));
+      const link = path.join(dest, "pge-ui");
+      assert("...lasciando un symlink al bin/pge-ui del repo",
+        fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink() &&
+        fs.realpathSync(link) === fs.realpathSync(BIN),
+        fs.existsSync(link) ? fs.readlinkSync(link) : "nessun link");
+      // I due versi guardano la STESSA espressione. Con `/PATH/` di qua e
+      // `!/attenzione/` di la' bastava riscrivere l'avviso senza quella parola
+      // — `export PATH=` sarebbe rimasto a tenere verde il verso positivo — e
+      // il verso negativo diventava vero per sempre: muto proprio sul caso che
+      // deve vedere, cioe' l'avviso che parla quando BINDIR e' nel PATH.
+      const WARN = /attenzione: .* non e' nel PATH/;
+      assert("BINDIR fuori dal PATH e' un avviso", WARN.test(a.stdout || ""),
+        "senza, l'utente vede 'command not found' e nessuna spiegazione\n      " +
+        ((a.stdout || "") + (a.stderr || "")));
+      const quiet = runMake({ PATH: dest + path.delimiter + process.env.PATH });
+      // Lo `status` fa parte dell'assert, non e' un di piu': la negazione da'
+      // verde anche su una ricetta che e' morta prima di stampare, cioe'
+      // proprio il "dichiarato presente e non funzionante" da cui nasce questo
+      // file. Il silenzio va misurato su una install-cli riuscita.
+      assert("...e dentro il PATH l'avviso tace", quiet.status === 0 &&
+        !WARN.test(quiet.stdout || ""),
+        `exit ${quiet.status}\n      ` + ((quiet.stdout || "") + (quiet.stderr || "")));
+
+      /* E tace anche con la barra in fondo, che e' la grafia che la
+         tab-completion della shell scrive da sola: `BINDIR=~/.local/bin/`.
+         Il confronto con il PATH e' testuale, e `$PATH` elenca quella cartella
+         senza barra — quindi l'avviso parlava li', consigliando di aggiungere
+         al PATH una voce che c'e' gia'. Un avviso che grida dove non c'e'
+         niente e' il primo che si impara a saltare, e questo e' l'unica cosa
+         che spiega un `command not found` dopo l'install. Il link deve
+         comunque finire nella cartella chiesta, non in una `…//` di fantasia. */
+      const slashed = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "/"],
+        { env: { ...process.env, PATH: dest + path.delimiter + process.env.PATH },
+          encoding: "utf8" });
+      assert("una barra in fondo a BINDIR non fa gridare l'avviso",
+        slashed.status === 0 && !WARN.test(slashed.stdout || "") &&
+        fs.existsSync(path.join(dest, "pge-ui")),
+        `exit ${slashed.status}\n      ` +
+        ((slashed.stdout || "") + (slashed.stderr || "")));
+      // Due barre non sono piu' esotiche di una (un path incollato a mano), e
+      // `patsubst` ne toglie una per giro: e' il motivo dei due giri.
+      const slashed2 = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "//"],
+        { env: { ...process.env, PATH: dest + path.delimiter + process.env.PATH },
+          encoding: "utf8" });
+      assert("...ne' due", slashed2.status === 0 && !WARN.test(slashed2.stdout || ""),
+        (slashed2.stdout || "") + (slashed2.stderr || ""));
+      // Il verso opposto della stessa espressione: con la barra e la cartella
+      // FUORI dal PATH l'avviso deve continuare a parlare. Senza questo, un
+      // `BINDIR := ` che normalizza troppo (o un avviso cancellato) resterebbe
+      // verde su tutt'e due gli assert qui sopra.
+      const slashedOut = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "/"],
+        { env: process.env, encoding: "utf8" });
+      assert("...e fuori dal PATH, con la barra, l'avviso parla ancora",
+        slashedOut.status === 0 && WARN.test(slashedOut.stdout || ""),
+        (slashedOut.stdout || "") + (slashedOut.stderr || ""));
+    } finally {
+      fs.rmSync(tmp2, { recursive: true, force: true });
+    }
+
+    /* Uno spazio nel path — del checkout o del BINDIR — non e' un caso
+       esotico: `~/Documents/…` e `~/Library/Mobile Documents/…` ce l'hanno, e
+       il lanciatore lo regge (ogni espansione dentro bin/pge-ui e' quotata).
+       A cedere era la ricetta: `mkdir -p $(BINDIR)` con uno spazio fabbricava
+       una cartella relativa DENTRO il repo e poi `ln` falliva nominando la
+       destinazione, che invece esisteva. */
+    const tmp3 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-spazi-")));
+    try {
+      const spaced = path.join(tmp3, "mio repo");
+      // Il nome della seconda parola non e' indifferente: con "dest bin" la
+      // cartella spuria che `mkdir -p` non quotato fabbrica si chiamerebbe
+      // `bin` e si confonderebbe con quella vera del checkout, lasciando muto
+      // l'assert qui sotto.
+      const dest3  = path.join(tmp3, "dest cartella");
+      fs.mkdirSync(path.join(spaced, "bin"), { recursive: true });
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(spaced, "Makefile"));
+      fs.copyFileSync(BIN, path.join(spaced, "bin", "pge-ui"));
+      fs.chmodSync(path.join(spaced, "bin", "pge-ui"), 0o755);
+      const m = spawnSync("make", ["-C", spaced, "install-cli", "BINDIR=" + dest3],
+        { env: process.env, encoding: "utf8" });
+      assert("uno spazio nel path del checkout e del BINDIR non rompe install-cli",
+        m.status === 0, (m.stdout || "") + (m.stderr || ""));
+      const link3 = path.join(dest3, "pge-ui");
+      assert("...e il link punta al lanciatore di quel checkout",
+        fs.existsSync(link3) &&
+        fs.realpathSync(link3) === fs.realpathSync(path.join(spaced, "bin", "pge-ui")),
+        fs.existsSync(link3) ? fs.readlinkSync(link3) : "nessun link (o pendente)");
+      assert("...senza fabbricare cartelle dentro il checkout",
+        fs.readdirSync(spaced).sort().join(",") === "Makefile,bin",
+        fs.readdirSync(spaced).join(", "));
+
+      /* Due spazi di fila non sono piu' esotici di uno, e li' non cedeva la
+         ricetta (che quota) ma l'espansione del `~` messa sopra di essa:
+         `patsubst` lavora a PAROLE, quindi `/tmp/a  b` tornava `/tmp/a b`. Il
+         link finiva in una cartella che non e' quella chiesta, sotto la riga
+         di successo — cioe' esattamente la bugia che quell'espansione era
+         stata aggiunta per togliere. Con uno spazio solo il difetto non si
+         vede: le parole si riattaccano identiche, ed e' il motivo per cui la
+         sonda qui sopra restava verde. */
+      const dest3b = path.join(tmp3, "due  spazi");
+      const m2 = spawnSync("make", ["-C", spaced, "install-cli", "BINDIR=" + dest3b],
+        { env: process.env, encoding: "utf8" });
+      assert("due spazi di fila in BINDIR: il link finisce dove l'hai chiesto",
+        m2.status === 0 && fs.existsSync(path.join(dest3b, "pge-ui")),
+        (m2.stdout || "") + (m2.stderr || ""));
+      assert("...e non in una cartella dal nome accorciato",
+        !fs.existsSync(path.join(tmp3, "due spazi")),
+        fs.readdirSync(tmp3).join(", "));
+    } finally {
+      fs.rmSync(tmp3, { recursive: true, force: true });
+    }
+
+    /* Il sorgente del symlink e' relativo al Makefile, non a $PWD. Con
+       `$(abspath bin/pge-ui)` un `make -f /path/PGE-ui/Makefile install-cli`
+       lanciato da un'altra cartella linkava `$PWD/bin/pge-ui` — un file che li'
+       non c'e'. `ln -s` non verifica il target: il link pendente nasceva
+       annunciato come riuscito, e il primo segnale era `pge-ui` che non parte.
+       Lo spazio resta fuori da questa sonda perche' `$(lastword
+       $(MAKEFILE_LIST))` spezza sugli spazi — limite di make, non della
+       ricetta: li' il `test -f` fa fallire l'installazione invece di fabbricare
+       il link sbagliato, ed e' la seconda meta' della stessa sonda. */
+    const tmp4 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-altrove-")));
+    try {
+      const copy  = path.join(tmp4, "checkout");
+      const dest4 = path.join(tmp4, "bin");
+      const from  = path.join(tmp4, "cwd");
+      fs.mkdirSync(path.join(copy, "bin"), { recursive: true });
+      fs.mkdirSync(from);
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(copy, "Makefile"));
+      fs.copyFileSync(BIN, path.join(copy, "bin", "pge-ui"));
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o755);
+      const m = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=" + dest4], { cwd: from, env: process.env, encoding: "utf8" });
+      assert("make -f da una terza cartella: install-cli riesce", m.status === 0,
+        (m.stdout || "") + (m.stderr || ""));
+      const link4 = path.join(dest4, "pge-ui");
+      assert("...e il link e' vivo, non pendente su $PWD/bin",
+        fs.existsSync(link4) &&
+        fs.realpathSync(link4) === fs.realpathSync(path.join(copy, "bin", "pge-ui")),
+        fs.lstatSync(link4, { throwIfNoEntry: false })
+          ? "punta a " + fs.readlinkSync(link4)
+          : "nessun link");
+      assert("...senza toccare la cartella da cui hai lanciato make",
+        fs.readdirSync(from).length === 0, fs.readdirSync(from).join(", "));
+
+      // E quando il sorgente davvero non c'e', install-cli si ferma invece di
+      // lasciare un nome sul PATH che non esegue niente.
+      fs.rmSync(path.join(copy, "bin", "pge-ui"));
+      const gone = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=" + path.join(tmp4, "bin2")], { cwd: from, env: process.env, encoding: "utf8" });
+      assert("sorgente assente → install-cli fallisce invece di linkare il nulla",
+        gone.status !== 0 && !fs.existsSync(path.join(tmp4, "bin2", "pge-ui")),
+        `exit ${gone.status}\n      ` + ((gone.stdout || "") + (gone.stderr || "")));
+    } finally {
+      fs.rmSync(tmp4, { recursive: true, force: true });
+    }
+
+    /* Le altre due grafie di BINDIR che davano un `pge-ui` annunciato
+       installato e irraggiungibile — la stessa famiglia dello spazio e del
+       `make -f`, e le ultime due rimaste.
+
+       Il `~`: make non fa tilde expansion, e la ricetta quota ogni espansione
+       (deve, per gli spazi), quindi nemmeno la shell lo espande.
+       `BINDIR=~/.local/bin` — la grafia che l'help del Makefile suggerisce —
+       fabbricava una cartella chiamata `~` dentro il checkout, ci metteva il
+       link e stampava la riga di successo. Ora il `~/` iniziale lo espande il
+       Makefile (`override`, altrimenti l'assegnamento perde proprio contro la
+       riga di comando da cui BINDIR arriva); `~utente/` non lo sa espandere
+       nessuno, e li' il target si ferma invece di inventare una cartella.
+
+       E il bit eseguibile: la guardia sorgente qui sopra difende l'indice di
+       QUESTO repo, non il checkout di chi installa. Un file senza bit x
+       (un download, un filesystem che non lo porta) si lasciava linkare, e il
+       primo segnale era `pge-ui: Permission denied` da un nome che make aveva
+       appena dichiarato installato. */
+    const tmp5 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-tilde-")));
+    try {
+      const copy = path.join(tmp5, "checkout");
+      const home = path.join(tmp5, "casa");
+      fs.mkdirSync(path.join(copy, "bin"), { recursive: true });
+      fs.mkdirSync(home);
+      fs.copyFileSync(path.join(repo, "Makefile"), path.join(copy, "Makefile"));
+      fs.copyFileSync(BIN, path.join(copy, "bin", "pge-ui"));
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o755);
+      const runIn = (bindir) => spawnSync("make", ["-C", copy, "install-cli",
+        "BINDIR=" + bindir], { env: { ...process.env, HOME: home }, encoding: "utf8" });
+
+      const t = runIn("~/.local/bin");
+      assert("BINDIR=~/.local/bin finisce sotto HOME, non in una cartella `~`",
+        t.status === 0 &&
+        fs.existsSync(path.join(home, ".local", "bin", "pge-ui")),
+        (t.stdout || "") + (t.stderr || ""));
+      // La ricetta gira con cwd = checkout (`make -C`): e' li' che la cartella
+      // spuria nasceva.
+      assert("...senza fabbricare una cartella `~` nel checkout",
+        fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        fs.readdirSync(copy).join(", "));
+
+      const u = runIn("~nessuno/bin");
+      assert("un `~utente` che nessuno puo' espandere ferma l'installazione",
+        u.status !== 0 && fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        `exit ${u.status}\n      ` + ((u.stdout || "") + (u.stderr || "")));
+
+      /* Un BINDIR RELATIVO e' l'ultima grafia della famiglia, e riusciva:
+         `mybin` non nomina una cartella finche' non si dice rispetto a cosa, e
+         make lo risolve sulla PROPRIA cwd — che `make -C` mette nel checkout e
+         `make -f` nella cartella da cui l'hai lanciato. La stessa ambiguita'
+         che CLI_SRC toglie al sorgente del link, lasciata aperta sulla
+         destinazione. Il link nasceva, la riga di successo lo annunciava, e
+         l'avviso chiudeva consigliando `export PATH="mybin:$PATH"` — una voce
+         di PATH relativa, cioe' un comando che risponde solo dalla cartella
+         giusta. Le due sonde misurano i due modi di invocare make, perche' e'
+         proprio la loro differenza a rendere quel path privo di significato. */
+      const rel = runIn("mybin");
+      assert("un BINDIR relativo ferma l'installazione, invece di sceglierne una",
+        rel.status !== 0 &&
+        fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        `exit ${rel.status}\n      ` + ((rel.stdout || "") + (rel.stderr || "")));
+      const relF = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=mybin"], { cwd: home, env: { ...process.env, HOME: home },
+        encoding: "utf8" });
+      assert("...anche via `make -f`, dove si sarebbe risolto altrove ancora",
+        relF.status !== 0 && !fs.existsSync(path.join(home, "mybin")),
+        `exit ${relF.status}\n      ` + ((relF.stdout || "") + (relF.stderr || "")));
+
+      /* Senza HOME il default non e' piu' un path: `$(HOME)/.local/bin`
+         diventava `/.local/bin` — non comincia per `~`, quindi nessuna delle
+         guardie lo vedeva, e su una macchina dove `/` e' scrivibile (un
+         container, un runner di CI) l'install RIUSCIVA, annunciata sotto la
+         riga di successo in una cartella che nessun PATH ha. E' la terza
+         grafia della stessa famiglia, e l'unica che il commento del Makefile
+         dichiarava gia' fermata.
+
+         Si misura sul messaggio e non solo sull'uscita: dove `/` non e'
+         scrivibile quel `mkdir` falliva comunque, cioe' un verde per il
+         motivo sbagliato. */
+      const noHomeEnv = { ...process.env };
+      delete noHomeEnv.HOME;
+      const nh = spawnSync("make", ["-C", copy, "install-cli"],
+        { env: noHomeEnv, encoding: "utf8" });
+      assert("HOME non impostato: install-cli si ferma, e nomina BINDIR",
+        nh.status !== 0 && /BINDIR/.test(nh.stderr || ""),
+        `exit ${nh.status}\n      ` + ((nh.stdout || "") + (nh.stderr || "")));
+      assert("...senza lasciare un link sotto la radice",
+        !fs.existsSync(path.join("/", ".local", "bin", "pge-ui")),
+        "/.local/bin/pge-ui: annunciato installato e irraggiungibile");
+
+      // Stessa fine per un BINDIR vuoto scritto a mano: prima era un
+      // `mkdir: cannot create directory ''`, che non dice cosa fare.
+      const ev = runIn("");
+      assert("BINDIR vuoto: si ferma anche lui, dicendo cosa manca",
+        ev.status !== 0 && /BINDIR/.test(ev.stderr || ""),
+        `exit ${ev.status}\n      ` + ((ev.stdout || "") + (ev.stderr || "")));
+
+      fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o644);
+      const dest5 = path.join(tmp5, "bin");
+      const nx = runIn(dest5);
+      assert("sorgente senza bit x → install-cli si ferma, invece di linkarlo",
+        nx.status !== 0 && !fs.existsSync(path.join(dest5, "pge-ui")),
+        `exit ${nx.status}\n      ` + ((nx.stdout || "") + (nx.stderr || "")));
+    } finally {
+      fs.rmSync(tmp5, { recursive: true, force: true });
+    }
+  }
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
