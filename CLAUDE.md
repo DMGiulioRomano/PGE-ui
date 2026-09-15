@@ -861,12 +861,55 @@ change, wrong on a click that asks for nothing: an explicit `range_anchor:
 center` vanished from the YAML), and `duration_unit` goes through
 `convertGrainDurationUnit`, whose tail does `delete ng.durationUnit` for
 `seconds` regardless of the conversion. Each returns early on the expression
-that is its own Seg's `value`. Two Segs deliberately have no guard, and
-`test-envelope-utils.js` censuses the file so a third cannot join them quietly:
-the tab selector (`onTab` is a React `setState`, not a write to the stream), and
-`read_direction`'s, where the click on the lit button **is** how an inherited
-`reverse` / `read_direction` conflict gets resolved — a guard there would remove
-the only remedy.
+that is its own Seg's `value`.
+
+**Two more owed it too, and the census could not see them**, because their
+`onChange` is a *named* function rather than an arrow inside the element: the
+guard has to live in the declaration, where a regex over the `<Seg …/>` finds
+nothing. They were the two the census exempted by name, so the exemption was
+doing the hiding.
+
+- The `deviation_probability` **mode** Seg (off / implicit / global / per-param)
+  writes on all four branches. `deviation_probability: true` is a valid global —
+  the engine reads `float(True)` = 1% — so "global" is lit, and that click
+  rewrote the key as `1`: exactly the migration the `dScalar` line three rows up
+  exists *not* to perform ("without rewriting the YAML until it is touched"),
+  i.e. a moved fingerprint and a yellow dot on a stream that sounds identical.
+  It returns early on `mode`, its Seg's `value`; normalizing `true` into `1`
+  stays available through the row's own `NumberField`, which is drawn precisely
+  because `dScalar` is a number.
+- `read_direction`'s. Its exemption was real but **wider than its reason**: the
+  lit button is the remedy for an inherited `reverse` / `read_direction`
+  conflict, and only then. With no conflict — a lone `reverse:`, which the
+  engine reads perfectly well — that same click deleted the key and wrote
+  `read_direction: -1`: a silent migration that moves the fingerprint and
+  yellows the stem on a direction that did not change, while the row's own hint
+  says the migration happens when you *pick another one*. On `read_direction: 1`
+  or on `auto` it re-emitted an identical `grain`, an undo step for nothing. So
+  the guard is `next === state && !err`, with `err` the `readDirectionError`
+  already computed for the message below: it stands down exactly where there is
+  something to repair, and the other three buttons stay open on every state.
+
+So one Seg is left deliberately unguarded — the tab selector, whose `onTab` is a
+React `setState` and not a write to the stream. `test-envelope-utils.js` still
+censuses the file so a new one cannot join quietly, and pins the two named
+handlers' guard as the *first statement* of their declaration, besides executing
+both.
+
+**And the Seg can be lit on a mode the stream does not hold**, which is the one
+way a click that passes every guard above still costs a value. `getMode` reads
+`paramModes` — the panel's memory of which button was pressed — *before* the
+stream, and the Inspector has no `key` in `app.jsx`, so it does not remount when
+the selection changes: the choice made on one stream stayed lit on the next.
+There "env" over a row showing a scalar makes the click on "scalar" a **real**
+change, which no guard may refuse, and `toggleMode` then collapses the row onto
+the parameter's default — `pan: 30` rewritten `pan: 0`. The memory is therefore
+reset with the selection (a `modesOwner` reconciliation in the render body, so
+React discards that render and no frame is ever drawn with the previous
+stream's memory). Nothing is lost by resetting: after any toggle `paramModes` is
+redundant with the stream — `getMode` derives "env" from the `*Env` twin of each
+of the sixteen keys — and it only keeps the button lit in the frame between the
+click and the new stream arriving.
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
