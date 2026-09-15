@@ -1086,6 +1086,28 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
         u.status !== 0 && fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
         `exit ${u.status}\n      ` + ((u.stdout || "") + (u.stderr || "")));
 
+      /* Un BINDIR RELATIVO e' l'ultima grafia della famiglia, e riusciva:
+         `mybin` non nomina una cartella finche' non si dice rispetto a cosa, e
+         make lo risolve sulla PROPRIA cwd — che `make -C` mette nel checkout e
+         `make -f` nella cartella da cui l'hai lanciato. La stessa ambiguita'
+         che CLI_SRC toglie al sorgente del link, lasciata aperta sulla
+         destinazione. Il link nasceva, la riga di successo lo annunciava, e
+         l'avviso chiudeva consigliando `export PATH="mybin:$PATH"` — una voce
+         di PATH relativa, cioe' un comando che risponde solo dalla cartella
+         giusta. Le due sonde misurano i due modi di invocare make, perche' e'
+         proprio la loro differenza a rendere quel path privo di significato. */
+      const rel = runIn("mybin");
+      assert("un BINDIR relativo ferma l'installazione, invece di sceglierne una",
+        rel.status !== 0 &&
+        fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
+        `exit ${rel.status}\n      ` + ((rel.stdout || "") + (rel.stderr || "")));
+      const relF = spawnSync("make", ["-f", path.join(copy, "Makefile"), "install-cli",
+        "BINDIR=mybin"], { cwd: home, env: { ...process.env, HOME: home },
+        encoding: "utf8" });
+      assert("...anche via `make -f`, dove si sarebbe risolto altrove ancora",
+        relF.status !== 0 && !fs.existsSync(path.join(home, "mybin")),
+        `exit ${relF.status}\n      ` + ((relF.stdout || "") + (relF.stderr || "")));
+
       /* Senza HOME il default non e' piu' un path: `$(HOME)/.local/bin`
          diventava `/.local/bin` — non comincia per `~`, quindi nessuna delle
          guardie lo vedeva, e su una macchina dove `/` e' scrivibile (un

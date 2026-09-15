@@ -79,7 +79,8 @@ exists, the fourth only when a browser is installed):
   folder is the only way the `realpath`-absent probe can tell a launcher that
   stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
   against temporary `BINDIR`s — with a space, with two, with a `~`, with a
-  trailing slash, empty, and with no `HOME` at all), and `test-tracks.js`
+  trailing slash, relative, empty, and with no `HOME` at all), and
+  `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
@@ -1291,6 +1292,18 @@ doesn't either. So the rewrite only applies to a **one-word** `BINDIR`, where
 and the spaces are carried by the recipe, which quotes. What is left
 unresolvable — `~user/`, a bare `~`, `~/with  spaces` — fails the target instead
 of inventing a folder.
+
+**A relative `BINDIR` was the last spelling of the family still announced as
+installed.** `mybin` doesn't name a folder until you say what it is relative
+to, and make resolves it against its own working directory — which `make -C
+/path/PGE-ui` puts inside the checkout and `make -f /path/PGE-ui/Makefile`
+puts wherever you were standing: the very ambiguity `CLI_SRC` removes on the
+link's *source*, left open on its destination. It succeeded, the success line
+announced it, and the `PATH` warning closed by advising `export
+PATH="mybin:$PATH"` — a relative `PATH` entry, i.e. a command that answers from
+one folder only. A `case` beside the `~` one stops it; the probe runs both
+spellings of `make`, because it is their disagreement that makes the path
+meaningless.
 
 **And a trailing slash made the warning itself lie.** It does not change where
 the link lands, but the `PATH` comparison is textual and `$PATH` lists

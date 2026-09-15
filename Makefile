@@ -124,6 +124,15 @@ serve: $(VENV_BIN)/pip
 # (~/Documents/…, ~/Library/Mobile Documents/…) faceva fabbricare a `mkdir -p`
 # una cartella relativa dentro il repo e poi fallire `ln` nominando la
 # destinazione, che invece esisteva. bin/pge-ui lo spazio lo reggeva gia'.
+#
+# E un BINDIR relativo si ferma qui, che e' l'ultima grafia della stessa
+# famiglia: `mybin` non nomina una cartella finche' non si sceglie rispetto a
+# cosa: `make -C /path/PGE-ui` lo risolve dentro il checkout, `make -f
+# /path/PGE-ui/Makefile` dentro la cartella da cui l'hai lanciato — la stessa
+# ambiguita' che CLI_SRC toglie al sorgente del link, lasciata aperta sulla
+# destinazione. Riusciva, stampava la riga di successo, e chiudeva
+# consigliando `export PATH="mybin:$PATH"`: una voce di PATH relativa, cioe' un
+# comando che risponde solo dalla cartella giusta — annunciato installato.
 install-cli:
 	@test -f "$(CLI_SRC)" || { \
 	  echo "install-cli: non trovo $(CLI_SRC)" >&2; \
@@ -142,6 +151,12 @@ install-cli:
 	@case "$(BINDIR)" in "~"*) \
 	  echo "install-cli: BINDIR=$(BINDIR) comincia per ~, e qui nessuno lo espande" >&2; \
 	  echo "  (make non fa tilde expansion: scrivilo per esteso, BINDIR=\$$HOME/.local/bin)" >&2; \
+	  exit 1;; esac
+	@case "$(BINDIR)" in /*) ;; *) \
+	  echo "install-cli: BINDIR=$(BINDIR) e' relativo, e un PATH relativo non e' un PATH" >&2; \
+	  echo "  (si risolve sulla cartella di make — che \`make -C\` e \`make -f\` scelgono" >&2; \
+	  echo "  diversa — e il comando risponderebbe solo da li': scrivilo assoluto," >&2; \
+	  echo "  BINDIR=\$$HOME/.local/bin)" >&2; \
 	  exit 1;; esac
 	@mkdir -p "$(BINDIR)"
 	@ln -sfn "$(CLI_SRC)" "$(BINDIR)/pge-ui"

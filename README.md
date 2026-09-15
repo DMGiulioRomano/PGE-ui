@@ -110,10 +110,11 @@ so — that is the usual reason `pge-ui` looks broken right after installing it.
 A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
 target does it), one with spaces in it lands exactly where you wrote it, and a
 trailing slash — what tab-completion gives you — is not mistaken for a different
-folder when the warning above checks your `PATH`.
-Anything the target cannot resolve — a `~user/…`, an empty `BINDIR` or no `HOME`
-to build the default from, or a `bin/pge-ui` that lost its executable bit —
-stops the install instead of leaving behind a name that doesn't run.
+folder when the warning above checks your `PATH`. Anything the target cannot
+resolve — a `~user/…`, a relative `BINDIR` (there is no such thing as a relative
+`PATH` entry worth having), an empty one or no `HOME` to build the default from,
+or a `bin/pge-ui` that lost its executable bit — stops the install instead of
+leaving behind a name that doesn't run.
 
 What the name does *not* change yet are the defaults: `--root` is still
 `../PythonGranularEngine` *relative to the folder you are in*, and the workspace
