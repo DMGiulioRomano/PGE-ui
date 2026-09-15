@@ -108,7 +108,9 @@ It is a symlink, not a copy, so `git pull` updates the command too; running the
 target twice is not an error. If `BINDIR` isn't on your `PATH` the target says
 so — that is the usual reason `pge-ui` looks broken right after installing it.
 A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
-target does it), and one with spaces in it lands exactly where you wrote it.
+target does it), one with spaces in it lands exactly where you wrote it, and a
+trailing slash — what tab-completion gives you — is not mistaken for a different
+folder when the warning above checks your `PATH`.
 Anything the target cannot resolve — a `~user/…`, an empty `BINDIR` or no `HOME`
 to build the default from, or a `bin/pge-ui` that lost its executable bit —
 stops the install instead of leaving behind a name that doesn't run.

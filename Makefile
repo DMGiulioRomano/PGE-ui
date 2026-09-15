@@ -37,7 +37,23 @@ BINDIR   ?= $(if $(HOME),$(HOME)/.local/bin,)
 # li regge la ricetta, che quota ogni espansione. Le grafie che restano
 # (`~utente/bin`, `~` nudo, `~/con  spazi`) make non le sa risolvere: le ferma
 # la ricetta, invece di inventare una cartella.
-override BINDIR := $(if $(filter 1,$(words $(BINDIR))),$(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR)),$(BINDIR))
+#
+# Nello stesso ramo cadono le barre in fondo, e per la stessa ragione di
+# prima: non cambiano dove finisce il link, ma il confronto con il PATH e'
+# testuale e `$PATH` elenca `/home/tu/.local/bin`, non `/home/tu/.local/bin/`.
+# Cioe' l'avviso «BINDIR non e' nel PATH» — l'unica cosa che qui dentro spiega
+# un `command not found` — parlava proprio sulla grafia piu' facile da
+# produrre, quella che la tab-completion della shell scrive da sola. Un avviso
+# che grida dove non c'e' niente e' il primo che si impara a non leggere.
+# `patsubst` ne toglie una per giro, quindi due giri: `…/bin/` e `…/bin//`.
+# L'ultima barra non si tocca mai (`filter-out /`), cosi' `BINDIR=/` resta `/`
+# e non si svuota, andando a sbattere nell'errore sbagliato — quello che dice
+# che BINDIR non c'e'.
+ifeq ($(words $(BINDIR)),1)
+override BINDIR := $(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR))
+override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
+override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
+endif
 # Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
 # quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un
 # `make -f /path/PGE-ui/Makefile install-cli` dato da un'altra cartella linkava

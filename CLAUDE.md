@@ -78,8 +78,8 @@ exists, the fourth only when a browser is installed):
   that half can tell `"$@"` from a bare `$@`, and a decoy `.venv` in the caller's
   folder is the only way the `realpath`-absent probe can tell a launcher that
   stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
-  against temporary `BINDIR`s — with a space, with two, with a `~`, empty, and
-  with no `HOME` at all), and `test-tracks.js`
+  against temporary `BINDIR`s — with a space, with two, with a `~`, with a
+  trailing slash, empty, and with no `HOME` at all), and `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
@@ -1291,6 +1291,20 @@ doesn't either. So the rewrite only applies to a **one-word** `BINDIR`, where
 and the spaces are carried by the recipe, which quotes. What is left
 unresolvable — `~user/`, a bare `~`, `~/with  spaces` — fails the target instead
 of inventing a folder.
+
+**And a trailing slash made the warning itself lie.** It does not change where
+the link lands, but the `PATH` comparison is textual and `$PATH` lists
+`/home/you/.local/bin`, not `/home/you/.local/bin/` — so `BINDIR=~/.local/bin/`,
+which is what the shell's own tab-completion writes, printed «not in your
+PATH» about a folder that was, and advised adding an entry already there. That
+warning is the only thing here that explains a `command not found` after an
+install, and one that cries where there is nothing is the first one people
+learn to skip. The slashes come off beside the tilde expansion, in the same
+one-word branch and for the same reason (`patsubst` works on words, and would
+rejoin `/tmp/a  b`); two passes, because `patsubst` takes one slash per pass,
+and never the last one, so `BINDIR=/` stays `/` instead of emptying into the
+wrong error. Both directions of the warning are measured with the slash on, or
+a normalization that went too far would read green on the half that matters.
 
 **An unset `HOME` was the one spelling the prose here already claimed was
 stopped, and wasn't.** `$(HOME)/.local/bin` simply became `/.local/bin`: it

@@ -906,6 +906,39 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("...e dentro il PATH l'avviso tace", quiet.status === 0 &&
         !WARN.test(quiet.stdout || ""),
         `exit ${quiet.status}\n      ` + ((quiet.stdout || "") + (quiet.stderr || "")));
+
+      /* E tace anche con la barra in fondo, che e' la grafia che la
+         tab-completion della shell scrive da sola: `BINDIR=~/.local/bin/`.
+         Il confronto con il PATH e' testuale, e `$PATH` elenca quella cartella
+         senza barra — quindi l'avviso parlava li', consigliando di aggiungere
+         al PATH una voce che c'e' gia'. Un avviso che grida dove non c'e'
+         niente e' il primo che si impara a saltare, e questo e' l'unica cosa
+         che spiega un `command not found` dopo l'install. Il link deve
+         comunque finire nella cartella chiesta, non in una `…//` di fantasia. */
+      const slashed = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "/"],
+        { env: { ...process.env, PATH: dest + path.delimiter + process.env.PATH },
+          encoding: "utf8" });
+      assert("una barra in fondo a BINDIR non fa gridare l'avviso",
+        slashed.status === 0 && !WARN.test(slashed.stdout || "") &&
+        fs.existsSync(path.join(dest, "pge-ui")),
+        `exit ${slashed.status}\n      ` +
+        ((slashed.stdout || "") + (slashed.stderr || "")));
+      // Due barre non sono piu' esotiche di una (un path incollato a mano), e
+      // `patsubst` ne toglie una per giro: e' il motivo dei due giri.
+      const slashed2 = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "//"],
+        { env: { ...process.env, PATH: dest + path.delimiter + process.env.PATH },
+          encoding: "utf8" });
+      assert("...ne' due", slashed2.status === 0 && !WARN.test(slashed2.stdout || ""),
+        (slashed2.stdout || "") + (slashed2.stderr || ""));
+      // Il verso opposto della stessa espressione: con la barra e la cartella
+      // FUORI dal PATH l'avviso deve continuare a parlare. Senza questo, un
+      // `BINDIR := ` che normalizza troppo (o un avviso cancellato) resterebbe
+      // verde su tutt'e due gli assert qui sopra.
+      const slashedOut = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "/"],
+        { env: process.env, encoding: "utf8" });
+      assert("...e fuori dal PATH, con la barra, l'avviso parla ancora",
+        slashedOut.status === 0 && WARN.test(slashedOut.stdout || ""),
+        (slashedOut.stdout || "") + (slashedOut.stderr || ""));
     } finally {
       fs.rmSync(tmp2, { recursive: true, force: true });
     }
