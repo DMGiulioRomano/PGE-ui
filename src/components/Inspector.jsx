@@ -423,6 +423,12 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
 function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
+  // Di QUALE stream sono i paramModes qui sopra. Serve perche' quella memoria
+  // non e' dello stream: e' del pannello, che non si rimonta al cambio di
+  // selezione (l'Inspector in app.jsx non ha `key`), quindi senza questo la
+  // scelta fatta su uno stream restava accesa sul successivo. Si veda il
+  // raccordo subito dopo l'early return.
+  const [modesOwner, setModesOwner] = useStateIN(null);
   const [selRow, setSelRow] = useStateIN(null);
   // Why the rejection lives here and not in a toast: it belongs next to the
   // field that caused it, and it has to survive until the user fixes the value.
@@ -464,6 +470,29 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         </div>
       </aside>
     );
+  }
+
+  // `paramModes` ricorda quale bottone scalare↔env e' acceso, e getMode lo
+  // legge PRIMA dello stream. Ma e' memoria del pannello, non dello stream, e
+  // il pannello non si rimonta quando la selezione cambia: la scelta fatta su
+  // uno stream restava accesa su quello dopo, dove la chiave puo' essere di
+  // tutt'altra forma. Da cui un Seg che dichiara «env» sopra una riga che
+  // mostra uno scalare — e un click su «scalar», che li' e' un cambio vero e
+  // passa ogni guardia, collassava quel numero sul default del parametro:
+  // `pan: 30` riscritto `pan: 0` da un click che chiedeva la modalita' in cui
+  // la riga gia' era. E' la stessa perdita che i round precedenti hanno tolto
+  // agli altri Seg, per la via che restava aperta.
+  // La memoria si azzera quindi con la selezione. Non c'e' niente da
+  // conservare: dopo ogni toggle e' ridondante rispetto allo stream — getMode
+  // deriva «env» dal gemello *Env di ognuna delle sedici chiavi — e serve solo
+  // a tenere acceso il bottone nel frame fra il click e lo stream nuovo.
+  // Il raccordo sta nel corpo, non in un effetto: React riesegue il render e
+  // scarta questo, quindi nessun frame viene disegnato con la memoria dello
+  // stream precedente — che e' esattamente il frame in cui il click farebbe
+  // danno.
+  if (modesOwner !== stream.id) {
+    setModesOwner(stream.id);
+    if (Object.keys(paramModes).length) setParamModes({});
   }
 
   const setMode = (k, v) => setParamModes({ ...paramModes, [k]: v });

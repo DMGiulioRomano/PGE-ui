@@ -2564,6 +2564,56 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
       JSON.stringify(viaEnv && viaEnv.grain));
   }
 
+  console.log("\n── paramModes è memoria del pannello, non dello stream ──");
+  {
+    /* getMode legge paramModes PRIMA dello stream, e l'Inspector non si
+       rimonta al cambio di selezione: la scelta fatta su uno stream restava
+       accesa sul successivo, dove la chiave puo' essere di tutt'altra forma —
+       un Seg che dichiara «env» sopra una riga che mostra uno scalare. Li' il
+       click su «scalar» e' un cambio VERO (passa ogni guardia) e collassa quel
+       numero sul default del parametro. */
+    assert("getMode legge la memoria prima dello stream",
+      /if \(paramModes\[k\]\) return paramModes\[k\];/.test(inspSrc));
+    const at = inspSrc.indexOf("if (modesOwner !== stream.id) {");
+    let block = "";
+    if (at >= 0) {
+      const open = inspSrc.indexOf("{", at);
+      let d = 0;
+      for (let j = open; j < inspSrc.length; j++) {
+        if (inspSrc[j] === "{") d++;
+        else if (inspSrc[j] === "}" && --d === 0) { block = inspSrc.slice(at, j + 1); break; }
+      }
+    }
+    assert("il raccordo è estraibile dal sorgente, e sta nel corpo del render",
+      block.length > 0 && /setParamModes\(\{\}\)/.test(block)
+      && /setModesOwner\(stream\.id\)/.test(block));
+    const fire = (modesOwner, id, paramModes) => {
+      const seen = { owner: NIENTE, modes: NIENTE };
+      new Function("modesOwner", "stream", "paramModes", "setModesOwner", "setParamModes",
+        block)(
+        modesOwner, { id }, paramModes,
+        (v) => { seen.owner = v; }, (v) => { seen.modes = v; });
+      return seen;
+    };
+    const cambio = fire("s1", "s2", { pan: "env" });
+    assert("cambiando stream la memoria si azzera",
+      cambio.owner === "s2" && eq(cambio.modes, {}), JSON.stringify(cambio));
+    const stesso = fire("s1", "s1", { pan: "env" });
+    assert("…e una modifica sullo stesso stream non la tocca",
+      stesso.owner === NIENTE && stesso.modes === NIENTE, JSON.stringify(stesso));
+    const monta = fire(null, "s1", {});
+    assert("al montaggio si prende la proprietà senza una scrittura inutile",
+      monta.owner === "s1" && monta.modes === NIENTE, JSON.stringify(monta));
+  }
+
+  /* …e il cablaggio: la condizione di ognuno e' il `value` del suo Seg. Le due
+     grafie del default (`stream.X || "…"`) compaiono quindi due volte per
+     controllo — il value e la guardia — e mai una terza. */
+  assert("i quattro Seg leggono la stessa espressione che accende il bottone",
+    /if \(v === \(stream\.distributionMode \|\| "uniform"\)\) return;/.test(inspSrc)
+    && /if \(v === \(stream\.clipStrategy \|\| "overflow_margin"\)\) return;/.test(inspSrc)
+    && /if \(v === \(stream\.rangeAnchor \|\| "center"\)\) return;/.test(inspSrc)
+    && /if \(v === grainUnit\) return;/.test(inspSrc));
   /* …e i due handler che un nome ce l'hanno: li' la guardia non puo' stare
      dentro l'elemento <Seg>, quindi il censimento qui sotto non la vedrebbe e
      li lasciava passare senza. Sta nella dichiarazione, sulla condizione che
