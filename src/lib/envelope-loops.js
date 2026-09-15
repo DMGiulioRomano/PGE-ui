@@ -37,6 +37,26 @@
            typeof item[0] === "number" && typeof item[1] === "number";
   }
 
+  /* Il breakpoint in forma dict `{t, v, type?}`: il builder del motore lo
+     normalizza in `[t, v, type?]` prima di guardarlo (envelope_builder.py:132),
+     quindi e' una grafia di prima classe e una y ce l'ha.
+     Sta accanto a isBreakpoint e NON dentro: isBreakpoint dice anche cosa il
+     canvas dell'EnvelopeEditor sa disegnare e trascinare, e un dict il canvas
+     non lo disegna — allargarla renderebbe trascinabile quel che non si vede.
+     Chi invece deve solo LEGGERE la y di un punto chiede a questa, ed e' per
+     questo che sta nel modulo: i lettori sono due (wouldEmptyEnv, che conta i
+     punti veri, e firstBreakpointY qui sotto, che ne legge il valore per conto
+     di ogni toggle env→scalare) e due copie e' il modo in cui una di esse
+     smette di valere.
+     Il `typeof` e' piu' stretto della presenza delle chiavi che il motore
+     testa — e quella lettura resta locale a deviation-probability.js, dove la
+     domanda e' se il motore costruira' il corpo, non se c'e' un numero da
+     leggere. */
+  function isDictBreakpoint(item) {
+    return !!item && typeof item === "object" && !Array.isArray(item) &&
+           typeof item.t === "number" && typeof item.v === "number";
+  }
+
   /* ---------- typed-envelope wrapper ----------
      `{type, points}` è la forma "tipata" globale per envelope di soli BP.
      Helpers per unwrappare a items[]/interp e ri-wrappare al commit.        */
@@ -162,6 +182,37 @@
     }
     flushRun();
     return out;
+  }
+
+  /* La y del PRIMO breakpoint di un envelope, qualunque grafia abbia.
+     È la domanda che si fa ogni volta che una curva viene sostituita da uno
+     scalare — il toggle env→scalare dell'Inspector, la conversione
+     loop_end ↔ loop_dur — e la risposta non può essere `env[0][1]`:
+       · una curva di soli BP con interp globale non lineare l'editor stesso la
+         SCRIVE `{type, points}` (wrapEnv), e lì `env[0]` non esiste;
+       · un BP group come primo item è `[points, interp]`, dove `[1]` è la
+         STRINGA dell'interp — scritta tale e quale come valore del parametro;
+       · un blocco compatto ha in `[1]` il suo END_TIME — il tempo assoluto
+         finale, si veda l'intestazione del modulo — e nella forma diretta
+         `param: [pattern, end, n_reps]` ha in `[1]` l'end_time ancora, mentre
+         `[0]` e' il pattern: numeri che con il valore del parametro non
+         c'entrano niente, e truthy entrambi, quindi un `|| default` li lascia
+         passare. Il ratio della distribuzione sta altrove (dentro `dist`, in
+         `[4]`): non e' mai lui il numero che finiva nello YAML.
+     Si desugara quindi dopo aver unwrappato, e si chiede ai due predicati del
+     modulo — le grafie di un punto sono due, `[t, v]` e `{t, v}` — così ogni
+     forma che una y ce l'ha la dichiara. Ripiega solo su ciò che una y non ce
+     l'ha davvero (blocco compatto, envelope vuoto o illeggibile), e il ripiego
+     lo decide il chiamante: è il default del suo parametro, che il modulo non
+     conosce.
+     Il ritorno è il valore LETTO, zero compreso: un `|| default` non distingue
+     la curva che vale zero da quella che non si sa leggere, ed è così che uno
+     zero legittimo diventava una costante che la curva non aveva mai avuto. */
+  function firstBreakpointY(env, fallback) {
+    const bp = desugarBPGroups(unwrapEnv(env).items)[0];
+    if (isBreakpoint(bp)) return bp[1];
+    if (isDictBreakpoint(bp)) return bp.v;
+    return fallback;
   }
 
   /* ---------- distribuzioni temporali (time_distribution.py) ---------- */
@@ -813,8 +864,9 @@
 
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
-    isBreakpoint, isCompactBlock, envHasLoop,
+    isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
+    firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, isPreviewFallback, expandMixed,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,

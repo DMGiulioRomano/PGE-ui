@@ -137,8 +137,29 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   // float(True) = 1%. Mostrarlo come 1 evita un campo numerico che dice
   // "true", senza riscrivere lo YAML finché non lo si tocca.
   const dScalar = typeof d === "boolean" ? 1 : d;
+  // Quale bottone del Seg scalare↔env e' acceso, calcolato una volta sola: lo
+  // legge il `mode` della ParamRow qui sotto, che e' anche dove sta la guardia
+  // sul click che non chiede niente. Una seconda copia nell'handler sarebbe il
+  // modo in cui una delle due smette di valere.
+  const dMode = dIsEnv ? "env" : "scalar";
 
   function setMode(next) {
+    // Il click che non chiede niente, sul Seg che sceglie il MODO. `Seg` chiama
+    // onChange anche sul bottone gia' acceso e tutti e quattro i rami qui sotto
+    // scrivono: su `deviation_probability: true` — un modo globale valido, che
+    // il motore legge float(True) = 1% — il bottone acceso e' «global», e quel
+    // click riscriveva la chiave come `1`. Cioe' esattamente la migrazione che
+    // `dScalar` tre righe piu' su esiste per NON fare («senza riscrivere lo
+    // YAML finche' non lo si tocca»): fingerprint mossa e stem giallo su uno
+    // stream che suona identico. Gli altri tre rami costano meno — `off` e
+    // `implicit` riscrivono lo stesso valore, `perParam` gia' si rilegge — ma
+    // sono lo stesso passo di undo a vuoto.
+    // La condizione e' `mode`, cioe' il `value` del Seg: la regola che
+    // loopEndSel dichiara nell'Inspector, qui applicata al controllo che sta
+    // un livello sopra le righe. Chi vuole normalizzare `true` in `1` ha il
+    // campo numerico della riga sotto, che su questo stream c'e' (dScalar e'
+    // un numero, quindi ParamRow disegna il NumberField).
+    if (next === mode) return;
     if (next === "off")       return onChange({ deviationProbability: false });
     if (next === "implicit")  return onChange({ deviationProbability: window.PGEYaml.DEVIATION_PROB_IMPLICIT });
     if (next === "global")    return onChange({ deviationProbability: typeof d === "number" ? d : (dIsEnv ? d : 1) });
@@ -211,15 +232,22 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
 
       {mode === "global" ? (
         <ParamRow name="probability"
-                  mode={dIsEnv ? "env" : "scalar"}
+                  mode={dMode}
                   onMode={(m) => {
+                    // Il click sul bottone gia' acceso non arriva qui: lo ferma
+                    // ParamRow, dove la condizione e' il `value` del Seg per
+                    // costruzione e sa anche se il valore e' scritto. Una copia
+                    // qui sarebbe la seconda, e `dMode` la userebbe senza la
+                    // meta' che ParamRow ha in piu'.
                     if (m === "env") {
                       const v = typeof dScalar === "number" ? dScalar : 1;
                       onChange({ deviationProbability: [[0, v], [1, v]] });
                     } else {
-                      const items = dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null;
-                      const v = (items && items[0] && items[0][1]) || 1;
-                      onChange({ deviationProbability: v });
+                      // La y del primo breakpoint, letta com'e': `items[0][1]`
+                      // non vede il dict `{t, v}` (che il motore normalizza in
+                      // `[t, v]`) e il `|| 1` scambiava per illeggibile una
+                      // probabilita' di zero, che qui significa «mai».
+                      onChange({ deviationProbability: PGEEnv.firstBreakpointY(d, 1) });
                     }
                   }}
                   value={dIsEnv ? "—" : dScalar}
@@ -238,6 +266,8 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
             // take the {type, points} form (cubic on a per-param envelope).
             const isEnv = PGEDeviationProb.isEnvValue(val);
             const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
+            // Il bottone acceso, che e' anche la condizione del no-op qui sotto.
+            const pMode = isEnv ? "env" : "scalar";
             return (
               <div key={p.key} className="pge-prow">
                 {/* Scritta ma inerte su QUESTO stream: la chiave morta
@@ -249,9 +279,13 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                       title={deviationProbInertReason(p.key, liveKeys)}>
                   {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
                 </span>
-                <Seg size="xs" value={isEnv ? "env" : "scalar"}
+                <Seg size="xs" value={pMode}
                      onChange={(m) => {
-                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : ((items && items[0] && items[0][1]) || 1);
+                       // Terzo Seg con lo stesso difetto: sul bottone `env`
+                       // gia' acceso `val` non e' un numero, quindi il ramo
+                       // seminava [[0,1],[1,1]] sopra la curva dell'utente.
+                       if (m === pMode) return;
+                       const nv = m === "env" ? [[0, typeof val==="number" ? val : 1], [1, typeof val==="number" ? val : 1]] : PGEEnv.firstBreakpointY(val, 1);
                        onChange({ deviationProbability: { ...d, [p.key]: nv } });
                      }}
                      options={[{label:"scalar",value:"scalar"},{label:"env",value:"env"}]} />
@@ -389,6 +423,12 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
 function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
+  // Di QUALE stream sono i paramModes qui sopra. Serve perche' quella memoria
+  // non e' dello stream: e' del pannello, che non si rimonta al cambio di
+  // selezione (l'Inspector in app.jsx non ha `key`), quindi senza questo la
+  // scelta fatta su uno stream restava accesa sul successivo. Si veda il
+  // raccordo subito dopo l'early return.
+  const [modesOwner, setModesOwner] = useStateIN(null);
   const [selRow, setSelRow] = useStateIN(null);
   // Why the rejection lives here and not in a toast: it belongs next to the
   // field that caused it, and it has to survive until the user fixes the value.
@@ -432,6 +472,29 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     );
   }
 
+  // `paramModes` ricorda quale bottone scalare↔env e' acceso, e getMode lo
+  // legge PRIMA dello stream. Ma e' memoria del pannello, non dello stream, e
+  // il pannello non si rimonta quando la selezione cambia: la scelta fatta su
+  // uno stream restava accesa su quello dopo, dove la chiave puo' essere di
+  // tutt'altra forma. Da cui un Seg che dichiara «env» sopra una riga che
+  // mostra uno scalare — e un click su «scalar», che li' e' un cambio vero e
+  // passa ogni guardia, collassava quel numero sul default del parametro:
+  // `pan: 30` riscritto `pan: 0` da un click che chiedeva la modalita' in cui
+  // la riga gia' era. E' la stessa perdita che i round precedenti hanno tolto
+  // agli altri Seg, per la via che restava aperta.
+  // La memoria si azzera quindi con la selezione. Non c'e' niente da
+  // conservare: dopo ogni toggle e' ridondante rispetto allo stream — getMode
+  // deriva «env» dal gemello *Env di ognuna delle sedici chiavi — e serve solo
+  // a tenere acceso il bottone nel frame fra il click e lo stream nuovo.
+  // Il raccordo sta nel corpo, non in un effetto: React riesegue il render e
+  // scarta questo, quindi nessun frame viene disegnato con la memoria dello
+  // stream precedente — che e' esattamente il frame in cui il click farebbe
+  // danno.
+  if (modesOwner !== stream.id) {
+    setModesOwner(stream.id);
+    if (Object.keys(paramModes).length) setParamModes({});
+  }
+
   const setMode = (k, v) => setParamModes({ ...paramModes, [k]: v });
   const getMode = (k, fallback) => {
     if (paramModes[k]) return paramModes[k];
@@ -460,6 +523,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // Toggle a parameter between scalar and env, mutating the stream.
   // When entering env, seed an env array from the current scalar; when leaving env, collapse env→scalar.
   function toggleMode(k, newMode) {
+    // Il click che non chiede niente lo ferma ParamRow, non questa funzione, e
+    // non e' un dettaglio di dove mettere una riga. La guardia ha bisogno di
+    // DUE meta': quale bottone e' acceso (`mode`, cioe' `getMode(k)`) e se la
+    // modalita' che il click sceglie e' gia' scritta — e la seconda qui non si
+    // puo' vedere, perche' «scritta» e' una domanda per chiave e i rami sono
+    // sedici. ParamRow le ha entrambe: `mode` e' il `value` del suo Seg, e
+    // `value`/`envValue` sono quel che la riga mostra. Una copia qui con la
+    // sola prima meta' rifiutava anche il click che MATERIALIZZA — la riga che
+    // mostra «—» perche' la chiave non c'e', dove quel click e' l'unica via
+    // d'ingresso — cioe' proprio il caso in cui le due domande divergono: e'
+    // il modo in cui la seconda copia smette di valere, la ragione che
+    // loopEndSel dichiara qui sotto.
     setMode(k, newMode);
     // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
     // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
@@ -478,7 +553,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.speedRatio != null ? cur.speedRatio : 1;
         onChange({ pointer: { ...cur, speedRatio: null, speedRatioEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.speedRatioEnv && cur.speedRatioEnv[0] && cur.speedRatioEnv[0][1]) || 1;
+        const v = window.PGEEnv.firstBreakpointY(cur.speedRatioEnv, 1);
         onChange({ pointer: { ...cur, speedRatio: v, speedRatioEnv: null } });
       }
       return;
@@ -495,7 +570,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.duration != null ? cur.duration : grainDurSeed;
         onChange({ grain: { ...cur, duration: null, durationEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationEnv && cur.durationEnv[0] && cur.durationEnv[0][1]) || grainDurSeed;
+        const v = window.PGEEnv.firstBreakpointY(cur.durationEnv, grainDurSeed);
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
       }
       return;
@@ -513,8 +588,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         onChange({ grain: { ...cur, readDirection: null,
                             readDirectionEnv: [[0, v], [0.5, -v]] } });
       } else {
-        const first = cur.readDirectionEnv && cur.readDirectionEnv[0]
-          && cur.readDirectionEnv[0][1];
+        const first = window.PGEEnv.firstBreakpointY(cur.readDirectionEnv, null);
         onChange({ grain: { ...cur, readDirection: first != null ? S(first) : 1,
                             readDirectionEnv: null } });
       }
@@ -526,18 +600,30 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.loopStart != null ? cur.loopStart : 0;
         onChange({ pointer: { ...cur, loopStart: null, loopStartEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopStartEnv && cur.loopStartEnv[0] && cur.loopStartEnv[0][1]) || 0;
+        // Stessa lettura delle altre due righe del loop, con il ripiego di
+        // questa: un `|| 0` non distingue la curva che vale zero da quella che
+        // non si sa leggere, e su un blocco compatto restituiva l'end_time del
+        // blocco come posizione nel sample.
+        const v = loopSeedFrom(cur.loopStartEnv, 0);
         onChange({ pointer: { ...cur, loopStart: v, loopStartEnv: null } });
       }
       return;
     }
+    // Il passaggio scalare↔env e' la quarta porta dello stesso 1, e ci si
+    // arriva senza toccare il menu: con `loop_start` da solo la riga loop_dur
+    // c'e' gia' e la chiave no, quindi il ramo `env` semina. Il seme e'
+    // «tutto il file nell'unita' in vigore» (loopSeedWhole), non un 1 nudo —
+    // che dopo #222 e' la fine del file solo in normalized. loopSeedWhole e
+    // loopSeedFrom sono dichiarati piu' sotto, nel corpo del componente: qui ci
+    // si arriva solo da un handler, a corpo gia' eseguito, e la stessa coppia
+    // serve al Seg loop_end ↔ loop_dur — una sola dichiarazione, non due copie.
     if (k === "loopDur") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopDur != null ? cur.loopDur : 1;
+        const v = cur.loopDur != null ? cur.loopDur : loopSeedWhole;
         onChange({ pointer: { ...cur, loopDur: null, loopDurEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopDurEnv && cur.loopDurEnv[0] && cur.loopDurEnv[0][1]) || 1;
+        const v = loopSeedFrom(cur.loopDurEnv);
         onChange({ pointer: { ...cur, loopDur: v, loopDurEnv: null } });
       }
       return;
@@ -545,10 +631,10 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     if (k === "loopEnd") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopEnd != null ? cur.loopEnd : 1;
+        const v = cur.loopEnd != null ? cur.loopEnd : loopSeedWhole;
         onChange({ pointer: { ...cur, loopEnd: null, loopEndEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.loopEndEnv && cur.loopEndEnv[0] && cur.loopEndEnv[0][1]) || 1;
+        const v = loopSeedFrom(cur.loopEndEnv);
         onChange({ pointer: { ...cur, loopEnd: v, loopEndEnv: null } });
       }
       return;
@@ -559,8 +645,8 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.value != null ? cur.value : (cur.unit === "ratio" ? 1.0 : 0);
         onChange({ pitch: { ...cur, value: null, valueEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.valueEnv && cur.valueEnv[0] && cur.valueEnv[0][1]);
-        onChange({ pitch: { ...cur, value: v != null ? v : (cur.unit === "ratio" ? 1.0 : 0), valueEnv: null } });
+        const v = window.PGEEnv.firstBreakpointY(cur.valueEnv, cur.unit === "ratio" ? 1.0 : 0);
+        onChange({ pitch: { ...cur, value: v, valueEnv: null } });
       }
       return;
     }
@@ -570,7 +656,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.num != null ? cur.num : 1;
         onChange({ voices: { ...cur, num: null, numEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.numEnv && cur.numEnv[0] && cur.numEnv[0][1]) || 1;
+        const v = window.PGEEnv.firstBreakpointY(cur.numEnv, 1);
         onChange({ voices: { ...cur, num: v, numEnv: null } });
       }
       return;
@@ -581,7 +667,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.scatter != null ? cur.scatter : 0;
         onChange({ voices: { ...cur, scatter: null, scatterEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.scatterEnv && cur.scatterEnv[0] && cur.scatterEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.scatterEnv, 0);
         onChange({ voices: { ...cur, scatter: v, scatterEnv: null } });
       }
       return;
@@ -591,7 +677,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = stream.panRange != null ? stream.panRange : 0;
         onChange({ panRange: null, panRangeEnv: [[0, v], [1, v]] });
       } else {
-        const v = (stream.panRangeEnv && stream.panRangeEnv[0] && stream.panRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(stream.panRangeEnv, 0);
         onChange({ panRange: v, panRangeEnv: null });
       }
       return;
@@ -601,7 +687,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = stream.volumeRange != null ? stream.volumeRange : 0;
         onChange({ volumeRange: null, volumeRangeEnv: [[0, v], [1, v]] });
       } else {
-        const v = (stream.volumeRangeEnv && stream.volumeRangeEnv[0] && stream.volumeRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(stream.volumeRangeEnv, 0);
         onChange({ volumeRange: v, volumeRangeEnv: null });
       }
       return;
@@ -612,7 +698,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.range != null ? cur.range : 0;
         onChange({ pitch: { ...cur, range: null, rangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.rangeEnv && cur.rangeEnv[0] && cur.rangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.rangeEnv, 0);
         onChange({ pitch: { ...cur, range: v, rangeEnv: null } });
       }
       return;
@@ -623,7 +709,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.durationRange != null ? cur.durationRange : 0;
         onChange({ grain: { ...cur, durationRange: null, durationRangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.durationRangeEnv && cur.durationRangeEnv[0] && cur.durationRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.durationRangeEnv, 0);
         onChange({ grain: { ...cur, durationRange: v, durationRangeEnv: null } });
       }
       return;
@@ -634,7 +720,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         const v = cur.offsetRange != null ? cur.offsetRange : 0;
         onChange({ pointer: { ...cur, offsetRange: null, offsetRangeEnv: [[0, v], [1, v]] } });
       } else {
-        const v = (cur.offsetRangeEnv && cur.offsetRangeEnv[0] && cur.offsetRangeEnv[0][1]) || 0;
+        const v = window.PGEEnv.firstBreakpointY(cur.offsetRangeEnv, 0);
         onChange({ pointer: { ...cur, offsetRange: v, offsetRangeEnv: null } });
       }
       return;
@@ -644,7 +730,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
       const v = stream[f.sk] != null ? stream[f.sk] : defaultsByKey[k];
       onChange({ [f.sk]: null, [f.ek]: [[0, v], [1, v]] });
     } else {
-      const v = (stream[f.ek] && stream[f.ek][0] && stream[f.ek][0][1]) || defaultsByKey[k];
+      const v = window.PGEEnv.firstBreakpointY(stream[f.ek], defaultsByKey[k]);
       onChange({ [f.sk]: v, [f.ek]: null });
     }
   }
@@ -705,6 +791,72 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // affermazioni opposte. La regola è la stessa di grainUnitSuffix, e sta nel
   // modulo perché la condivide l'EnvelopeEditor.
   const loopUnitSuffix = window.PGEEnvUtils.loopUnitSuffix(stream.pointer);
+  // Il menu «add parameter» e' l'altro punto che semina un valore nelle
+  // coordinate del loop, e le sue voci erano scritte per una sola unita'.
+  // `loop_end: 1` / `loop_dur: 1` nascono sotto l'ereditarieta', dove
+  // `time_mode: normalized` rendeva la chiave normalized e 1 era esattamente la
+  // fine del file: un seme sempre dentro il dominio. Dopo #222 quella stessa
+  // popolazione legge secondi, e 1 e' un secondo — sopra il cap su ogni sample
+  // piu' corto, cioe' un valore che una modifica digitata avrebbe clampato e
+  // che il menu invece scrive grezzo. Il seme torna a dire «tutto il file»
+  // nell'unita' in vigore, che e' il cap stesso (loopEnvMax, gia' calcolato in
+  // loopMax): 1 in normalized, sample_dur in secondi. Quando la durata del
+  // sample e' ignota loopEnvMax non risponde, e resta 1 — il solo numero
+  // disponibile li', ed e' quel che il menu scriveva prima.
+  // Si tronca a quattro decimali invece di arrotondare (il `R` di app.jsx): su
+  // una durata come 3.33333 l'arrotondamento scavalcherebbe il cap di un
+  // decimillesimo, ed e' proprio il cap che questo seme sta cercando di non
+  // superare.
+  // Il `|| loopMax` e' il pavimento del troncamento: su un sample piu' corto di
+  // un decimillesimo di secondo `Math.floor(loopMax * 1e4)` e' 0, e il seme
+  // diventerebbe una finestra di loop lunga zero — sotto il minimo statico di
+  // loop_dur e degenere per loopBoundsError. Meglio il cap intero: superarlo di
+  // qualche cifra sotto la soglia del troncamento e' il male minore rispetto a
+  // seminare un valore che il motore rifiuta.
+  const loopSeedWhole = loopMax != null ? (Math.floor(loopMax * 1e4) / 1e4 || loopMax) : 1;
+  // E il valore da cui si riparte quando al posto dello scalare c'e' una
+  // curva: la y del primo breakpoint. «Il primo breakpoint» non e' `env[0]` —
+  // una forma wrappata va unwrappata, un BP group desugarato, e in un blocco
+  // compatto `[1]` e' l'END_TIME del blocco, non una posizione nel
+  // sample — e la domanda non ha niente di loop: se la fa ogni toggle
+  // env→scalare. Quindi la risposta sta nel modulo (PGEEnv.firstBreakpointY,
+  // che la documenta) e qui resta solo il ripiego, che e' del chiamante perche'
+  // e' il default del suo parametro: «tutto il file» per le due chiavi del
+  // loop, 0 per `loop_start`. Una sola dichiarazione per i tre handler che ne
+  // hanno bisogno — i due rami di toggleMode qui sopra e il Seg qui sotto —
+  // perche' due copie e' il modo in cui una di esse smette di valere.
+  const loopSeedFrom = (env, fallback) =>
+    window.PGEEnv.firstBreakpointY(env, fallback !== undefined ? fallback : loopSeedWhole);
+  // E la prosa segue l'unita' come il suffisso: «(s)» e «∈ [0, sample_dur]»
+  // sotto `loop_unit: normalized` descrivono il dominio sbagliato — li' i
+  // valori vivono in [0,1] e li scala il motore. Sono le stesse frasi che
+  // creano le righe il cui suffisso loopUnitSuffix fa gia' tacere: lasciarle
+  // fisse sarebbe il menu che contraddice la riga che apre.
+  const loopNormalized = loopUnit.unit === "normalized";
+  // …e su una grafia fuori vocabolario non se ne dichiara nessuno. loopUnitInfo
+  // legge `normalised` come assoluto per esclusione, quindi senza questo filtro
+  // le tre voci direbbero «(s)» accanto alla riga rossa che dichiara l'unita'
+  // non riconosciuta e sopra righe che loopUnitSuffix lascia senza «s»: le due
+  // affermazioni opposte che questo blocco esiste per togliere, rimesse dal
+  // lato del menu. La regola e' quella di loopUnitSuffix — se non si sa che
+  // unita' sia, non si dice in che unita' sia — e le clausole qui sotto sono
+  // opzionali apposta: spariscono invece di mentire.
+  const loopUnitKnown = !loopUnitErr;
+  const loopDomain = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0,1] × sample_dur" : "(s)");
+  const loopEndDomain = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0,1] × sample_dur" : "(s) ∈ [0, sample_dur]");
+  // Il solo intervallo, senza l'unita': lo usa la riga di hint sotto le righe
+  // del loop, dove l'unita' la dichiara gia' il selettore due righe piu' giu'.
+  const loopEndRange = !loopUnitKnown ? "" : (loopNormalized ? "∈ [0, 1]" : "∈ [0, sample_dur]");
+  // Il riferimento contro cui si misura «oltre la fine del file»: la fine del
+  // sample vale 1 in normalized e sample_dur in secondi.
+  const loopFileEnd = loopNormalized ? "1" : "sample_dur";
+  // La frase sul loop a cavallo della fine del file NOMINA quel riferimento,
+  // quindi segue la stessa regola: senza unita' riconosciuta non c'e' nemmeno
+  // un «oltre la fine» da scrivere.
+  const loopStraddle = loopUnitKnown
+    ? ` — loop_start+loop_dur > ${loopFileEnd} ⇒ loop straddling the file end` : "";
+  // Una clausola che tace non deve lasciare due spazi o una virgola orfana.
+  const loopClause = (c) => (c ? " " + c : "");
   // grain.duration_unit (PGE #158, tre unità da PGE v5.2.0 / #171). È un
   // meta-parametro: governa insieme grain.duration e grain.duration_range, e
   // con qualunque unità che non sia 'seconds' il motore pretende una duration
@@ -782,6 +934,33 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // ora coincidono e le righe del loop compaiono esattamente quando il loop c'è.
   const loopActive = loopWindowShown;
   const loopEndMode = !!(stream.pointer && (stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null));
+  // Quale dei due bottoni del Seg e' acceso, calcolato una volta sola. Il Seg
+  // chiama onChange anche sul bottone gia' acceso (primitives.jsx), quindi il
+  // ramo deve saper riconoscere il click che non chiede niente — ed e' la
+  // stessa lezione di #149 un blocco piu' sotto, sull'altro Seg di questo
+  // riquadro. La condizione che riconosce il no-op dev'essere LA STESSA che
+  // accende il bottone: due copie e il ritorno anticipato smette di coprire
+  // proprio il caso che esiste per coprire.
+  const loopEndSel = loopEndMode ? "loop_end" : "loop_dur";
+  // …e la stessa regola per l'altra coppia mutuamente esclusiva del pannello,
+  // density ↔ fill_factor: quale bottone e' acceso si dichiara una volta sola,
+  // qui, ed e' sia il `value` del Seg sia la condizione con cui il suo handler
+  // riconosce il click che non chiede niente — e la stessa che sceglie la riga
+  // sotto il Seg e il badge della sezione, che altrimenti sarebbero la terza e
+  // la quarta copia, libere di dissentire dal selettore che le governa. Li' il
+  // no-op costava piu' che altrove — i due rami scrivono la costante e azzerano
+  // l'envelope, quindi un fill_factor scelto dall'utente tornava 2.0 e una
+  // curva di density spariva sotto un 8.
+  // Ma «acceso» non basta a dire «no-op»: nessuna delle due chiavi e'
+  // obbligatoria (il motore ha un default, e otto stream del corpus non ne
+  // dichiarano nessuna), e li' il bottone `density` e' acceso per esclusione
+  // mentre la riga sotto mostra «—». Quel click chiede eccome: era l'unico modo
+  // per far esistere una density, e rifiutarlo lasciava la riga senza ingresso.
+  // Da cui il secondo flag: si tace solo su una coppia gia' scritta.
+  const fillFactorWritten = stream.fillFactor != null || stream.fillFactorEnv != null;
+  const densityWritten = stream.density != null || stream.densityEnv != null;
+  const densityUnitSel = fillFactorWritten ? "fill_factor" : "density";
+  const densityUnitWritten = fillFactorWritten || densityWritten;
 
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
@@ -917,7 +1096,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="how a _range band is filled: uniform (flat) or gaussian (bell, σ = width/6)">distribution_mode</span>
                 <span />
                 <span className="v">
-                  <Seg size="xs" value={stream.distributionMode || "uniform"} onChange={v => onChange({distributionMode: v})}
+                  {/* Il no-op: `Seg` chiama onChange anche sul bottone gia'
+                      acceso, e qui il ramo scrive comunque. Con la chiave
+                      assente il bottone acceso e' il default, quindi quel click
+                      materializzava `distribution_mode: uniform` — una chiave
+                      ridondante, un passo di undo e la fingerprint mossa su uno
+                      stream che suona identico. La condizione e' il `value` del
+                      Seg, come in loop_unit (#149). */}
+                  <Seg size="xs" value={stream.distributionMode || "uniform"}
+                       onChange={v => { if (v === (stream.distributionMode || "uniform")) return;
+                                        onChange({distributionMode: v}); }}
                        options={[{label:"uniform",value:"uniform"},{label:"gaussian",value:"gaussian"}]} />
                 </span>
                 <span />
@@ -926,8 +1114,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="where base sits inside a _range band: center (base ± range/2) or min (base → base+range)">range_anchor</span>
                 <span />
                 <span className="v">
+                  {/* Qui il click sul bottone acceso non materializzava: CANCELLAVA.
+                      Il ramo scrive `undefined` sul default, cioe' la regola
+                      «scegliere il default toglie la chiave ridondante» — giusta
+                      su un cambio, sbagliata su un click che non chiede niente:
+                      un `range_anchor: center` scritto esplicito spariva dallo
+                      YAML. E' lo stesso ritorno anticipato che loop_unit ha
+                      preso con #149, per lo stesso identico motivo. */}
                   <Seg size="xs" value={stream.rangeAnchor || "center"}
-                       onChange={v => onChange({rangeAnchor: v === "center" ? undefined : v})}
+                       onChange={v => { if (v === (stream.rangeAnchor || "center")) return;
+                                        onChange({rangeAnchor: v === "center" ? undefined : v}); }}
                        options={[{label:"center",value:"center"},{label:"min",value:"min"}]} />
                 </span>
                 <span />
@@ -954,8 +1150,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="how grains that extend past clip end are handled">clip_strategy</span>
                 <span />
                 <span className="v">
+                  {/* Come distribution_mode: sul bottone acceso il ramo scrive
+                      comunque, e con la chiave assente scriveva il default. */}
                   <Seg size="xs" value={stream.clipStrategy || "overflow_margin"}
-                       onChange={v => onChange({clipStrategy: v})}
+                       onChange={v => { if (v === (stream.clipStrategy || "overflow_margin")) return;
+                                        onChange({clipStrategy: v}); }}
                        options={[{label:"overflow",value:"overflow_margin"},{label:"passthrough",value:"passthrough"}]} />
                 </span>
                 <span />
@@ -972,7 +1171,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
             </Section>
 
             <Section title="Overall density"
-                     badge={(stream.fillFactor != null || stream.fillFactorEnv != null)
+                     badge={densityUnitSel === "fill_factor"
                        ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${stream.fillFactorEnv.length} bp` : "fill_factor"}</span>
                        : (stream.densityEnv
                            ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {stream.densityEnv.length} bp</span>
@@ -982,8 +1181,29 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span />
                 <span className="v">
                   <Seg size="xs"
-                       value={(stream.fillFactor != null || stream.fillFactorEnv != null) ? "fill_factor" : "density"}
+                       value={densityUnitSel}
                        onChange={(u) => {
+                         // Il click che non chiede niente, sulla coppia dove
+                         // costa di piu': i due rami scrivono comunque la
+                         // costante e azzerano l'envelope, quindi il bottone
+                         // gia' acceso riportava un fill_factor a 2.0 e
+                         // sostituiva una curva di density con un 8. Stessa
+                         // lezione del Seg loop_end ↔ loop_dur, e la stessa
+                         // regola: la condizione e' quella che accende il
+                         // bottone, non una seconda copia — piu' la meta' che
+                         // la dichiarazione spiega, cioe' che una delle due
+                         // chiavi sia davvero scritta. Sul bottone `density`
+                         // acceso per esclusione su uno stream che non dichiara
+                         // nessuna delle due, questo click e' l'unica via per
+                         // farne esistere una.
+                         if (u === densityUnitSel && densityUnitWritten) return;
+                         // Sul click VERO le due costanti restano: density
+                         // (grani al secondo) e fill_factor (fattore di
+                         // sovrapposizione) sono grandezze diverse, e portarsi
+                         // dietro il numero vorrebbe dire convertirlo per la
+                         // durata del grano — una scelta di modello, non la
+                         // lettura di una curva che il round 3 ha rimesso a
+                         // posto altrove.
                          if (u === "fill_factor") {
                            const ff = 2.0;
                            onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null });
@@ -995,7 +1215,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 </span>
                 <span />
               </div>
-              {(stream.fillFactor != null || stream.fillFactorEnv != null) ? (
+              {densityUnitSel === "fill_factor" ? (
                 <ParamRow name="fill_factor"
                   mode={getMode("fillFactor")} onMode={(m) => toggleMode("fillFactor", m)}
                   value={stream.fillFactor != null ? stream.fillFactor : "—"} unit={stream.fillFactorEnv ? "" : "×"}
@@ -1071,15 +1291,58 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   <div className="pge-prow">
                     <span className="k">loop_end ↔ loop_dur</span>
                     <Seg size="xs"
-                         value={(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? "loop_end" : "loop_dur"}
+                         value={loopEndSel}
                          onChange={(u) => {
+                           // Click sul bottone gia' acceso: non cambia niente,
+                           // e senza questo ritorno cambiava tutto. In
+                           // modalita' envelope i due rami scrivono comunque lo
+                           // scalare e azzerano la curva — loop_endEnv
+                           // sostituito da un seme, loop_durEnv da 0.01 — cioe'
+                           // un envelope sparito per un click che non lo
+                           // chiedeva. Da scalare era un onChange a vuoto: un
+                           // passo di undo e lo stem marcato sporco per niente.
+                           if (u === loopEndSel) return;
+                           // I due rami convertono fra due chiavi mutuamente
+                           // esclusive, quindi la curva di partenza non
+                           // sopravvive comunque — ma il numero che la
+                           // sostituisce dev'essere quello che la curva diceva,
+                           // non una costante. Letti con `|| 0` e ignorando del
+                           // tutto l'envelope, un `loop_endEnv` fermo su 6
+                           // diventava `loop_dur: 0.01` (il pavimento) e un
+                           // `loop_durEnv` su 3 diventava la fine del file: la
+                           // stessa lezione del `|| 1` di toggleMode, sullo
+                           // stesso riquadro. Da qui loopSeedFrom, condiviso.
+                           // …e loop_start e' il terzo numero della
+                           // conversione, non un contorno: la lunghezza e' la
+                           // distanza DA li'. Letto con `|| 0` la sua curva non
+                           // si vedeva affatto — un loop_startEnv fermo su 3 con
+                           // loop_end a 6 dava una lunghezza di 6 invece di 3,
+                           // cioe' la finestra raddoppiata da un click. Stesso
+                           // lettore delle altre due righe, con il ripiego di
+                           // questa.
+                           const ls = stream.pointer.loopStart != null ? stream.pointer.loopStart
+                             : loopSeedFrom(stream.pointer.loopStartEnv, 0);
                            if (u === "loop_end") {
+                             // Con loop_start da solo (il menu lo sa scrivere) qui non
+                             // c'e' nessuna lunghezza da cui partire, e il ripiego era
+                             // un 1 nudo: la fine del file in normalized, un secondo in
+                             // secondi. Stessa cura del seme del menu — «tutto il file»
+                             // nell'unita' in vigore — e poi il cap, che il ramo non
+                             // applicava affatto.
+                             const dur = stream.pointer.loopDur != null ? stream.pointer.loopDur
+                               : loopSeedFrom(stream.pointer.loopDurEnv);
                              const le = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
-                               : (stream.pointer.loopStart || 0) + (stream.pointer.loopDur != null ? stream.pointer.loopDur : 1);
+                               : clampLoop("loopEnd", ls + dur);
                              onChange({ pointer: { ...stream.pointer, loopEnd: le, loopEndEnv: null, loopDur: null, loopDurEnv: null } });
                            } else {
+                             // Simmetrico, cap compreso: una lunghezza piu' lunga del
+                             // file e' esattamente quel che la riga clampa quando la si
+                             // digita, e il pavimento resta 0.01 — sopra il minimo
+                             // statico, cosi' il clamp non lo puo' riportare a zero.
+                             const end = stream.pointer.loopEnd != null ? stream.pointer.loopEnd
+                               : loopSeedFrom(stream.pointer.loopEndEnv);
                              const ld = stream.pointer.loopDur != null ? stream.pointer.loopDur
-                               : Math.max(0.01, (stream.pointer.loopEnd || 0) - (stream.pointer.loopStart || 0));
+                               : clampLoop("loopDur", Math.max(0.01, end - ls));
                              onChange({ pointer: { ...stream.pointer, loopDur: ld, loopDurEnv: null, loopEnd: null, loopEndEnv: null } });
                            }
                          }}
@@ -1087,10 +1350,22 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <span />
                     <span />
                   </div>
-                  {(stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null) ? (
+                  {/* Il valore che la riga mostra quando la chiave non c'e'
+                      ancora: e' il seme, non un 1 nudo. Con `loop_start` da
+                      solo la riga loop_dur c'e' gia' e la chiave no, e quel
+                      numero non e' solo scritto — e' il punto da cui parte il
+                      trascinamento del NumberField. Sul ramo loop_end il caso
+                      non si da' (la condizione qui sopra garantisce una delle
+                      due chiavi), ma le due righe non devono dire numeri
+                      diversi per la stessa domanda.
+                      E quale delle due righe si veda lo dice loopEndMode, la
+                      stessa domanda che accende il bottone del Seg qui sopra:
+                      una terza copia della condizione sarebbe la riga libera di
+                      dissentire dal selettore che la sceglie. */}
+                  {loopEndMode ? (
                     <ParamRow name="loop_end"
                               mode={getMode("loopEnd")} onMode={(m) => toggleMode("loopEnd", m)}
-                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : 1)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
+                              value={stream.pointer.loopEnd != null ? stream.pointer.loopEnd : (stream.pointer.loopEndEnv ? "—" : loopSeedWhole)} unit={stream.pointer.loopEndEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopEndEnv != null}
                               envValue={stream.pointer.loopEndEnv}
                               onEditEnv={focusEnv("loopEnd")}
@@ -1098,7 +1373,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   ) : (
                     <ParamRow name="loop_dur"
                               mode={getMode("loopDur")} onMode={(m) => toggleMode("loopDur", m)}
-                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : 1)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
+                              value={stream.pointer.loopDur != null ? stream.pointer.loopDur : (stream.pointer.loopDurEnv ? "—" : loopSeedWhole)} unit={stream.pointer.loopDurEnv ? "" : loopUnitSuffix}
                               accent={stream.pointer.loopDurEnv != null}
                               envValue={stream.pointer.loopDurEnv}
                               onEditEnv={focusEnv("loopDur")}
@@ -1117,7 +1392,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <div className="pge-prow hint" style={{paddingTop:0}}>
                       <span className="k" /><span />
                       <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        loop_end ∈ [0, sample_dur] · per un loop oltre la fine del file usa loop_dur
+                        {`loop_end${loopClause(loopEndRange)} · per un loop oltre la fine del file usa loop_dur`}
                       </span>
                       <span />
                     </div>
@@ -1188,7 +1463,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                     <div className="pge-prow hint" style={{paddingTop:0}}>
                       <span className="k" /><span />
                       <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        {loopUnit.unit === "normalized"
+                        {loopNormalized
                           ? "start e loop_start/end/dur ∈ [0, 1] × sample_dur · start resta un valore raw, senza bound (is_smart=False)"
                           : (loopMax != null
                               ? ("start e loop_start/end/dur in secondi · cap " + (+loopMax.toFixed(3)) + " s (durata del sample)")
@@ -1224,12 +1499,12 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
               ) : null}
               <AddParamMenu
                 options={[
-                  { key: "loopStart",   label: "loop_start",   desc: "loop window start (s) — confines the read to [loop_start, loop_end)",
+                  { key: "loopStart",   label: "loop_start",   desc: `loop window start${loopClause(loopDomain)} — confines the read to [loop_start, loop_end)`,
                     exists: stream.pointer.loopStart != null, def: 0 },
-                  { key: "loopEnd",     label: "loop_end",     desc: "loop end (s) ∈ [0, sample_dur], must be > loop_start — mutex w/ loop_dur, has priority",
-                    exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: 1 },
-                  { key: "loopDur",     label: "loop_dur",     desc: "loop window length (s) — loop_start+loop_dur > sample_dur ⇒ loop straddling the file end",
-                    exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: 1 },
+                  { key: "loopEnd",     label: "loop_end",     desc: `loop end${loopClause(loopEndDomain)}, must be > loop_start — mutex w/ loop_dur, has priority`,
+                    exists: stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null || stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null, def: loopSeedWhole },
+                  { key: "loopDur",     label: "loop_dur",     desc: `loop window length${loopClause(loopDomain)}${loopStraddle}`,
+                    exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: loopSeedWhole },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
                 ]}
@@ -1282,6 +1557,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="v">
                   <Seg size="xs" value={grainUnit}
                        onChange={(v) => {
+                         // Il click che non chiede niente, e qui CANCELLA: la
+                         // coda di convertGrainDurationUnit fa
+                         // `if (toUnit === 'seconds') delete ng.durationUnit`
+                         // a prescindere dalla conversione, quindi un
+                         // `duration_unit: seconds` scritto esplicito spariva
+                         // dallo YAML per un click sul bottone gia' acceso — la
+                         // fingerprint si muove e lo stem torna giallo senza che
+                         // un campione cambi. E' la gemella di loop_unit una
+                         // sezione piu' su, che quel ritorno anticipato ce l'ha
+                         // da #149; `grainUnit` e' il `value` del Seg, quindi la
+                         // condizione e' quella che accende il bottone.
+                         if (v === grainUnit) return;
                          // Il cambio di unità CONVERTE i valori già scritti: il
                          // numero cambia, la durata reale no. Lasciarli lì
                          // dentro voleva dire reinterpretarli nella nuova scala
@@ -1357,10 +1644,31 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   : g.readDirection === -1 ? "back"
                   : g.readDirection === 1 ? "forward"
                   : "invalid";
+                // L'errore si legge PRIMA di setDirection perche' e' la guardia a
+                // chiederlo: la deroga dichiarata per questo Seg non e'
+                // «read_direction non ha guardia», e' «cede dove c'e' qualcosa
+                // da riparare», e quel qualcosa ha gia' un nome.
+                const err = window.PGEEnvUtils.readDirectionError(g);
                 // Passare da uno stato all'altro riscrive SEMPRE entrambe le
                 // chiavi: è il punto in cui un conflitto ereditato da un file
                 // scritto a mano si risolve, semplicemente usando il controllo.
                 function setDirection(next) {
+                  // …e per questo il click sul bottone gia' acceso e' il rimedio
+                  // SOLO quando un conflitto c'e'. Senza errore da riparare quel
+                  // click non chiede niente e riscriveva comunque: su un
+                  // `reverse:` da solo — nessun conflitto, il motore lo legge
+                  // benissimo — cancellava la chiave e scriveva
+                  // `read_direction: -1`, cioe' una migrazione silenziosa che
+                  // muove la fingerprint e ingiallisce lo stem su un verso che
+                  // non e' cambiato; su `read_direction: 1` o su `auto`
+                  // riemetteva un grain identico, un passo di undo a vuoto.
+                  // La riga di hint qui sotto dice gia' la regola a chi legge —
+                  // «sceglierne un altro passa a read_direction» — e le altre
+                  // tre vie restano tutte aperte. Con un conflitto invece il
+                  // bottone acceso e' l'unico che tiene il verso che lo YAML
+                  // dichiara, quindi li' la guardia cede: e' la deroga, ed e'
+                  // larga esattamente quanto il suo motivo.
+                  if (next === state && !err) return;
                   const ng = { ...g };
                   delete ng.reverse;
                   delete ng.readDirection;
@@ -1373,7 +1681,6 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   }
                   onChange({ grain: ng });
                 }
-                const err = window.PGEEnvUtils.readDirectionError(g);
                 return (
                   <React.Fragment>
                     <div className={"pge-prow" + (selRow === "grain.readDirection" ? " selected" : "")}

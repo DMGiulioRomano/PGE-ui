@@ -169,6 +169,73 @@ assert("envArrayWouldTruncate vede i punti del gruppo",
   U.envArrayWouldTruncate([ZONE_A], 3) === true &&
   U.envArrayWouldTruncate([ZONE_A], 1) === false);
 
+/* ============================================================================
+ * firstBreakpointY — la y del primo breakpoint, qualunque grafia abbia
+ *
+ * E' la domanda di ogni toggle env→scalare: la curva sparisce, e il numero che
+ * la sostituisce dev'essere quello che la curva diceva. `env[0][1]` non sa
+ * rispondere, e sbaglia in tre modi diversi — uno per grafia — tutti e tre
+ * silenziosi. Sta nel modulo perche' i chiamanti sono tredici (dodici rami di
+ * toggleMode piu' il Seg del loop): scritta dentro uno, gli altri dodici
+ * tengono la versione rotta, ed e' esattamente com'e' andata.
+ * ========================================================================== */
+console.log("\n── firstBreakpointY: la y del primo punto, in ogni grafia ──");
+{
+  const FB = (env, fb) => E.firstBreakpointY(env, fb);
+  assert("lista piatta: la y del primo breakpoint",
+    FB([[0, 6], [1, 2]], "FB") === 6);
+  assert("3-tuple con interp per-punto: sempre la y",
+    FB([[0, 6, "step"], [1, 2]], "FB") === 6);
+  /* La grafia che l'editor SCRIVE da se': wrapEnv produce {type, points}
+     appena l'interp globale di una curva di soli BP non e' lineare. Li'
+     `env[0]` non esiste, quindi il vecchio lettore ripiegava sul default —
+     la costante al posto della curva, sul caso raggiungibile senza scrivere
+     una riga di YAML a mano. */
+  assert("envelope tipato {type, points}: si unwrappa prima di leggere",
+    FB({ type: "cubic", points: [[0, 6], [1, 2]] }, "FB") === 6);
+  assert("dict con i soli points, che il motore accetta",
+    FB({ points: [[0, 6], [1, 2]] }, "FB") === 6);
+  /* Un BP group come primo item e' `[points, interp]`: `[1]` e' la STRINGA
+     dell'interp, e `|| default` la lascia passare — cioe' `pan: "cubic"`
+     scritto nello YAML come valore del parametro. */
+  assert("BP group: si desugara, non si legge il nome dell'interp",
+    FB([[[[0, 3], [1, 4]], "cubic"]], "FB") === 3);
+  assert("BP group in forma diretta (non annidato in una lista)",
+    FB([[[0, 3], [1, 4]], "cubic"], "FB") === 3);
+  /* E il blocco compatto e' la grafia che una y non ce l'ha davvero: in `[1]`
+     c'e' l'END_TIME del blocco, un numero che con il valore del
+     parametro non c'entra niente. Qui il ripiego e' la risposta giusta. */
+  assert("blocco compatto come primo item: ripiega, non scrive l'end_time",
+    FB([[[[0, 0.1], [0.5, 0.2]], 2, 4]], "FB") === "FB");
+  assert("blocco compatto in forma di dict: ripiega",
+    FB({ type: "geometric", ratio: 2, n_reps: 4 }, "FB") === "FB");
+  /* Il breakpoint in forma dict `{t, v}`: il builder del motore lo normalizza
+     in `[t, v]` (envelope_builder.py:132) e wouldEmptyEnv lo conta gia' come
+     punto vero, quindi una y ce l'ha ed e' `v`. */
+  assert("breakpoint {t, v}: la y e' `v`",
+    FB([{ t: 0, v: 6 }, { t: 1, v: 2 }], "FB") === 6);
+  assert("…con l'interp per-punto, uguale",
+    FB([{ t: 0, v: 6, type: "step" }], "FB") === 6);
+  assert("dict senza una y numerica: non e' un punto, ripiega",
+    FB([{ t: 0 }], "FB") === "FB");
+  /* Il ritorno e' il valore LETTO, zero compreso. Con `|| default` uno zero
+     legittimo — un loop_end a inizio file, una probabilita' «mai», un pan al
+     centro — diventava una costante che la curva non aveva mai avuto. */
+  assert("uno zero letto e' uno zero, non il ripiego",
+    FB([[0, 0], [1, 1]], "FB") === 0 && FB([{ t: 0, v: 0 }], "FB") === 0);
+  assert("y negativa: nessun trattamento speciale",
+    FB([[0, -3], [1, 1]], "FB") === -3);
+  /* Le forme che una y non ce l'hanno per niente: il ripiego e' del chiamante,
+     perche' e' il default del SUO parametro — 1 per speed_ratio, 0 per pan,
+     loopSeedWhole per il loop. Il modulo non ne conosce nessuno. */
+  assert("envelope assente o vuoto: ripiega",
+    FB(null, "FB") === "FB" && FB(undefined, "FB") === "FB" && FB([], "FB") === "FB");
+  assert("uno scalare passato per sbaglio: ripiega, non si auto-legge",
+    FB(5, "FB") === "FB");
+  assert("ripiego non passato: undefined, cosi' il chiamante lo riconosce",
+    FB([], undefined) === undefined && FB([[0, 0]], undefined) === 0);
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).
