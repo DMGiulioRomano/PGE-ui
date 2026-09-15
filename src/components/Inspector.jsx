@@ -1029,7 +1029,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="how a _range band is filled: uniform (flat) or gaussian (bell, σ = width/6)">distribution_mode</span>
                 <span />
                 <span className="v">
-                  <Seg size="xs" value={stream.distributionMode || "uniform"} onChange={v => onChange({distributionMode: v})}
+                  {/* Il no-op: `Seg` chiama onChange anche sul bottone gia'
+                      acceso, e qui il ramo scrive comunque. Con la chiave
+                      assente il bottone acceso e' il default, quindi quel click
+                      materializzava `distribution_mode: uniform` — una chiave
+                      ridondante, un passo di undo e la fingerprint mossa su uno
+                      stream che suona identico. La condizione e' il `value` del
+                      Seg, come in loop_unit (#149). */}
+                  <Seg size="xs" value={stream.distributionMode || "uniform"}
+                       onChange={v => { if (v === (stream.distributionMode || "uniform")) return;
+                                        onChange({distributionMode: v}); }}
                        options={[{label:"uniform",value:"uniform"},{label:"gaussian",value:"gaussian"}]} />
                 </span>
                 <span />
@@ -1038,8 +1047,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="where base sits inside a _range band: center (base ± range/2) or min (base → base+range)">range_anchor</span>
                 <span />
                 <span className="v">
+                  {/* Qui il click sul bottone acceso non materializzava: CANCELLAVA.
+                      Il ramo scrive `undefined` sul default, cioe' la regola
+                      «scegliere il default toglie la chiave ridondante» — giusta
+                      su un cambio, sbagliata su un click che non chiede niente:
+                      un `range_anchor: center` scritto esplicito spariva dallo
+                      YAML. E' lo stesso ritorno anticipato che loop_unit ha
+                      preso con #149, per lo stesso identico motivo. */}
                   <Seg size="xs" value={stream.rangeAnchor || "center"}
-                       onChange={v => onChange({rangeAnchor: v === "center" ? undefined : v})}
+                       onChange={v => { if (v === (stream.rangeAnchor || "center")) return;
+                                        onChange({rangeAnchor: v === "center" ? undefined : v}); }}
                        options={[{label:"center",value:"center"},{label:"min",value:"min"}]} />
                 </span>
                 <span />
@@ -1066,8 +1083,11 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="k" title="how grains that extend past clip end are handled">clip_strategy</span>
                 <span />
                 <span className="v">
+                  {/* Come distribution_mode: sul bottone acceso il ramo scrive
+                      comunque, e con la chiave assente scriveva il default. */}
                   <Seg size="xs" value={stream.clipStrategy || "overflow_margin"}
-                       onChange={v => onChange({clipStrategy: v})}
+                       onChange={v => { if (v === (stream.clipStrategy || "overflow_margin")) return;
+                                        onChange({clipStrategy: v}); }}
                        options={[{label:"overflow",value:"overflow_margin"},{label:"passthrough",value:"passthrough"}]} />
                 </span>
                 <span />
@@ -1470,6 +1490,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span className="v">
                   <Seg size="xs" value={grainUnit}
                        onChange={(v) => {
+                         // Il click che non chiede niente, e qui CANCELLA: la
+                         // coda di convertGrainDurationUnit fa
+                         // `if (toUnit === 'seconds') delete ng.durationUnit`
+                         // a prescindere dalla conversione, quindi un
+                         // `duration_unit: seconds` scritto esplicito spariva
+                         // dallo YAML per un click sul bottone gia' acceso — la
+                         // fingerprint si muove e lo stem torna giallo senza che
+                         // un campione cambi. E' la gemella di loop_unit una
+                         // sezione piu' su, che quel ritorno anticipato ce l'ha
+                         // da #149; `grainUnit` e' il `value` del Seg, quindi la
+                         // condizione e' quella che accende il bottone.
+                         if (v === grainUnit) return;
                          // Il cambio di unità CONVERTE i valori già scritti: il
                          // numero cambia, la durata reale no. Lasciarli lì
                          // dentro voleva dire reinterpretarli nella nuova scala
