@@ -1,9 +1,12 @@
 /* =============================================================================
  * audio-engine.js — Web Audio playback for rendered stems.
  *
- * Fetches real audio from server.py /audio/<basename>__<sid>.wav (the server
- * transcodes the .aif to WAV via sox for cross-browser compatibility — Firefox
- * doesn't decode AIFF natively). Streams without a rendered stem stay silent.
+ * Fetches real audio from server.py (`/output/…` for wav/flac, `/audio/…` for
+ * aiff, which the server transcodes to WAV via sox — Firefox doesn't decode
+ * AIFF natively). The bytes are pulled with fetch() and played from a blob:
+ * URL, never straight from the http URL: see `_stemObjectUrl` for the
+ * six-connections-per-origin cap that made the seventh stem silent. Streams
+ * without a rendered stem stay silent.
  *
  * The engine treats `audioCtx.currentTime` as the master clock once playing.
  * The visual playhead reads from `engine.currentTime` so audio and timeline
@@ -36,6 +39,14 @@
   // `_scheduleStreaming`. Tune here if start sync ever drifts.
   const START_LEAD_SEC = 0.09;
 
+  // Cap on stem blobs kept alive (see _stemObjectUrl). Soft: a blob a currently
+  // loaded project can still play is never revoked, so a project with more
+  // streams than this keeps them all.
+  // ponytail: numero fisso; se la memoria diventa un problema prima dei ~24
+  // stem, il passo successivo e' tenere in blob solo le clip che il playhead
+  // puo' raggiungere, non tutte quelle schedulate.
+  const MAX_STEM_BLOBS = 24;
+
   // --- pure clock math (no AudioContext), exposed as window.PGEAudioClock and
   // exercised in tests/node/test-audio-clock.js -----------------------------
   // Position currently audible: the ctx clock advanced since the anchor, minus
@@ -60,6 +71,7 @@
       this.bufferKeys = new Map();        // streamId → "basename__sid#fingerprint" cache key
       this.peaks = new Map();             // streamId → { key, data: Float32Array }  waveform peaks
       this.streamUrls = new Map();        // streamId → stem URL (real stems → streamed, not decoded)
+      this.stemBlobs = new Map();         // stem URL → Promise<{tag, obj}>  (see _stemObjectUrl)
       // streamId → { el?, mediaSource?, gainNode?, gainBase?, source?, timers: [] }
       this.activeNodes = new Map();
       this.streamMuteSolo = new Map();    // streamId → { mute, solo }
@@ -148,6 +160,8 @@
       this.buffers.delete(id);
       this.bufferKeys.delete(id);
       this.peaks.delete(id);
+      const su = this.streamUrls.get(id);
+      if (su) this._dropStemBlob(su);
       const ta = this.trackAnalysers.get(id);
       if (ta) { try { ta.disconnect(); } catch {} this.trackAnalysers.delete(id); }
     }
@@ -155,6 +169,7 @@
       this.buffers.clear();
       this.bufferKeys.clear();
       this.peaks.clear();
+      for (const u of [...this.stemBlobs.keys()]) this._dropStemBlob(u);
     }
 
     // LRU upkeep for decoded AudioBuffers. this.buffers preserves insertion
@@ -239,6 +254,76 @@
       return data;
     }
 
+    // -------- stem bytes --------
+
+    /**
+     * Object URL for a stem's bytes, downloaded once and reused.
+     *
+     * An <audio> pointed straight at the http URL keeps its connection busy for
+     * the whole clip — the browser downloads at roughly playback rate, not in
+     * one go — so past the browser's six-connections-per-origin cap the seventh
+     * stem never reaches `canplay`. And a merely *queued* element fires no
+     * `error` either: the clip is silent with nothing to log, which is exactly
+     * the case the error listener below exists to rule out. Measured on this
+     * repo's nine-stem project: six elements start in 10 ms, the seventh at
+     * 8.3 s, the last two never (readyState 0 after 15 s).
+     *
+     * A fetch() gives the slot back as soon as the bytes are in (95 MB from the
+     * local bridge in ~30 ms) and a blob: URL costs no slot at all, so the
+     * ceiling goes away. The server-side `threads: 200` fixed the same symptom
+     * on its own side; this is the browser's half of it.
+     *
+     * The entry is keyed on the file's ETag, not on the URL alone: a re-render
+     * writes the same filename, and a blob cached under the URL would keep
+     * playing the previous audio. The HEAD is cheap; the download only happens
+     * when the bytes really changed.
+     */
+    _stemObjectUrl(url) {
+      const prev = this.stemBlobs.get(url) || Promise.resolve(null);
+      const p = prev.catch(() => null).then(async (cur) => {
+        const tag = await this._stemTag(url);
+        if (cur && tag && cur.tag === tag) return cur;   // same file → same blob
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const obj = URL.createObjectURL(await res.blob());
+        if (cur) URL.revokeObjectURL(cur.obj);
+        return { tag, obj };
+      });
+      this.stemBlobs.set(url, p);
+      this._capStemBlobs();
+      return p.then(e => e.obj);
+    }
+
+    // Identity of the file behind `url`. Null = "don't know" → re-download,
+    // never "unchanged": a stale blob is audio the author never rendered.
+    async _stemTag(url) {
+      try {
+        const h = await fetch(url, { method: "HEAD" });
+        return h.ok ? (h.headers.get("etag") || h.headers.get("last-modified")) : null;
+      } catch { return null; }
+    }
+
+    _dropStemBlob(url) {
+      const p = this.stemBlobs.get(url);
+      if (!p) return;
+      this.stemBlobs.delete(url);
+      p.then(e => { if (e) URL.revokeObjectURL(e.obj); }, () => {});
+    }
+
+    // Map order is insertion order, so the front is the least recently loaded.
+    // A URL the current project still lists is never dropped — it is about to
+    // be played again, and re-fetching it is the cost this cache exists to
+    // avoid on every seek.
+    _capStemBlobs() {
+      if (this.stemBlobs.size <= MAX_STEM_BLOBS) return;
+      const live = new Set(this.streamUrls.values());
+      for (const u of [...this.stemBlobs.keys()]) {
+        if (this.stemBlobs.size <= MAX_STEM_BLOBS) break;
+        if (live.has(u)) continue;
+        this._dropStemBlob(u);
+      }
+    }
+
     // -------- scheduling --------
 
     /**
@@ -321,18 +406,32 @@
       // than now (a reschedule mid-playback anchors in the past → play at once).
       const playAtCtx = window.PGEAudioClock.playAt(this.ctx.currentTime, this.startedAtCtx, startDelay);
 
+      // Start pulling the bytes now, not when the element is built: `build`
+      // fires `startLead` (90 ms) before the clip sounds, which is nowhere near
+      // enough to download a stem, and the element is instant once the blob is
+      // there.
+      const objP = this._stemObjectUrl(url);
+
       const build = () => {
         if (this.activeNodes.get(s.id) !== entry) return; // stopped meanwhile
+        objP.then((objUrl) => { buildWith(objUrl); }, (e) => {
+          if (entry.dead) return;
+          this._reportStreamError(s.id,
+            `stem non caricabile (${url.replace(/^.*\//, "")}: ${e && e.message ? e.message : e})`);
+        });
+      };
+
+      const buildWith = (objUrl) => {
+        if (this.activeNodes.get(s.id) !== entry) return; // stopped while fetching
         const el = new Audio();
-        el.src = url;
+        el.src = objUrl;                     // blob: — the bytes are already here
         el.preload = "auto";
-        el.crossOrigin = "anonymous";
         // A missing/undecodable stem is otherwise indistinguishable from a
         // silent one: `canplay` simply never fires and the clip stays quiet
         // forever with nothing logged anywhere. Say it out loud instead.
         el.addEventListener("error", () => {
-          if (entry.dead) return;            // teardown clears el.src, which fires `error`
-          this._reportStreamError(s.id, `stem non caricabile (${url.replace(/^.*\//, "")})`);
+          if (entry.dead) return;            // teardown detaches the src, which fires `error`
+          this._reportStreamError(s.id, `stem non decodificabile (${url.replace(/^.*\//, "")})`);
         }, { once: true });
         const mediaSource = this.ctx.createMediaElementSource(el);
         const gainNode = this.ctx.createGain();
@@ -406,7 +505,12 @@
         try { n.el.pause(); } catch {}
         try { n.mediaSource.disconnect(); } catch {}
         try { n.gainNode.disconnect(); } catch {}
-        n.el.src = "";
+        // NOT `src = ""`: the empty string resolves against the document URL,
+        // so the element would go and fetch the editor page as media — one
+        // bogus request per clip per stop, on the connection pool this whole
+        // change exists to spare. The blob itself is cached, not revoked here.
+        n.el.removeAttribute("src");
+        try { n.el.load(); } catch {}
       } else if (n.source) {
         try { n.source.stop(0); } catch {}
       }

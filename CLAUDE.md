@@ -36,6 +36,9 @@ exists, the fourth only when a browser is installed):
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
   `audiblePosition`/`playAt` in `window.PGEAudioClock`), and
+  `test-stem-blobs.js` (the stem blob cache: when it reuses the bytes and when
+  it must not — a re-render writes the same filename, so the key is the ETag —
+  plus source guards on the element never receiving the http URL), and
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
   `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
   `test-score-options.js` (the score switches that reach argv from the render
@@ -1225,7 +1228,50 @@ The EnvelopeEditor Y window auto-fits point values (`computeYFit` in `envelope-u
 
 Render output format is a Settings preference (`tweaks.outputFormat`, **default `wav`**, also `aiff`/`flac`), forwarded as `--format`. `stemUrl` routes playback by format: `wav`/`flac` → `GET /output/<basename>__<sid>.<ext>` (browsers decode natively); `aiff` → `GET /audio/<basename>__<sid>.aif`, which `server.py` transcodes to WAV via sox (Firefox can't decode AIFF natively). With default WAV, playback needs no sox.
 
-Streams without a rendered stem stay silent but **never silently**: a missing/undecodable stem fires `pge-audio-error` (once per stream per schedule), logged and surfaced as a toast. Without that, a 404 stem is indistinguishable from a quiet one because `canplay` simply never fires. Teardown marks the node dead **before** clearing `el.src` (clearing it fires `error` on the element).
+Streams without a rendered stem stay silent but **never silently**: a missing/undecodable stem fires `pge-audio-error` (once per stream per schedule), logged and surfaced as a toast. Without that, a 404 stem is indistinguishable from a quiet one because `canplay` simply never fires. Teardown marks the node dead **before** detaching `el.src` (detaching it fires `error` on the element).
+
+**The stem bytes come through `fetch()`, never straight into `el.src`** — and
+that is not a preference, it is the ceiling the previous design hit. An
+`<audio>` pointed at the http URL keeps its connection busy for the whole clip
+(the browser downloads at roughly playback rate, not in one go), so past the
+browser's **six connections per origin** the seventh stem never reaches
+`canplay` — and an element that is merely *queued* fires no `error` either, so
+the clip is silent with nothing to log, i.e. exactly the hole the paragraph
+above exists to close. Measured on a nine-stem project: six elements start in
+10 ms, the seventh at 8.3 s, the last two never (readyState 0 after 15 s).
+Which six won the race varied per run, which is what made it read as "some
+tracks suddenly don't play" after a stop/seek/play round rather than as a
+broken stem. The server's `threads: 200` (see the gunicorn options in
+`server.py`) had already fixed the same symptom on *its* side; this is the
+browser's half of it, and the two are independent.
+
+`_stemObjectUrl(url)` downloads the bytes once and hands out a `blob:` URL: the
+fetch gives the connection back as soon as it is done (95 MB from the local
+bridge in ~30 ms) and a blob URL costs no slot at all. `_scheduleStreaming`
+warms it at **schedule** time, not in `build()` — `build` fires `startLead`
+(90 ms) before the clip sounds, nowhere near enough to download a stem, while
+the element itself is instant once the blob is there.
+
+The cache entry is keyed on the file's **ETag**, not on the URL alone, and that
+is the one thing that can fail quietly: a re-render writes the same filename,
+so a blob cached under the URL would keep playing the previous audio under a
+green dot. Each call does a HEAD first and re-downloads unless the tag matches;
+an *unknown* tag (HEAD unavailable) counts as "don't know" and re-downloads —
+the safe direction, one wasted round trip instead of audio the author never
+rendered. The blob is what makes a seek free: a seek reschedules every clip,
+and without the cache that would be the whole project downloaded again per
+click. `_capStemBlobs` bounds the set but never drops a URL the current project
+still lists (`streamUrls`), so the cap is soft by design.
+
+Teardown does **not** revoke the blob (it is shared with the next schedule) and
+does **not** write `el.src = ""`: the empty string resolves against the
+document URL, so the element goes and fetches the editor page as media — one
+bogus request per clip per stop, on the very connection pool this design exists
+to spare. It is `removeAttribute("src")` + `load()`.
+
+`tests/node/test-stem-blobs.js` covers the cache (reuse, re-download on a moved
+ETag, revoke of the superseded blob, a failed fetch not cached as a success,
+the soft cap) plus source guards on the three links that don't run in node.
 
 The pure clock math (`audiblePosition`, `playAt`) is exposed as `window.PGEAudioClock`, node-tested in `test-audio-clock.js`.
 
