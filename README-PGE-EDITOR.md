@@ -4,17 +4,19 @@ Setup and quick start live in **[README.md](README.md)**. This document is the
 operational reference for the bridge: how the local backend maps to HTTP, the
 full endpoint list, the NDJSON render protocol, troubleshooting and security.
 
-The bridge is `server.py` in this repo. It runs **from PGE-ui** and points at a
-separately-cloned `PythonGranularEngine` via `--root` (default
-`../PythonGranularEngine`) — it never copies itself into or mutates the engine
-source. It binds `127.0.0.1` only; CORS is open so the editor (a `file://`
-page) can reach it.
+The bridge is `server.py` in this repo. It runs **from wherever your piece
+lives** and points at a separately-cloned `PythonGranularEngine` — it never
+copies itself into or mutates the engine source. It binds `127.0.0.1` only;
+CORS is open so the editor (a `file://` page) can reach it.
 
 Two directories, not one. `--root` is engine source (`src/main.py`, `.venv`,
 `csound/`); `--workspace` is the folder holding `configs/`, `output/` and
-`cache/` — the work itself, `refs/` included where the engine has
-`--samples-dir`. Omit it and they coincide, which is the historical behavior.
-See **Workspace** below.
+`cache/` — the work itself, the samples included where the engine has
+`--samples-dir`. Neither has a default written for someone standing inside this
+checkout any more (#165): the engine is `--root`, else `$PGE_ENGINE_ROOT`, else
+an `engine/` found walking up from the current folder, else an error naming the
+three; the workspace is `--workspace`, else the current folder. See
+**Workspace** below.
 
 ---
 
@@ -89,20 +91,29 @@ The engine was never the constraint: `src/main.py` takes absolute paths and
 ```bash
 python server.py --root ../PythonGranularEngine --workspace ~/brani
 make serve WORKSPACE=~/brani
-pge-ui --root ~/projects/PythonGranularEngine --workspace .   # after make install-cli
+cd ~/brani && python /path/to/PGE-ui/server.py   # #165: the workspace is here
+cd ~/brani && pge-ui                             # the same, after make install-cli
 ```
 
-The third form is the same bridge under a name on `$PATH` (#164): `server.py`
+The last form is the same bridge under a name on `$PATH` (#164): `server.py`
 resolves its own folder, so it has never needed to be started from the
-checkout — `bin/pge-ui` only supplies the name. The defaults are unchanged,
-which is why that line still spells out both flags: `--root` is relative to the
-folder you are standing in.
+checkout — `bin/pge-ui` only supplies the name, and writes no flag of its own.
+Since #165 there is no flag left to spell out in the common case: the workspace
+is the folder you are standing in, and the engine comes from `$PGE_ENGINE_ROOT`
+(a line of `.envrc` beside the piece) or from an `engine/` found walking up.
 
 | | comes from |
 | --- | --- |
-| `src/main.py`, `.venv/`, `csound/`, `logs/` | `--root` (engine source) |
-| `configs/`, `output/`, `cache/` | `--workspace` (defaults to `--root`) |
-| `refs/` | `--workspace` too, on an engine with `--samples-dir`; `--root` otherwise — see below |
+| `src/main.py`, `.venv/`, `csound/`, `logs/` | `--root`, else `$PGE_ENGINE_ROOT`, else an `engine/` walking up (engine source) |
+| `configs/`, `output/`, `cache/` | `--workspace`, else the current folder (`make serve` passes the engine root, the historical layout) |
+| the samples | `--workspace` too, on an engine with `--samples-dir`; `--root` otherwise — see below |
+
+The samples folder inside the workspace is `refs/`, **or the `samples/` the
+folder already has**: the bridge adopts the one that exists (`refs/` first, it
+is the canonical name) and creates `refs/` only when neither does. That name is
+what goes out as `--samples-dir`, so the engine reads the folder the editor
+lists, and `GET /workspace` carries `samplesDirAdopted` so Settings can say
+"adopted" instead of promising an empty folder over a full one.
 
 Missing **sub**directories are created on startup; the workspace folder itself
 is not. A mistyped `--workspace` stops the bridge rather than fabricating an
@@ -110,7 +121,10 @@ empty folder and making the author's projects disappear from the list.
 
 **Switching at runtime.** `POST /workspace {"path": …}` commutes the four paths
 in place (they are process state, not closure constants — which is why the
-gunicorn config runs `workers: 1`); an empty path returns to `--root`. The
+gunicorn config runs `workers: 1`); an empty path returns to `--root` — to the
+engine checkout, not "to the default": since #165 a hand-launched bridge starts
+on the current folder, and this route is what is left of the historical layout
+(the one `make serve` passes explicitly). The
 response carries the new project list, because a switch invalidates what the
 browser holds: it is a replacement, not a merge. In the editor: **⚙ → Workspace**.
 

@@ -25,6 +25,7 @@
 
 const fs   = require("fs");
 const path = require("path");
+const SG   = require("./source-guard.js");
 
 let pass = 0, fail = 0;
 // Il corpo della suite e' un IIFE async: se muore a meta', i suoi assert non
@@ -293,7 +294,14 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
 
   console.log("\n── il pannello Settings ha il campo (source guard) ──");
   {
-    const sp = fs.readFileSync(path.join(__dirname, "../../src/components/SettingsPanel.jsx"), "utf8");
+    const spPath = path.join(__dirname, "../../src/components/SettingsPanel.jsx");
+    const sp = fs.readFileSync(spPath, "utf8");
+    // Lo stesso file letto come CODICE: i commenti qui accanto le vecchie
+    // frasi le citano apposta (dicono perche' non si dicono piu'), quindi ogni
+    // guardia NEGATIVA — "questa frase non c'e' piu'" — deve leggere questo, o
+    // resta rossa per sempre su un commento; e ogni guardia positiva su una
+    // frase, o sarebbe verde su un commento. #165
+    const spCode = SG.codeOf(spPath);
     assert("sezione Workspace", /sp-sec-head">Workspace</.test(sp));
     assert("campo di testo + applica", /applyWorkspace\(wsPath\)/.test(sp));
     assert("e un modo di tornare al motore", /applyWorkspace\(""\)/.test(sp));
@@ -314,6 +322,49 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            /wsInfo\.isRoot \?/.test(sp.slice(sp.indexOf("Anche i sample seguono"))));
     assert("e non trascrive la vecchia promessa",
            !/Seguiranno il workspace quando il motore/.test(sp));
+    // Terzo caso della stessa frase: la cartella dei sample il bridge puo'
+    // averla ADOTTATA (un workspace che teneva gia' il corpus in samples/,
+    // #165). Anche questo lo dice il server: dal path il browser vedrebbe solo
+    // un nome, e "la crea il bridge, vuota" su una cartella piena manda a
+    // cercare sample che non mancano.
+    assert("ne' promette una cartella vuota dove l'ha adottata",
+           /wsInfo\.samplesDirAdopted/.test(spCode) &&
+           /samplesDirAdopted/.test(SG.codeOf(path.join(__dirname, "../../server.py"))));
+    // ...e la chiave sta nel contratto in testa a backend.js, che e' dove la
+    // forma del payload e' scritta una volta (CLAUDE.md lo dichiara IL
+    // contratto). Una chiave che il pannello legge e il contratto non elenca e'
+    // il modo in cui il prossimo backend la dimentica. #165
+    //
+    // Qui si legge il sorgente GREZZO, e per una volta e' giusto: il contratto
+    // E' un commento. `codeOf` lo cancellerebbe, e la guardia sarebbe rossa per
+    // sempre — l'errore opposto a quello delle frasi qui sopra, e lo stesso
+    // motivo per cui la lettura va scelta, non ereditata.
+    {
+      const be = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
+      const contratto = be.slice(be.indexOf("Contract (every backend implements)"),
+                                 be.indexOf("fs.listDir(kind)"));
+      assert("e la chiave nuova sta nel contratto di backend.js",
+             contratto.length > 0 && /samplesDirAdopted/.test(contratto));
+    }
+    // Quarto caso, ed e' quello che i tre rami non coprivano: una refs/ che
+    // nel workspace c'era gia', piena. `samplesDirAdopted` guarda l'ALTRO nome
+    // (e' la domanda "perche' la riga dice samples/"), quindi qui si cade nel
+    // ramo finale — dove "vuota" era una promessa falsa, la stessa che il ramo
+    // isRoot esiste per non fare. Nessuna delle tre frasi promette un vuoto
+    // che il server non ha dichiarato. #165
+    {
+      const frasi = spCode.slice(spCode.indexOf("Anche i sample seguono"),
+                                 spCode.indexOf("a ogni render"));
+      assert("nessuna delle frasi sui sample promette una cartella vuota",
+             frasi.length > 0 && !/crea il bridge, vuota/.test(frasi) &&
+             /Se manca la crea/.test(frasi));
+    }
+    // E il workspace sul motore non e' piu' "il default": da #165 un bridge
+    // lanciato a mano parte sulla cwd. La frase resta (il layout storico,
+    // quello che `make serve` passa), l'etichetta no.
+    assert("e non chiama 'default' il workspace sul motore",
+           /wsInfo\.isRoot/.test(spCode) &&
+           !/repo del motore \(default\)/.test(spCode));
     // Anche lo specchio delle path nella sezione Paths lo chiede al server.
     // Scritto come condizione da districare ("a meno che il motore non abbia
     // --samples-dir, nel qual caso restano i suoi") diceva l'opposto di quel

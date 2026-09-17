@@ -208,7 +208,13 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             Le sottocartelle mancanti le crea il server; la cartella no — un percorso
             digitato male viene rifiutato invece di essere creato. Fuori dal checkout
             del motore, il rollback di un progetto torna a essere il proprio git.
-            {wsInfo && wsInfo.isRoot ? " Ora coincide col repo del motore (default)." : ""}
+            {/* Non piu' "(default)": da #165 un bridge lanciato a mano parte
+                sulla cwd, e il workspace sul motore e' il layout storico
+                (#147) — quello che `make serve` passa esplicito e a cui il
+                bottone "al motore" riporta. */}
+            {wsInfo && wsInfo.isRoot
+              ? " Ora coincide col repo del motore: il layout storico, quello che passa make serve."
+              : ""}
           </div>
           {/* Dove stanno i sample lo decide il motore, non una preferenza:
               con --samples-dir (PythonGranularEngine#235) refs/ segue il
@@ -226,8 +232,21 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
                   // cercare un problema che non c'e', e proprio nel caso di
                   // default. La frase sotto vale quando il workspace e' altrove.
                   <> E' quella del motore, perche' il workspace coincide col suo repo.</>
+                ) : wsInfo.samplesDirAdopted ? (
+                  // Stessa ragione, altro caso: la cartella c'era gia' e il
+                  // bridge l'ha adottata invece di crearne una vuota accanto
+                  // (#165). "La crea il bridge, vuota" qui sarebbe falso su una
+                  // cartella piena — e chi la legge va a cercare i sample che
+                  // "mancano".
+                  <> Il bridge ha adottato la cartella che il workspace aveva gia',
+                  invece di creargliene una vuota accanto.</>
                 ) : (
-                  <> La cartella la crea il bridge, vuota: copiaci i file, o falla
+                  // "vuota" era una promessa, e su un workspace che una refs/
+                  // piena ce l'aveva gia' (il nome canonico: samplesDirAdopted
+                  // guarda l'altro) era falsa — la stessa frase che il ramo
+                  // isRoot qui sopra esiste per non dire. Il bridge la crea se
+                  // manca: questo e' vero comunque, e il consiglio resta.
+                  <> Se manca la crea il bridge: copiaci i file, o falla
                   puntare alla libreria che usi gia' con un symlink.</>
                 )}{" "}
                 Il motore la riceve come{" "}

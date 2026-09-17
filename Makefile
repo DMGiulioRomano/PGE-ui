@@ -6,10 +6,15 @@
 PYTHON   ?= python3
 PORT     ?= 7878
 ROOT     ?= ../PythonGranularEngine
-# Cartella di lavoro: configs/ output/ cache/. Vuota = come ROOT, cioe' i
-# progetti stanno dentro il checkout del motore (comportamento storico). #147
+# Cartella di lavoro: configs/ output/ cache/. Vuota = come ENGINE_ROOT, cioe'
+# i progetti stanno dentro il checkout del motore (comportamento storico, #147).
+#
+# Da #165 il DEFAULT DEL BRIDGE e' invece la cwd: `pge-ui` da ~/un-brano lavora
+# li'. `make serve` pero' si lancia da dentro questo checkout, dove la cwd e'
+# PGE-ui: ereditare quel default significherebbe creare configs/ output/ cache/
+# dentro il repo dell'editor e far sparire dall'elenco i progetti di chi
+# aggiorna. Quindi qui il workspace si passa sempre, esplicito.
 WORKSPACE ?=
-WS_FLAG  := $(if $(WORKSPACE),--workspace $(WORKSPACE),)
 VENV     := .venv
 VENV_BIN := $(VENV)/bin
 # Dove `install-cli` mette il symlink `pge-ui`. ~/.local/bin e' il posto in cui
@@ -83,6 +88,8 @@ else
 ENGINE_ROOT := $(if $(PGE_ENGINE_ROOT),$(PGE_ENGINE_ROOT),$(abspath $(ROOT)))
 endif
 
+WS_FLAG  := --workspace $(if $(WORKSPACE),$(WORKSPACE),$(ENGINE_ROOT))
+
 .PHONY: help serve install install-cli dev-clean tests tests-node tests-python tests-parity tests-e2e
 
 help:
@@ -101,8 +108,11 @@ help:
 	@echo " Variables:"
 	@echo "  PORT=7878            porta"
 	@echo "  ROOT=../PythonGranularEngine   path al repo engine (sorgente)"
+	@echo "                       (senza ROOT=: PGE_ENGINE_ROOT, poi il default)"
 	@echo "  WORKSPACE=~/brani    cartella con configs/ output/ cache/"
-	@echo "                       (default: = ROOT, i progetti nel repo engine)"
+	@echo "                       (default di make serve: = ROOT, i progetti nel"
+	@echo "                        repo engine; il bridge lanciato a mano usa la"
+	@echo "                        cartella corrente)"
 	@echo "  PYTHON=python3       interprete usato per creare il venv"
 	@echo "  BINDIR=~/.local/bin  dove install-cli mette il symlink pge-ui"
 	@echo "  PGE_PARITY_STRICT=1  un caso di parita' saltato diventa un errore"
@@ -114,8 +124,16 @@ $(VENV_BIN)/pip:
 install: $(VENV_BIN)/pip
 	$(VENV_BIN)/pip install -r requirements.txt
 
+# `$(ENGINE_ROOT)` e non `$(ROOT)`: la precedenza del motore e' quella
+# calcolata qui sopra (ROOT= esplicito > PGE_ENGINE_ROOT > default), la stessa
+# che `server.py` implementa per conto suo (#165). `make serve` la ignorava —
+# passava `--root $(ROOT)` secco, quindi con un PGE_ENGINE_ROOT esportato
+# `make tests` e `make serve` giravano su due motori diversi. Due precedenze
+# per la stessa variabile nello stesso repo si vedono solo quando una delle due
+# sbaglia; tests/python/test_cli_resolve.py adesso le confronta chiedendolo a
+# make, non trascrivendo.
 serve: $(VENV_BIN)/pip
-	$(VENV_BIN)/python server.py --root $(ROOT) $(WS_FLAG) --port $(PORT)
+	$(VENV_BIN)/python server.py --root $(ENGINE_ROOT) $(WS_FLAG) --port $(PORT)
 
 # Un nome sul PATH per il bridge (#164): `cd ~/qualsiasi-brano && pge-ui`.
 # E' un symlink, non una copia, cosi' un `git pull` aggiorna anche il comando.
