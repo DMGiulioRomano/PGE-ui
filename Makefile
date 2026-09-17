@@ -38,21 +38,27 @@ BINDIR   ?= $(if $(HOME),$(HOME)/.local/bin,)
 # (`~utente/bin`, `~` nudo, `~/con  spazi`) make non le sa risolvere: le ferma
 # la ricetta, invece di inventare una cartella.
 #
-# Nello stesso ramo cadono le barre in fondo, e per la stessa ragione di
-# prima: non cambiano dove finisce il link, ma il confronto con il PATH e'
-# testuale e `$PATH` elenca `/home/tu/.local/bin`, non `/home/tu/.local/bin/`.
+# Nello stesso ramo cade la GRAFIA del path, e per una ragione sola: non
+# cambia dove finisce il link — `mkdir` e `ln` la reggono qualunque — ma il
+# confronto con il PATH e' testuale, e `$PATH` elenca `/home/tu/.local/bin`.
 # Cioe' l'avviso «BINDIR non e' nel PATH» — l'unica cosa che qui dentro spiega
-# un `command not found` — parlava proprio sulla grafia piu' facile da
-# produrre, quella che la tab-completion della shell scrive da sola. Un avviso
-# che grida dove non c'e' niente e' il primo che si impara a non leggere.
-# `patsubst` ne toglie una per giro, quindi due giri: `…/bin/` e `…/bin//`.
-# L'ultima barra non si tocca mai (`filter-out /`), cosi' `BINDIR=/` resta `/`
-# e non si svuota, andando a sbattere nell'errore sbagliato — quello che dice
-# che BINDIR non c'e'.
+# un `command not found` — parlava sulle grafie piu' facili da produrre: la
+# barra in fondo che la tab-completion scrive da sola, e la barra doppia che
+# il default stesso fabbricava da un `HOME=/root/` (una grafia che i container
+# producono). Un avviso che grida dove non c'e' niente e' il primo che si
+# impara a non leggere.
+# Le toglie `abspath`, che e' gia' in casa (CLI_SRC) e le prende tutte in una
+# volta: barre in fondo quante sono, barre doppie in mezzo, `.` e `..`. Due
+# `patsubst` di fila ne toglievano due sole, e in fondo soltanto: `BINDIR=/x//`
+# restava `/x/`, e la barra doppia del default non la vedeva nessuno.
+# Il filtro `/%` NON e' ornamentale: `abspath` di un path relativo lo risolve
+# sulla cwd di make, cioe' sceglierebbe proprio la cartella che la ricetta si
+# rifiuta di scegliere — il guardiano sul BINDIR relativo diventerebbe muto,
+# perche' non gli arriverebbe mai piu' un path relativo. Fuori dal filtro
+# passano verbatim; `/` resta `/`, che `abspath` non svuota.
 ifeq ($(words $(BINDIR)),1)
 override BINDIR := $(if $(HOME),$(patsubst ~/%,$(HOME)/%,$(BINDIR)),$(BINDIR))
-override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
-override BINDIR := $(if $(filter-out /,$(BINDIR)),$(patsubst %/,%,$(BINDIR)),$(BINDIR))
+override BINDIR := $(if $(filter /%,$(BINDIR)),$(abspath $(BINDIR)),$(BINDIR))
 endif
 # Il sorgente del link si risolve sulla cartella di QUESTO Makefile, non su
 # quella da cui hai lanciato make: con `$(abspath bin/pge-ui)` un

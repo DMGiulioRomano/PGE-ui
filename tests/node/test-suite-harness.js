@@ -662,6 +662,12 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
     const w = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8" });
     return w.status === 0 ? w.stdout.trim() : "";
   };
+  // I due versi dell'avviso guardano la STESSA espressione. Con `/PATH/` di
+  // qua e `!/attenzione/` di la' bastava riscrivere l'avviso senza quella
+  // parola — `export PATH=` sarebbe rimasto a tenere verde il verso positivo
+  // — e il verso negativo diventava vero per sempre: muto proprio sul caso
+  // che deve vedere, cioe' l'avviso che parla quando BINDIR e' nel PATH.
+  const WARN = /attenzione: .* non e' nel PATH/;
 
   assert("bin/pge-ui esiste", fs.existsSync(BIN),
     "il comando dell'issue #164 non c'e'");
@@ -901,12 +907,6 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
         fs.existsSync(link) && fs.lstatSync(link).isSymbolicLink() &&
         fs.realpathSync(link) === fs.realpathSync(BIN),
         fs.existsSync(link) ? fs.readlinkSync(link) : "nessun link");
-      // I due versi guardano la STESSA espressione. Con `/PATH/` di qua e
-      // `!/attenzione/` di la' bastava riscrivere l'avviso senza quella parola
-      // — `export PATH=` sarebbe rimasto a tenere verde il verso positivo — e
-      // il verso negativo diventava vero per sempre: muto proprio sul caso che
-      // deve vedere, cioe' l'avviso che parla quando BINDIR e' nel PATH.
-      const WARN = /attenzione: .* non e' nel PATH/;
       assert("BINDIR fuori dal PATH e' un avviso", WARN.test(a.stdout || ""),
         "senza, l'utente vede 'command not found' e nessuna spiegazione\n      " +
         ((a.stdout || "") + (a.stderr || "")));
@@ -942,6 +942,18 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
           encoding: "utf8" });
       assert("...ne' due", slashed2.status === 0 && !WARN.test(slashed2.stdout || ""),
         (slashed2.stdout || "") + (slashed2.stderr || ""));
+      // Ne' tre. Il numero non e' il punto: due `patsubst` di fila toglievano
+      // due barre e basta, cioe' la normalizzazione si fermava dove si era
+      // deciso che i casi finissero. `abspath` non ha un numero — e prende
+      // anche le barre in MEZZO, che e' la grafia che il default fabbrica da
+      // solo (sonda su HOME, piu' sotto).
+      const slashed3 = spawnSync("make", ["-C", repo, "install-cli", "BINDIR=" + dest + "///"],
+        { env: { ...process.env, PATH: dest + path.delimiter + process.env.PATH },
+          encoding: "utf8" });
+      assert("...ne' tre: la normalizzazione non ha un tetto",
+        slashed3.status === 0 && !WARN.test(slashed3.stdout || "") &&
+        fs.existsSync(path.join(dest, "pge-ui")),
+        (slashed3.stdout || "") + (slashed3.stderr || ""));
       // Il verso opposto della stessa espressione: con la barra e la cartella
       // FUORI dal PATH l'avviso deve continuare a parlare. Senza questo, un
       // `BINDIR := ` che normalizza troppo (o un avviso cancellato) resterebbe
@@ -1092,6 +1104,32 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
       assert("...senza fabbricare una cartella `~` nel checkout",
         fs.readdirSync(copy).sort().join(",") === "Makefile,bin",
         fs.readdirSync(copy).join(", "));
+
+      /* La stessa grafia arrivata dal DEFAULT del target, non da un BINDIR
+         scritto a mano — ed e' quella che nessuno ha scritto. `HOME=/root/`
+         (i container la producono) faceva `$(HOME)/.local/bin` =
+         `/root//.local/bin`: il link finisce dove deve, ma il confronto con il
+         PATH e' testuale e `$PATH` elenca `/root/.local/bin`. Cioe' l'avviso
+         gridava sulla cartella che aveva appena trovato, consigliando di
+         aggiungere al PATH una voce che c'era gia'. Le due passate di
+         `patsubst` toglievano le barre in FONDO; questa sta in mezzo, e a
+         nessuno dei due guardiani del `~` o del relativo risultava storta. */
+      const homeSlash = spawnSync("make", ["-C", copy, "install-cli"], {
+        env: { ...process.env, HOME: home + "/",
+               PATH: path.join(home, ".local", "bin") + path.delimiter + process.env.PATH },
+        encoding: "utf8" });
+      assert("HOME con la barra in fondo: l'avviso non grida sul default del target",
+        homeSlash.status === 0 && !WARN.test(homeSlash.stdout || "") &&
+        fs.existsSync(path.join(home, ".local", "bin", "pge-ui")),
+        (homeSlash.stdout || "") + (homeSlash.stderr || ""));
+      // Il verso opposto, sulla stessa espressione: fuori dal PATH deve
+      // continuare a parlare, o una normalizzazione che va troppo in la'
+      // (o l'avviso cancellato) terrebbe verde l'assert qui sopra per sempre.
+      const homeSlashOut = spawnSync("make", ["-C", copy, "install-cli"],
+        { env: { ...process.env, HOME: home + "/" }, encoding: "utf8" });
+      assert("...e fuori dal PATH, con quel HOME, parla ancora",
+        homeSlashOut.status === 0 && WARN.test(homeSlashOut.stdout || ""),
+        (homeSlashOut.stdout || "") + (homeSlashOut.stderr || ""));
 
       const u = runIn("~nessuno/bin");
       assert("un `~utente` che nessuno puo' espandere ferma l'installazione",

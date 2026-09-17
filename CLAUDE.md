@@ -78,9 +78,9 @@ exists, the fourth only when a browser is installed):
   that half can tell `"$@"` from a bare `$@`, and a decoy `.venv` in the caller's
   folder is the only way the `realpath`-absent probe can tell a launcher that
   stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
-  against temporary `BINDIR`s — with a space, with two, with a `~`, with a
-  trailing slash, relative, empty, with no `HOME` at all and with no `realpath`
-  on the `PATH`), and
+  against temporary `BINDIR`s — with a space, with two, with a `~`, with one
+  trailing slash, with three, with a slashed `HOME`, relative, empty, with no
+  `HOME` at all and with no `realpath` on the `PATH`), and
   `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
@@ -1315,12 +1315,25 @@ which is what the shell's own tab-completion writes, printed «not in your
 PATH» about a folder that was, and advised adding an entry already there. That
 warning is the only thing here that explains a `command not found` after an
 install, and one that cries where there is nothing is the first one people
-learn to skip. The slashes come off beside the tilde expansion, in the same
-one-word branch and for the same reason (`patsubst` works on words, and would
-rejoin `/tmp/a  b`); two passes, because `patsubst` takes one slash per pass,
-and never the last one, so `BINDIR=/` stays `/` instead of emptying into the
-wrong error. Both directions of the warning are measured with the slash on, or
-a normalization that went too far would read green on the half that matters.
+learn to skip. And the trailing slash was not the only spelling: `HOME=/root/`
+— what a container hands you — made the target's *own default* come out
+`/root//.local/bin`, so the warning cried about the folder it had just found,
+on a `BINDIR` nobody typed.
+
+The normalization is `$(abspath …)`, beside the tilde expansion, in the same
+one-word branch and for the same reason (make's functions work on words, and
+would rejoin `/tmp/a  b`). It is the one already in the file for `CLI_SRC`, and
+it takes the whole family at once: trailing slashes however many, doubled
+slashes in the middle, `.` and `..`. Two `patsubst` passes took two slashes and
+only at the end — `BINDIR=/x//` came back `/x/`, and the default's middle slash
+was invisible to it. The `/%` filter in front is **not** ornamental: `abspath`
+of a relative path resolves it against make's own working directory, i.e. it
+would choose exactly the folder the recipe refuses to choose, and the
+relative-`BINDIR` guard below would go mute — no relative path would ever reach
+it again. Outside the filter everything passes verbatim, and `/` stays `/`,
+which `abspath` does not empty. Both directions of the warning are measured,
+with the slash on and with the slashed `HOME`, or a normalization that went too
+far would read green on the half that matters.
 
 **An unset `HOME` was the one spelling the prose here already claimed was
 stopped, and wasn't.** `$(HOME)/.local/bin` simply became `/.local/bin`: it

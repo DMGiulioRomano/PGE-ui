@@ -108,14 +108,15 @@ It is a symlink, not a copy, so `git pull` updates the command too; running the
 target twice is not an error. If `BINDIR` isn't on your `PATH` the target says
 so — that is the usual reason `pge-ui` looks broken right after installing it.
 A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
-target does it), one with spaces in it lands exactly where you wrote it, and a
-trailing slash — what tab-completion gives you — is not mistaken for a different
-folder when the warning above checks your `PATH`. Anything the target cannot
-resolve — a `~user/…`, a relative `BINDIR` (there is no such thing as a relative
-`PATH` entry worth having), an empty one or no `HOME` to build the default from,
-a `bin/pge-ui` that lost its executable bit, or no `realpath` on your `PATH` for
-the launcher to resolve itself with — stops the install instead of leaving
-behind a name that doesn't run.
+target does it), one with spaces in it lands exactly where you wrote it, and the
+way a path is spelled — a trailing slash from tab-completion, a doubled slash
+from a `HOME` that ends in one — doesn't make the warning above mistake it for a
+different folder. Anything the target cannot resolve — a `~user/…`, a relative
+`BINDIR` (there is no such thing as a relative `PATH` entry worth having), an
+empty one or no `HOME` to build the default from, a `bin/pge-ui` that lost its
+executable bit, or no `realpath` on your `PATH` for the launcher to resolve
+itself with — stops the install instead of leaving behind a name that doesn't
+run.
 
 What the name does *not* change yet are the defaults: `--root` is still
 `../PythonGranularEngine` *relative to the folder you are in*, and the workspace
