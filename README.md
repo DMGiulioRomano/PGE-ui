@@ -87,6 +87,54 @@ PGE bridge
   listen:    http://127.0.0.1:7878
 ```
 
+### 4b) (optional) One name on your `PATH`
+
+The bridge doesn't care where you start it from — `server.py` resolves its own
+folder — so the only thing missing to launch it from anywhere is a name:
+
+```bash
+make install-cli                 # symlinks bin/pge-ui into ~/.local/bin
+make install-cli BINDIR=/usr/local/bin   # …or wherever you keep your commands
+```
+
+Then:
+
+```bash
+cd ~/brani/pezzo-nuovo
+pge-ui --root ~/projects/PythonGranularEngine --workspace .
+```
+
+It is a symlink, not a copy, so `git pull` updates the command too; running the
+target twice is not an error. If `BINDIR` isn't on your `PATH` the target says
+so — that is the usual reason `pge-ui` looks broken right after installing it.
+A `BINDIR` written as `~/.local/bin` works (`make` doesn't expand a `~`, so the
+target does it), one with spaces in it lands exactly where you wrote it, and the
+way a path is spelled — a trailing slash from tab-completion, a doubled slash
+from a `HOME` that ends in one — doesn't make the warning above mistake it for a
+different folder. Anything the target cannot resolve — a `~user/…`, a relative
+`BINDIR` (there is no such thing as a relative `PATH` entry worth having), an
+empty one or no `HOME` to build the default from, a `bin/pge-ui` that lost its
+executable bit, or no `realpath` on your `PATH` for the launcher to resolve
+itself with — stops the install instead of leaving behind a name that doesn't
+run.
+
+What the name does *not* change yet are the defaults: `--root` is still
+`../PythonGranularEngine` *relative to the folder you are in*, and the workspace
+still follows `--root`, so from an arbitrary folder both flags have to be
+spelled out. Making them follow the caller is a separate change.
+
+`bin/pge-ui` deliberately holds no logic of its own: it resolves its path
+through the symlink (`realpath`) and hands over to `server.py`, preferring the
+repo's `.venv/bin/python` when `make install` has created one. Every decision —
+engine root, workspace, flags — stays in `server.py`, where the tests see it.
+If `realpath` isn't there to answer (it is not POSIX; macOS only ships it from
+12.3) the command stops and says so, rather than resolving the repo onto the
+folder you happen to be standing in — and `make install-cli` refuses to install
+it in the first place, so you get one explanation instead of a name on the
+`PATH` that never runs. On such a system, `brew install coreutils` and a
+`realpath` reachable as an executable (a shell alias won't do — the launcher is
+a script) is what the target is waiting for.
+
 ### 5) Open the editor
 
 Open `PGE Editor.html` in any browser (Chrome, Firefox, Safari — all work, because the file system access goes through the bridge, not through `window.showDirectoryPicker`).
@@ -171,6 +219,7 @@ PGE-ui/
 ├── server.py                    Flask bridge (this repo's only python)
 ├── requirements.txt
 ├── Makefile
+├── bin/pge-ui                   launcher on $PATH (make install-cli) — no logic, just exec
 ├── README.md                    this file
 ├── README-PGE-EDITOR.md         deep dive: endpoints, NDJSON protocol, troubleshooting
 │

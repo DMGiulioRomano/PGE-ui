@@ -15,6 +15,7 @@ make install          # pip install -r requirements.txt  (flask, flask-cors, gun
 make serve            # python server.py --root ../PythonGranularEngine --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
+make install-cli      # symlinks bin/pge-ui into ~/.local/bin (BINDIR= to choose)
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
 make tests-e2e        # headless boot of the editor (needs a playwright browser)
@@ -72,7 +73,19 @@ exists, the fourth only when a browser is installed):
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
   positional exit gate — and a check on `source-guard.js` itself, the reading
-  every other guard in the repo rests on), and `test-tracks.js` (the track model: `deriveTracks`
+  every other guard in the repo rests on; plus, since #164, the presidio on
+  `bin/pge-ui`: it must stay a launcher — four code lines, one trailing `exec`,
+  no bridge flag written inside — and it is *run* through a symlink against a
+  stub `server.py`, which is the only way to show that `realpath` is doing its
+  job; one of the forwarded arguments carries a space, which is the only way
+  that half can tell `"$@"` from a bare `$@`, and a decoy `.venv` in the caller's
+  folder is the only way the `realpath`-absent probe can tell a launcher that
+  stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
+  against temporary `BINDIR`s — with a space, with two, with a `~`, with one
+  trailing slash, with three, with a slashed `HOME`, relative, empty, with no
+  `HOME` at all and with no `realpath` on the `PATH`), and
+  `test-tracks.js`
+  (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -1521,6 +1534,159 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 ## File layout & load order (matters)
 
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
+
+`bin/pge-ui` (#164) is the one thing in the repo that is neither editor nor
+bridge: a four-line `sh` launcher that `make install-cli` symlinks onto `$PATH`,
+so the bridge can be started from the folder you are working in. It resolves its
+own path with `realpath` — it is reached *through* a symlink, so a plain
+`dirname` would name `~/.local/bin` — and execs `server.py` with the repo's
+`.venv/bin/python` when there is one (that is where `make install` puts flask;
+with a bare `python3` the documented setup dies on the import).
+
+**And it stops when `realpath` doesn't answer, rather than guessing.**
+`realpath` is not POSIX — on macOS it only arrives with 12.3 — and `dirname` of
+an empty string is `.`, so the missing binary didn't fail: it resolved `REPO`
+onto the *current* folder. Inside the checkout the command then worked by
+accident, and from anywhere else it died naming a `server.py` in the folder you
+were standing in, which is an error nobody gets out of on their own. Hence the
+`|| exit 1` on the resolution line (and, on the install side, the `command -v
+realpath` guard, so the name never reaches the `PATH` on a machine where it
+could only stop) — it costs no line, so the four-line rule
+below is untouched. The probe for it needs a **decoy**: with the PATH stripped
+of `realpath` the broken launcher dies anyway (no `python3` there either), so
+"exit != 0" stayed green on the defect; a fake `.venv` in the folder the command
+is called from is what makes the two outcomes different.
+
+**Nothing else may go in there.** The engine root, the workspace default, the
+flags — every decision stays in `server.py`, where pytest and the source guards
+see it; a script in `bin/` is looked at by nobody, and its natural tendency is
+to grow into a second, untested copy of those decisions. That is a rule with
+teeth: `test-suite-harness.js` requires the file to stay at most four code
+lines with a single trailing `exec`, refuses any bridge flag written inside it,
+and *runs* it — through a symlink, from a third folder, against a stub
+`server.py` — to check that the path resolution and the argument forwarding
+really work. That last half needs neither flask nor the sibling engine, so it
+runs in the node CI job too.
+
+**Which flags those are is read from `server.py`, never transcribed.** The
+guard collects the `add_argument("--…")` names out of the bridge's own source,
+so the sixth flag added tomorrow is refused the day it is declared. A list
+written into the test would be a second copy of the truth, and the person
+adding a flag is not the person who remembers to update it — it would go mute
+exactly while the launcher was about to grow the decision. That is not a
+hypothesis: the same list, transcribed into the prose of the PR that
+introduced it, named four of the five. The read has its own assert (it must
+find a plausible number of flags, `--root` among them), because an empty list
+builds a regex that accuses nothing — the silent way to disappear this repo
+already knows from `backend.envelopeKeys()` returning `[]` and the filter
+hiding.
+
+**The install side has its own rules, and every one of them had the same
+failure mode: a `pge-ui` on the `PATH` that doesn't run, announced as
+installed.** The link's source is `CLI_SRC`, resolved on the *Makefile's* folder
+(`$(dir $(lastword $(MAKEFILE_LIST)))`) and not on `$PWD` — with
+`$(abspath bin/pge-ui)` a `make -f /path/PGE-ui/Makefile install-cli` given from
+elsewhere linked a `bin/pge-ui` that doesn't exist there, and `ln -s` doesn't
+look at its target, so the dangling link was born under the success line. And
+every expansion in the recipe is quoted, because a space in the checkout's path
+or in `BINDIR` (`~/Documents/…`) made the unquoted `mkdir -p` fabricate a
+relative folder *inside the repo* and then `ln` fail naming the destination,
+which existed. `make` itself can't carry a space through
+`$(lastword $(MAKEFILE_LIST))`, so that one residual case (`make -f` on a
+checkout whose path has a space) is covered by the `test -f "$(CLI_SRC)"` guard
+at the top of the recipe: it fails the install instead of writing the wrong
+link.
+
+**The last spellings of that same failure are stopped now, not announced.**
+A `BINDIR` carrying a `~` is not a path: `make` does no tilde expansion, and
+the recipe quotes every expansion (it has to — the spaces above), so the shell
+doesn't expand it either. `BINDIR=~/.local/bin` — the spelling the target's own
+`help` line suggests — therefore fabricated a folder literally named `~` inside
+the checkout, put the link in it, printed the success line, and closed with an
+`export PATH="~/…"` that expands to nothing either: two announcements of an
+install nothing can reach. The `~/` head is expanded in the Makefile now, under
+`override`, which is not ornamental — a plain assignment loses against the
+command line, and the command line is exactly where `BINDIR` comes from.
+
+**That expansion brought the same lie back in through `patsubst`, which works
+on words.** `BINDIR=/tmp/a  b` came back `/tmp/a b`: the link in a folder that
+is not the one asked for, under the success line — the exact failure the tilde
+expansion had just been added to remove. One space hides it (the words rejoin
+identically, which is why the space probe stayed green), two don't, and a tab
+doesn't either. So the rewrite only applies to a **one-word** `BINDIR`, where
+`patsubst` has nothing to split; every other spelling passes through verbatim
+and the spaces are carried by the recipe, which quotes. What is left
+unresolvable — `~user/`, a bare `~`, `~/with  spaces` — fails the target instead
+of inventing a folder.
+
+**A relative `BINDIR` was the last spelling of the family still announced as
+installed.** `mybin` doesn't name a folder until you say what it is relative
+to, and make resolves it against its own working directory — which `make -C
+/path/PGE-ui` puts inside the checkout and `make -f /path/PGE-ui/Makefile`
+puts wherever you were standing: the very ambiguity `CLI_SRC` removes on the
+link's *source*, left open on its destination. It succeeded, the success line
+announced it, and the `PATH` warning closed by advising `export
+PATH="mybin:$PATH"` — a relative `PATH` entry, i.e. a command that answers from
+one folder only. A `case` beside the `~` one stops it; the probe runs both
+spellings of `make`, because it is their disagreement that makes the path
+meaningless.
+
+**And a trailing slash made the warning itself lie.** It does not change where
+the link lands, but the `PATH` comparison is textual and `$PATH` lists
+`/home/you/.local/bin`, not `/home/you/.local/bin/` — so `BINDIR=~/.local/bin/`,
+which is what the shell's own tab-completion writes, printed «not in your
+PATH» about a folder that was, and advised adding an entry already there. That
+warning is the only thing here that explains a `command not found` after an
+install, and one that cries where there is nothing is the first one people
+learn to skip. And the trailing slash was not the only spelling: `HOME=/root/`
+— what a container hands you — made the target's *own default* come out
+`/root//.local/bin`, so the warning cried about the folder it had just found,
+on a `BINDIR` nobody typed.
+
+The normalization is `$(abspath …)`, beside the tilde expansion, in the same
+one-word branch and for the same reason (make's functions work on words, and
+would rejoin `/tmp/a  b`). It is the one already in the file for `CLI_SRC`, and
+it takes the whole family at once: trailing slashes however many, doubled
+slashes in the middle, `.` and `..`. Two `patsubst` passes took two slashes and
+only at the end — `BINDIR=/x//` came back `/x/`, and the default's middle slash
+was invisible to it. The `/%` filter in front is **not** ornamental: `abspath`
+of a relative path resolves it against make's own working directory, i.e. it
+would choose exactly the folder the recipe refuses to choose, and the
+relative-`BINDIR` guard below would go mute — no relative path would ever reach
+it again. Outside the filter everything passes verbatim, and `/` stays `/`,
+which `abspath` does not empty. Both directions of the warning are measured,
+with the slash on and with the slashed `HOME`, or a normalization that went too
+far would read green on the half that matters.
+
+**An unset `HOME` was the one spelling the prose here already claimed was
+stopped, and wasn't.** `$(HOME)/.local/bin` simply became `/.local/bin`: it
+doesn't start with a `~`, so no guard looked at it, and wherever `/` is writable
+(a container, a CI runner) the install *succeeded* — announced, under the root,
+reachable by no `PATH`. The default is `$(if $(HOME),…)` now, so no `HOME` means
+no default, and an empty `BINDIR` (that one, or one typed by hand) is stopped by
+a `test -n` beside the other two guards, naming what is missing instead of
+dying on `mkdir: cannot create directory ''`. The probe reads the *message*, not
+only the exit code: where `/` isn't writable that `mkdir` failed anyway, which
+is a green for the wrong reason. The other spelling is the executable bit: the
+source guard defends *this* repo's index, not the checkout of whoever installs,
+so `test -x` sits beside the `test -f` — linking a file without it is a name on
+the `PATH` that answers `Permission denied`, which is the same lie one layer
+further on. All of it is measured by running `make install-cli` against
+temporary `BINDIR`s and a temporary `HOME`, in the same section of the harness.
+
+**And the last one isn't a `BINDIR` at all: it is `realpath`.** The launcher
+needs it to cross the very symlink this target creates, and stops without it —
+correctly, per the paragraph above. But the *recipe* doesn't use `realpath`, so
+the install succeeded anyway, printed its success line, and left on the `PATH`
+a `pge-ui` that exits 1 forever: the same lie as all the others, reached from
+the one direction that isn't a mistyped variable but a whole platform
+(`realpath` is not POSIX; macOS ships it only from 12.3). A `command -v` sits
+with the other guards now, and refuses rather than warns, because a command
+that cannot run is not a degraded install. Its probe runs `make install-cli`
+under a `PATH` carrying only what the recipe uses (`make`, `mkdir`, `ln`), and
+needs its control: with a `PATH` that narrow, *any* failure would keep a
+`status !== 0` assert green, so the same `PATH` with `realpath` back in it must
+succeed.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
