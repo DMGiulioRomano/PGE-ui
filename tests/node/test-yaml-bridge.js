@@ -1413,6 +1413,17 @@ global.React = {};                                    // satisfies `const {…} 
 // Sorgente GREZZO, non `SG.codeOf`: qui non si cerca niente, si ESEGUE la
 // testa del file — e il taglio e' su un commento marcatore, che uno strip dei
 // commenti fa sparire, mandando in eval anche il JSX.
+// computeAnnotations misura la finestra di loop contro il cap NELL'UNITA' in
+// vigore, e lo chiede a window.PGEEnvUtils — la stessa sorgente unica che
+// leggono l'Inspector e l'EnvelopeEditor. Qui vanno quindi caricati anche i tre
+// moduli che nell'editor precedono i componenti, nello stesso ordine: sono
+// IIFE che si limitano ad attaccarsi a window, quindi non lasciano nomi in
+// questo scope. Senza, la suite non darebbe un rosso che si legge: morirebbe
+// con un TypeError dentro il primo caso.
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
+
 const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
 // The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
@@ -1524,6 +1535,94 @@ assert("#42 presentation helpers loaded",
   const a4 = computeAnnotations(sPan, { name: "test.wav", duration: 5 });
   assert("#42 annotate pan env out of range", a4.byKey.get("pan") && a4.byKey.get("pan").kind === "warn",
     JSON.stringify([...a4.byKey]));
+}
+
+{
+  /* ── e il controllo del loop parla l'unità in vigore (#149, PGE #222) ─────
+     Le due righe qui sopra misurano in secondi perché la chiave è assente, cioè
+     `loop_unit: seconds`. Sotto `normalized` le stesse coordinate vivono in
+     [0,1] e il tetto è 1: la durata del file nel confronto non entra affatto.
+     Letto in secondi, il controllo sbagliava in tutte e due le direzioni — e
+     la direzione rumorosa colpiva la popolazione più comune, perché ogni clip
+     che l'editor crea nasce con `loop_unit: normalized`. */
+  const normLoop = (rows) => streamOf(pointerYaml(["loop_unit: normalized"].concat(rows)));
+
+  // Rumoroso dove il motore tace: 0.9 normalized su un sample da 0.4 s sono
+  // 0.36 s, dentro il file. Il rosso di prima accusava un valore legittimo, e
+  // per giunta lo chiamava secondi.
+  const nOk = computeAnnotations(normLoop(["loop_end: 0.9"]), { name: "test.wav", duration: 0.4 });
+  assert("normalized: nessun rosso su un loop_end dentro [0,1] di un sample corto",
+    !nOk.byKey.has("loop_end"), JSON.stringify([...nOk.byKey]));
+
+  // Muto dove il motore parla: 5 normalized sono cinque volte la fine del file,
+  // e 5 > 8 è falso — il controllo in secondi non vedeva niente.
+  const nOver = computeAnnotations(normLoop(["loop_end: 5"]), { name: "test.wav", duration: 8 });
+  assert("normalized: loop_end oltre 1 è rosso, per quanto lungo sia il sample",
+    nOver.byKey.get("loop_end") && nOver.byKey.get("loop_end").kind === "err",
+    JSON.stringify([...nOver.byKey]));
+  // Letto da un `|| {}`: se l'assert qui sopra e' rosso questa riga deve dare
+  // un rosso anch'essa, non uccidere la suite su un .msg di undefined.
+  const nOverMsg = (nOver.byKey.get("loop_end") || {}).msg || "";
+  assert("…e il messaggio dichiara il tetto normalizzato, non i secondi",
+    /≤ 1 \(loop_unit: normalized/.test(nOverMsg), nOverMsg);
+
+  // Stessa coppia sull'altra chiave: una lunghezza di 2 è due volte il file.
+  const nDur = computeAnnotations(normLoop(["loop_dur: 2"]), { name: "test.wav", duration: 8 });
+  assert("normalized: loop_dur oltre 1 è rosso",
+    nDur.byKey.get("loop_dur") && nDur.byKey.get("loop_dur").kind === "err",
+    JSON.stringify([...nDur.byKey]));
+  const nDurOk = computeAnnotations(normLoop(["loop_dur: 0.9"]), { name: "test.wav", duration: 0.4 });
+  assert("normalized: loop_dur dentro [0,1] resta pulito",
+    !nDurOk.byKey.has("loop_dur"), JSON.stringify([...nDurOk.byKey]));
+
+  // La grafia storica dell'assoluto è la stessa lettura dei secondi: il tetto
+  // torna a essere la durata del file.
+  const absOver = computeAnnotations(streamOf(pointerYaml(["loop_unit: absolute", "loop_end: 9"])),
+                                     { name: "test.wav", duration: 5 });
+  assert("absolute: alias dei secondi, il tetto resta la durata del sample",
+    absOver.byKey.get("loop_end") && /sample duration \(5\.000 s\)/.test(absOver.byKey.get("loop_end").msg),
+    JSON.stringify([...absOver.byKey]));
+
+  // Durata ignota in secondi: loopEnvMax non risponde, e un controllo che non
+  // sa contro cosa misurare tace invece di inventarsi un confronto (prima
+  // `v > undefined` era falso, stesso silenzio ma per caso, e il messaggio
+  // sarebbe morto su .toFixed di undefined).
+  const noDur = computeAnnotations(streamOf(pointerYaml(["loop_end: 9"])), { name: "test.wav" });
+  assert("secondi con durata ignota: nessun rosso e nessun crash",
+    !noDur.byKey.has("loop_end"), JSON.stringify([...noDur.byKey]));
+
+  /* — e una grafia fuori vocabolario non ha un tetto affatto ————————————
+     Dopo PGE #222 `normalised` non e' piu' «assoluto per esclusione»: il motore
+     alza InvalidFieldValueError sull'unita' e non guarda mai la finestra.
+     loopUnitInfo pero' quella grafia la legge ancora come assoluta — e' il suo
+     ripiego — quindi misurare la finestra darebbe un rosso che dichiara
+     un'unita' diversa da quella scritta, mentre sulle stesse righe la tab
+     Preview non mette nemmeno la «s» (loopUnitSuffix tace apposta). Il rosso
+     quindi e' quello vero, l'unita', e la finestra tace: la stessa regola del
+     tetto ignoto qui sopra. */
+  const badUnit = computeAnnotations(
+    streamOf(pointerYaml(["loop_unit: normalised", "loop_end: 9"])),
+    { name: "test.wav", duration: 5 });
+  assert("unità fuori vocabolario: il rosso è sull'unità",
+    badUnit.byKey.get("loop_unit") && badUnit.byKey.get("loop_unit").kind === "err",
+    JSON.stringify([...badUnit.byKey]));
+  assert("…e nomina il vocabolario, come fa l'Inspector",
+    /normalised/.test((badUnit.byKey.get("loop_unit") || {}).msg || "")
+    && /seconds, absolute, normalized/.test((badUnit.byKey.get("loop_unit") || {}).msg || ""),
+    (badUnit.byKey.get("loop_unit") || {}).msg);
+  assert("…e la finestra tace, invece di misurarla in un'unità che non è quella scritta",
+    !badUnit.byKey.has("loop_end") && !badUnit.byKey.has("loop_dur"),
+    JSON.stringify([...badUnit.byKey]));
+  // Una grafia FALSY non e' un refuso: e' la chiave assente, che il
+  // serializzatore toglie (`ptr.loopUnit || undefined`) e il motore non vede
+  // mai. Li' il controllo torna quello dei secondi, come dice loopUnitInfo.
+  const falsyUnit = computeAnnotations(
+    streamOf(pointerYaml(["loop_unit: \"\"", "loop_end: 9"])),
+    { name: "test.wav", duration: 5 });
+  assert("grafia falsy: nessun rosso sull'unità, e la finestra si misura in secondi",
+    !falsyUnit.byKey.has("loop_unit")
+    && falsyUnit.byKey.get("loop_end") && falsyUnit.byKey.get("loop_end").kind === "err",
+    JSON.stringify([...falsyUnit.byKey]));
 }
 
 /* ============================================================

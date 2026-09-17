@@ -422,6 +422,14 @@ assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
    di un solo blocco loop si svuotava con "remove loop" o con Delete. */
 assert("il guard 'non svuotare' esiste una volta sola",
   (eeSrc.match(/function wouldEmptyEnv/g) || []).length === 1);
+/* E il breakpoint dict lo riconosce col predicato del MODULO, non con una
+   copia locale: l'altro lettore di quella grafia e' loopSeedFrom
+   nell'Inspector, che di quel punto legge la y. Due copie e le due regole
+   divergono — ed e' successo: il lettore del loop trattava `{t, v}` come una
+   forma senza y mentre questo conteggio lo contava come punto vero. */
+assert("il dict {t, v} lo riconosce il modulo, non una copia locale",
+  /E\.isDictBreakpoint\(it\)/.test(eeSrc)
+  && !/const isDictBP = /.test(eeSrc));
 /* Una asserzione NOMINATA per ciascuna via, non un conteggio: il conteggio
    includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
    e quella scoperta era proprio il ramo del breakpoint, la via storica e
@@ -500,6 +508,163 @@ assert("paste di `[]` → rifiutato (e' il corpo che il motore rifiuta)",
   runPaste([]) === null);
 assert("paste di un envelope tipizzato senza punti → rifiutato",
   runPaste({ type: "step", points: [] }) === null);
+
+/* ── i due Seg di questo riquadro: il click che non chiede niente ──────────
+   `Seg` chiama onChange anche sul bottone GIA' ACCESO (primitives.jsx). Qui i
+   Seg sono due — quello globale e quello per-parametro — e nessuno dei due
+   passa da toggleMode, quindi la guardia e' loro. In modalita' env il ramo
+   `env` non guarda la curva: quello globale semina `dScalar`, che con un
+   envelope in piedi non e' un numero, e quello per-parametro semina `val`, che
+   e' l'envelope stesso — cioe' [[0,1],[1,1]] sopra i breakpoint dell'utente,
+   per un click che non li aveva chiesti. Stessa lezione del Seg di loop_unit
+   (#149) e di quello loop_end ↔ loop_dur.
+   E il verso opposto leggeva `items[0][1] || 1`, che non vede il dict `{t, v}`
+   e scambia per illeggibile una probabilita' di zero — che qui significa
+   «mai», non «non so».
+   Si ESEGUONO i due handler estratti dal sorgente, con il bottone acceso
+   ricostruito dalla sua dichiarazione vera. */
+console.log("\n── i due Seg: il no-op e la y del primo breakpoint ──");
+{
+  const bodyAfter = (needle, from) => {
+    const at = inspSrc.indexOf(needle, from || 0);
+    if (at < 0) return "";
+    const open = inspSrc.indexOf("{", inspSrc.indexOf("=>", at));
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(open, j + 1);
+    }
+    return "";
+  };
+  const globalBody = bodyAfter('mode={dMode}\n                  onMode={(m) => ');
+  const perBody    = bodyAfter('<Seg size="xs" value={pMode}\n                     onChange={(m) => ');
+  assert("i due handler sono estraibili dal sorgente",
+    globalBody.length > 0 && perBody.length > 0);
+
+  // Il bottone acceso viene dalle sue dichiarazioni vere, non riscritto qui:
+  // la condizione del no-op dev'essere LA STESSA che lo accende.
+  const dModeSrc = /const dMode = [\s\S]*?;/.exec(inspSrc)[0];
+  const pModeSrc = /const pMode = [\s\S]*?;/.exec(inspSrc)[0];
+
+  /* Il Seg globale e' una ParamRow, quindi il click che non chiede niente lo
+     ferma `handleMode` di primitives.jsx, non il suo onMode: una copia
+     nell'handler sarebbe la seconda, e con la sola meta' «bottone acceso» —
+     mentre la guardia vera legge anche `value` ed `envValue`, cioe' se il
+     valore e' gia' scritto. Quindi qui si compone come in interfaccia: la
+     guardia vera davanti, l'handler vero dietro, e le due props della riga
+     nella grafia con cui l'Inspector le passa. */
+  const handleModeSrc = (() => {
+    const src = require("fs").readFileSync(
+      require("path").join(__dirname, "../../src/components/primitives.jsx"), "utf8");
+    const at = src.indexOf("const handleMode = (m) => {");
+    const open = src.indexOf("{", src.indexOf("=>", at));
+    let d = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === "{") d++;
+      else if (src[j] === "}" && --d === 0) return src.slice(at, j + 1) + ";";
+    }
+    return "";
+  })();
+  assert("la guardia di ParamRow è estraibile dal sorgente", handleModeSrc.length > 0);
+
+  const runGlobal = (d) => {
+    const dIsEnv = D.isEnvValue(d);
+    const dScalar = typeof d === "boolean" ? 1 : d;
+    const mode = new Function("dIsEnv", dModeSrc + "\nreturn dMode;")(dIsEnv);
+    // value={dIsEnv ? "—" : dScalar} · envValue={dIsEnv ? desugar(unwrap(d)) : null}
+    const value = dIsEnv ? "\u2014" : dScalar;
+    const envValue = dIsEnv ? window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(d).items) : null;
+    const fire = (m) => {
+      let out;
+      new Function("m", "d", "dIsEnv", "dScalar", "dMode", "PGEEnv", "onChange",
+                   "mode", "value", "envValue",
+        "const onMode = (m) => " + globalBody + ";\n" + handleModeSrc + "\nhandleMode(m);")(
+        m, d, dIsEnv, dScalar, mode, window.PGEEnv, (p) => { out = p; },
+        mode, value, envValue);
+      return out;
+    };
+    return { mode, fire };
+  };
+  const runPer = (val) => {
+    const isEnv = D.isEnvValue(val);
+    const items = isEnv ? window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(val).items) : null;
+    const mode = new Function("isEnv", pModeSrc + "\nreturn pMode;")(isEnv);
+    const fire = (m) => {
+      let out;
+      new Function("m", "val", "items", "pMode", "d", "p", "PGEEnv", "onChange",
+        "(" + "(m) => " + perBody + ")(m);")(
+        m, val, items, mode, { volume: val }, { key: "volume" }, window.PGEEnv,
+        (x) => { out = x; });
+      return out;
+    };
+    return { mode, fire };
+  };
+
+  {
+    const g = runGlobal([[0, 20], [1, 80]]);
+    assert("globale: con una curva in piedi il bottone acceso è env", g.mode === "env");
+    assert("globale: click sul bottone già acceso → nessuna modifica, la curva resta",
+      g.fire("env") === undefined);
+    const gs = runGlobal(50);
+    assert("globale: e sullo scalare già acceso nessuna riscrittura",
+      gs.mode === "scalar" && gs.fire("scalar") === undefined);
+  }
+  {
+    // Il click vero continua a passare, nei due versi.
+    const g = runGlobal(50);
+    const toEnv = g.fire("env");
+    assert("globale: scalare→env vero semina la rampa costante",
+      toEnv && JSON.stringify(toEnv.deviationProbability) === JSON.stringify([[0, 50], [1, 50]]),
+      JSON.stringify(toEnv));
+    const toSc = runGlobal([[0, 20], [1, 80]]).fire("scalar");
+    assert("globale: env→scalare vero legge la y del primo breakpoint",
+      toSc && toSc.deviationProbability === 20, JSON.stringify(toSc));
+  }
+  {
+    /* Le grafie su cui `items[0][1] || 1` sbagliava. La prima l'editor la
+       scrive da se' (wrapEnv, interp globale non lineare); la seconda il
+       motore la normalizza in `[t, v]`; la terza e' uno zero legittimo —
+       «mai» — che il `|| 1` trasformava nell'1% implicito. */
+    assert("globale: una curva wrappata {type, points} si legge lo stesso",
+      runGlobal({ type: "cubic", points: [[0, 20], [1, 80]] }).fire("scalar").deviationProbability === 20);
+    assert("globale: i breakpoint in forma dict hanno una y, ed è `v`",
+      runGlobal([{ t: 0, v: 20 }, { t: 1, v: 80 }]).fire("scalar").deviationProbability === 20);
+    assert("globale: una probabilità di zero non diventa l'1% implicito",
+      runGlobal([[0, 0], [1, 80]]).fire("scalar").deviationProbability === 0);
+  }
+  {
+    const p = runPer([[0, 20], [1, 80]]);
+    assert("per-parametro: con una curva in piedi il bottone acceso è env", p.mode === "env");
+    assert("per-parametro: click sul bottone già acceso → la curva resta",
+      p.fire("env") === undefined);
+    const ps = runPer(50);
+    assert("per-parametro: e sullo scalare già acceso nessuna riscrittura",
+      ps.mode === "scalar" && ps.fire("scalar") === undefined);
+    const toSc = runPer([[0, 20], [1, 80]]).fire("scalar");
+    assert("per-parametro: env→scalare vero legge la y del primo breakpoint",
+      toSc && toSc.deviationProbability.volume === 20, JSON.stringify(toSc));
+    assert("per-parametro: e le grafie che `items[0][1]` non vedeva",
+      runPer({ type: "cubic", points: [[0, 20], [1, 80]] }).fire("scalar").deviationProbability.volume === 20
+      && runPer([{ t: 0, v: 0 }, { t: 1, v: 80 }]).fire("scalar").deviationProbability.volume === 0);
+  }
+
+  // …e il cablaggio, perché gli handler sopra valgono solo se sono quelli veri.
+  /* I due Seg hanno lo stesso difetto e due guardie diverse, perche' sono due
+     controlli diversi: il per-parametro il suo Seg se lo costruisce, quindi la
+     guardia e' sua; quello globale e' una ParamRow, e li' la guardia sta a
+     monte — dove la condizione oltre al bottone acceso vede anche se il valore
+     e' scritto. Una copia nell'onMode sarebbe la seconda, con meta' della
+     domanda. In tutti e due i casi la condizione e' il `value` del suo Seg. */
+  assert("il no-op del per-parametro legge la stessa domanda che accende il bottone",
+    /value=\{pMode\}/.test(inspSrc) && /if \(m === pMode\) return;/.test(inspSrc)
+    && !/value=\{isEnv \? "env" : "scalar"\}/.test(inspSrc));
+  assert("…e il globale passa dalla ParamRow guardata, senza copie nell'handler",
+    /mode=\{dMode\}/.test(inspSrc) && !/if \(m === dMode\) return;/.test(inspSrc)
+    && !/mode=\{dIsEnv \? "env" : "scalar"\}/.test(inspSrc));
+  assert("e la y del primo breakpoint la chiedono al lettore del modulo",
+    (inspSrc.match(/PGEEnv\.firstBreakpointY\(/g) || []).length >= 2
+    && !/\(items && items\[0\] && items\[0\]\[1\]\)/.test(inspSrc));
+}
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL

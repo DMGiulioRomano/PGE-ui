@@ -258,7 +258,37 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
       pts = expandedBPs.map((p) => `${((p[0] - xmin) / xr * 100).toFixed(1)},${(14 - (p[1] - ymin) / yr * 12).toFixed(1)}`).join(" ");
     }
   }
-  const handleMode = (m) => {if (onMode) onMode(m);};
+  /* Il click che non chiede niente. `Seg` chiama onChange anche sul bottone
+     GIA' acceso, e dall'altra parte di onMode c'e' sempre un ramo che SCRIVE:
+     verso `env` quel ramo non guarda la curva — legge lo scalare, che in quella
+     modalita' e' null — e semina una rampa costante sul default, cioe'
+     l'envelope dell'utente sostituito da una riga piatta per un click che non
+     l'aveva chiesto. Dal lato scalare e' una riscrittura uguale: un passo di
+     undo e uno stem marcato sporco per niente.
+     La guardia sta QUI e non in ognuno dei chiamanti perche' qui la condizione
+     e' quella che accende il bottone: `mode` e' il `value` del Seg due righe
+     piu' giu', per costruzione e per ogni ParamRow dell'editor. Riscriverla a
+     valle sarebbe la seconda copia, che e' il modo in cui una delle due smette
+     di valere — la ragione che loopEndSel dichiara nell'Inspector.
+     Ma «non chiede niente» non e' «il bottone e' gia' acceso»: e' «la modalita'
+     che il bottone sceglie e' gia' scritta», e le due domande divergono
+     esattamente sulle righe il cui parametro NON c'e'. Il motore ha un default
+     e la chiave e' assente, quindi il chiamante passa una `value` che non e' un
+     numero («—») e la riga non disegna nessun NumberField: li' il click sul
+     bottone gia' acceso e' l'unica via d'ingresso, perche' il ramo scalare
+     materializza la chiave sul default del parametro. Rifiutarlo lasciava la
+     riga senza nessun modo di scrivere — la `density` delle stream che non la
+     dichiarano (otto nel corpus del motore) e le dodici righe delle strategie
+     di VoicesSection, dove lo YAML puo' dichiarare la strategia senza il suo
+     parametro. Quindi la guardia cede dove la riga non offre altra via, ed e'
+     la riga stessa a dirlo: `value` non numerica = nessun campo, `envValue`
+     assente = nessuna curva. Cosi' il click che il PR esiste per fermare —
+     quello che passerebbe sopra un valore gia' scritto — resta fermo. */
+  const handleMode = (m) => {
+    const written = m === "env" ? envValue != null : typeof value === "number";
+    if (m === mode && written) return;
+    if (onMode) onMode(m);
+  };
   return (
     <div className={"pge-prow" + (selected ? " selected" : "")} onClick={onSelect}>
       <span className="k">{name}</span>

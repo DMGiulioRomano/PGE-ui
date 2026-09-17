@@ -45,15 +45,18 @@ function pitchEnvBounds(unit, semis, signed) {
        neanche unwrapEnv, quindi desugarare non basterebbe.
      - il breakpoint in forma dict `{t, v, type?}`, che il motore normalizza in
        `[t, v]` prima di guardarlo (envelope_builder.py:132). isBreakpoint non
-       va allargata — la usa l'editor per decidere cosa e' trascinabile — e il
-       predicato sta qui, dove la domanda e' solo se c'e' contenuto. */
+       va allargata — la usa l'editor per decidere cosa e' trascinabile, e un
+       dict il canvas non lo disegna — quindi il predicato e' il suo vicino di
+       casa nel modulo, isDictBreakpoint, condiviso con chi la y di quel punto
+       la legge (loopSeedFrom, Inspector). */
 function wouldEmptyEnv(next) {
   const E = window.PGEEnv;
   if (E.isCompactBlock(next)) return false;   // il valore E' il blocco
   if (!Array.isArray(next)) return true;
-  const isDictBP = (it) => !!it && typeof it === "object" && !Array.isArray(it) &&
-                           typeof it.t === "number" && typeof it.v === "number";
-  const bps   = next.filter((it) => E.isBreakpoint(it) || isDictBP(it)).length;
+  // Il dict `{t, v}` e' un punto vero: lo chiede al modulo, che e' anche chi
+  // risponde a loopSeedFrom nell'Inspector — una copia locale qui e una la'
+  // sarebbero due regole libere di divergere.
+  const bps   = next.filter((it) => E.isBreakpoint(it) || E.isDictBreakpoint(it)).length;
   const loops = next.filter(E.isCompactBlock).length;
   return bps + loops < 1;
 }

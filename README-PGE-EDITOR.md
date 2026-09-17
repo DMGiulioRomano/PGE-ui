@@ -92,7 +92,15 @@ The engine was never the constraint: `src/main.py` takes absolute paths and
 python server.py --root ../PythonGranularEngine --workspace ~/brani
 make serve WORKSPACE=~/brani
 cd ~/brani && python /path/to/PGE-ui/server.py   # #165: the workspace is here
+cd ~/brani && pge-ui                             # the same, after make install-cli
 ```
+
+The last form is the same bridge under a name on `$PATH` (#164): `server.py`
+resolves its own folder, so it has never needed to be started from the
+checkout — `bin/pge-ui` only supplies the name, and writes no flag of its own.
+Since #165 there is no flag left to spell out in the common case: the workspace
+is the folder you are standing in, and the engine comes from `$PGE_ENGINE_ROOT`
+(a line of `.envrc` beside the piece) or from an `engine/` found walking up.
 
 | | comes from |
 | --- | --- |

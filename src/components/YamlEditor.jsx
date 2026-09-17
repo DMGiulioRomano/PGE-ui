@@ -58,11 +58,46 @@ function computeAnnotations(stream, sampleRec) {
     byKey.set("sample", { kind: "err", msg: `sample not found: ${stream.sample}` });
   } else {
     const ptr = stream.pointer || {};
-    if (!ptr.loopEndEnv && ptr.loopEnd != null && ptr.loopEnd > sampleRec.duration) {
-      byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` });
+    // Il tetto della finestra di loop NON e' la durata del sample: e' la durata
+    // nell'UNITA' in vigore. `loop_unit` (PGE #222, #149) decide se questi
+    // numeri sono secondi — e allora il tetto e' sample_dur — oppure
+    // [0,1] × sample_dur, dove il tetto e' 1 e la durata del file nel confronto
+    // non entra affatto. Misurato in secondi, il controllo sbagliava in
+    // entrambe le direzioni: rosso su `loop_end: 0.9` normalized (= 0.36 s) di
+    // un sample da 0.4 — cioe' su ogni clip nato nell'editor, che
+    // `loop_unit: normalized` ce l'ha sempre — e silenzio su `loop_end: 5`
+    // normalized, cinque volte oltre la fine del file. Ed era la stessa unita'
+    // fissa che l'Inspector ha smesso di dichiarare: un rosso qui contro il
+    // suffisso unit-aware della riga di la' sono due affermazioni opposte.
+    // Il tetto viene da loopEnvMax, la sorgente unica gia' letta dall'Inspector
+    // e dall'EnvelopeEditor, non da una seconda copia della regola.
+    // …e la grafia dell'unita' viene prima del tetto, perche' e' il tetto a
+    // dipendere da lei. Fuori dal vocabolario (PGE #222) il motore alza
+    // InvalidFieldValueError sull'unita' senza mai guardare la finestra, e
+    // loopUnitInfo legge quella grafia come assoluta PER ESCLUSIONE: misurare
+    // in secondi darebbe un rosso che dichiara un'unita' diversa da quella
+    // scritta, mentre la tab Preview su quelle stesse righe non mette nemmeno
+    // la «s» (loopUnitSuffix tace apposta). Quindi il rosso qui e' quello vero
+    // — l'unita' — e il controllo sulla finestra tace, che e' la stessa regola
+    // del cap ignoto tre righe piu' giu'.
+    const loopUnitErr = window.PGEEnvUtils.loopUnitError(ptr);
+    if (loopUnitErr) {
+      byKey.set("loop_unit", { kind: "err",
+        msg: `loop_unit: ${JSON.stringify(loopUnitErr.value)} is not a recognized unit — the engine rejects the stream (${loopUnitErr.units.join(", ")})` });
     }
-    if (!ptr.loopDurEnv && ptr.loopDur != null && ptr.loopDur > sampleRec.duration) {
-      byKey.set("loop_dur", { kind: "err", msg: `loop_dur must be ≤ sample duration (${sampleRec.duration.toFixed(3)} s)` });
+    const loopCap = window.PGEEnvUtils.loopEnvMax(stream, sampleRec.duration);
+    const loopNormalized = window.PGEEnvUtils.loopUnitInfo(stream).unit === "normalized";
+    // loopCap null = secondi con la durata ignota: non c'e' niente contro cui
+    // misurare, e un controllo che non sa tace.
+    const capMsg = loopNormalized
+      ? "1 (loop_unit: normalized — coordinates are [0,1] × sample duration)"
+      : `sample duration (${loopCap != null ? loopCap.toFixed(3) : "?"} s)`;
+    const overCap = (v) => !loopUnitErr && loopCap != null && v > loopCap;
+    if (!ptr.loopEndEnv && ptr.loopEnd != null && overCap(ptr.loopEnd)) {
+      byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ ${capMsg}` });
+    }
+    if (!ptr.loopDurEnv && ptr.loopDur != null && overCap(ptr.loopDur)) {
+      byKey.set("loop_dur", { kind: "err", msg: `loop_dur must be ≤ ${capMsg}` });
     }
   }
   if (Array.isArray(stream.panEnv) && stream.panEnv.some(p => Math.abs(p[1]) > 3600)) {

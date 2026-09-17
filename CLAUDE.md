@@ -15,8 +15,10 @@ make install          # pip install -r requirements.txt  (flask, flask-cors, gun
 make serve            # python server.py --root $(ENGINE_ROOT) --workspace $(ENGINE_ROOT) --port 7878
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
+make install-cli      # symlinks bin/pge-ui into ~/.local/bin (BINDIR= to choose)
 cd ~/un-brano && python /path/to/PGE-ui/server.py        # #165: workspace = $PWD,
                                                          # engine from $PGE_ENGINE_ROOT
+cd ~/un-brano && pge-ui                                  # the same, after install-cli
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
 make tests-e2e        # headless boot of the editor (needs a playwright browser)
@@ -38,6 +40,9 @@ exists, the fourth only when a browser is installed):
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
   and `test-audio-clock.js` (the playback clock's latency/lead compensation —
   `audiblePosition`/`playAt` in `window.PGEAudioClock`), and
+  `test-stem-blobs.js` (the stem blob cache: when it reuses the bytes and when
+  it must not — a re-render writes the same filename, so the key is the ETag —
+  plus source guards on the element never receiving the http URL), and
   `test-magnify-spec.js` (the `--magnify-at` SPEC grammar in
   `window.PGEMagnifySpec`, plus source guards on the UI wiring), and
   `test-score-options.js` (the score switches that reach argv from the render
@@ -71,7 +76,19 @@ exists, the fourth only when a browser is installed):
   exit contract: the verdict is an `exit` handler, verified by running it, plus
   a guard that every `tests/node/*.js` uses it and none went back to a
   positional exit gate — and a check on `source-guard.js` itself, the reading
-  every other guard in the repo rests on), and `test-tracks.js` (the track model: `deriveTracks`
+  every other guard in the repo rests on; plus, since #164, the presidio on
+  `bin/pge-ui`: it must stay a launcher — four code lines, one trailing `exec`,
+  no bridge flag written inside — and it is *run* through a symlink against a
+  stub `server.py`, which is the only way to show that `realpath` is doing its
+  job; one of the forwarded arguments carries a space, which is the only way
+  that half can tell `"$@"` from a bare `$@`, and a decoy `.venv` in the caller's
+  folder is the only way the `realpath`-absent probe can tell a launcher that
+  stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
+  against temporary `BINDIR`s — with a space, with two, with a `~`, with one
+  trailing slash, with three, with a slashed `HOME`, relative, empty, with no
+  `HOME` at all and with no `realpath` on the `PATH`), and
+  `test-tracks.js`
+  (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
   stream object, the key appearing only when it says something, plus source
   guards on the Timeline/app wiring), and `test-workspace.js` (the
@@ -611,7 +628,7 @@ Per-param key lists — important distinction:
 
 The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGE.deviationProbInertReason` (one function, shared).
 
-`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own are recognized inside the function: a bare compact block and a dict breakpoint `{t, v}`.
+`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
@@ -696,6 +713,34 @@ never reaches the parser — accusing it would be a red on a render that succeed
 and would contradict `loopUnitInfo`, which reports those as absent
 (`source: "default"`).
 
+**The Raw tab is on that list too**, and it was the last place still measuring
+the loop window in seconds flat. `computeAnnotations` (`YamlEditor.jsx`)
+compared `loop_end` / `loop_dur` against `sampleRec.duration`, which is only
+the cap when the unit *is* seconds; under `normalized` the coordinates live in
+`[0,1]` and the cap is `1`, the file's length not entering the comparison at
+all. So it was wrong in both directions, and the loud one hit the commonest
+population: `loop_end: 0.9` normalized on a 0.4 s sample is 0.36 s, inside the
+file, and it drew a red naming seconds — on a stream the engine accepts, three
+rows away from the unit-aware suffix of the Preview tab saying the opposite.
+The quiet one is `loop_end: 5` normalized on an 8 s sample: five times past the
+file end, and `5 > 8` is false. The cap comes from `loopEnvMax` now, the same
+single source the Inspector and the EnvelopeEditor read, and a `null` cap
+(seconds with the duration unknown) makes the check say nothing rather than
+compare against `undefined`. Its node coverage lives in `test-yaml-bridge.js`,
+which therefore loads `envelope-loops` / `deviation-probability` /
+`envelope-utils` beside the bridge, in the editor's own order.
+
+**The unit's spelling comes before the cap**, because the cap depends on it.
+Outside the vocabulary (`normalised`) the engine raises on the unit and never
+looks at the window, while `loopUnitInfo` still reads that spelling as absolute
+*by exclusion* — its fallback — so measuring the window would draw a red naming
+an unit that is not the one written, three rows from a Preview tab that puts no
+`s` on those same rows (`loopUnitSuffix` goes quiet on purpose). So the red is
+the true one — `loop_unit` itself, named and with the vocabulary — and the
+window check says nothing, the same rule as the unknown cap. A *falsy* spelling
+is not a typo but an absent key (the serializer drops it), so there the seconds
+check stands, exactly as `loopUnitInfo` reports it.
+
 Two consequences the editor had to be taught, both of which turned a healthy
 stream into an exposed one. `Seg` calls `onChange` on the already-active button,
 so a click on the lit "normalized" used to delete the explicit key of every clip
@@ -706,6 +751,255 @@ The handler now returns early when the reading doesn't change. And the ×
 also governs `pointer.start`, which outlives the loop: the loop rows
 (`loopWindowShown`) and the unit control (`loopUnitShown`) are separate blocks
 now, so removing the loop leaves the unit standing.
+
+The **AddParamMenu is the other half of that lesson**, and it was written for one
+unit. It is the widest door `loop_start` / `loop_end` / `loop_dur` come through
+— not the only one, see below — and its three entries stated the seconds domain flat — `(s)`,
+`∈ [0, sample_dur]`, `loop_start+loop_dur > sample_dur` — under a control whose
+whole point is that the unit varies; the very rows those entries create have had
+a unit-aware suffix since `loopUnitSuffix`, so the menu contradicted the row it
+opened. They read the unit now (`loopDomain` / `loopEndDomain` / `loopEndRange` /
+`loopFileEnd`, one `loopNormalized` behind them), as does the `loop_end` hint
+under the loop rows.
+
+And on a spelling outside the vocabulary they **declare no domain at all**, for
+the same reason `loopUnitSuffix` drops the `s`: `loopUnitInfo` reads such a
+spelling as absolute by exclusion, so without the filter the three entries said
+`(s)` beside the red row declaring the unit unrecognized and above rows left
+deliberately unlabelled — the two opposite statements this whole change removes,
+put back from the menu's side. Hence `loopUnitKnown` (`!loopUnitErr`) in front
+of the four strings, and `loopClause` around each: they are *optional* clauses
+that disappear rather than lie, leaving no double space or orphan comma.
+
+The **seed** moved for a sharper reason than prose. `def: 1` could not be wrong
+under inheritance: `time_mode: normalized` made the key normalized, and there `1`
+*is* the end of the file. Post-#222 that same population reads seconds, where `1`
+is one second — past the cap on any sample shorter than that, i.e. the menu
+writing a value a typed edit would have clamped. The seed is `loopSeedWhole` now,
+"the whole file in the unit in force", which is the cap itself (`loopEnvMax`,
+already computed as `loopMax`): `1` normalized, `sample_dur` in seconds, and `1`
+again when the sample duration is unknown — the only number available there, and
+what the menu wrote before. `loop_start` keeps its `0`: zero is zero under any
+scale factor, the same reason the migration warning filters on
+`loopUnitRescaleKeys`. The truncation has a floor (`|| loopMax`): on a sample
+shorter than a tenth of a millisecond `Math.floor(cap * 1e4)` is `0`, and a
+zero-length seed is degenerate for `loopBoundsError` and under `loop_dur`'s
+static minimum — overshooting the cap by digits below the truncation threshold
+is the smaller evil. Same fix as #114's `grainSecondsToUnit(0.01, grainUnit)`
+one section down, one level over.
+
+The menu is not the only door, and the others don't go through a menu at all.
+The `loop_end ↔ loop_dur` toggle, with `loop_start` standing alone, had no
+length to start from and fell back to a bare `1` — and did not clamp at all.
+The **scalar↔env toggle of the two rows** is the next one: with `loop_start`
+alone the `loop_dur` row is already there and the key is not, so that branch
+*seeds* (and the row is the third, since the number it shows while the key is
+absent is where a `NumberField` drag starts from — it was a bare `1` too). Its
+other half was `|| 1` on the way back: an envelope opening on `0` — a
+legitimate `loop_end` — collapsed onto a value the curve never had, so the
+first breakpoint's y is read as it is. Every one of them is `loopSeedWhole`
+now; `loop_start` keeps its `0` everywhere.
+
+And the `loop_end ↔ loop_dur` Seg needed #149's other lesson, the one the unit
+selector learned one block down: **`Seg` calls `onChange` on the already-lit
+button**, and both branches write the scalar and null the envelope — so a click
+that asked for nothing replaced a `loop_end` curve with a seed, or a `loop_dur`
+curve with `0.01`. It returns early now, on `loopEndSel`: the condition that
+recognizes the no-op is *the same one* that lights the button, not a second
+copy of it, because two copies is how such a guard stops covering the case it
+exists for. From the scalar side that click was an `onChange` for nothing — an
+undo step and a stem marked dirty. (The scalar↔env Seg has the same defect one
+level up, in `toggleMode`, where it costs the envelope of *any* parameter: a
+guard there belongs to its own change, not to this one.) The row under it picks
+its key from `loopEndMode` for the same reason — a third copy of that condition
+would be the row free to disagree with the selector that chooses it.
+
+A **real** click on that Seg converts between two mutually exclusive keys, so
+the curve cannot survive either way — but the number replacing it has to be the
+one the curve stated. Both branches used to ignore the envelope outright
+(`stream.pointer.loopEnd || 0`), so a `loop_endEnv` sitting at `6` came back as
+`loop_dur: 0.01`, the floor, and a `loop_durEnv` at `3` came back as the end of
+the file. That is the `|| 1` of `toggleMode` one level over, on the same panel,
+which is why `loopSeedFrom` is declared **once** in the component body and read
+by all three loop handlers rather than living inside the one that found it
+first. The `loop_dur` branch got the cap too, for the symmetry the `loop_end`
+branch had just been given — a length longer than the file is exactly what the
+row clamps when the number is typed.
+
+**"The first breakpoint" is not `env[0]`**, and reading it that way put the
+constant straight back. It is the same rule `wouldEmptyEnv` states one section
+up — a caller holding a wrapped value must `unwrapEnv` first — and the wrapped
+spelling here is not exotic: `wrapEnv` produces `{type, points}` the moment a
+pure-BP curve's global interp stops being linear, so the EnvelopeEditor writes
+it by itself. Indexed at `[0]` that dict has nothing, and a `loop_end` curve
+sitting at `6` came back as the whole file. A **compact block** as the first
+item was the other half and worse than the fallback: there `env[0][1]` is the
+block's *end time* (the module header spells the shape out:
+`[pattern, end_time, n_reps, interp?, dist?]`), so a `typeof … === "number"`
+guard meant to reject the shape let it through and wrote an absolute time as a
+position in the sample.
+`firstBreakpointY` desugars the BP groups and asks the module's own predicates,
+not a third copy of the rule, so every spelling that states a y gives it up — and
+there are **two** predicates because a point has two spellings. The dict
+`{t, v}` is one of them: the engine's builder normalizes it to `[t, v]` before
+looking at it (`envelope_builder.py:132`) and `wouldEmptyEnv` already counts it
+as a real point, so a y it has, and it is `v`. `isBreakpoint` alone cannot see
+it (it demands `Array.isArray`) and must not be widened — it also says what the
+canvas can drag, and a dict is not drawn — hence `isDictBreakpoint` beside it in
+`envelope-loops.js`, the one predicate shared by the two readers of that
+spelling (`wouldEmptyEnv` counting points, `firstBreakpointY` reading one).
+Counting it among the shapes without a y put the constant back on exactly that
+spelling. Only the compact block falls back, which genuinely has none. The
+fallback belongs to the **caller**, because it is the default of its parameter
+and the module knows none of them: `loopSeedFrom` is the loop's thin wrapper
+that supplies `loopSeedWhole`, `loop_start` passes `0` — the same seed the menu
+gives it — and reads through the shared reader instead of the `|| 0` that could
+not tell a curve worth zero from a curve it could not read; that is also true of
+the `loop_start` the Seg's own conversion needs, since the length it computes is
+the distance *from* there: a `loop_startEnv` sitting at `3` under a `loop_end` of
+`6` produced a window of `6` instead of `3`, doubled by one click.
+
+**That reading is not a loop question, and leaving it in one handler is what
+kept twelve others broken.** `env[0][1] || default` was the spelling of every
+env→scalar branch in `toggleMode` and of both `deviation_probability` Segs, so
+the three failures above were live on `pan`, `density`, `pitch`, `speed_ratio`,
+the `_range` keys and the probability alike — and on a BP group the worst of
+them is worse still, since `env[0][1]` there is the interp's **string**: a
+`|| default` waves it through and writes `pan: "cubic"` into the YAML. So the
+reader lives in `envelope-loops.js` as `firstBreakpointY(env, fallback)` and all
+fifteen sites call it — the twelve `toggleMode` branches directly, the three
+loop keys through `loopSeedFrom`, the two Segs by their own name — with its own
+coverage in `test-bp-groups.js`, beside the predicates it rests on.
+
+**And `Seg` fires on the already-lit button — that is a property of the
+control, so every one of its `onChange`s owes a guard.** `loop_unit` learned it
+in #149 and `loop_end ↔ loop_dur` here, but the widest one is the scalar↔env
+`Seg` of every `ParamRow`: it goes through `toggleMode`, whose `env` branch does
+not look at the envelope at all — it reads the scalar, which in env mode is
+`null`, and seeds a flat ramp on the default. A click on the lit "env" therefore
+replaced *any* parameter's curve with a straight line, and the two
+`deviation_probability` Segs did the same thing by their own route (there the
+per-param branch seeds from `val`, which is the envelope itself, so the flat
+line reads `1`). All three return early now, each on the expression that is
+literally its Seg's `value` — never on a second copy of it, for the reason
+`loopEndSel` states. From the scalar side the same click was already a write for
+nothing: an undo step and a stem marked dirty.
+
+**But "asks for nothing" is not "the button is already lit" — it is "the mode
+the button picks is already written"**, and the two diverge exactly on the rows
+whose parameter is *absent*. The engine has a default and the key is missing, so
+the caller passes a `value` that is not a number (`—`) and the row draws no
+`NumberField`: there the click on the lit button is the only way in, because the
+scalar branch materializes the key on the parameter's default. Refusing it left
+those rows with no way to write at all — the `density` of the streams that
+declare neither `density` nor `fill_factor` (eight in the engine's own config
+corpus) and the twelve strategy rows of `VoicesSection`, where a hand-written
+YAML may name the strategy without its parameter. So the guard stands down where
+the row offers no other entrance, and the row itself says so: a non-numeric
+`value` means no field, an absent `envValue` means no curve. Which is why the
+condition cannot live downstream: `toggleMode` has only the first half —
+"scritta?" is a per-key question across sixteen branches — and a copy there with
+that half alone refused the materializing click, i.e. precisely the case where
+the two questions differ. `ParamRow.handleMode` has both halves, so it is the
+single place, and `toggleMode` and the global `deviation_probability` row keep
+**no** copy of it. The per-param `deviation_probability` Seg keeps its own
+because it builds its own `Seg`, and there the row is filtered on
+`d[p.key] != null`, so the value is always written.
+
+**The guard belongs to `ParamRow`, and the Inspector is not where its rows
+end.** Sixteen of them go through `toggleMode`; the other **fourteen** live in
+`VoicesSection.jsx` — `num_voices`, `scatter`, and the twelve strategy
+parameters through `toggleStratParam` — and no `ParamRow` calls
+`toggleMode("voicesNum")` or `toggleMode("scatter")`, so those two branches of
+it are not the live rows. The live ones carried the whole defect, both halves:
+the flat ramp on the lit "env", and `env[0][1]` on the way back — worse there
+than a wrong number, since a compact block gives up its *end time* under that
+index when it sits inside an array, and the pattern's *second point* — an array
+— in the direct spelling: neither of them a number of voices, and `|| default`
+waves both through because both are truthy. So the
+no-op guard sits in `ParamRow.handleMode` (`primitives.jsx`), the one place
+where the condition **is** the Seg's `value` by construction *and* where the
+"already written" half is readable (`value`, `envValue`), for every row of the
+editor and for the next one added. The three readers in `VoicesSection` call
+`firstBreakpointY` like the twelve in `toggleMode`.
+
+**`density ↔ fill_factor` is the third mutually exclusive pair** — the shape of
+`loop_end ↔ loop_dur` one panel over, and the most expensive no-op of the
+family: both branches write their constant *and* null the envelope, so a click
+on the already-lit button took a `fill_factor` the author had chosen back to
+`2.0` and replaced a `density` curve with `8`. It returns early on
+`densityUnitSel`, which is also the Seg's `value` — and on `densityUnitWritten`,
+the same second half as `ParamRow`: neither key is mandatory, so the `density`
+button is also lit *by exclusion*, and on the eight corpus streams that declare
+neither, that click was the only way to give the stream a density. The one
+declaration serves four readers now — the Seg's `value`, its guard, the row
+below it and the section badge — where the last two used to re-derive the
+condition, i.e. the third and fourth copies free to disagree with the selector
+that governs them (the reason `loopEndMode` exists for the loop pair). What it
+deliberately does not do is carry the number across on a **real** click: grains per second and an
+overlap factor are different quantities, and converting one into the other
+(`fill = density × grain_dur`) is a modelling decision, not the curve-reading
+fix above.
+
+**Four more `Seg`s in the Inspector owed the same guard**, and the rule really
+is the control's: `distribution_mode` and `clip_strategy` materialized their own
+default on the lit button — a redundant key, an undo step and a moved
+fingerprint on a stream that sounds identical — while the other two *deleted*,
+which is the case #149 found on `loop_unit`. `range_anchor` writes `undefined`
+on the default ("picking the default drops the redundant key", right on a
+change, wrong on a click that asks for nothing: an explicit `range_anchor:
+center` vanished from the YAML), and `duration_unit` goes through
+`convertGrainDurationUnit`, whose tail does `delete ng.durationUnit` for
+`seconds` regardless of the conversion. Each returns early on the expression
+that is its own Seg's `value`.
+
+**Two more owed it too, and the census could not see them**, because their
+`onChange` is a *named* function rather than an arrow inside the element: the
+guard has to live in the declaration, where a regex over the `<Seg …/>` finds
+nothing. They were the two the census exempted by name, so the exemption was
+doing the hiding.
+
+- The `deviation_probability` **mode** Seg (off / implicit / global / per-param)
+  writes on all four branches. `deviation_probability: true` is a valid global —
+  the engine reads `float(True)` = 1% — so "global" is lit, and that click
+  rewrote the key as `1`: exactly the migration the `dScalar` line three rows up
+  exists *not* to perform ("without rewriting the YAML until it is touched"),
+  i.e. a moved fingerprint and a yellow dot on a stream that sounds identical.
+  It returns early on `mode`, its Seg's `value`; normalizing `true` into `1`
+  stays available through the row's own `NumberField`, which is drawn precisely
+  because `dScalar` is a number.
+- `read_direction`'s. Its exemption was real but **wider than its reason**: the
+  lit button is the remedy for an inherited `reverse` / `read_direction`
+  conflict, and only then. With no conflict — a lone `reverse:`, which the
+  engine reads perfectly well — that same click deleted the key and wrote
+  `read_direction: -1`: a silent migration that moves the fingerprint and
+  yellows the stem on a direction that did not change, while the row's own hint
+  says the migration happens when you *pick another one*. On `read_direction: 1`
+  or on `auto` it re-emitted an identical `grain`, an undo step for nothing. So
+  the guard is `next === state && !err`, with `err` the `readDirectionError`
+  already computed for the message below: it stands down exactly where there is
+  something to repair, and the other three buttons stay open on every state.
+
+So one Seg is left deliberately unguarded — the tab selector, whose `onTab` is a
+React `setState` and not a write to the stream. `test-envelope-utils.js` still
+censuses the file so a new one cannot join quietly, and pins the two named
+handlers' guard as the *first statement* of their declaration, besides executing
+both.
+
+**And the Seg can be lit on a mode the stream does not hold**, which is the one
+way a click that passes every guard above still costs a value. `getMode` reads
+`paramModes` — the panel's memory of which button was pressed — *before* the
+stream, and the Inspector has no `key` in `app.jsx`, so it does not remount when
+the selection changes: the choice made on one stream stayed lit on the next.
+There "env" over a row showing a scalar makes the click on "scalar" a **real**
+change, which no guard may refuse, and `toggleMode` then collapses the row onto
+the parameter's default — `pan: 30` rewritten `pan: 0`. The memory is therefore
+reset with the selection (a `modesOwner` reconciliation in the render body, so
+React discards that render and no frame is ever drawn with the previous
+stream's memory). Nothing is lost by resetting: after any toggle `paramModes` is
+redundant with the stream — `getMode` derives "env" from the `*Env` twin of each
+of the sixteen keys — and it only keeps the button lit in the frame between the
+click and the new stream arriving.
 
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
@@ -1021,7 +1315,50 @@ The EnvelopeEditor Y window auto-fits point values (`computeYFit` in `envelope-u
 
 Render output format is a Settings preference (`tweaks.outputFormat`, **default `wav`**, also `aiff`/`flac`), forwarded as `--format`. `stemUrl` routes playback by format: `wav`/`flac` → `GET /output/<basename>__<sid>.<ext>` (browsers decode natively); `aiff` → `GET /audio/<basename>__<sid>.aif`, which `server.py` transcodes to WAV via sox (Firefox can't decode AIFF natively). With default WAV, playback needs no sox.
 
-Streams without a rendered stem stay silent but **never silently**: a missing/undecodable stem fires `pge-audio-error` (once per stream per schedule), logged and surfaced as a toast. Without that, a 404 stem is indistinguishable from a quiet one because `canplay` simply never fires. Teardown marks the node dead **before** clearing `el.src` (clearing it fires `error` on the element).
+Streams without a rendered stem stay silent but **never silently**: a missing/undecodable stem fires `pge-audio-error` (once per stream per schedule), logged and surfaced as a toast. Without that, a 404 stem is indistinguishable from a quiet one because `canplay` simply never fires. Teardown marks the node dead **before** detaching `el.src` (detaching it fires `error` on the element).
+
+**The stem bytes come through `fetch()`, never straight into `el.src`** — and
+that is not a preference, it is the ceiling the previous design hit. An
+`<audio>` pointed at the http URL keeps its connection busy for the whole clip
+(the browser downloads at roughly playback rate, not in one go), so past the
+browser's **six connections per origin** the seventh stem never reaches
+`canplay` — and an element that is merely *queued* fires no `error` either, so
+the clip is silent with nothing to log, i.e. exactly the hole the paragraph
+above exists to close. Measured on a nine-stem project: six elements start in
+10 ms, the seventh at 8.3 s, the last two never (readyState 0 after 15 s).
+Which six won the race varied per run, which is what made it read as "some
+tracks suddenly don't play" after a stop/seek/play round rather than as a
+broken stem. The server's `threads: 200` (see the gunicorn options in
+`server.py`) had already fixed the same symptom on *its* side; this is the
+browser's half of it, and the two are independent.
+
+`_stemObjectUrl(url)` downloads the bytes once and hands out a `blob:` URL: the
+fetch gives the connection back as soon as it is done (95 MB from the local
+bridge in ~30 ms) and a blob URL costs no slot at all. `_scheduleStreaming`
+warms it at **schedule** time, not in `build()` — `build` fires `startLead`
+(90 ms) before the clip sounds, nowhere near enough to download a stem, while
+the element itself is instant once the blob is there.
+
+The cache entry is keyed on the file's **ETag**, not on the URL alone, and that
+is the one thing that can fail quietly: a re-render writes the same filename,
+so a blob cached under the URL would keep playing the previous audio under a
+green dot. Each call does a HEAD first and re-downloads unless the tag matches;
+an *unknown* tag (HEAD unavailable) counts as "don't know" and re-downloads —
+the safe direction, one wasted round trip instead of audio the author never
+rendered. The blob is what makes a seek free: a seek reschedules every clip,
+and without the cache that would be the whole project downloaded again per
+click. `_capStemBlobs` bounds the set but never drops a URL the current project
+still lists (`streamUrls`), so the cap is soft by design.
+
+Teardown does **not** revoke the blob (it is shared with the next schedule) and
+does **not** write `el.src = ""`: the empty string resolves against the
+document URL, so the element goes and fetches the editor page as media — one
+bogus request per clip per stop, on the very connection pool this design exists
+to spare. It is `removeAttribute("src")` + `load()`.
+
+`tests/node/test-stem-blobs.js` covers the cache (reuse, re-download on a moved
+ETag, revoke of the superseded blob, a failed fetch not cached as a success,
+the soft cap) plus source guards on the three links that don't run in node.
 
 The pure clock math (`audiblePosition`, `playAt`) is exposed as `window.PGEAudioClock`, node-tested in `test-audio-clock.js`.
 
@@ -1271,6 +1608,159 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 ## File layout & load order (matters)
 
 Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
+
+`bin/pge-ui` (#164) is the one thing in the repo that is neither editor nor
+bridge: a four-line `sh` launcher that `make install-cli` symlinks onto `$PATH`,
+so the bridge can be started from the folder you are working in. It resolves its
+own path with `realpath` — it is reached *through* a symlink, so a plain
+`dirname` would name `~/.local/bin` — and execs `server.py` with the repo's
+`.venv/bin/python` when there is one (that is where `make install` puts flask;
+with a bare `python3` the documented setup dies on the import).
+
+**And it stops when `realpath` doesn't answer, rather than guessing.**
+`realpath` is not POSIX — on macOS it only arrives with 12.3 — and `dirname` of
+an empty string is `.`, so the missing binary didn't fail: it resolved `REPO`
+onto the *current* folder. Inside the checkout the command then worked by
+accident, and from anywhere else it died naming a `server.py` in the folder you
+were standing in, which is an error nobody gets out of on their own. Hence the
+`|| exit 1` on the resolution line (and, on the install side, the `command -v
+realpath` guard, so the name never reaches the `PATH` on a machine where it
+could only stop) — it costs no line, so the four-line rule
+below is untouched. The probe for it needs a **decoy**: with the PATH stripped
+of `realpath` the broken launcher dies anyway (no `python3` there either), so
+"exit != 0" stayed green on the defect; a fake `.venv` in the folder the command
+is called from is what makes the two outcomes different.
+
+**Nothing else may go in there.** The engine root, the workspace default, the
+flags — every decision stays in `server.py`, where pytest and the source guards
+see it; a script in `bin/` is looked at by nobody, and its natural tendency is
+to grow into a second, untested copy of those decisions. That is a rule with
+teeth: `test-suite-harness.js` requires the file to stay at most four code
+lines with a single trailing `exec`, refuses any bridge flag written inside it,
+and *runs* it — through a symlink, from a third folder, against a stub
+`server.py` — to check that the path resolution and the argument forwarding
+really work. That last half needs neither flask nor the sibling engine, so it
+runs in the node CI job too.
+
+**Which flags those are is read from `server.py`, never transcribed.** The
+guard collects the `add_argument("--…")` names out of the bridge's own source,
+so the sixth flag added tomorrow is refused the day it is declared. A list
+written into the test would be a second copy of the truth, and the person
+adding a flag is not the person who remembers to update it — it would go mute
+exactly while the launcher was about to grow the decision. That is not a
+hypothesis: the same list, transcribed into the prose of the PR that
+introduced it, named four of the five. The read has its own assert (it must
+find a plausible number of flags, `--root` among them), because an empty list
+builds a regex that accuses nothing — the silent way to disappear this repo
+already knows from `backend.envelopeKeys()` returning `[]` and the filter
+hiding.
+
+**The install side has its own rules, and every one of them had the same
+failure mode: a `pge-ui` on the `PATH` that doesn't run, announced as
+installed.** The link's source is `CLI_SRC`, resolved on the *Makefile's* folder
+(`$(dir $(lastword $(MAKEFILE_LIST)))`) and not on `$PWD` — with
+`$(abspath bin/pge-ui)` a `make -f /path/PGE-ui/Makefile install-cli` given from
+elsewhere linked a `bin/pge-ui` that doesn't exist there, and `ln -s` doesn't
+look at its target, so the dangling link was born under the success line. And
+every expansion in the recipe is quoted, because a space in the checkout's path
+or in `BINDIR` (`~/Documents/…`) made the unquoted `mkdir -p` fabricate a
+relative folder *inside the repo* and then `ln` fail naming the destination,
+which existed. `make` itself can't carry a space through
+`$(lastword $(MAKEFILE_LIST))`, so that one residual case (`make -f` on a
+checkout whose path has a space) is covered by the `test -f "$(CLI_SRC)"` guard
+at the top of the recipe: it fails the install instead of writing the wrong
+link.
+
+**The last spellings of that same failure are stopped now, not announced.**
+A `BINDIR` carrying a `~` is not a path: `make` does no tilde expansion, and
+the recipe quotes every expansion (it has to — the spaces above), so the shell
+doesn't expand it either. `BINDIR=~/.local/bin` — the spelling the target's own
+`help` line suggests — therefore fabricated a folder literally named `~` inside
+the checkout, put the link in it, printed the success line, and closed with an
+`export PATH="~/…"` that expands to nothing either: two announcements of an
+install nothing can reach. The `~/` head is expanded in the Makefile now, under
+`override`, which is not ornamental — a plain assignment loses against the
+command line, and the command line is exactly where `BINDIR` comes from.
+
+**That expansion brought the same lie back in through `patsubst`, which works
+on words.** `BINDIR=/tmp/a  b` came back `/tmp/a b`: the link in a folder that
+is not the one asked for, under the success line — the exact failure the tilde
+expansion had just been added to remove. One space hides it (the words rejoin
+identically, which is why the space probe stayed green), two don't, and a tab
+doesn't either. So the rewrite only applies to a **one-word** `BINDIR`, where
+`patsubst` has nothing to split; every other spelling passes through verbatim
+and the spaces are carried by the recipe, which quotes. What is left
+unresolvable — `~user/`, a bare `~`, `~/with  spaces` — fails the target instead
+of inventing a folder.
+
+**A relative `BINDIR` was the last spelling of the family still announced as
+installed.** `mybin` doesn't name a folder until you say what it is relative
+to, and make resolves it against its own working directory — which `make -C
+/path/PGE-ui` puts inside the checkout and `make -f /path/PGE-ui/Makefile`
+puts wherever you were standing: the very ambiguity `CLI_SRC` removes on the
+link's *source*, left open on its destination. It succeeded, the success line
+announced it, and the `PATH` warning closed by advising `export
+PATH="mybin:$PATH"` — a relative `PATH` entry, i.e. a command that answers from
+one folder only. A `case` beside the `~` one stops it; the probe runs both
+spellings of `make`, because it is their disagreement that makes the path
+meaningless.
+
+**And a trailing slash made the warning itself lie.** It does not change where
+the link lands, but the `PATH` comparison is textual and `$PATH` lists
+`/home/you/.local/bin`, not `/home/you/.local/bin/` — so `BINDIR=~/.local/bin/`,
+which is what the shell's own tab-completion writes, printed «not in your
+PATH» about a folder that was, and advised adding an entry already there. That
+warning is the only thing here that explains a `command not found` after an
+install, and one that cries where there is nothing is the first one people
+learn to skip. And the trailing slash was not the only spelling: `HOME=/root/`
+— what a container hands you — made the target's *own default* come out
+`/root//.local/bin`, so the warning cried about the folder it had just found,
+on a `BINDIR` nobody typed.
+
+The normalization is `$(abspath …)`, beside the tilde expansion, in the same
+one-word branch and for the same reason (make's functions work on words, and
+would rejoin `/tmp/a  b`). It is the one already in the file for `CLI_SRC`, and
+it takes the whole family at once: trailing slashes however many, doubled
+slashes in the middle, `.` and `..`. Two `patsubst` passes took two slashes and
+only at the end — `BINDIR=/x//` came back `/x/`, and the default's middle slash
+was invisible to it. The `/%` filter in front is **not** ornamental: `abspath`
+of a relative path resolves it against make's own working directory, i.e. it
+would choose exactly the folder the recipe refuses to choose, and the
+relative-`BINDIR` guard below would go mute — no relative path would ever reach
+it again. Outside the filter everything passes verbatim, and `/` stays `/`,
+which `abspath` does not empty. Both directions of the warning are measured,
+with the slash on and with the slashed `HOME`, or a normalization that went too
+far would read green on the half that matters.
+
+**An unset `HOME` was the one spelling the prose here already claimed was
+stopped, and wasn't.** `$(HOME)/.local/bin` simply became `/.local/bin`: it
+doesn't start with a `~`, so no guard looked at it, and wherever `/` is writable
+(a container, a CI runner) the install *succeeded* — announced, under the root,
+reachable by no `PATH`. The default is `$(if $(HOME),…)` now, so no `HOME` means
+no default, and an empty `BINDIR` (that one, or one typed by hand) is stopped by
+a `test -n` beside the other two guards, naming what is missing instead of
+dying on `mkdir: cannot create directory ''`. The probe reads the *message*, not
+only the exit code: where `/` isn't writable that `mkdir` failed anyway, which
+is a green for the wrong reason. The other spelling is the executable bit: the
+source guard defends *this* repo's index, not the checkout of whoever installs,
+so `test -x` sits beside the `test -f` — linking a file without it is a name on
+the `PATH` that answers `Permission denied`, which is the same lie one layer
+further on. All of it is measured by running `make install-cli` against
+temporary `BINDIR`s and a temporary `HOME`, in the same section of the harness.
+
+**And the last one isn't a `BINDIR` at all: it is `realpath`.** The launcher
+needs it to cross the very symlink this target creates, and stops without it —
+correctly, per the paragraph above. But the *recipe* doesn't use `realpath`, so
+the install succeeded anyway, printed its success line, and left on the `PATH`
+a `pge-ui` that exits 1 forever: the same lie as all the others, reached from
+the one direction that isn't a mistyped variable but a whole platform
+(`realpath` is not POSIX; macOS ships it only from 12.3). A `command -v` sits
+with the other guards now, and refuses rather than warns, because a command
+that cannot run is not a degraded install. Its probe runs `make install-cli`
+under a `PATH` carrying only what the recipe uses (`make`, `mkdir`, `ln`), and
+needs its control: with a `PATH` that narrow, *any* failure would keep a
+`status !== 0` assert green, so the same `PATH` with `realpath` back in it must
+succeed.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
