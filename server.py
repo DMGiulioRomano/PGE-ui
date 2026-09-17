@@ -271,11 +271,20 @@ def find_engine_upwards(cwd=None):
     """Cerca `<dir>/engine/src/main.py` risalendo da `cwd`. `None` se non c'e'.
 
     E' il fallback, non la regola: serve al repo che il submodule ce l'ha ma
-    l'`.envrc` no. Per questo la risalita e' limitata — si ferma DOPO aver
-    guardato la radice del repo git (o la home, quando repo non ce n'e'): un
+    l'`.envrc` no. Per questo la risalita si ferma DOPO aver guardato il primo
+    fra: la radice del repo git, la home, la radice del filesystem. Un
     `engine/` trovato cinque cartelle piu' su non l'ha dichiarato nessuno, e
     prenderlo sarebbe esattamente il modo in cui la UI e il `make` di un brano
-    finiscono a girare su due motori diversi."""
+    finiscono a girare su due motori diversi.
+
+    I due sentinella utili sono percio' `.git` e la home, e il secondo e' una
+    UGUAGLIANZA: sotto la home ferma la risalita, ma per una cartella che non
+    sta sotto la home non scatta mai, e li' il limite resta la radice del
+    filesystem. Un brano su un disco esterno (`/Volumes/SSD/brani/...`) o in
+    `/srv` ha quindi una regola piu' larga di uno in `~/brani`, a parita' di
+    layout — dichiarato, non accidentale (test_cli_resolve.py). Chi tiene i
+    brani fuori dalla home ha comunque i due modi espliciti, che vengono
+    prima."""
     try:
         cur = Path(cwd or Path.cwd()).expanduser().resolve()
         home = Path.home().resolve()
@@ -307,7 +316,7 @@ def _no_engine_message(cwd, bad=None, source=None):
         f"  2. per cartella    export {ENGINE_ENV_VAR}=/path/to/PythonGranularEngine",
         "                     (una riga di .envrc, versionata accanto al brano)",
         f"  3. automatico      un {ENGINE_SUBDIR}/ con dentro src/main.py, risalendo",
-        f"                     da {cwd} fino alla radice del repo",
+        f"                     da {cwd} fino alla radice del repo (o alla home)",
         "",
         "Il motore si clona da:",
         "  git clone https://github.com/DMGiulioRomano/PythonGranularEngine",
@@ -776,8 +785,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
     @app.get("/media")
     def list_media():
         if not refs.exists():
+            # `refs.name`, come la riga del banner e l'etichetta di /diagnose:
+            # da #165 la cartella dei sample e' quella che il workspace aveva
+            # gia' (`resolve_media_dir`), quindi puo' chiamarsi samples/. La UI
+            # mostra questo errore accanto al `path` qui sopra, cioe' le due
+            # frasi si leggono insieme: un nome fisso manderebbe a cercare una
+            # cartella diversa da quella che il bridge sta guardando. #165
             return jsonify({"path": str(refs), "files": [],
-                            "error": "refs/ folder missing"})
+                            "error": f"{refs.name}/ folder missing"})
         files = []
         for p in sorted(refs.iterdir()):
             if not p.is_file():
@@ -1362,7 +1377,28 @@ def main():
             f"le crea il bridge.\n"
         )
 
-    app = make_app(root, render_timeout=args.render_timeout, workspace=workspace)
+    # Le sottodirectory le crea `_set_workspace`, e quando non ci riesce
+    # (permessi, disco, un FILE che si chiama `output`, una `refs` che e' un
+    # symlink rotto) e' un errore di avvio come gli altri due qui sopra: la
+    # cartella di lavoro si nomina e si esce. Un traceback direbbe in che riga
+    # il bridge si e' rotto mentre la domanda e' quale cartella usare — la
+    # stessa ragione per cui il motore irrisolvibile non alza EngineRootError
+    # fino a qui. La route POST /workspace lo stesso OSError lo traduce gia' in
+    # un 400 col messaggio: prima di #165 questo ramo era quasi irraggiungibile
+    # (il workspace era il checkout del motore, cioe' una cartella di chi
+    # lancia), adesso e' la cwd. #165
+    try:
+        app = make_app(root, render_timeout=args.render_timeout,
+                       workspace=workspace)
+    except OSError as e:
+        sys.exit(
+            f"Non posso creare le cartelle di lavoro in {workspace}:\n"
+            f"    {e}\n"
+            f"\n"
+            f"Il bridge crea configs/, output/, cache/ e — su un motore con "
+            f"--samples-dir — refs/ dentro la cartella di lavoro (senza "
+            f"--workspace e' quella corrente).\n"
+        )
 
     def _check_cmd(cmd):
         try:

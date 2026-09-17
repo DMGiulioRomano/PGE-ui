@@ -1629,6 +1629,29 @@ def test_diagnose_labels_the_samples_folder_by_its_name(tmp_path):
     assert "refs/" in {c["label"] for c in c2.get("/diagnose").get_json()["checks"]}
 
 
+def test_media_names_the_missing_folder_by_its_name(tmp_path):
+    """Anche l'errore di `/media` nomina la cartella che c'e'.
+
+    E' la terza scrittura dello stesso nome — dopo la riga del banner e
+    l'etichetta di /diagnose, che leggono entrambe `refs.name` (#165). Fissa a
+    "refs/" diceva l'opposto delle altre due, e lo diceva accanto al `path`
+    giusto: la UI mostra i due campi insieme, quindi "refs/ folder missing"
+    sopra un path che finisce in samples/ manda a cercare la cartella
+    sbagliata."""
+    import server
+    root = _engine_stub(tmp_path / "engine")
+    ws = tmp_path / "mare-nostrum"
+    (ws / "samples").mkdir(parents=True)
+
+    client = server.make_app(root, render_timeout=600.0, workspace=ws).test_client()
+    (ws / "samples").rmdir()          # sparita sotto il bridge acceso
+    body = client.get("/media").get_json()
+
+    assert body["path"] == str(ws / "samples")
+    assert "samples/" in body["error"], body["error"]
+    assert "refs/" not in body["error"]
+
+
 def test_workspace_switch_adopts_samples_too(tmp_path):
     """Quale sia la cartella dei sample e' una domanda sola, quindi la
     commutazione a caldo la fa come l'avvio: `_set_workspace` chiama

@@ -115,7 +115,12 @@ exists, the fourth only when a browser is installed):
   this Makefile's own help suggests) would reach the nested make as a
   command-line `ROOT=` and turn the test red with the Makefile unchanged. It
   also asks **git** whether the four working folders are ignored at the repo
-  root and *not* deeper), `test_audio_pipeline.py`
+  root and *not* deeper, and launches the bridge over a folder holding a *file*
+  named `output` — the third way an unusable workspace shows up, after "no
+  engine" and "not a directory", and the one the `$PWD` default made easy to
+  meet: `main()` catches the `OSError` from `_set_workspace`'s `mkdir` and names
+  the folder, the same translation `POST /workspace` has always done with a
+  400), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), and `test_engine_render.py`
@@ -410,10 +415,14 @@ Three properties of that resolution are load-bearing, and each is a test:
   bridge naming it; falling through to the walk-up would run a *different*
   engine than the one asked for, which is exactly how an editor and a piece's
   own `make` end up on two engines without anyone writing it down.
-- **The walk up is bounded** — it stops after looking at the git root (or the
-  home directory when there is no repo). It is the fallback for a repo that has
-  the submodule but not the `.envrc`; an `engine/` five folders up was declared
-  by nobody.
+- **The walk up is bounded** — it stops after looking at the first of: the git
+  root, the home directory, the filesystem root. It is the fallback for a repo
+  that has the submodule but not the `.envrc`; an `engine/` five folders up was
+  declared by nobody. The home sentinel is an *equality*, so it never fires for
+  a folder that isn't under `$HOME` (a piece on an external drive, `/srv`): there
+  the bound is the filesystem root, i.e. a wider rule than `~/brani` gets for
+  the same layout. Declared rather than accidental — `test_cli_resolve.py` pins
+  it, and it is the case that speaks first if the bound is ever tightened.
 
 Empty is absent, in both readings (`_declared`): `PGE_ENGINE_ROOT=` is the
 commonest way to cancel an inherited one, and make's `$(if …)` reads it the same
@@ -439,9 +448,14 @@ for samples that aren't missing.
 says `samples/`), so the other sentence must not promise emptiness — Settings
 says "the bridge creates it if it's missing", true in all four cases, and
 `tests/node/test-workspace.js` guards that none of the three phrases promises a
-void the server never declared. For the same reason the name is printed
-wherever the folder is named: the banner line and the `/diagnose` label both
-read `refs.name`, never the literal `refs/`.
+void the server never declared, and that the key is listed in the payload
+contract at the top of `backend.js` — the one place that shape is written down,
+so a key the panel reads and the contract omits is how the next backend forgets
+it. For the same reason the name is printed wherever the folder is named: the
+banner line, the `/diagnose` label and `/media`'s "folder missing" all read
+`refs.name`, never the literal `refs/`. That last one is shown next to the
+`path` it reports, so a fixed name sends the author looking in a folder the
+bridge isn't watching.
 
 **`refs/` follows the workspace only where the engine can be told about it.**
 The subprocess runs with `cwd=root`, and without `--samples-dir` the engine

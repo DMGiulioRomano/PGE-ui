@@ -171,7 +171,8 @@ checkout. **Which engine** is resolved in this order:
 1. `--root /path/to/PythonGranularEngine` on the command line
 2. `$PGE_ENGINE_ROOT`
 3. an `engine/` containing `src/main.py`, walking up from the current folder
-   and stopping at the git root
+   and stopping at the git root — or, with no repo above you, at your home
+   directory (at the filesystem root, for work kept outside it)
 4. otherwise an error naming those three — not a traceback
 
 It is the precedence the Makefile already implements for `ROOT=` /

@@ -140,6 +140,39 @@ def test_fallback_stops_at_home(tmp_path, monkeypatch):
         (home / "brani" / "engine").resolve()
 
 
+def test_outside_the_home_tree_only_the_filesystem_root_stops_the_walk(tmp_path,
+                                                                        monkeypatch):
+    """Il limite e' "radice del repo, HOME, o radice del filesystem", e fuori
+    dalla home i primi due non ci sono.
+
+    `d == home` e' un'uguaglianza, non un contenimento: se la cartella di
+    partenza non sta sotto la home, quel sentinella non scatta mai e la
+    risalita arriva alla radice del filesystem. Un brano in /Volumes/SSD/brani
+    o in /srv/lavoro ha percio' una regola diversa da uno in ~/brani, a parita'
+    di layout — cinque cartelle piu' su vengono guardate.
+
+    Scritto qui perche' e' il comportamento vero e perche' e' quello che il
+    resto della prosa dichiara: la garanzia non e' "mai piu' di N", e chi
+    tiene i brani fuori dalla home un `.git` o un `PGE_ENGINE_ROOT` ce li
+    mette lui. Se un giorno il limite si stringe, questo caso e' il primo a
+    parlare."""
+    fuori = tmp_path / "volumi"
+    _engine(fuori / "engine")
+    deep = fuori / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    # Una home che non contiene nulla di tutto questo: e' il caso di chi tiene
+    # i brani su un disco esterno.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    assert server.find_engine_upwards(deep) == (fuori / "engine").resolve()
+    # ...e un `.git` lungo la strada lo ferma comunque, fuori dalla home come
+    # dentro: e' il sentinella che dice "questo e' un progetto solo".
+    (deep.parent / ".git").mkdir()
+    assert server.find_engine_upwards(deep) is None
+
+
 def test_the_repo_root_itself_is_looked_at(tmp_path):
     """Ci si ferma DOPO aver guardato la radice, non prima: `engine/` sta
     quasi sempre proprio li'."""
@@ -458,3 +491,34 @@ def test_the_working_folders_are_ignored_at_the_root_only():
         assert not ignored(f"tests/e2e/fixtures/{name}/x"), (
             f"tests/e2e/fixtures/{name}/ non e' una cartella di lavoro del "
             f"bridge: ignorarla fa sparire una fixture senza dirlo")
+
+
+# ---------------------------------------------------------------------------
+# Le sottodirectory si creano — e quando NON si riesce, quello e' un messaggio
+# come gli altri. `main()` gestisce due errori di avvio su tre: il motore
+# irrisolvibile e il workspace che non e' una directory. Il terzo — un mkdir
+# che fallisce dentro il workspace — arrivava fino al traceback, e da #165 e'
+# il piu' facile dei tre da incontrare: il workspace e' la cwd, cioe' una
+# cartella qualunque, che puo' essere di sola lettura o tenere un FILE che si
+# chiama `output`. La route POST /workspace lo stesso OSError lo traduce gia'
+# in un 400 con il messaggio.
+# ---------------------------------------------------------------------------
+
+def test_a_subdirectory_that_cannot_be_created_is_a_message(tmp_path):
+    engine = _engine(tmp_path / "engine")
+    brano = tmp_path / "brano"
+    brano.mkdir()
+    (brano / "output").write_text("sono un file, non una cartella\n")
+    env = {**os.environ, server.ENGINE_ENV_VAR: str(engine)}
+
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "server.py")],
+        cwd=brano, env=env, capture_output=True, text=True, timeout=60)
+    out = proc.stdout + proc.stderr
+    if "Missing deps" in out:
+        pytest.skip("flask assente in questo interprete")
+
+    assert proc.returncode != 0
+    assert "Traceback" not in out, out
+    assert str(brano) in out, "il messaggio nomina la cartella di lavoro"
+    assert "output" in out, "e cosa non e' riuscito a creare"

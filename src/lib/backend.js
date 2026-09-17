@@ -11,10 +11,15 @@
  *
  * Contract (every backend implements):
  *   workspace()                   → Promise<{ ok, workspace, isRoot, paths, projects,
- *                                   samplesFollowWorkspace }>. L'ultimo dice se refs/
- *                                   segue il workspace o resta al motore (#148): dai
- *                                   path non si deduce, con workspace == root le due
- *                                   cartelle coincidono comunque
+ *                                   samplesFollowWorkspace, samplesDirAdopted }>.
+ *                                   Il penultimo dice se la cartella dei sample segue
+ *                                   il workspace o resta al motore (#148): dai path
+ *                                   non si deduce, con workspace == root le due
+ *                                   cartelle coincidono comunque. L'ultimo dice QUALE
+ *                                   NOME ha vinto — il bridge adotta la samples/ che
+ *                                   il workspace aveva gia' invece di crearle accanto
+ *                                   una refs/ vuota (#165) — e neanche questo si
+ *                                   deduce: dal path il browser vedrebbe solo un nome
  *   setWorkspace(path)            → lo stesso, oppure { ok:false, error } (percorso
  *                                   invalido / render in corso). "" torna al --root
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
