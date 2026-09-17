@@ -120,6 +120,14 @@ serve: $(VENV_BIN)/pip
 # di setup, e chi tiene le dipendenze fuori dal repo non deve vedersi creare un
 # .venv per avere il comando. Il venv, se c'e', lo preferisce bin/pge-ui.
 #
+# Su `realpath` invece la dipendenza c'e', ed e' del lanciatore: e' cosi' che
+# risolve il symlink che questo target crea. Non e' POSIX (su macOS arriva con
+# la 12.3), e senza di lui bin/pge-ui si ferma — a ragione, invece di risolvere
+# REPO sulla cartella corrente. Ma la ricetta non lo usa, quindi l'install
+# riusciva lo stesso e annunciava un `pge-ui` che poi non parte mai: l'ultima
+# grafia di quella famiglia, e l'unica che non nasce da un BINDIR scritto male
+# ma da una piattaforma intera. Il guardiano lo chiede prima di linkare.
+#
 # Ogni espansione e' quotata: uno spazio nel path del checkout o del BINDIR
 # (~/Documents/…, ~/Library/Mobile Documents/…) faceva fabbricare a `mkdir -p`
 # una cartella relativa dentro il repo e poi fallire `ln` nominando la
@@ -142,6 +150,16 @@ install-cli:
 	  echo "install-cli: $(CLI_SRC) non e' eseguibile" >&2; \
 	  echo "  chmod +x \"$(CLI_SRC)\"  — un link a un file senza bit x e' un nome" >&2; \
 	  echo "  sul PATH che risponde 'Permission denied', annunciato come installato" >&2; \
+	  exit 1; }
+	@command -v realpath >/dev/null 2>&1 || { \
+	  echo "install-cli: realpath non c'e' sul PATH, e bin/pge-ui lo usa per" >&2; \
+	  echo "  risolvere il proprio path ATTRAVERSO il symlink che questo target" >&2; \
+	  echo "  sta per creare. Senza, il lanciatore esce 1 a ogni invocazione:" >&2; \
+	  echo "  installarlo adesso sarebbe un \`pge-ui\` sul PATH che non parte," >&2; \
+	  echo "  annunciato come installato." >&2; \
+	  echo "  (macOS prima della 12.3 non ce l'ha: brew install coreutils, e metti" >&2; \
+	  echo "  la sua realpath sul PATH — un alias di shell non basta, qui serve un" >&2; \
+	  echo "  eseguibile)" >&2; \
 	  exit 1; }
 	@test -n "$(BINDIR)" || { \
 	  echo "install-cli: BINDIR e' vuoto, quindi non c'e' dove installare" >&2; \

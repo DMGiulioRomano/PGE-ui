@@ -654,6 +654,14 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
 {
   const repo = path.join(__dirname, "..", "..");
   const BIN  = path.join(repo, "bin", "pge-ui");
+  // Le due meta' del presidio hanno bisogno della stessa domanda — «dov'e'
+  // questo binario» — una per costruire un PATH ridotto, l'altra per togliere
+  // `realpath` di mezzo a `make install-cli`. Una copia per meta' e' una copia
+  // di troppo.
+  const which = (name) => {
+    const w = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8" });
+    return w.status === 0 ? w.stdout.trim() : "";
+  };
 
   assert("bin/pge-ui esiste", fs.existsSync(BIN),
     "il comando dell'issue #164 non c'e'");
@@ -826,10 +834,6 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
        risolto su `.` il lanciatore esegue quella, e si vede. Il controllo e'
        lo stesso PATH ridotto con realpath dentro — deve continuare a trovare
        lo stub del repo, e non l'esca. */
-    const which = (name) => {
-      const w = spawnSync("/bin/sh", ["-c", "command -v " + name], { encoding: "utf8" });
-      return w.status === 0 ? w.stdout.trim() : "";
-    };
     const dnPath = which("dirname"), rpPath = which("realpath");
     if (!dnPath || !rpPath) {
       console.log("  SKIP realpath assente (dirname/realpath non trovati sul PATH)");
@@ -870,8 +874,16 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
      quattro righe di shell dentro un Makefile, cioe' proprio il genere di cosa
      che una guardia sorgente dichiara presente e non funzionante. */
   const mk = spawnSync("make", ["--version"], { encoding: "utf8" });
+  // `install-cli` rifiuta di installare senza `realpath` (l'ultima sonda di
+  // questa sezione, ed e' il suo oggetto), quindi su una macchina che non ce
+  // l'ha qui sotto non c'e' niente da misurare: ogni probe fallirebbe per
+  // quella ragione sola, e il rosso direbbe del PATH della macchina invece che
+  // del target. Lo stesso SKIP dichiarato che la meta' eseguendo usa gia'.
+  const rpHere = which("realpath");
   if (mk.status !== 0) {
     console.log("  SKIP make install-cli (make assente)");
+  } else if (!rpHere) {
+    console.log("  SKIP make install-cli (realpath assente: il target rifiuta, per progetto)");
   } else {
     const tmp2 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-bindir-")));
     const dest = path.join(tmp2, "bin");
@@ -1145,6 +1157,59 @@ console.log("\n── bin/pge-ui: il lanciatore resta un lanciatore ──");
         `exit ${nx.status}\n      ` + ((nx.stdout || "") + (nx.stderr || "")));
     } finally {
       fs.rmSync(tmp5, { recursive: true, force: true });
+    }
+
+    /* E l'ultima grafia di «annunciato installato, non parte» — l'unica che
+       non nasce da un BINDIR scritto male, ma da una piattaforma intera.
+       `bin/pge-ui` risolve il proprio path con `realpath`, ed e' cosi' che
+       attraversa il symlink che install-cli sta per creare; senza, si ferma a
+       ogni invocazione (sonda piu' sopra, ed e' la scelta giusta: l'alternativa
+       era risolvere REPO su $PWD). Ma la RICETTA `realpath` non lo usa, quindi
+       l'install riusciva lo stesso, stampava la riga di successo e lasciava sul
+       PATH un comando che esce 1 per sempre. `realpath` non e' POSIX: su macOS
+       arriva con la 12.3, cioe' e' il sistema di una parte dei destinatari di
+       questo repo.
+
+       Il PATH ridotto porta solo cio' che la ricetta adopera (`make`, `mkdir`,
+       `ln` — il resto e' builtin di sh, che sta a un path assoluto). E la sonda
+       ha bisogno del suo controllo: con un PATH cosi' stretto un fallimento
+       qualunque terrebbe verde un assert scritto su `status !== 0`, quindi lo
+       stesso PATH con dentro `realpath` deve riuscire. */
+    const mkPath = which("make"), mkdirPath = which("mkdir"), lnPath = which("ln");
+    if (!mkPath || !mkdirPath || !lnPath) {
+      console.log("  SKIP il guardiano su realpath (make/mkdir/ln non tutti sul PATH)");
+    } else {
+      const tmp6 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pge-realpath-")));
+      try {
+        const copy  = path.join(tmp6, "checkout");
+        const home6 = path.join(tmp6, "casa");
+        const only  = path.join(tmp6, "path-ridotto");
+        const dest6 = path.join(tmp6, "bin");
+        fs.mkdirSync(path.join(copy, "bin"), { recursive: true });
+        fs.mkdirSync(home6); fs.mkdirSync(only);
+        fs.copyFileSync(path.join(repo, "Makefile"), path.join(copy, "Makefile"));
+        fs.copyFileSync(BIN, path.join(copy, "bin", "pge-ui"));
+        fs.chmodSync(path.join(copy, "bin", "pge-ui"), 0o755);
+        for (const [n, t] of [["make", mkPath], ["mkdir", mkdirPath], ["ln", lnPath]]) {
+          fs.symlinkSync(t, path.join(only, n));
+        }
+        const runBare = () => spawnSync("make", ["-C", copy, "install-cli",
+          "BINDIR=" + dest6], { env: { PATH: only, HOME: home6 }, encoding: "utf8" });
+
+        const noRp = runBare();
+        assert("realpath assente → install-cli si ferma, invece di linkare un comando che non parte",
+          noRp.status !== 0 && /realpath/.test(noRp.stderr || "") &&
+          !fs.existsSync(path.join(dest6, "pge-ui")),
+          `exit ${noRp.status}\n      ` + ((noRp.stdout || "") + (noRp.stderr || "")));
+
+        fs.symlinkSync(rpHere, path.join(only, "realpath"));
+        const withRp = runBare();
+        assert("controllo: con realpath sullo stesso PATH ridotto, install-cli riesce",
+          withRp.status === 0 && fs.existsSync(path.join(dest6, "pge-ui")),
+          `exit ${withRp.status}\n      ` + ((withRp.stdout || "") + (withRp.stderr || "")));
+      } finally {
+        fs.rmSync(tmp6, { recursive: true, force: true });
+      }
     }
   }
 }

@@ -113,8 +113,9 @@ trailing slash — what tab-completion gives you — is not mistaken for a diffe
 folder when the warning above checks your `PATH`. Anything the target cannot
 resolve — a `~user/…`, a relative `BINDIR` (there is no such thing as a relative
 `PATH` entry worth having), an empty one or no `HOME` to build the default from,
-or a `bin/pge-ui` that lost its executable bit — stops the install instead of
-leaving behind a name that doesn't run.
+a `bin/pge-ui` that lost its executable bit, or no `realpath` on your `PATH` for
+the launcher to resolve itself with — stops the install instead of leaving
+behind a name that doesn't run.
 
 What the name does *not* change yet are the defaults: `--root` is still
 `../PythonGranularEngine` *relative to the folder you are in*, and the workspace
@@ -127,7 +128,11 @@ repo's `.venv/bin/python` when `make install` has created one. Every decision �
 engine root, workspace, flags — stays in `server.py`, where the tests see it.
 If `realpath` isn't there to answer (it is not POSIX; macOS only ships it from
 12.3) the command stops and says so, rather than resolving the repo onto the
-folder you happen to be standing in.
+folder you happen to be standing in — and `make install-cli` refuses to install
+it in the first place, so you get one explanation instead of a name on the
+`PATH` that never runs. On such a system, `brew install coreutils` and a
+`realpath` reachable as an executable (a shell alias won't do — the launcher is
+a script) is what the target is waiting for.
 
 ### 5) Open the editor
 

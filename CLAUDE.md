@@ -79,7 +79,8 @@ exists, the fourth only when a browser is installed):
   folder is the only way the `realpath`-absent probe can tell a launcher that
   stops from one that resolves `REPO` onto `$PWD`; `make install-cli` is then run
   against temporary `BINDIR`s — with a space, with two, with a `~`, with a
-  trailing slash, relative, empty, and with no `HOME` at all), and
+  trailing slash, relative, empty, with no `HOME` at all and with no `realpath`
+  on the `PATH`), and
   `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
@@ -1225,7 +1226,9 @@ an empty string is `.`, so the missing binary didn't fail: it resolved `REPO`
 onto the *current* folder. Inside the checkout the command then worked by
 accident, and from anywhere else it died naming a `server.py` in the folder you
 were standing in, which is an error nobody gets out of on their own. Hence the
-`|| exit 1` on the resolution line — it costs no line, so the four-line rule
+`|| exit 1` on the resolution line (and, on the install side, the `command -v
+realpath` guard, so the name never reaches the `PATH` on a machine where it
+could only stop) — it costs no line, so the four-line rule
 below is untouched. The probe for it needs a **decoy**: with the PATH stripped
 of `realpath` the broken launcher dies anyway (no `python3` there either), so
 "exit != 0" stayed green on the defect; a fake `.venv` in the folder the command
@@ -1334,6 +1337,20 @@ so `test -x` sits beside the `test -f` — linking a file without it is a name o
 the `PATH` that answers `Permission denied`, which is the same lie one layer
 further on. All of it is measured by running `make install-cli` against
 temporary `BINDIR`s and a temporary `HOME`, in the same section of the harness.
+
+**And the last one isn't a `BINDIR` at all: it is `realpath`.** The launcher
+needs it to cross the very symlink this target creates, and stops without it —
+correctly, per the paragraph above. But the *recipe* doesn't use `realpath`, so
+the install succeeded anyway, printed its success line, and left on the `PATH`
+a `pge-ui` that exits 1 forever: the same lie as all the others, reached from
+the one direction that isn't a mistyped variable but a whole platform
+(`realpath` is not POSIX; macOS ships it only from 12.3). A `command -v` sits
+with the other guards now, and refuses rather than warns, because a command
+that cannot run is not a degraded install. Its probe runs `make install-cli`
+under a `PATH` carrying only what the recipe uses (`make`, `mkdir`, `ln`), and
+needs its control: with a `PATH` that narrow, *any* failure would keep a
+`status !== 0` assert green, so the same `PATH` with `realpath` back in it must
+succeed.
 
 `PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
