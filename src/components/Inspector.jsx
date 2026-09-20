@@ -79,33 +79,6 @@ const DEVIATION_PROB_PARAMS = [
   { key: "envelope", desc: "chiave morta: il motore non la legge — usa pc_rand_envelope" },
 ];
 
-/* Perche' una chiave scritta in deviation_probability e' inerte su QUESTO
-   stream — undefined se e' viva. I casi sono TRE, quanti sono gli insiemi che
-   liveParamKeys esclude, e il ternario inline che stava nel title ne
-   distingueva due:
-     - `envelope`, sempre: il motore non la legge mai (il suo spec
-       `grain_envelope` e' is_smart=False, non raggiunge GateFactory);
-     - il perdente del gruppo esclusivo reverse/read_direction, sempre: il
-       motore legge quella dichiarata in grain e scarta l'altra;
-     - `pc_rand_envelope`, quando grain.envelope e' in forma transition
-       (`{from, to}`) o multistate (`{states}`): li' il gate e' spento a monte
-       (uses_gate, window_controller.py) e la finestra la sceglie la curva.
-   Il terzo cadeva nel ramo `else`, cioe' in quello del verso: la spiegazione
-   era falsa e mandava a cercare il problema in grain.reverse, mentre la causa
-   e' grain.envelope e il rimedio e' cambiare quello. Sullo stesso stream il
-   rimando di `envelope` a `pc_rand_envelope` diventa a sua volta fuorviante —
-   quella riga e' inerte anche lei — quindi e' condizionato. */
-function deviationProbInertReason(key, liveKeys) {
-  if (liveKeys.includes(key)) return undefined;
-  if (key === "pc_rand_envelope")
-    return "grain.envelope e' in forma transition o multistate: li' la finestra la sceglie la curva, non un gate — il rimedio e' cambiare la forma della finestra";
-  if (key === "envelope")
-    return liveKeys.includes("pc_rand_envelope")
-      ? "il motore non legge questa chiave: la probabilita' di cambio finestra e' pc_rand_envelope"
-      : "il motore non legge questa chiave; e su questo stream non e' letta nemmeno pc_rand_envelope, perche' grain.envelope e' in forma transition o multistate";
-  return "su questo stream il verso e' governato dall'altra chiave del gruppo: questa non viene letta";
-}
-
 function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Icon, Tag, NumberField } = window.PGE;
   const PGEDeviationProb = window.PGEDeviationProb, PGEEnv = window.PGEEnv;
@@ -276,7 +249,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                     numero scritto non fa niente — la riga resta (e' scritta,
                     va vista e tolta) ma lo dice. */}
                 <span className="k" style={liveKeys.includes(p.key) ? undefined : {opacity:.55}}
-                      title={deviationProbInertReason(p.key, liveKeys)}>
+                      title={PGEDeviationProb.inertReason(p.key, liveKeys)}>
                   {p.key}{liveKeys.includes(p.key) ? null : <span style={{color:"var(--fg-4)"}}> · inerte</span>}
                 </span>
                 <Seg size="xs" value={pMode}
@@ -1916,7 +1889,10 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   );
 }
 window.PGE = window.PGE || {};
-/* Il motivo dell'inerzia esce dal file perche' anche il catalogo
-   dell'EnvelopeEditor deve marcare quelle chiavi: due copie della stessa prosa
-   divergerebbero al primo cambio di regola. */
-Object.assign(window.PGE, { Inspector, deviationProbInertReason });
+/* Il motivo dell'inerzia non sta piu' qui: anche il catalogo dell'EnvelopeEditor
+   deve marcare quelle chiavi, e due copie della stessa prosa divergerebbero al
+   primo cambio di regola. Stava su window.PGE fino alla #140; da quando il
+   catalogo e' una lib (envelope-catalog.js) leggerlo da li' sarebbe un modulo
+   di src/lib/ che dipende da un componente, quindi vive accanto a
+   liveParamKeys, cioe' in deviation-probability.js. */
+Object.assign(window.PGE, { Inspector });

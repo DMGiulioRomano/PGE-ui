@@ -1915,12 +1915,15 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
 {
   const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  // Il catalogo è uscito dal componente con la #140: le voci (unità, finestra,
+  // cap) si leggono lì, la precisione la consuma ancora il JSX.
+  const catSrc = SG.codeOf(path.join(__dirname, "../../src/lib/envelope-catalog.js"));
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
-    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(eeSrc)
-    && (eeSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
+    /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(catSrc)
+    && (catSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
   assert("nessun consumatore deduce più la precisione dal suffisso",
-    !/unit === "s"/.test(eeSrc));
+    !/unit === "s"/.test(eeSrc) && !/unit === "s"/.test(catSrc));
   assert("la precisione viaggia su `fine` (formato, nudge, editing)",
     /if \(env\.fine\) return v\.toFixed\(3\)/.test(eeSrc)
     && (eeSrc.match(/integer \? 0 : \(\w+\.fine \? 4 : 2\)/g) || []).length === 2);
@@ -1929,7 +1932,7 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
   // Due delle quattro voci "in secondi" sono passate all'unità dichiarata di
   // grain.duration (issue #114): restano le due di voices.onset_offset.
   assert("le altre grandezze a grana fine dichiarano `fine`",
-    (eeSrc.match(/unit: "s", fine: true,/g) || []).length === 2);
+    (catSrc.match(/unit: "s", fine: true,/g) || []).length === 2);
 }
 
 /* ===========================================================================
@@ -2197,25 +2200,26 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 
 console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
 {
-  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  // Come sopra: dalla #140 le voci del catalogo stanno in envelope-catalog.js.
+  const catSrc = SG.codeOf(path.join(__dirname, "../../src/lib/envelope-catalog.js"));
 
   // I bound statici di grain_duration sono in secondi (max 10); i valori di un
   // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
   // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
   // il punto al primo drag, che è perdita di dati, non solo una vista storta.
   assert("i bound delle curve di durata seguono l'unità dichiarata",
-    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(eeSrc)
-    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(eeSrc)
-    && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(eeSrc)
-    && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(eeSrc));
+    /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(catSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(catSrc)
+    && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(catSrc)
+    && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(catSrc));
   assert("anche la finestra di partenza è espressa nell'unità",
-    !/visMin: 0\.001, visMax: 0\.1/.test(eeSrc)
-    && !/visMin: 0, visMax: 0\.5,/.test(eeSrc)
-    && /grainDurVis/.test(eeSrc) && /grainRangeVis/.test(eeSrc));
+    !/visMin: 0\.001, visMax: 0\.1/.test(catSrc)
+    && !/visMin: 0, visMax: 0\.5,/.test(catSrc)
+    && /grainDurVis/.test(catSrc) && /grainRangeVis/.test(catSrc));
   assert("il suffisso è quello condiviso con l'Inspector",
-    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(eeSrc)
-    && (eeSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
+    /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(catSrc)
+    && (catSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
 }
 
 

@@ -58,7 +58,13 @@ exists, the fourth only when a browser is installed):
   (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier,
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
-  guards on the UI wiring), and `test-stream-id.js` (`allocStreamIds` never
+  guards on the UI wiring), and `test-envelope-catalog.js` (the two pure
+  functions #140 pulled out of `EnvelopeEditor.jsx`: `wouldEmptyEnv`'s two
+  historic false positives and the contract that it takes the *items*, plus
+  `listEnvelopes` — its totality against the walk of `envelope-utils.js`, read
+  out of that module's source rather than transcribed, the loop/grain unit
+  resolution and the inert `deviation_probability` keys — with source guards
+  that the component keeps no copy), and `test-stream-id.js` (`allocStreamIds` never
   reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, the
@@ -636,11 +642,15 @@ Two engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123):
 Per-param key lists — important distinction:
 - `PARAM_KEYS` (5): keys the engine consults **always** (`volume`, `pan`, `duration`, `pitch`, `pointer`).
 - `liveParamKeys(stream)` (adds 3 conditional on the `grain` block): `reverse`/`read_direction` (exclusive group, engine reads exactly one) and `pc_rand_envelope` (live unless `grain.envelope` is transition/multistate).
-- `ALL_PARAM_KEYS` (8 + dead `envelope`): every key the editor may find written — used by the envelope walk (`envelope-utils.js`) and `listEnvelopes` in the EnvelopeEditor, which need format-agnostic coverage regardless of liveness.
+- `ALL_PARAM_KEYS` (8 + dead `envelope`): every key the editor may find written — used by the envelope walk (`envelope-utils.js`) and `listEnvelopes` (`envelope-catalog.js`), which need format-agnostic coverage regardless of liveness.
 
 `isEnvValue` — which decides global-vs-per-param — is the engine's dict rule verbatim: **`'points' in obj`**, nothing more.
 
-The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGE.deviationProbInertReason` (one function, shared).
+The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGEDeviationProb.inertReason` (one function, shared). It sat on `window.PGE` — i.e. in `Inspector.jsx` — until #140 made the catalog a lib, at which point reading it there would have been a `src/lib/` module depending on a component.
+
+**`wouldEmptyEnv` and `listEnvelopes` live in `src/lib/`, not in the component** (#140), for the reason `history-core.js`, `render-status.js` and `tweaks-store.js` do: they are pure, they decide in the component's stead, and an error in either is *silent* — `wouldEmptyEnv` either lets through a body the engine rejects or refuses a full envelope it doesn't recognize, and a missing `listEnvelopes` entry makes a written envelope unreachable while the Inspector opens a different one. `wouldEmptyEnv` sits in `envelope-loops.js`, beside the three predicates its answer is the sum of; `listEnvelopes` has its own `envelope-catalog.js` (`window.PGEEnvCatalog`), since it pulls in `loopEnvMax`/`loopUnitSuffix`, `grainUnitBounds` and the inert-key reason. `EnvelopeEditor.jsx` binds both by name at the top of the file and keeps the glue.
+
+Their only coverage before that was **by extraction** — `extractFn` + `new Function` over the JSX, inside a `try` that fell back to `() => []` — so a broken extraction left half the assertions green (`{}.inert === undefined` is true of an empty list). `tests/node/test-envelope-catalog.js` runs them instead.
 
 `wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 
@@ -1776,7 +1786,7 @@ needs its control: with a `PATH` that narrow, *any* failure would keep a
 `status !== 0` assert green, so the same `PATH` with `realpath` back in it must
 succeed.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a

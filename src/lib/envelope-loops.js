@@ -108,6 +108,58 @@
            typeof item[1] === "string";
   }
 
+  /* ---------- wouldEmptyEnv (PGE #209) ----------
+     Un envelope resterebbe senza contenuto? Un array senza nessun breakpoint
+     isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il
+     primo dei corpi che il motore rifiuta da PGE #209
+     (InvalidFieldValueError). Nessuna cancellazione dell'editor deve poterci
+     arrivare: il guard sta qui una volta sola perche' le vie sono cinque
+     (Delete su un breakpoint, Delete su un blocco, il bottone "remove loop",
+     il doppio click su un breakpoint, e il paste di un envelope vuoto), e
+     finche' ne restava una scoperta la riga di CLAUDE.md che dichiara
+     l'editor incapace di produrre quei corpi era falsa.
+
+     Vive qui e non nel componente (#140) per la ragione dei suoi tre vicini:
+     e' pura, decide al posto della colla React, e i suoi due falsi positivi
+     storici si vedono solo eseguendola. Sta accanto a isBreakpoint /
+     isDictBreakpoint / isCompactBlock perche' la sua risposta E' la loro
+     somma: un predicato che cambia qui cambia il guard nello stesso file,
+     invece che in un componente che nessun test carica.
+
+     Riceve gli ITEM: la forma desugarata, e non quella wrappata. Su un BP
+     group nudo (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe
+     `true` su un envelope pieno, perche' ne' isBreakpoint ne' isCompactBlock
+     riconoscono il gruppo — quello lo normalizza desugarBPGroups, che ogni
+     chiamante applica. E chi ha in mano una forma wrappata deve prima passare
+     da `unwrapEnv`, non da desugarBPGroups: `wrapEnv` restituisce il dict
+     {type, points} per un envelope di soli breakpoint con interp globale non
+     lineare, desugarBPGroups su un non-array lo lascia intatto, e qui un
+     non-array e' "vuoto". Era il difetto del paste (`handlePasteEnv`), che
+     valutava l'output di wrapEnv e rifiutava in silenzio ogni envelope
+     tipizzato.
+
+     Due contenuti che il conteggio non vedeva da se', ed erano falsi positivi:
+       - il blocco compatto NUDO (`[[[0,0],[100,1]],1,4]`), dove il valore E'
+         il blocco invece di contenerlo. Si normalizza qui, come
+         desugarBPGroups fa con il BP group diretto: quella forma
+         desugarBPGroups non la tocca, e neanche unwrapEnv, quindi desugarare
+         non basterebbe.
+       - il breakpoint in forma dict `{t, v, type?}`, che il motore normalizza
+         in `[t, v]` prima di guardarlo (envelope_builder.py:132).
+         isBreakpoint non va allargata — la usa l'editor per decidere cosa e'
+         trascinabile, e un dict il canvas non lo disegna — quindi il predicato
+         e' il suo vicino di casa, isDictBreakpoint, condiviso con chi la y di
+         quel punto la legge (loopSeedFrom, Inspector). */
+  function wouldEmptyEnv(next) {
+    if (isCompactBlock(next)) return false;   // il valore E' il blocco
+    if (!Array.isArray(next)) return true;
+    // Il dict `{t, v}` e' un punto vero, e lo dice il predicato accanto — lo
+    // stesso che risponde a firstBreakpointY, che di quel punto legge la y.
+    const bps   = next.filter((it) => isBreakpoint(it) || isDictBreakpoint(it)).length;
+    const loops = next.filter(isCompactBlock).length;
+    return bps + loops < 1;
+  }
+
   function envHasLoop(env) {
     const items = isTypedEnv(env) ? env.points : env;
     return Array.isArray(items) && items.some(isCompactBlock);
@@ -865,6 +917,7 @@
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
     isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
+    wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
