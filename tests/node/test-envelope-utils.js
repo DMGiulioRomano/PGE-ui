@@ -2648,6 +2648,127 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
   }
 }
 
+/* ── le grafie che il walk sui TEMPI non vedeva ──────────────────────────────
+   Un envelope si scrive in piu' grafie, e il motore le legge tutte (PGE #234).
+   Il walk sulle Y di questo modulo lo sa da allora — `_mapGrainEnvY` tratta il
+   dict `{t, v}` e normalizza le due grafie NUDE (il valore E' il gruppo, il
+   valore E' il blocco) — mentre il walk sui TEMPI, cioe' il rescale del
+   freeze, il troncamento e il taglio al cursore, ne riconosceva solo le forme
+   annidate. Le altre restavano dove stavano mentre ogni altra curva dello
+   stream si spostava: nessun errore, nessun marcatore, e nemmeno la conferma
+   «perdi dei breakpoint», perche' `envArrayWouldTruncate` guardava dalla
+   stessa parte. Nel corpus del motore erano trentuno envelope su sette config.
+   La regola non e' un elenco di numeri ma un confronto: la grafia NUDA deve
+   comportarsi come la stessa identica grafia dentro una lista, e il dict come
+   il suo omonimo in forma array. */
+console.log("\n── le grafie che il walk sui tempi non vedeva (bare / dict) ──");
+{
+  const PTS   = [[0, 0], [0.5, 50], [1, 100]];
+  const GROUP = [PTS, "cubic"];            // BP group NUDO (PGE #64)
+  const BLOCK = [[[0, 5], [50, 30]], 0.8, 2];  // blocco compatto NUDO
+  const DICTS = [{ t: 0, v: 0 }, { t: 0.5, v: 50 }, { t: 1, v: 100 }];
+
+  // 1. rescale: la nuda si muove come l'annidata, e resta nuda.
+  assert("rescale: il BP group nudo scala come quello dentro una lista",
+    eq(U.rescaleEnvArray(GROUP, 2), U.rescaleEnvArray([GROUP], 2)[0]),
+    JSON.stringify(U.rescaleEnvArray(GROUP, 2)));
+  assert("rescale: il blocco compatto nudo scala come quello dentro una lista",
+    eq(U.rescaleEnvArray(BLOCK, 2), U.rescaleEnvArray([BLOCK], 2)[0]),
+    JSON.stringify(U.rescaleEnvArray(BLOCK, 2)));
+  assert("rescale: il nudo resta nudo (la grafia dell'autore non si migra)",
+    window.PGEEnv.isBPGroup(U.rescaleEnvArray(GROUP, 2)) &&
+    window.PGEEnv.isCompactBlock(U.rescaleEnvArray(BLOCK, 2)));
+  assert("rescale: l'end_time del blocco nudo e' quello annidato, non il vecchio",
+    U.rescaleEnvArray(BLOCK, 2)[1] === 1.6);
+  // 2. rescale: il dict e' un punto, e torna dict.
+  assert("rescale: i punti in forma dict scalano come i loro omonimi array",
+    eq(U.rescaleEnvArray(DICTS, 2).map(d => [d.t, d.v]),
+       U.rescaleEnvArray(PTS, 2)),
+    JSON.stringify(U.rescaleEnvArray(DICTS, 2)));
+  assert("rescale: e restano dict (non si riscrivono come array)",
+    U.rescaleEnvArray(DICTS, 2).every(window.PGEEnv.isDictBreakpoint));
+  // 3. l'avviso guarda dove guarda il taglio: senza, si tronca in silenzio.
+  for (const [nome, env] of [["BP group nudo", GROUP], ["blocco nudo", BLOCK], ["dict", DICTS]])
+    assert("wouldTruncate vede il " + nome, U.envArrayWouldTruncate(env, 2) === true);
+  // 4. truncate: stessa regola del confronto, e il punto di chiusura prende la
+  //    grafia del punto che lo ha causato.
+  assert("truncate: il BP group nudo si taglia come quello annidato",
+    eq(U.truncateEnvArray(U.rescaleEnvArray(GROUP, 2)),
+       U.truncateEnvArray(U.rescaleEnvArray([GROUP], 2))[0]));
+  assert("truncate: il blocco nudo si tappa a 1.0 come quello annidato",
+    eq(U.truncateEnvArray(U.rescaleEnvArray(BLOCK, 2)),
+       U.truncateEnvArray(U.rescaleEnvArray([BLOCK], 2))[0]));
+  {
+    const cutD = U.truncateEnvArray(U.rescaleEnvArray(DICTS, 2));
+    const cutA = U.truncateEnvArray(U.rescaleEnvArray(PTS, 2));
+    assert("truncate: i dict si tagliano come gli array omonimi",
+      eq(cutD.map(d => [d.t, d.v]), cutA), JSON.stringify(cutD));
+    assert("truncate: il punto di chiusura e' un dict, non meta' envelope in un'altra grafia",
+      cutD.every(window.PGEEnv.isDictBreakpoint));
+  }
+  // 5. slice: il blocco si RIFIUTA (come quello annidato, e il chiamante lo
+  //    conta), il gruppo e i dict si tagliano.
+  assert("slice: il blocco compatto nudo si rifiuta, come quello dentro una lista",
+    U.sliceEnvArray(BLOCK, 0.5) === null && U.sliceEnvArray([BLOCK], 0.5) === null);
+  assert("slice: il BP group nudo si taglia come quello annidato",
+    eq(U.sliceEnvArray(GROUP, 0.5), U.sliceEnvArray([GROUP], 0.5)[0]),
+    JSON.stringify(U.sliceEnvArray(GROUP, 0.5)));
+  {
+    const sd = U.sliceEnvArray(DICTS, 0.25), sa = U.sliceEnvArray(PTS, 0.25);
+    assert("slice: i dict si tagliano come gli array omonimi",
+      eq(sd.map(d => [d.t, d.v]), sa), JSON.stringify(sd));
+    assert("slice: anche il punto d'apertura calcolato al taglio e' un dict",
+      sd.every(window.PGEEnv.isDictBreakpoint));
+  }
+  // 6. La forma tipizzata {type, points} non aveva un mapper suo: leggeva
+  //    `p[0]`/`p[1]` su ogni grafia. Su un punto dict tornava [NaN, undefined]
+  //    — l'envelope DISTRUTTO da un ridimensionamento, non congelato — e
+  //    l'interp per-punto di una 3-tupla spariva.
+  {
+    const typedD = U.rescaleEnvArray({ type: "cubic", points: DICTS }, 2);
+    assert("typed {type,points}: i punti dict sopravvivono al rescale",
+      typedD.points.every(window.PGEEnv.isDictBreakpoint) &&
+      typedD.points.every(d => isFinite(d.t) && isFinite(d.v)),
+      JSON.stringify(typedD));
+    assert("typed {type,points}: e scalano come i loro omonimi array",
+      eq(typedD.points.map(d => [d.t, d.v]), U.rescaleEnvArray(PTS, 2)));
+    assert("typed {type,points}: l'interp per-punto non viene buttato",
+      eq(U.rescaleEnvArray({ type: "cubic", points: [[0, 0, "step"], [1, 12]] }, 2),
+         { type: "cubic", points: [[0, 0, "step"], [2, 12]] }));
+    assert("typed {type,points}: e l'avviso vede i punti dict",
+      U.envArrayWouldTruncate({ type: "cubic", points: DICTS }, 2) === true);
+  }
+  // 7. I due assi vedono le STESSE grafie: e' la regola, non i numeri. Il walk
+  //    sulle y passa da convertGrainDurationUnit (_mapGrainEnvY), quello sui
+  //    tempi da rescaleEnvArray; una grafia che si muove su un asse e non
+  //    sull'altro e' esattamente il difetto di questa sezione.
+  for (const [nome, env] of [["BP group nudo", GROUP], ["blocco nudo", BLOCK],
+                             ["dict", DICTS], ["array", PTS]]) {
+    const y = U.convertGrainDurationUnit({ durationEnv: env }, "milliseconds").durationEnv;
+    const x = U.rescaleEnvArray(env, 2);
+    assert("i due assi vedono il " + nome + " (y: unita', x: resize)",
+      !eq(y, env) && !eq(x, env),
+      "y=" + JSON.stringify(y) + " x=" + JSON.stringify(x));
+  }
+  // 8. E allo stream: il campo con la grafia nuda si muove, l'avviso parla, e
+  //    il taglio conta lo scarto invece di restituire una coda che dichiara
+  //    ancora la durata della testa.
+  {
+    const s1 = { id: "s", densityEnv: DICTS, panEnv: BLOCK };
+    const moved = U.rescaleStreamEnvelopes(s1, 10, 5);   // ratio 2
+    assert("stream: la curva dict si sposta come le vicine",
+      !eq(moved.densityEnv, s1.densityEnv) && moved.densityEnv[2].t === 2);
+    assert("stream: e il blocco nudo pure",
+      moved.panEnv[1] === 1.6);
+    assert("stream: streamWouldTruncate vede entrambe",
+      U.streamWouldTruncate({ id: "s", densityEnv: DICTS }, 2) === true &&
+      U.streamWouldTruncate({ id: "s", panEnv: BLOCK }, 2) === true);
+    const cut = U.sliceStreamEnvelopes({ id: "s", panEnv: BLOCK }, 0.5);
+    assert("stream: il blocco nudo finisce fra gli `skipped` del taglio",
+      cut.skipped === 1 && eq(cut.stream.panEnv, BLOCK));
+  }
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

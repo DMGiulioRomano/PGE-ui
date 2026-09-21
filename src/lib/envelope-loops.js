@@ -43,11 +43,12 @@
      Sta accanto a isBreakpoint e NON dentro: isBreakpoint dice anche cosa il
      canvas dell'EnvelopeEditor sa disegnare e trascinare, e un dict il canvas
      non lo disegna — allargarla renderebbe trascinabile quel che non si vede.
-     Chi invece deve solo LEGGERE la y di un punto chiede a questa, ed e' per
-     questo che sta nel modulo: i lettori sono due (wouldEmptyEnv, che conta i
-     punti veri, e firstBreakpointY qui sotto, che ne legge il valore per conto
-     di ogni toggle env→scalare) e due copie e' il modo in cui una di esse
-     smette di valere.
+     Chi invece deve solo LEGGERE un punto chiede a questa, ed e' per questo che
+     sta nel modulo: i lettori sono tre (wouldEmptyEnv, che conta i punti veri;
+     firstBreakpointY qui sotto, che ne legge il valore per conto di ogni
+     toggle env→scalare; e bpAt, per cui camminano sui tempi il rescale del
+     freeze, il troncamento e il taglio al cursore) e due copie e' il modo in
+     cui una di esse smette di valere.
      Il `typeof` e' piu' stretto della presenza delle chiavi che il motore
      testa — e quella lettura resta locale a deviation-probability.js, dove la
      domanda e' se il motore costruira' il corpo, non se c'e' un numero da
@@ -261,10 +262,39 @@
      la curva che vale zero da quella che non si sa leggere, ed è così che uno
      zero legittimo diventava una costante che la curva non aveva mai avuto. */
   function firstBreakpointY(env, fallback) {
-    const bp = desugarBPGroups(unwrapEnv(env).items)[0];
-    if (isBreakpoint(bp)) return bp[1];
-    if (isDictBreakpoint(bp)) return bp.v;
-    return fallback;
+    const bp = bpAt(desugarBPGroups(unwrapEnv(env).items)[0]);
+    return bp ? bp[1] : fallback;
+  }
+
+  /* ---------- le due grafie di un punto, lette e riscritte come sono --------
+     `bpAt` torna [x, y, interp|null] per l'una e per l'altra — null se l'item
+     non e' un punto — e `bpAtX` / `bpMake` le riscrivono NELLA GRAFIA trovata.
+     Serve a chi cammina sull'asse dei TEMPI (il rescale del freeze, il
+     troncamento, il taglio al cursore): li' il dict `{t, v}` era invisibile,
+     quindi quella curva restava nel vecchio riferimento temporale mentre ogni
+     altra si spostava. Convertirla in `[t, v]` per farla vedere al walk
+     sarebbe la cura peggiore del male: migrerebbe la grafia dell'autore a
+     ogni resize, e il walk sulle y (envelope-utils._mapGrainEnvY) la rispetta
+     da PGE #234.
+     `bpMake` costruisce i due y che il taglio CALCOLA invece di sceglierli —
+     la chiusura del truncate, l'apertura dello slice — nella grafia del punto
+     accanto, perche' un envelope non diventi meta' dict e meta' array per un
+     ridimensionamento. */
+  function bpAt(item) {
+    if (isBreakpoint(item))
+      return [item[0], item[1], typeof item[2] === "string" ? item[2] : null];
+    if (isDictBreakpoint(item))
+      return [item.t, item.v, typeof item.type === "string" ? item.type : null];
+    return null;
+  }
+  function bpAtX(item, x) {
+    if (isDictBreakpoint(item)) return { ...item, t: x };
+    const c = [...item]; c[0] = x; return c;
+  }
+  function bpMake(like, x, y, interp) {
+    if (isDictBreakpoint(like))
+      return interp ? { t: x, v: y, type: interp } : { t: x, v: y };
+    return interp ? [x, y, interp] : [x, y];
   }
 
   /* ---------- distribuzioni temporali (time_distribution.py) ---------- */
@@ -917,6 +947,7 @@
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
     isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
+    bpAt, bpAtX, bpMake,
     wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,

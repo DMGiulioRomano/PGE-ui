@@ -43,6 +43,28 @@
     return domain === "direction" ? snapDirection : null;
   }
 
+  /* ---------- le grafie NUDE: il valore E' il gruppo, o E' il blocco --------
+   * `[[[0,0],[1,1]], 4, 2]` (blocco compatto) e `[[[0,0],[1,100]], "cubic"]`
+   * (BP group) sono envelope interi, non item dentro una lista. Ne' unwrapEnv
+   * ne' desugarBPGroups le toccano — lo dice gia' wouldEmptyEnv, che le
+   * normalizza per conto suo — e il walk sulle y di questo stesso modulo le
+   * riconosce da PGE #234 (_mapGrainEnvY, le sue ultime due righe). Il walk
+   * sui TEMPI no: leggeva quelle liste item per item, dove niente e' un punto
+   * ne' un blocco, e non riscriveva niente. Una curva ferma nel vecchio
+   * riferimento temporale mentre ogni altra dello stream si sposta — e senza
+   * neppure la conferma «perdi dei breakpoint», perche' anche
+   * envArrayWouldTruncate guardava dalla stessa parte. Nel corpus del motore
+   * sono trentuno envelope su sette config.
+   * La normalizzazione e' una riga per funzione: si incarta il valore in una
+   * lista di un elemento, che e' esattamente la grafia che il walk sa gia'
+   * leggere, e si rende il risultato come lo si e' trovato (`_asBare`). */
+  const _isBareEnv = (arr) => PGEEnv.isBPGroup(arr) || PGEEnv.isCompactBlock(arr);
+  /* Un gruppo troncato puo' degenerare in un solo punto: li' l'envelope resta
+     una LISTA, perche' `[0.5, 30]` da solo non e' un punto — sono due numeri,
+     e il motore li leggerebbe come due punti senza y. */
+  const _asBare = (src, out) =>
+    (Array.isArray(out) && out.length === 1 && _isBareEnv(out[0])) ? out[0] : out;
+
   /* Il rescale NON tappa la x a 1: chi sfora resta fuori, ed e' `truncateEnvArray`
    * a decidere cosa farne. Il tappo c'era, e mangiava esattamente il dato che
    * serve al taglio: accorciando uno stream con il freeze, ogni breakpoint oltre
@@ -55,15 +77,25 @@
    * Il commit passa sempre per truncateEnvArray (che interpola il punto di
    * chiusura) o per sliceEnvArray (che sposta l'origine). */
   function rescaleEnvArray(arr, ratio) {
-    // object-form {type, points} envelope
+    // object-form {type, points} envelope: i punti sono gli stessi item di un
+    // envelope nudo, quindi passano dallo stesso mapper. Scritto a mano qui,
+    // leggeva `p[0]` e `p[1]` su ogni grafia: un punto in forma dict tornava
+    // `[NaN, undefined]` — cioe' l'envelope distrutto da un ridimensionamento,
+    // non congelato — e l'interp per-punto di una 3-tupla spariva.
+    // (il test e' quello delle altre tre funzioni del walk — presenza di
+    // `points` —, piu' largo di isTypedEnv, che pretende anche `type`)
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return { ...arr, points: arr.points.map(p => [+(p[0] * ratio).toFixed(5), p[1]]) };
+      return { ...arr, points: rescaleEnvArray(arr.points, ratio) };
     }
     if (!Array.isArray(arr)) return arr;
+    if (_isBareEnv(arr)) return _asBare(arr, rescaleEnvArray([arr], ratio));
     return arr.map(item => {
-      if (PGEEnv.isBreakpoint(item)) {
-        const c = [...item]; c[0] = +(c[0] * ratio).toFixed(5); return c;
-      }
+      // Le due grafie di un punto insieme (PGEEnv.bpAt): il dict `{t, v}` e'
+      // un punto per il motore (PGE #234) e per ogni altro lettore di questo
+      // repo, e qui era invisibile — la curva restava ferma mentre le vicine
+      // si spostavano.
+      const bp = PGEEnv.bpAt(item);
+      if (bp) return PGEEnv.bpAtX(item, +(bp[0] * ratio).toFixed(5));
       if (PGEEnv.isBPGroup(item)) {
         // BP group [points, interp]: i punti hanno tempi assoluti come i BP
         return [rescaleEnvArray(item[0], ratio), item[1]];
@@ -102,25 +134,32 @@
       return { ...arr, points: truncateEnvArray(arr.points, snap) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
+    if (_isBareEnv(arr)) return _asBare(arr, truncateEnvArray([arr], snap));
     const result = [];
     let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
 
     for (const item of arr) {
-      if (PGEEnv.isBreakpoint(item)) {
-        const [x, y] = item;
+      // Un punto nelle due grafie (PGEEnv.bpAt): il dict `{t, v}` non entrava
+      // in questo ramo, quindi non veniva ne' tagliato ne' contato come
+      // riferimento per il punto di chiusura degli altri.
+      const bp = PGEEnv.bpAt(item);
+      if (bp) {
+        const [x, y, interp] = bp;
         if (x <= 1.0) {
           result.push(item);
-          prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
+          prevX = x; prevY = y; prevInterp = interp;
         } else {
           // first BP past boundary — interpolate closing BP at x=1.0.
           // Se il punto precedente sta gia' esattamente sul bordo l'envelope
           // e' gia' chiuso: un punto interpolato li' sarebbe un doppione.
           if (prevY !== null && prevX >= 1.0) break;
+          // il punto calcolato prende la grafia di quello che lo ha causato
+          // (PGEEnv.bpMake), o un resize renderebbe l'envelope meta' dict.
           if (prevY !== null && prevX < x) {
-            result.push([1.0, close(boundaryY(prevX, prevY, prevInterp, x, y, 1.0))]);
+            result.push(PGEEnv.bpMake(item, 1.0, close(boundaryY(prevX, prevY, prevInterp, x, y, 1.0))));
           } else {
-            result.push([1.0, close(y)]);
+            result.push(PGEEnv.bpMake(item, 1.0, close(y)));
           }
           break;
         }
@@ -131,12 +170,12 @@
         const inner = truncateEnvArray(item[0], snap);
         if (inner.length >= 2) result.push([inner, item[1]]);
         else if (inner.length === 1) result.push(inner[0]);
-        const lastP = inner[inner.length - 1];
+        const lastP = PGEEnv.bpAt(inner[inner.length - 1]);
         // Il segmento in uscita dall'ultimo punto di un gruppo segue l'interp
         // globale, non quello di zona (expandMixed): solo un tag esplicito
         // sul punto conta.
-        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = typeof lastP[2] === "string" ? lastP[2] : null; }
-        if (item[0].some(p => p[0] > 1.0)) break; // il gruppo è stato tagliato
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = lastP[2]; }
+        if (item[0].some(p => { const b = PGEEnv.bpAt(p); return b && b[0] > 1.0; })) break; // il gruppo è stato tagliato
       } else if (PGEEnv.isCompactBlock(item)) {
         if (prevX >= 1.0) break; // block starts beyond boundary — drop
         if (item[1] > 1.0) {
@@ -147,7 +186,8 @@
         }
         result.push(item);
         prevX = item[1];
-        prevY = item[0][item[0].length - 1][1]; // last pattern point y
+        const lastPat = PGEEnv.bpAt(item[0][item[0].length - 1]); // last pattern point
+        prevY = lastPat ? lastPat[1] : prevY;
         prevInterp = null;
       } else {
         result.push(item);
@@ -157,13 +197,19 @@
   }
 
   function envArrayWouldTruncate(arr, ratio) {
+    // stessa lettura del troncamento vero, o l'avviso parlerebbe di un
+    // envelope diverso da quello che verra' tagliato: i punti passano dallo
+    // stesso mapper (dict compresi), e le grafie nude dalla stessa
+    // normalizzazione.
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return arr.points.some(p => p[0] * ratio > 1.0);
+      return envArrayWouldTruncate(arr.points, ratio);
     }
     if (!Array.isArray(arr)) return false;
+    if (_isBareEnv(arr)) return envArrayWouldTruncate([arr], ratio);
     return arr.some(item => {
-      if (PGEEnv.isBreakpoint(item)) return item[0] * ratio > 1.0;
-      if (PGEEnv.isBPGroup(item)) return item[0].some(p => p[0] * ratio > 1.0);
+      const bp = PGEEnv.bpAt(item);
+      if (bp) return bp[0] * ratio > 1.0;
+      if (PGEEnv.isBPGroup(item)) return envArrayWouldTruncate(item[0], ratio);
       if (PGEEnv.isCompactBlock(item)) return item[1] * ratio > 1.0;
       return false;
     });
@@ -380,12 +426,24 @@
       return pts === null ? null : { ...arr, points: pts };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
+    // Il blocco compatto NUDO e' un blocco come quello dentro una lista:
+    // tagliarlo a meta' non e' definito, quindi si RIFIUTA (e il chiamante lo
+    // conta fra gli `skipped` del toast) invece di restituirlo intatto come
+    // faceva, cioe' una coda che dichiara ancora la durata della testa senza
+    // che niente lo dica. Il BP group nudo invece si taglia: sono punti.
+    if (PGEEnv.isCompactBlock(arr)) return null;
+    if (_isBareEnv(arr)) {
+      const out = sliceEnvArray([arr], cut, snap, inGroup);
+      return out === null ? null : _asBare(arr, out);
+    }
     if (arr.some(PGEEnv.isCompactBlock)) return null;
     const k = 1 / (1 - cut);
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
     const shift = (x) => Math.max(0, +((x - cut) * k).toFixed(5));
     const out = [];
-    let prevX = null, prevY = null, prevInterp = null;  // ultimo punto PRIMA del taglio
+    // `prevItem` viaggia con le sue coordinate perche' il punto tenuto quando
+    // non sopravvive niente va scritto nella grafia di quello che lo detta.
+    let prevX = null, prevY = null, prevInterp = null, prevItem = null;  // ultimo punto PRIMA del taglio
     for (const item of arr) {
       if (PGEEnv.isBPGroup(item)) {
         // Il gruppo si taglia con le stesse regole, ma da dentro: `inGroup`
@@ -397,32 +455,32 @@
         if (inner === null) return null;
         if (inner.length >= 2) out.push([inner, item[1]]);
         else if (inner.length === 1) out.push(inner[0]);
-        const lastP = item[0][item[0].length - 1];
-        prevX = lastP[0]; prevY = lastP[1];
-        prevInterp = typeof lastP[2] === "string" ? lastP[2] : null;
+        const lastItem = item[0][item[0].length - 1];
+        const lastP = PGEEnv.bpAt(lastItem);
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = lastP[2]; prevItem = lastItem; }
         continue;
       }
-      if (!PGEEnv.isBreakpoint(item)) { out.push(item); continue; }
-      const [x, y] = item;
+      // Le due grafie di un punto (PGEEnv.bpAt): un dict non entrava qui,
+      // quindi restava con la x della testa e non faceva neppure da
+      // riferimento per il punto d'apertura degli altri.
+      const bp = PGEEnv.bpAt(item);
+      if (!bp) { out.push(item); continue; }
+      const [x, y, interp] = bp;
       if (x < cut) {
-        prevX = x; prevY = y; prevInterp = typeof item[2] === "string" ? item[2] : null;
+        prevX = x; prevY = y; prevInterp = interp; prevItem = item;
         continue;
       }
       // Primo punto oltre il taglio: davanti gli va il valore AL taglio, o la
       // coda partirebbe dal punto sbagliato. Si porta dietro l'interp del
       // segmento che stiamo tagliando a meta', che e' quello del punto prima.
       if (!out.length && prevX !== null && x > cut) {
-        const opening = [0, close(boundaryY(prevX, prevY, prevInterp, x, y, cut))];
-        if (prevInterp) opening.push(prevInterp);
-        out.push(opening);
+        out.push(PGEEnv.bpMake(item, 0, close(boundaryY(prevX, prevY, prevInterp, x, y, cut)), prevInterp));
       }
-      const moved = [...item];
-      moved[0] = shift(x);
-      out.push(moved);
+      out.push(PGEEnv.bpAtX(item, shift(x)));
     }
     // Dopo il taglio non e' rimasto niente: l'envelope tiene l'ultimo valore.
     // Un array vuoto il motore non lo accetta.
-    if (!out.length && prevY !== null && !inGroup) out.push([0, prevY]);
+    if (!out.length && prevY !== null && !inGroup) out.push(PGEEnv.bpMake(prevItem, 0, prevY));
     return out;
   }
 

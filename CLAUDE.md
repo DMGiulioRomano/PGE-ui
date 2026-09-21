@@ -30,7 +30,9 @@ exists, the fourth only when a browser is installed):
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
-  (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
+  (rescale/truncate/slice math — the last one is the split's tail half — plus
+  the graphies the time walk used to miss, each asked by comparison against its
+  own nested or array twin), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary, incl. the engine-semantics axis, source
   guards on the chain that carries the version from the engine to the dot, and
@@ -1211,8 +1213,43 @@ held last value when nothing survives the cut (the engine rejects an empty
 envelope). `snapForDomain` applies there too — that interpolated point is a
 *computed* y, and on `read_direction` an unsnapped one is a parse error.
 **Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
-half isn't defined, so `sliceEnvArray` returns `null` on an array holding one,
-the field is left verbatim, and the count comes back as `skipped` for the toast.
+half isn't defined, so `sliceEnvArray` returns `null` on an array holding one —
+and on a **bare** one, the value that *is* the block — the field is left
+verbatim, and the count comes back as `skipped` for the toast.
+
+**The time walk reads every graphy, because the y walk already does.** An
+envelope has more than one spelling and the engine reads them all (PGE #234): a
+point is `[t, v]` *or* the dict `{t, v, type?}`, and a BP group or a compact
+block can be the **whole value** instead of an item inside a list — the two bare
+forms neither `unwrapEnv` nor `desugarBPGroups` touch, which is why
+`wouldEmptyEnv` normalizes the bare block by itself and says so. `_mapGrainEnvY`
+— the *y* walk of this same module, the one a `duration_unit` change drives —
+has handled all of them since #234. The *x* walk (`rescaleEnvArray`,
+`truncateEnvArray`, `envArrayWouldTruncate`, `sliceEnvArray`) read only the
+nested array forms, so those three graphies stayed in the old time frame while
+every other curve on the stream moved: no error, no marker, and not even the
+"you'll lose breakpoints" confirm, because `envArrayWouldTruncate` was looking
+the same way. In the engine's own config corpus that was **31 envelopes across
+7 files** — `PGE_wrap_test.yml`'s densities, `PGE_read_direction_demo.yml`'s
+directions, the `offset_range` of the two `pino`s. One spot was worse than
+frozen: `rescaleEnvArray`'s `{type, points}` branch was the only one that
+didn't recurse into the item mapper, so it read `p[0]`/`p[1]` off a dict and
+wrote `[NaN, undefined]` — the envelope *destroyed* by a resize — while
+silently dropping a 3-tuple's per-point interp.
+
+The reading rule is one function, `PGEEnv.bpAt` (with `bpAtX` / `bpMake`), in
+`envelope-loops.js` beside the predicates it is made of — the third reader of
+the dict spelling, after `wouldEmptyEnv` counting points and `firstBreakpointY`
+reading one. **It never migrates a spelling**: a dict comes back a dict, and the
+two y's the cut *computes* (truncate's closing point, slice's opening one) take
+the spelling of the point beside them. Rewriting `{t, v}` as `[t, v]` would be
+the cure worse than the disease — a fingerprint moved, and a yellow dot, on
+every resize of a stream nobody edited. The bare forms are normalized in one
+line per function (wrap in a list, hand back as found, `_isBareEnv`/`_asBare`),
+the single exception being the bare compact block in `sliceEnvArray`, refused
+like its nested twin. `test-envelope-utils.js` pins it as a **comparison**, not
+as numbers: the bare graphy must behave like the identical graphy inside a list,
+the dict like its array namesake, and both walks — x and y — must see all four.
 
 ### Fingerprint parity
 
