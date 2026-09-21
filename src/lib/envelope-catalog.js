@@ -168,8 +168,14 @@
     if (stream.pitch && stream.pitch.valueEnv) {
       const pu = stream.pitch.unit || "semitones";
       const puLabel = pu === "ratio" ? "ratio" : pu;
-      const puUnit  = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
       const edoN = stream.pitch.edoDivisions || 12;
+      // Il simbolo lo dice il modulo (PGEEnv.pitchUnitSymbol), come per le due
+      // voci di voices.pitch qui sotto e come fa l'Inspector sulla stessa riga.
+      // Scritto a mano qui era una seconda copia della stessa tabella, e su edo
+      // diceva un'altra cosa: `°edo` contro il `°/N` dell'Inspector, cioe' la
+      // stessa curva etichettata in due modi e senza il numero di divisioni,
+      // che e' l'unica cosa che quel simbolo ha da dire.
+      const puUnit = window.PGEEnv.pitchUnitSymbol(pu, edoN);
       // engine-driven: pitchUnitBounds reads PB.pitch (presets) / edoFactor (edo)
       const pb = window.PGEEnv.pitchUnitBounds(pu, edoN);
       const [pvMin, pvMax, phMin, phMax] = pu === "cents" ? [-1200, 1200, pb.min, pb.max]
@@ -184,8 +190,8 @@
     }
     if (stream.pitch && stream.pitch.rangeEnv) {
       const pu = stream.pitch.unit || "semitones";
-      const puUnit = pu === "ratio" ? "×" : pu === "cents" ? "¢" : pu === "semitones" ? "st" : pu.startsWith("quarter") ? "qt" : pu.startsWith("eighth") ? "et" : pu === "edo" ? "°edo" : "st";
       const edoN2 = stream.pitch.edoDivisions || 12;
+      const puUnit = window.PGEEnv.pitchUnitSymbol(pu, edoN2);
       // engine-driven: pitchUnitBounds reads PB.pitch (presets) / edoFactor (edo)
       const prb = window.PGEEnv.pitchUnitBounds(pu, edoN2);
       const [prVis, prHard] = pu === "cents" ? [1200, prb.rangeMax]

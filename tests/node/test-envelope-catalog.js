@@ -381,6 +381,43 @@ assert("pitchEnvBounds: `signed` da' l'intervallo simmetrico, l'altro parte da 0
   eq(C.pitchEnvBounds("semitones", { vis: 12, hard: 96 }, false),
      { visMin: 0, visMax: 12, hardMin: 0, hardMax: 96 }));
 
+/* ── il simbolo dell'unita' di pitch: uno solo, e lo dice il modulo ──────────
+   Le due voci di `stream.pitch` se lo scrivevano da se', con una catena di
+   ternari: una seconda copia della tabella che `pitchUnitSymbol` gia' tiene —
+   quella che leggono sia le due voci di `voices.pitch` qui sopra sia
+   l'Inspector sulla riga della stessa curva. Sui cinque preset le due copie
+   dicevano la stessa cosa; su `edo` no. La copia diceva `°edo`, il modulo dice
+   `°/N`, cioe' la stessa curva etichettata in due modi nello stesso pannello e
+   senza il numero di divisioni, che e' l'unica cosa che quel simbolo ha da
+   dire. La regola e' «un simbolo, una funzione», quindi la si interroga per
+   ogni grafia dell'unita' invece di trascrivere i sei valori. */
+console.log("\n── listEnvelopes: il simbolo dell'unita' di pitch ──");
+{
+  const pitchRows = (unit, edo) => {
+    const l = C.listEnvelopes({ id: "s", pitch: {
+      ...(unit ? { unit } : {}), ...(edo ? { edoDivisions: edo } : {}),
+      valueEnv: BP, rangeEnv: BP } }, 8);
+    return [byKey(l, "pitch"), byKey(l, "pitchRange")];
+  };
+  for (const [unit, edo] of [["semitones", null], ["cents", null], ["ratio", null],
+                             ["quarter_tone", null], ["eighth_tone", null],
+                             ["edo", 19], [undefined, null]]) {
+    const rows = pitchRows(unit, edo);
+    const want = E.pitchUnitSymbol(unit || "semitones", edo || 12);
+    assert("`" + (unit || "(assente)") + (edo ? "/" + edo : "") +
+           "`: il simbolo e' quello del modulo, sulle due righe",
+      rows[0].unit === want && rows[1].unit === want,
+      rows[0].unit + " / " + rows[1].unit + " ≠ " + want);
+  }
+  /* Il caso che le due copie leggevano in modo diverso: le divisioni devono
+     arrivare nel simbolo, o `edo: 19` e `edo: 31` si etichettano uguale. */
+  assert("edo: il numero di divisioni entra nel simbolo",
+    pitchRows("edo", 19)[0].unit !== pitchRows("edo", 31)[0].unit &&
+    /19/.test(pitchRows("edo", 19)[0].unit));
+  assert("nessuna catena di ternari sopravvive nel catalogo (una tabella sola)",
+    !/"°edo"/.test(SG.codeOf(LIB("envelope-catalog.js"))));
+}
+
 /* ── read_direction: dominio discreto ──────────────────────────────────────── */
 console.log("\n── listEnvelopes: il dominio discreto di read_direction ──");
 const rd = byKey(C.listEnvelopes({ id: "s", grain: { readDirectionEnv: [[0, -1], [1, 1]] } }, 8),
