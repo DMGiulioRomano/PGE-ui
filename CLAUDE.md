@@ -666,7 +666,7 @@ Their only coverage before that was **by extraction** — `extractFn` + `new Fun
 
 **The catalog and the resize walk are one list written three times, and the three must agree.** `listEnvelopes` says what can be opened and drawn; `_applyEnvFields` (`envelope-utils.js`) is what `rescaleStreamEnvelopes` / `truncateStreamEnvelopes` / `sliceStreamEnvelopes` rewrite on every resize and every split; `streamWouldTruncate` is the third, and it is the one that decides whether to ask before a resize eats breakpoints. A field the walk rewrites and the catalog can't open is an envelope the editor moves and nobody can see. The other direction is quieter and was live: `voices.pan.stepEnv` was in the catalog and in neither of the other two, so that curve — which the engine resolves against stream time, `StepPanStrategy.get_pan_offset` → `resolve_param(self.step, time)`, exactly like its `pitch` and `pointer` namesakes — stayed in the old time frame while every other curve moved, with no error and not even the "you'll lose breakpoints" confirm. `test-envelope-catalog.js` pins all three, and the two lists it compares are **read from two different files** (the `wf(…)` calls out of `envelope-utils.js`, the `path:` literals out of `envelope-catalog.js`): the first version built its fat stream out of the walk, so a field dropped from the walk vanished from both sides at once and the check stayed green on the very defect it was written for. `streamWouldTruncate` is asked by *behaviour*, field by field, never by reading its list — that would be a fourth copy. `deviationProbability` is the one exemption, since the walk reaches it through `_applyDeviationProb` rather than `wf`, and the exemption has its own executed case.
 
-`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
+`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, answered inside the function without wrapping it (a count question — a block already counts as one; whoever needs to *index* the items goes through `desugarBPGroups`, which wraps both bare graphies alike), and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
@@ -1253,11 +1253,33 @@ two y's the cut *computes* (truncate's closing point, slice's opening one) take
 the spelling of the point beside them. Rewriting `{t, v}` as `[t, v]` would be
 the cure worse than the disease — a fingerprint moved, and a yellow dot, on
 every resize of a stream nobody edited. The bare forms are normalized in one
-line per function (wrap in a list, hand back as found, `_isBareEnv`/`_asBare`),
-the single exception being the bare compact block in `sliceEnvArray`, refused
-like its nested twin. `test-envelope-utils.js` pins it as a **comparison**, not
-as numbers: the bare graphy must behave like the identical graphy inside a list,
-the dict like its array namesake, and both walks — x and y — must see all four.
+line per function (wrap in a list, hand back as found, `PGEEnv.isBareEnv` +
+`_asBare`), the single exception being the bare compact block in
+`sliceEnvArray`, refused like its nested twin. `test-envelope-utils.js` pins it
+as a **comparison**, not as numbers: the bare graphy must behave like the
+identical graphy inside a list, the dict like its array namesake, and both
+walks — x and y — must see all four.
+
+**And the editor reaches those two graphies through one door, `desugarBPGroups`.**
+`isBareEnv` (`isBPGroup || isCompactBlock`) is one rule in `envelope-loops.js`
+with two readers — the walk above, and that function's `// forma diretta` line —
+because a second copy is how one of the two graphies stops being seen by half
+the repo. It used to know only the group, and the gap showed in exactly one
+place, the one that matters: `unwrapEnv` of a bare *block* hands back its three
+elements (`pattern`, `end_time`, `n_reps`), none of which is an item, and
+`EnvelopeEditor.jsx` builds `rawEnv` **and** `expandMixed` on top of that pair
+(`desugarBPGroups(unwrapEnv(v).items)`). So a full envelope opened on an **empty
+canvas** — 26 streams in the engine's own config corpus, `PGE_envelope_syntax_test.yml`
+first among them — and the one gesture an empty canvas offers, a double click,
+appended a breakpoint to that list: `[pattern, end, n_reps, [x, y]]`, which the
+engine no longer reads as compact (`item[3]` is not a string) and from which
+only the breakpoint survives. The block gone, with no error. Wrapping it here
+also keeps `rawEnv`'s indices aligned with `expandMixed`'s `originalIdx`, which
+is the editor's invariant — normalizing in `expandMixed` alone would have
+desynchronized them. `wouldEmptyEnv` still answers on the bare block without
+wrapping it, because its question is a count and a block already counts as one;
+`test-bp-groups.js` asks the rest by **comparison**, the bare graphy against the
+identical one inside a list, up to the double click that used to eat it.
 
 ### Fingerprint parity
 

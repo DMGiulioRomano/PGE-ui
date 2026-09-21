@@ -109,6 +109,21 @@
            typeof item[1] === "string";
   }
 
+  /* ---------- le grafie NUDE: il valore E' il gruppo, o E' il blocco --------
+     `[[[0,0],[1,100]], "cubic"]` e `[[[0,0],[100,1]], 4, 2]` sono envelope
+     INTERI, non item dentro una lista, e il motore li legge come tali
+     (envelope_builder.build: is_compact_format / is_bp_group sul raw_points
+     prima di iterare). Ogni lettore di questo repo ha quindi due domande sulla
+     stessa lista — "e' un envelope?" e "e' un item?" — e la prima e' questa.
+     Una regola sola perche' i lettori sono tre e lontani: desugarBPGroups qui
+     sotto, che le incarta per l'editor; il walk sui tempi di envelope-utils.js
+     (rescale / truncate / slice), che le incarta per riusare il suo mapper; e
+     wouldEmptyEnv, che sul blocco risponde senza incartare perche' la sua e'
+     una domanda di conteggio. */
+  function isBareEnv(env) {
+    return isBPGroup(env) || isCompactBlock(env);
+  }
+
   /* ---------- wouldEmptyEnv (PGE #209) ----------
      Un envelope resterebbe senza contenuto? Un array senza nessun breakpoint
      isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il
@@ -141,10 +156,10 @@
 
      Due contenuti che il conteggio non vedeva da se', ed erano falsi positivi:
        - il blocco compatto NUDO (`[[[0,0],[100,1]],1,4]`), dove il valore E'
-         il blocco invece di contenerlo. Si normalizza qui, come
-         desugarBPGroups fa con il BP group diretto: quella forma
-         desugarBPGroups non la tocca, e neanche unwrapEnv, quindi desugarare
-         non basterebbe.
+         il blocco invece di contenerlo. Qui si risponde senza incartarlo,
+         perche' la domanda e' di conteggio e un blocco vale gia' uno; chi
+         invece deve INDICIZZARE gli item passa da desugarBPGroups, che
+         incarta le due grafie nude allo stesso modo (isBareEnv).
        - il breakpoint in forma dict `{t, v, type?}`, che il motore normalizza
          in `[t, v]` prima di guardarlo (envelope_builder.py:132).
          isBreakpoint non va allargata — la usa l'editor per decidere cosa e'
@@ -185,7 +200,19 @@
                via, come fa il context-menu per-segmento). Il ciclo
                desugar∘resugar è idempotente sugli indici. */
   function desugarBPGroups(items) {
-    if (isBPGroup(items)) items = [items]; // forma diretta
+    // Forma diretta: il valore E' il gruppo, oppure E' il blocco (isBareEnv).
+    // Il blocco mancava, e non si vedeva da nessuna parte tranne l'unico posto
+    // che conta: `unwrapEnv` di un blocco nudo rende i suoi TRE elementi
+    // (pattern, end_time, n_reps), qui nessuno dei tre e' un item, e
+    // l'EnvelopeEditor ci costruisce sopra `rawEnv` e `expandMixed`. Risultato:
+    // canvas vuoto su un envelope pieno — 26 stream nel corpus del motore — e
+    // il primo doppio click ci appendeva un breakpoint, cioe' scriveva
+    // `[pattern, end, n_reps, [x, y]]`, che il motore non legge piu' come
+    // compatto (item[3] non e' una stringa) e da cui salva il solo breakpoint:
+    // il blocco sparito in silenzio. Incartarlo qui e' la stessa riga che il
+    // gruppo aveva gia', e tiene allineati gli indici di rawEnv con gli
+    // `originalIdx` di expandMixed, che e' l'invariante dell'editor.
+    if (isBareEnv(items)) items = [items];
     if (!Array.isArray(items)) return items;
     const out = [];
     for (const it of items) {
@@ -946,7 +973,7 @@
 
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
-    isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
+    isBreakpoint, isDictBreakpoint, isCompactBlock, isBareEnv, envHasLoop,
     bpAt, bpAtX, bpMake,
     wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,

@@ -57,13 +57,15 @@
    * sono trentuno envelope su sette config.
    * La normalizzazione e' una riga per funzione: si incarta il valore in una
    * lista di un elemento, che e' esattamente la grafia che il walk sa gia'
-   * leggere, e si rende il risultato come lo si e' trovato (`_asBare`). */
-  const _isBareEnv = (arr) => PGEEnv.isBPGroup(arr) || PGEEnv.isCompactBlock(arr);
+   * leggere, e si rende il risultato come lo si e' trovato (`_asBare`). Il
+   * riconoscimento e' quello del modulo (`PGEEnv.isBareEnv`), lo stesso che
+   * desugarBPGroups applica per l'editor: due copie e' il modo in cui una
+   * delle due grafie smette di essere vista da una meta' del repo. */
   /* Un gruppo troncato puo' degenerare in un solo punto: li' l'envelope resta
      una LISTA, perche' `[0.5, 30]` da solo non e' un punto — sono due numeri,
      e il motore li leggerebbe come due punti senza y. */
-  const _asBare = (src, out) =>
-    (Array.isArray(out) && out.length === 1 && _isBareEnv(out[0])) ? out[0] : out;
+  const _asBare = (out) =>
+    (Array.isArray(out) && out.length === 1 && PGEEnv.isBareEnv(out[0])) ? out[0] : out;
 
   /* Il rescale NON tappa la x a 1: chi sfora resta fuori, ed e' `truncateEnvArray`
    * a decidere cosa farne. Il tappo c'era, e mangiava esattamente il dato che
@@ -88,7 +90,7 @@
       return { ...arr, points: rescaleEnvArray(arr.points, ratio) };
     }
     if (!Array.isArray(arr)) return arr;
-    if (_isBareEnv(arr)) return _asBare(arr, rescaleEnvArray([arr], ratio));
+    if (PGEEnv.isBareEnv(arr)) return _asBare(rescaleEnvArray([arr], ratio));
     return arr.map(item => {
       // Le due grafie di un punto insieme (PGEEnv.bpAt): il dict `{t, v}` e'
       // un punto per il motore (PGE #234) e per ogni altro lettore di questo
@@ -134,7 +136,7 @@
       return { ...arr, points: truncateEnvArray(arr.points, snap) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
-    if (_isBareEnv(arr)) return _asBare(arr, truncateEnvArray([arr], snap));
+    if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap));
     const result = [];
     let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
@@ -205,7 +207,7 @@
       return envArrayWouldTruncate(arr.points, ratio);
     }
     if (!Array.isArray(arr)) return false;
-    if (_isBareEnv(arr)) return envArrayWouldTruncate([arr], ratio);
+    if (PGEEnv.isBareEnv(arr)) return envArrayWouldTruncate([arr], ratio);
     return arr.some(item => {
       const bp = PGEEnv.bpAt(item);
       if (bp) return bp[0] * ratio > 1.0;
@@ -432,9 +434,9 @@
     // faceva, cioe' una coda che dichiara ancora la durata della testa senza
     // che niente lo dica. Il BP group nudo invece si taglia: sono punti.
     if (PGEEnv.isCompactBlock(arr)) return null;
-    if (_isBareEnv(arr)) {
+    if (PGEEnv.isBareEnv(arr)) {
       const out = sliceEnvArray([arr], cut, snap, inGroup);
-      return out === null ? null : _asBare(arr, out);
+      return out === null ? null : _asBare(out);
     }
     if (arr.some(PGEEnv.isCompactBlock)) return null;
     const k = 1 / (1 - cut);

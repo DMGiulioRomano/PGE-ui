@@ -77,7 +77,10 @@ assert("un breakpoint basta", E.wouldEmptyEnv([[0, 1]]) === false);
 assert("i breakpoint 3-tuple (interp per-punto) bastano",
   E.wouldEmptyEnv([[0, 1, "step"], [1, 0]]) === false);
 /* Il blocco compatto NUDO: il valore E' il blocco invece di contenerlo, e
-   nessun conteggio lo vede — ne' desugarBPGroups ne' unwrapEnv lo toccano. */
+   nessun conteggio lo vede. Qui si risponde senza incartarlo — la domanda e'
+   di conteggio, e un blocco vale gia' uno — mentre chi deve INDICIZZARE gli
+   item passa da desugarBPGroups, che incarta le due grafie nude allo stesso
+   modo (isBareEnv, test-bp-groups.js). */
 assert("il blocco compatto NUDO non svuota (il valore E' il blocco)",
   E.wouldEmptyEnv(LOOP) === false);
 assert("un envelope fatto di un solo blocco loop non svuota",
@@ -108,7 +111,7 @@ assert("passata da unwrapEnv (i suoi `items`) non lo e' piu'",
   E.wouldEmptyEnv(E.unwrapEnv(typed).items) === false);
 assert("e un envelope tipizzato SENZA punti resta vuoto anche dopo unwrapEnv",
   E.wouldEmptyEnv(E.unwrapEnv({ type: "step", points: [] }).items) === true);
-/* Il BP group nudo e' l'altra forma che va normalizzata dal CHIAMANTE, e con
+/* Il BP group nudo e' l'altra grafia che va normalizzata dal CHIAMANTE, e con
    l'altra funzione: desugarBPGroups, non unwrapEnv. */
 const group = [BP, "cubic"];
 assert("il BP group nudo, passato cosi', risulta vuoto (e' il contratto)",
