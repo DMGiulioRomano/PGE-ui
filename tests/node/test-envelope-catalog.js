@@ -188,6 +188,72 @@ assert("ogni voce dichiara chiave, etichetta, gruppo e bound",
 assert("nessuna chiave duplicata (la chiave sceglie la voce da aprire)",
   new Set(fatList.map(e => e.key)).size === fatList.length);
 
+/* ── e il verso opposto, che e' quello che mancava ───────────────────────────
+   Una voce di catalogo che il walk NON riscrive e' l'altra meta' dello stesso
+   difetto, e si vede ancora meno: l'envelope si apre, si disegna, si trascina
+   — poi un resize con freeze, o un taglio al cursore, sposta ogni altra curva
+   e lascia quella dov'era, nel vecchio riferimento temporale. Nessun errore,
+   nessun marcatore, e nemmeno la conferma «perdi dei breakpoint», perche'
+   quella legge una terza lista ancora (sotto).
+   Era il caso di `voices.pan.stepEnv`: il motore lo risolve al tempo del grain
+   (StepPanStrategy.get_pan_offset → resolve_param(self.step, time)) esattamente
+   come i suoi omonimi di pitch e pointer, che il walk riscriveva entrambi.
+   `deviationProbability` e' l'unica esenzione: il walk ci arriva con
+   _applyDeviationProb e non con `wf`, quindi il regex sopra non lo vede. Ha il
+   suo caso ESEGUITO qui sotto, o sarebbe un buco col nome di una regola. */
+const DP_KEY = "deviationProbability";
+/* Le due liste devono venire da due FILE diversi, o il confronto si chiude su
+   se stesso: `fatStream` e' costruito da `walkPaths`, quindi un campo tolto al
+   walk sparisce anche dal catalogo che lo riceve — e i due insiemi si
+   rimpiccioliscono insieme, verdi. Il verso opposto legge percio' i `path:`
+   dal sorgente del CATALOGO, che del walk non sa niente. */
+const catalogPaths = (() => {
+  const src = SG.codeOf(LIB("envelope-catalog.js"));
+  const out = [];
+  const re = /path:\s*\[([^\]]*)\]/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const parts = m[1].split(",").map(t => t.trim()).filter(Boolean);
+    // Solo i path di sole stringhe letterali: quello di deviation_probability
+    // per-parametro porta la variabile `pk`, ed e' l'esenzione qui sotto.
+    if (parts.every(t => /^"[^"]*"$/.test(t)))
+      out.push(parts.map(t => t.slice(1, -1)));
+  }
+  return out.filter(p => p[0] !== DP_KEY);
+})();
+// Un elenco vuoto costruirebbe zero asserzioni e passerebbe.
+assert("i path si leggono davvero dal sorgente del catalogo (>= 20)",
+  catalogPaths.length >= 20, "trovati: " + catalogPaths.length);
+/* …e quel che si legge e' quel che il catalogo EMETTE: senza questo la lettura
+   potrebbe inseguire righe morte e il confronto sotto girerebbe a vuoto. */
+assert("i path letti coincidono con quelli emessi su fatStream",
+  fatList.map(e => e.path).filter(p => p[0] !== DP_KEY)
+    .every(p => catalogPaths.some(c => eq(c, p))));
+for (const p of catalogPaths)
+  assert("il walk riscrive " + p.join("."), walkPaths.some(w => eq(w, p)));
+{
+  const dp = { id: "s", deviationProbability: { volume: BP.map(b => b.slice()) } };
+  const moved = EU.rescaleStreamEnvelopes(dp, 10, 5);   // ratio = 2
+  assert("deviationProbability e' esente dal regex, non dal walk",
+    eq(moved.deviationProbability.volume, [[0, 0], [1, 50], [2, 100]]));
+}
+
+/* ── la terza lista: l'avviso che parla PRIMA del gesto ──────────────────────
+   `streamWouldTruncate` trascrive gli stessi campi una terza volta, ed e' lei
+   a decidere se chiedere conferma quando un resize taglia dei breakpoint. Un
+   campo che le manca viene troncato in silenzio: il walk lo riscrive, ma
+   nessuno lo aveva annunciato. La si interroga per COMPORTAMENTO, campo per
+   campo — leggerne l'elenco sarebbe la quarta copia della stessa lista. */
+console.log("\n── l'avviso di troncamento copre gli stessi campi ──");
+const PAST_END = [[0, 0], [1, 100]];   // a ratio 2 il punto a x=1 esce dalla finestra
+for (const p of walkPaths) {
+  const s = {};
+  let cur = s;
+  for (const k of p.slice(0, -1)) cur = (cur[k] = cur[k] || {});
+  cur[p[p.length - 1]] = PAST_END.map(b => b.slice());
+  assert("streamWouldTruncate vede " + p.join("."), EU.streamWouldTruncate(s, 2) === true);
+}
+
 /* ── loop_unit: DUE provenienze, non tre ─────────────────────────────────────
    La #140 ne chiedeva tre perche' all'epoca `loop_unit` ereditava da
    `time_mode`. PGE #222 ha tagliato quel fallback (PGE-ui #149): le

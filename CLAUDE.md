@@ -61,8 +61,10 @@ exists, the fourth only when a browser is installed):
   guards on the UI wiring), and `test-envelope-catalog.js` (the two pure
   functions #140 pulled out of `EnvelopeEditor.jsx`: `wouldEmptyEnv`'s two
   historic false positives and the contract that it takes the *items*, plus
-  `listEnvelopes` — its totality against the walk of `envelope-utils.js`, read
-  out of that module's source rather than transcribed, the loop/grain unit
+  `listEnvelopes` — its totality against the walk of `envelope-utils.js` **in
+  both directions**, each side read out of its own module's source rather than
+  transcribed, plus `streamWouldTruncate` asked by behaviour field by field,
+  the loop/grain unit
   resolution and the inert `deviation_probability` keys — with source guards
   that the component keeps no copy), and `test-stream-id.js` (`allocStreamIds` never
   reuses an id that still owns a stem, plus source guards on its three call sites
@@ -651,6 +653,8 @@ The `envelope` per-param key is always inert (its spec is `is_smart=False`). The
 **`wouldEmptyEnv` and `listEnvelopes` live in `src/lib/`, not in the component** (#140), for the reason `history-core.js`, `render-status.js` and `tweaks-store.js` do: they are pure, they decide in the component's stead, and an error in either is *silent* — `wouldEmptyEnv` either lets through a body the engine rejects or refuses a full envelope it doesn't recognize, and a missing `listEnvelopes` entry makes a written envelope unreachable while the Inspector opens a different one. `wouldEmptyEnv` sits in `envelope-loops.js`, beside the three predicates its answer is the sum of; `listEnvelopes` has its own `envelope-catalog.js` (`window.PGEEnvCatalog`), since it pulls in `loopEnvMax`/`loopUnitSuffix`, `grainUnitBounds` and the inert-key reason. `EnvelopeEditor.jsx` binds both by name at the top of the file and keeps the glue.
 
 Their only coverage before that was **by extraction** — `extractFn` + `new Function` over the JSX, inside a `try` that fell back to `() => []` — so a broken extraction left half the assertions green (`{}.inert === undefined` is true of an empty list). `tests/node/test-envelope-catalog.js` runs them instead.
+
+**The catalog and the resize walk are one list written three times, and the three must agree.** `listEnvelopes` says what can be opened and drawn; `_applyEnvFields` (`envelope-utils.js`) is what `rescaleStreamEnvelopes` / `truncateStreamEnvelopes` / `sliceStreamEnvelopes` rewrite on every resize and every split; `streamWouldTruncate` is the third, and it is the one that decides whether to ask before a resize eats breakpoints. A field the walk rewrites and the catalog can't open is an envelope the editor moves and nobody can see. The other direction is quieter and was live: `voices.pan.stepEnv` was in the catalog and in neither of the other two, so that curve — which the engine resolves against stream time, `StepPanStrategy.get_pan_offset` → `resolve_param(self.step, time)`, exactly like its `pitch` and `pointer` namesakes — stayed in the old time frame while every other curve moved, with no error and not even the "you'll lose breakpoints" confirm. `test-envelope-catalog.js` pins all three, and the two lists it compares are **read from two different files** (the `wf(…)` calls out of `envelope-utils.js`, the `path:` literals out of `envelope-catalog.js`): the first version built its fat stream out of the walk, so a field dropped from the walk vanished from both sides at once and the check stayed green on the very defect it was written for. `streamWouldTruncate` is asked by *behaviour*, field by field, never by reading its list — that would be a fourth copy. `deviationProbability` is the one exemption, since the walk reaches it through `_applyDeviationProb` rather than `wf`, and the exemption has its own executed case.
 
 `wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 

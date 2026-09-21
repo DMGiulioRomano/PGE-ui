@@ -244,7 +244,14 @@
         pitch:        stream.voices.pitch        ? { ...stream.voices.pitch,        ...wf(stream.voices.pitch,        "stepEnv"), ...wf(stream.voices.pitch,        "pitch_rangeEnv")    } : stream.voices.pitch,
         onset_offset: stream.voices.onset_offset ? { ...stream.voices.onset_offset, ...wf(stream.voices.onset_offset, "stepEnv"), ...wf(stream.voices.onset_offset, "baseEnv"), ...wf(stream.voices.onset_offset, "max_offsetEnv") } : stream.voices.onset_offset,
         pointer:      stream.voices.pointer      ? { ...stream.voices.pointer,      ...wf(stream.voices.pointer,      "stepEnv"), ...wf(stream.voices.pointer,      "pointer_rangeEnv") } : stream.voices.pointer,
-        pan:          stream.voices.pan          ? { ...stream.voices.pan,          ...wf(stream.voices.pan,          "spreadEnv") } : stream.voices.pan,
+        // `step` e' un envelope nel tempo come i suoi omonimi di pitch e pointer:
+        // il motore lo risolve al tempo del grain (StepPanStrategy.get_pan_offset →
+        // resolve_param(self.step, time)). Mancava qui e in streamWouldTruncate,
+        // ed era l'unico campo che il catalogo sa aprire e il walk non riscriveva:
+        // dopo un resize con freeze, o un taglio al cursore, quella curva restava
+        // nel vecchio riferimento temporale mentre tutte le altre si spostavano —
+        // in silenzio, e senza nemmeno la conferma "perdi dei breakpoint".
+        pan:          stream.voices.pan          ? { ...stream.voices.pan,          ...wf(stream.voices.pan,          "spreadEnv"), ...wf(stream.voices.pan, "stepEnv") } : stream.voices.pan,
       } : stream.voices,
     };
   }
@@ -344,6 +351,7 @@
       stream.voices && stream.voices.pointer      && stream.voices.pointer.stepEnv,
       stream.voices && stream.voices.pointer      && stream.voices.pointer.pointer_rangeEnv,
       stream.voices && stream.voices.pan          && stream.voices.pan.spreadEnv,
+      stream.voices && stream.voices.pan          && stream.voices.pan.stepEnv,
     ];
     return fields.some(f => f && envArrayWouldTruncate(f, ratio));
   }
