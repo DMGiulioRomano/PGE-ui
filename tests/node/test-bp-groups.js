@@ -236,6 +236,77 @@ console.log("\n── firstBreakpointY: la y del primo punto, in ogni grafia ─
     FB([], undefined) === undefined && FB([[0, 0]], undefined) === 0);
 }
 
+/* ── le due grafie NUDE arrivano all'editor allo stesso modo ─────────────────
+   `[points, interp]` e `[pattern, end_time, n_reps]` sono envelope INTERI, non
+   item dentro una lista, e il motore li legge come tali (envelope_builder:
+   is_bp_group / is_compact_format sul raw_points, prima di iterare). Il
+   gruppo lo incartava gia' `desugarBPGroups`; il blocco no, e si vedeva in un
+   posto solo — quello che conta. L'EnvelopeEditor costruisce `rawEnv` e
+   `expandMixed` su `desugarBPGroups(unwrapEnv(v).items)`, e di un blocco nudo
+   `unwrapEnv` rende i suoi TRE elementi: li' nessuno e' un punto ne' un
+   blocco, quindi canvas VUOTO su un envelope pieno (26 stream nel corpus del
+   motore, `PGE_envelope_syntax_test.yml` in testa). E il doppio click che
+   segue — l'unico gesto disponibile su una tela vuota — ci appendeva un
+   breakpoint: `[pattern, end, n_reps, [x, y]]`, che per il motore non e' piu'
+   compatto (item[3] non e' una stringa) e da cui sopravvive il solo
+   breakpoint. Il blocco sparito, senza un errore.
+   La regola si interroga per CONFRONTO: la grafia nuda deve arrivare
+   all'editor come la stessa identica grafia dentro una lista. */
+console.log("\n── le grafie nude entrano nell'editor come quelle annidate ──");
+{
+  const BARE_BLOCK = [[[0, 5], [50, 30]], 0.8, 2];
+  const BARE_GROUP = ZONE_A;
+  // L'espressione dell'editor, non una sua parafrasi (EnvelopeEditor.jsx:588).
+  const items = (v) => E.desugarBPGroups(E.unwrapEnv(v).items);
+
+  assert("isBareEnv riconosce le due grafie nude e nient'altro",
+    E.isBareEnv(BARE_BLOCK) && E.isBareEnv(BARE_GROUP) &&
+    !E.isBareEnv([[0, 0], [1, 1]]) && !E.isBareEnv([BARE_BLOCK]) &&
+    !E.isBareEnv({ type: "cubic", points: [[0, 0], [1, 1]] }));
+
+  assert("il blocco nudo entra come quello dentro una lista",
+    eq(items(BARE_BLOCK), items([BARE_BLOCK])),
+    JSON.stringify(items(BARE_BLOCK)));
+  assert("…e resta UN item, il blocco, non i suoi tre elementi",
+    items(BARE_BLOCK).length === 1 && E.isCompactBlock(items(BARE_BLOCK)[0]));
+  assert("il gruppo nudo entra come quello dentro una lista (regola gia' in vigore)",
+    eq(items(BARE_GROUP), items([BARE_GROUP])));
+
+  /* L'invariante su cui l'editor poggia: `blocks[].originalIdx` indicizza la
+     lista desugarata. Con il blocco nudo la lista non conteneva blocchi, quindi
+     expandMixed non ne trovava nessuno — il canvas vuoto. */
+  const exp = E.expandMixed(items(BARE_BLOCK));
+  assert("expandMixed disegna i punti del blocco nudo",
+    exp.points.length === 4 && eq(exp.points.map(p => p[1]), [5, 30, 5, 30]),
+    JSON.stringify(exp.points));
+  assert("…e ogni originalIdx indicizza davvero un blocco della lista",
+    exp.blocks.length === 1 &&
+    exp.blocks.every(b => E.isCompactBlock(items(BARE_BLOCK)[b.originalIdx])));
+  assert("il disegno e' lo stesso di quello annidato",
+    eq(E.expandMixed(items(BARE_BLOCK)), E.expandMixed(items([BARE_BLOCK]))));
+
+  /* Il gesto che distruggeva il blocco: su una tela vuota il doppio click
+     appende un breakpoint alla lista. Sulla lista giusta il blocco resta. */
+  const afterDblClick = [...items(BARE_BLOCK), [0.9, 42]];
+  const committed = E.wrapEnv(E.resugarBPGroups(afterDblClick, "linear"), "linear");
+  assert("aggiungere un breakpoint non fa sparire il blocco",
+    E.envHasLoop(committed) && committed.length === 2,
+    JSON.stringify(committed));
+  assert("e quel che si committa e' leggibile come prima: un blocco piu' un bp",
+    E.isCompactBlock(committed[0]) && E.isBreakpoint(committed[1]));
+
+  /* Una regola sola: il walk sui tempi di envelope-utils incarta le stesse due
+     grafie, e lo chiede a questa funzione invece di tenerne una copia. */
+  const SG = require("./source-guard.js");
+  const euSrc = SG.codeOf(path.join(__dirname, "../../src/lib/envelope-utils.js"));
+  assert("il walk sui tempi usa la stessa regola, non una copia",
+    /PGEEnv\.isBareEnv\(/.test(euSrc) &&
+    !/isBPGroup\(arr\)\s*\|\|\s*PGEEnv\.isCompactBlock\(arr\)/.test(euSrc));
+  assert("…e sul blocco nudo continua a muoversi come prima del riuso",
+    U.rescaleEnvArray(BARE_BLOCK, 2)[1] === 1.6 &&
+    E.isCompactBlock(U.rescaleEnvArray(BARE_BLOCK, 2)));
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

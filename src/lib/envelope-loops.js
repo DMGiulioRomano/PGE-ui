@@ -43,11 +43,12 @@
      Sta accanto a isBreakpoint e NON dentro: isBreakpoint dice anche cosa il
      canvas dell'EnvelopeEditor sa disegnare e trascinare, e un dict il canvas
      non lo disegna — allargarla renderebbe trascinabile quel che non si vede.
-     Chi invece deve solo LEGGERE la y di un punto chiede a questa, ed e' per
-     questo che sta nel modulo: i lettori sono due (wouldEmptyEnv, che conta i
-     punti veri, e firstBreakpointY qui sotto, che ne legge il valore per conto
-     di ogni toggle env→scalare) e due copie e' il modo in cui una di esse
-     smette di valere.
+     Chi invece deve solo LEGGERE un punto chiede a questa, ed e' per questo che
+     sta nel modulo: i lettori sono tre (wouldEmptyEnv, che conta i punti veri;
+     firstBreakpointY qui sotto, che ne legge il valore per conto di ogni
+     toggle env→scalare; e bpAt, per cui camminano sui tempi il rescale del
+     freeze, il troncamento e il taglio al cursore) e due copie e' il modo in
+     cui una di esse smette di valere.
      Il `typeof` e' piu' stretto della presenza delle chiavi che il motore
      testa — e quella lettura resta locale a deviation-probability.js, dove la
      domanda e' se il motore costruira' il corpo, non se c'e' un numero da
@@ -108,6 +109,73 @@
            typeof item[1] === "string";
   }
 
+  /* ---------- le grafie NUDE: il valore E' il gruppo, o E' il blocco --------
+     `[[[0,0],[1,100]], "cubic"]` e `[[[0,0],[100,1]], 4, 2]` sono envelope
+     INTERI, non item dentro una lista, e il motore li legge come tali
+     (envelope_builder.build: is_compact_format / is_bp_group sul raw_points
+     prima di iterare). Ogni lettore di questo repo ha quindi due domande sulla
+     stessa lista — "e' un envelope?" e "e' un item?" — e la prima e' questa.
+     Una regola sola perche' i lettori sono tre e lontani: desugarBPGroups qui
+     sotto, che le incarta per l'editor; il walk sui tempi di envelope-utils.js
+     (rescale / truncate / slice), che le incarta per riusare il suo mapper; e
+     wouldEmptyEnv, che sul blocco risponde senza incartare perche' la sua e'
+     una domanda di conteggio. */
+  function isBareEnv(env) {
+    return isBPGroup(env) || isCompactBlock(env);
+  }
+
+  /* ---------- wouldEmptyEnv (PGE #209) ----------
+     Un envelope resterebbe senza contenuto? Un array senza nessun breakpoint
+     isolato E senza nessun blocco loop e' `[]` per il serializer, cioe' il
+     primo dei corpi che il motore rifiuta da PGE #209
+     (InvalidFieldValueError). Nessuna cancellazione dell'editor deve poterci
+     arrivare: il guard sta qui una volta sola perche' le vie sono cinque
+     (Delete su un breakpoint, Delete su un blocco, il bottone "remove loop",
+     il doppio click su un breakpoint, e il paste di un envelope vuoto), e
+     finche' ne restava una scoperta la riga di CLAUDE.md che dichiara
+     l'editor incapace di produrre quei corpi era falsa.
+
+     Vive qui e non nel componente (#140) per la ragione dei suoi tre vicini:
+     e' pura, decide al posto della colla React, e i suoi due falsi positivi
+     storici si vedono solo eseguendola. Sta accanto a isBreakpoint /
+     isDictBreakpoint / isCompactBlock perche' la sua risposta E' la loro
+     somma: un predicato che cambia qui cambia il guard nello stesso file,
+     invece che in un componente che nessun test carica.
+
+     Riceve gli ITEM: la forma desugarata, e non quella wrappata. Su un BP
+     group nudo (`[[[0,0],[0.5,50],[1,100]], "cubic"]`, PGE #64) direbbe
+     `true` su un envelope pieno, perche' ne' isBreakpoint ne' isCompactBlock
+     riconoscono il gruppo — quello lo normalizza desugarBPGroups, che ogni
+     chiamante applica. E chi ha in mano una forma wrappata deve prima passare
+     da `unwrapEnv`, non da desugarBPGroups: `wrapEnv` restituisce il dict
+     {type, points} per un envelope di soli breakpoint con interp globale non
+     lineare, desugarBPGroups su un non-array lo lascia intatto, e qui un
+     non-array e' "vuoto". Era il difetto del paste (`handlePasteEnv`), che
+     valutava l'output di wrapEnv e rifiutava in silenzio ogni envelope
+     tipizzato.
+
+     Due contenuti che il conteggio non vedeva da se', ed erano falsi positivi:
+       - il blocco compatto NUDO (`[[[0,0],[100,1]],1,4]`), dove il valore E'
+         il blocco invece di contenerlo. Qui si risponde senza incartarlo,
+         perche' la domanda e' di conteggio e un blocco vale gia' uno; chi
+         invece deve INDICIZZARE gli item passa da desugarBPGroups, che
+         incarta le due grafie nude allo stesso modo (isBareEnv).
+       - il breakpoint in forma dict `{t, v, type?}`, che il motore normalizza
+         in `[t, v]` prima di guardarlo (envelope_builder.py:132).
+         isBreakpoint non va allargata — la usa l'editor per decidere cosa e'
+         trascinabile, e un dict il canvas non lo disegna — quindi il predicato
+         e' il suo vicino di casa, isDictBreakpoint, condiviso con chi la y di
+         quel punto la legge (loopSeedFrom, Inspector). */
+  function wouldEmptyEnv(next) {
+    if (isCompactBlock(next)) return false;   // il valore E' il blocco
+    if (!Array.isArray(next)) return true;
+    // Il dict `{t, v}` e' un punto vero, e lo dice il predicato accanto — lo
+    // stesso che risponde a firstBreakpointY, che di quel punto legge la y.
+    const bps   = next.filter((it) => isBreakpoint(it) || isDictBreakpoint(it)).length;
+    const loops = next.filter(isCompactBlock).length;
+    return bps + loops < 1;
+  }
+
   function envHasLoop(env) {
     const items = isTypedEnv(env) ? env.points : env;
     return Array.isArray(items) && items.some(isCompactBlock);
@@ -132,7 +200,19 @@
                via, come fa il context-menu per-segmento). Il ciclo
                desugar∘resugar è idempotente sugli indici. */
   function desugarBPGroups(items) {
-    if (isBPGroup(items)) items = [items]; // forma diretta
+    // Forma diretta: il valore E' il gruppo, oppure E' il blocco (isBareEnv).
+    // Il blocco mancava, e non si vedeva da nessuna parte tranne l'unico posto
+    // che conta: `unwrapEnv` di un blocco nudo rende i suoi TRE elementi
+    // (pattern, end_time, n_reps), qui nessuno dei tre e' un item, e
+    // l'EnvelopeEditor ci costruisce sopra `rawEnv` e `expandMixed`. Risultato:
+    // canvas vuoto su un envelope pieno — 26 stream nel corpus del motore — e
+    // il primo doppio click ci appendeva un breakpoint, cioe' scriveva
+    // `[pattern, end, n_reps, [x, y]]`, che il motore non legge piu' come
+    // compatto (item[3] non e' una stringa) e da cui salva il solo breakpoint:
+    // il blocco sparito in silenzio. Incartarlo qui e' la stessa riga che il
+    // gruppo aveva gia', e tiene allineati gli indici di rawEnv con gli
+    // `originalIdx` di expandMixed, che e' l'invariante dell'editor.
+    if (isBareEnv(items)) items = [items];
     if (!Array.isArray(items)) return items;
     const out = [];
     for (const it of items) {
@@ -209,10 +289,39 @@
      la curva che vale zero da quella che non si sa leggere, ed è così che uno
      zero legittimo diventava una costante che la curva non aveva mai avuto. */
   function firstBreakpointY(env, fallback) {
-    const bp = desugarBPGroups(unwrapEnv(env).items)[0];
-    if (isBreakpoint(bp)) return bp[1];
-    if (isDictBreakpoint(bp)) return bp.v;
-    return fallback;
+    const bp = bpAt(desugarBPGroups(unwrapEnv(env).items)[0]);
+    return bp ? bp[1] : fallback;
+  }
+
+  /* ---------- le due grafie di un punto, lette e riscritte come sono --------
+     `bpAt` torna [x, y, interp|null] per l'una e per l'altra — null se l'item
+     non e' un punto — e `bpAtX` / `bpMake` le riscrivono NELLA GRAFIA trovata.
+     Serve a chi cammina sull'asse dei TEMPI (il rescale del freeze, il
+     troncamento, il taglio al cursore): li' il dict `{t, v}` era invisibile,
+     quindi quella curva restava nel vecchio riferimento temporale mentre ogni
+     altra si spostava. Convertirla in `[t, v]` per farla vedere al walk
+     sarebbe la cura peggiore del male: migrerebbe la grafia dell'autore a
+     ogni resize, e il walk sulle y (envelope-utils._mapGrainEnvY) la rispetta
+     da PGE #234.
+     `bpMake` costruisce i due y che il taglio CALCOLA invece di sceglierli —
+     la chiusura del truncate, l'apertura dello slice — nella grafia del punto
+     accanto, perche' un envelope non diventi meta' dict e meta' array per un
+     ridimensionamento. */
+  function bpAt(item) {
+    if (isBreakpoint(item))
+      return [item[0], item[1], typeof item[2] === "string" ? item[2] : null];
+    if (isDictBreakpoint(item))
+      return [item.t, item.v, typeof item.type === "string" ? item.type : null];
+    return null;
+  }
+  function bpAtX(item, x) {
+    if (isDictBreakpoint(item)) return { ...item, t: x };
+    const c = [...item]; c[0] = x; return c;
+  }
+  function bpMake(like, x, y, interp) {
+    if (isDictBreakpoint(like))
+      return interp ? { t: x, v: y, type: interp } : { t: x, v: y };
+    return interp ? [x, y, interp] : [x, y];
   }
 
   /* ---------- distribuzioni temporali (time_distribution.py) ---------- */
@@ -864,7 +973,9 @@
 
   window.PGEEnv = {
     DISCONTINUITY_OFFSET,
-    isBreakpoint, isDictBreakpoint, isCompactBlock, envHasLoop,
+    isBreakpoint, isDictBreakpoint, isCompactBlock, isBareEnv, envHasLoop,
+    bpAt, bpAtX, bpMake,
+    wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,

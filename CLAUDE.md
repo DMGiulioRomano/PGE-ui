@@ -30,7 +30,9 @@ exists, the fourth only when a browser is installed):
 - **`make tests-node`** (node, no deps beyond npm) — `tests/node/test-yaml-bridge.js`
   (YAML round-trip fidelity incl. `serializeStream`/`parseStream`, with the real
   engine `configs/*.yml` as fixtures when present), `test-envelope-utils.js`
-  (rescale/truncate/slice math — the last one is the split's tail half), `test-fingerprint.js` (fingerprint parity: which
+  (rescale/truncate/slice math — the last one is the split's tail half — plus
+  the graphies the time walk used to miss, each asked by comparison against its
+  own nested or array twin), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary, incl. the engine-semantics axis, source
   guards on the chain that carries the version from the engine to the dot, and
@@ -58,7 +60,15 @@ exists, the fourth only when a browser is installed):
   (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier,
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
-  guards on the UI wiring), and `test-stream-id.js` (`allocStreamIds` never
+  guards on the UI wiring), and `test-envelope-catalog.js` (the two pure
+  functions #140 pulled out of `EnvelopeEditor.jsx`: `wouldEmptyEnv`'s two
+  historic false positives and the contract that it takes the *items*, plus
+  `listEnvelopes` — its totality against the walk of `envelope-utils.js` **in
+  both directions**, each side read out of its own module's source rather than
+  transcribed, plus `streamWouldTruncate` asked by behaviour field by field,
+  the loop/grain unit
+  resolution and the inert `deviation_probability` keys — with source guards
+  that the component keeps no copy), and `test-stream-id.js` (`allocStreamIds` never
   reuses an id that still owns a stem, plus source guards on its three call sites
   and on `deleteStream` staying a data-only mutation), and `test-stem-index.js`
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, the
@@ -636,13 +646,27 @@ Two engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123):
 Per-param key lists — important distinction:
 - `PARAM_KEYS` (5): keys the engine consults **always** (`volume`, `pan`, `duration`, `pitch`, `pointer`).
 - `liveParamKeys(stream)` (adds 3 conditional on the `grain` block): `reverse`/`read_direction` (exclusive group, engine reads exactly one) and `pc_rand_envelope` (live unless `grain.envelope` is transition/multistate).
-- `ALL_PARAM_KEYS` (8 + dead `envelope`): every key the editor may find written — used by the envelope walk (`envelope-utils.js`) and `listEnvelopes` in the EnvelopeEditor, which need format-agnostic coverage regardless of liveness.
+- `ALL_PARAM_KEYS` (8 + dead `envelope`): every key the editor may find written — used by the envelope walk (`envelope-utils.js`) and `listEnvelopes` (`envelope-catalog.js`), which need format-agnostic coverage regardless of liveness.
 
 `isEnvValue` — which decides global-vs-per-param — is the engine's dict rule verbatim: **`'points' in obj`**, nothing more.
 
-The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGE.deviationProbInertReason` (one function, shared).
+The `envelope` per-param key is always inert (its spec is `is_smart=False`). The Inspector shows rows for it so it's visible and removable; the EnvelopeEditor's selector marks it the same way via `window.PGEDeviationProb.inertReason` (one function, shared). It sat on `window.PGE` — i.e. in `Inspector.jsx` — until #140 made the catalog a lib, at which point reading it there would have been a `src/lib/` module depending on a component.
 
-`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, normalized inside the function, and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
+**`wouldEmptyEnv` and `listEnvelopes` live in `src/lib/`, not in the component** (#140), for the reason `history-core.js`, `render-status.js` and `tweaks-store.js` do: they are pure, they decide in the component's stead, and an error in either is *silent* — `wouldEmptyEnv` either lets through a body the engine rejects or refuses a full envelope it doesn't recognize, and a missing `listEnvelopes` entry makes a written envelope unreachable while the Inspector opens a different one. `wouldEmptyEnv` sits in `envelope-loops.js`, beside the three predicates its answer is the sum of; `listEnvelopes` has its own `envelope-catalog.js` (`window.PGEEnvCatalog`), since it pulls in `loopEnvMax`/`loopUnitSuffix`, `grainUnitBounds` and the inert-key reason. `EnvelopeEditor.jsx` binds both by name at the top of the file and keeps the glue.
+
+The catalog owns no table of its own, and the last one to go was the pitch unit's
+**symbol**: the two `stream.pitch` rows spelled the six cases out again in a
+ternary chain, while the two `voices.pitch` rows beside them (and the Inspector,
+on the same curve's row) ask `PGEEnv.pitchUnitSymbol`. On the five presets the
+copies agreed; on `edo` they did not — `°edo` against the module's `°/N` — so the
+same curve carried two labels in one panel, and the catalog's one lost the
+divisions count, which is the only thing that symbol has to say.
+
+Their only coverage before that was **by extraction** — `extractFn` + `new Function` over the JSX, inside a `try` that fell back to `() => []` — so a broken extraction left half the assertions green (`{}.inert === undefined` is true of an empty list). `tests/node/test-envelope-catalog.js` runs them instead.
+
+**The catalog and the resize walk are one list written three times, and the three must agree.** `listEnvelopes` says what can be opened and drawn; `_applyEnvFields` (`envelope-utils.js`) is what `rescaleStreamEnvelopes` / `truncateStreamEnvelopes` / `sliceStreamEnvelopes` rewrite on every resize and every split; `streamWouldTruncate` is the third, and it is the one that decides whether to ask before a resize eats breakpoints. A field the walk rewrites and the catalog can't open is an envelope the editor moves and nobody can see. The other direction is quieter and was live: `voices.pan.stepEnv` was in the catalog and in neither of the other two, so that curve — which the engine resolves against stream time, `StepPanStrategy.get_pan_offset` → `resolve_param(self.step, time)`, exactly like its `pitch` and `pointer` namesakes — stayed in the old time frame while every other curve moved, with no error and not even the "you'll lose breakpoints" confirm. `test-envelope-catalog.js` pins all three, and the two lists it compares are **read from two different files** (the `wf(…)` calls out of `envelope-utils.js`, the `path:` literals out of `envelope-catalog.js`): the first version built its fat stream out of the walk, so a field dropped from the walk vanished from both sides at once and the check stayed green on the very defect it was written for. `streamWouldTruncate` is asked by *behaviour*, field by field, never by reading its list — that would be a fourth copy. `deviationProbability` is the one exemption, since the walk reaches it through `_applyDeviationProb` rather than `wf`, and the exemption has its own executed case.
+
+`wouldEmptyEnv` guards all five delete/paste paths in the EnvelopeEditor. It takes the **desugared items** (not wrapped). A caller holding a wrapped value must `unwrapEnv` first. Two forms the item count can't see on its own: a bare compact block, answered inside the function without wrapping it (a count question — a block already counts as one; whoever needs to *index* the items goes through `desugarBPGroups`, which wraps both bare graphies alike), and a dict breakpoint `{t, v}` — that one through `PGEEnv.isDictBreakpoint`, shared with `PGEEnv.firstBreakpointY`, which reads the same point's y.
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
@@ -1197,8 +1221,65 @@ held last value when nothing survives the cut (the engine rejects an empty
 envelope). `snapForDomain` applies there too — that interpolated point is a
 *computed* y, and on `read_direction` an unsnapped one is a parse error.
 **Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
-half isn't defined, so `sliceEnvArray` returns `null` on an array holding one,
-the field is left verbatim, and the count comes back as `skipped` for the toast.
+half isn't defined, so `sliceEnvArray` returns `null` on an array holding one —
+and on a **bare** one, the value that *is* the block — the field is left
+verbatim, and the count comes back as `skipped` for the toast.
+
+**The time walk reads every graphy, because the y walk already does.** An
+envelope has more than one spelling and the engine reads them all (PGE #234): a
+point is `[t, v]` *or* the dict `{t, v, type?}`, and a BP group or a compact
+block can be the **whole value** instead of an item inside a list — the two bare
+forms neither `unwrapEnv` nor `desugarBPGroups` touch, which is why
+`wouldEmptyEnv` normalizes the bare block by itself and says so. `_mapGrainEnvY`
+— the *y* walk of this same module, the one a `duration_unit` change drives —
+has handled all of them since #234. The *x* walk (`rescaleEnvArray`,
+`truncateEnvArray`, `envArrayWouldTruncate`, `sliceEnvArray`) read only the
+nested array forms, so those three graphies stayed in the old time frame while
+every other curve on the stream moved: no error, no marker, and not even the
+"you'll lose breakpoints" confirm, because `envArrayWouldTruncate` was looking
+the same way. In the engine's own config corpus that was **31 envelopes across
+7 files** — `PGE_wrap_test.yml`'s densities, `PGE_read_direction_demo.yml`'s
+directions, the `offset_range` of the two `pino`s. One spot was worse than
+frozen: `rescaleEnvArray`'s `{type, points}` branch was the only one that
+didn't recurse into the item mapper, so it read `p[0]`/`p[1]` off a dict and
+wrote `[NaN, undefined]` — the envelope *destroyed* by a resize — while
+silently dropping a 3-tuple's per-point interp.
+
+The reading rule is one function, `PGEEnv.bpAt` (with `bpAtX` / `bpMake`), in
+`envelope-loops.js` beside the predicates it is made of — the third reader of
+the dict spelling, after `wouldEmptyEnv` counting points and `firstBreakpointY`
+reading one. **It never migrates a spelling**: a dict comes back a dict, and the
+two y's the cut *computes* (truncate's closing point, slice's opening one) take
+the spelling of the point beside them. Rewriting `{t, v}` as `[t, v]` would be
+the cure worse than the disease — a fingerprint moved, and a yellow dot, on
+every resize of a stream nobody edited. The bare forms are normalized in one
+line per function (wrap in a list, hand back as found, `PGEEnv.isBareEnv` +
+`_asBare`), the single exception being the bare compact block in
+`sliceEnvArray`, refused like its nested twin. `test-envelope-utils.js` pins it
+as a **comparison**, not as numbers: the bare graphy must behave like the
+identical graphy inside a list, the dict like its array namesake, and both
+walks — x and y — must see all four.
+
+**And the editor reaches those two graphies through one door, `desugarBPGroups`.**
+`isBareEnv` (`isBPGroup || isCompactBlock`) is one rule in `envelope-loops.js`
+with two readers — the walk above, and that function's `// forma diretta` line —
+because a second copy is how one of the two graphies stops being seen by half
+the repo. It used to know only the group, and the gap showed in exactly one
+place, the one that matters: `unwrapEnv` of a bare *block* hands back its three
+elements (`pattern`, `end_time`, `n_reps`), none of which is an item, and
+`EnvelopeEditor.jsx` builds `rawEnv` **and** `expandMixed` on top of that pair
+(`desugarBPGroups(unwrapEnv(v).items)`). So a full envelope opened on an **empty
+canvas** — 26 streams in the engine's own config corpus, `PGE_envelope_syntax_test.yml`
+first among them — and the one gesture an empty canvas offers, a double click,
+appended a breakpoint to that list: `[pattern, end, n_reps, [x, y]]`, which the
+engine no longer reads as compact (`item[3]` is not a string) and from which
+only the breakpoint survives. The block gone, with no error. Wrapping it here
+also keeps `rawEnv`'s indices aligned with `expandMixed`'s `originalIdx`, which
+is the editor's invariant — normalizing in `expandMixed` alone would have
+desynchronized them. `wouldEmptyEnv` still answers on the bare block without
+wrapping it, because its question is a count and a block already counts as one;
+`test-bp-groups.js` asks the rest by **comparison**, the bare graphy against the
+identical one inside a list, up to the double click that used to eat it.
 
 ### Fingerprint parity
 
@@ -1776,7 +1857,7 @@ needs its control: with a `PATH` that narrow, *any* failure would keep a
 `status !== 0` assert green, so the same `PATH` with `realpath` back in it must
 succeed.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a

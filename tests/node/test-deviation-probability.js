@@ -343,13 +343,13 @@ assert("la riga inerte e' marcata, non solo spiegata dal title",
    a `pc_rand_envelope` era incondizionato: su quello stream le due righe si
    mandavano l'una all'altra e nessuna diceva la verita'. */
 console.log("\n── il motivo dell'inerzia: tre casi, non due ──");
-const inertReason = (() => {
-  try {
-    return new Function(extractFn(inspSrc, "deviationProbInertReason") +
-                        "\nreturn deviationProbInertReason;")();
-  } catch (e) { return null; }
-})();
-assert("l'Inspector ha una funzione sola per il motivo dell'inerzia",
+/* La ragione dell'inerzia sta nel MODULO dalla #140: il catalogo
+   dell'EnvelopeEditor e' diventato una lib (envelope-catalog.js) e leggerla
+   da window.PGE sarebbe stata una lib che dipende da un componente. Qui la si
+   chiama, invece di estrarla dal JSX con un try/catch che su un'estrazione
+   rotta rispondeva null. */
+const inertReason = D.inertReason;
+assert("la ragione dell'inerzia e' una funzione sola, e sta nel modulo",
   typeof inertReason === "function");
 const reason = (key, grain) =>
   typeof inertReason === "function"
@@ -375,44 +375,26 @@ assert("envelope, con pc_rand_envelope a sua volta inerte → dice anche quello"
   /grain\.envelope/.test(reason("envelope", TRANSITION)) &&
   /grain\.envelope/.test(reason("envelope", MULTISTATE)));
 assert("il title della riga viene da li', non da un ternario inline",
-  /title=\{deviationProbInertReason\(p\.key, liveKeys\)\}/.test(inspSrc));
+  /title=\{PGEDeviationProb\.inertReason\(p\.key, liveKeys\)\}/.test(inspSrc));
+assert("e l'Inspector non ne tiene una copia propria",
+  !/function\s+deviationProbInertReason\s*\(/.test(inspSrc));
 
 /* Il catalogo dell'EnvelopeEditor metteva le chiavi inerti nel selettore con la
    stessa dignita' delle altre, mentre l'Inspector le marca: si poteva disegnare
    una curva su una chiave che il motore non legge, nell'unico posto dove non lo
-   si diceva. Il motivo e' lo stesso dell'Inspector — una funzione sola,
-   pubblicata su window.PGE — cosi' le due viste non possono divergere. */
-console.log("\n── il catalogo dell'editor marca le chiavi inerti ──");
-const ENV = [[0, 0], [1, 100]];
-const catalog = (() => {
-  try {
-    const fn = new Function(extractFn(eeSrc, "listEnvelopes") + "\nreturn listEnvelopes;")();
-    return (stream) => fn(stream, undefined).filter(e => /^deviation_probability_/.test(e.key));
-  } catch (e) { return () => []; }
-})();
-window.PGE = window.PGE || {};
-window.PGE.deviationProbInertReason = inertReason;
+   si diceva. Il motivo e' lo stesso dell'Inspector — una funzione sola, nel
+   modulo — cosi' le due viste non possono divergere.
 
-const catLive = catalog({ grain: { envelope: "hanning" },
-  deviationProbability: { volume: ENV, envelope: ENV, pc_rand_envelope: ENV } });
-const catSpec = catalog({ grain: TRANSITION,
-  deviationProbability: { volume: ENV, pc_rand_envelope: ENV } });
-const entry = (list, pk) => list.find(e => e.key === "deviation_probability_" + pk) || {};
-
-assert("il catalogo elenca comunque le chiavi inerti (sono scritte, vanno aperte)",
-  entry(catLive, "envelope").key === "deviation_probability_envelope");
-assert("una chiave viva non porta il marcatore", entry(catLive, "volume").inert === undefined);
-assert("la chiave morta envelope lo porta",
-  typeof entry(catLive, "envelope").inert === "string");
-assert("pc_rand_envelope viva non lo porta",
-  entry(catLive, "pc_rand_envelope").inert === undefined);
-assert("pc_rand_envelope con grain.envelope transition lo porta, e nomina la causa",
-  /grain\.envelope/.test(entry(catSpec, "pc_rand_envelope").inert || ""));
-assert("il motivo e' lo stesso dell'Inspector, non una seconda copia",
-  entry(catLive, "envelope").inert === inertReason("envelope",
-    D.liveParamKeys(grainOf({ envelope: "hanning" }))));
-assert("l'Inspector pubblica il motivo su window.PGE",
-  /Object\.assign\(window\.PGE,[\s\S]{0,200}?deviationProbInertReason/.test(inspSrc));
+   Dalla #140 il catalogo e' `window.PGEEnvCatalog.listEnvelopes`, e la sua
+   meta' di queste asserzioni sta in test-envelope-catalog.js, dove viene
+   ESEGUITO. Qui restava costruito per estrazione dal JSX con un `catch` che
+   ricadeva su `() => []`: su un'estrazione rotta «non porta il marcatore»
+   restava verde, perche' `{}.inert` e' undefined anche su una lista vuota.
+   Qui resta il cablaggio, che il modulo non puo' dire da se'. */
+console.log("\n── il selettore dell'editor mostra il marcatore ──");
+assert("il motivo dell'inerzia sta nel modulo, non in un componente",
+  /inertReason,?/.test(SG.codeOf(path.join(__dirname, "../../src/lib/deviation-probability.js"))
+    .split("window.PGEDeviationProb = {")[1].split("};")[0]));
 assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
   (eeSrc.match(/it\.inert/g) || []).length >= 2 && /cur\.inert/.test(eeSrc));
 
@@ -420,16 +402,12 @@ assert("e il selettore dell'editor lo mostra (voce di menu e riga corrente)",
    deve poterlo scrivere da nessuna delle sue tre vie di cancellazione — il
    guard c'era solo su una (Delete su un breakpoint), quindi un envelope fatto
    di un solo blocco loop si svuotava con "remove loop" o con Delete. */
-assert("il guard 'non svuotare' esiste una volta sola",
-  (eeSrc.match(/function wouldEmptyEnv/g) || []).length === 1);
-/* E il breakpoint dict lo riconosce col predicato del MODULO, non con una
-   copia locale: l'altro lettore di quella grafia e' loopSeedFrom
-   nell'Inspector, che di quel punto legge la y. Due copie e le due regole
-   divergono — ed e' successo: il lettore del loop trattava `{t, v}` come una
-   forma senza y mentre questo conteggio lo contava come punto vero. */
-assert("il dict {t, v} lo riconosce il modulo, non una copia locale",
-  /E\.isDictBreakpoint\(it\)/.test(eeSrc)
-  && !/const isDictBP = /.test(eeSrc));
+/* Dalla #140 il guard sta in envelope-loops.js: il componente lo LEGA una
+   volta sola e non ne tiene nessuna copia. Il suo comportamento — i due falsi
+   positivi storici compresi — e' in test-envelope-catalog.js, eseguito. */
+assert("il guard 'non svuotare' e' legato una volta sola, dal modulo",
+  !/function\s+wouldEmptyEnv\s*\(/.test(eeSrc) &&
+  (eeSrc.match(/window\.PGEEnv\.wouldEmptyEnv/g) || []).length === 1);
 /* Una asserzione NOMINATA per ciascuna via, non un conteggio: il conteggio
    includeva la definizione, quindi `>= 4` restava vero anche togliendone una —
    e quella scoperta era proprio il ramo del breakpoint, la via storica e
@@ -466,9 +444,9 @@ console.log("\n── il paste (quinta via): esecuzione, non regex ──");
 /* handlePasteEnv vive dentro il componente: si prende il suo corpo e lo si
    rimonta su un harness che fornisce le variabili di chiusura. Tutto il resto
    (unwrapEnv, wrapEnv, desugarBPGroups, remapEnvY, patchForPath,
-   wouldEmptyEnv) e' il codice vero. */
+   wouldEmptyEnv) e' il codice vero — le prime e l'ultima dai moduli, le altre
+   due estratte dal JSX come handlePasteEnv. */
 const pasteSrc = [
-  extractFn(eeSrc, "wouldEmptyEnv"),
   extractFn(eeSrc, "remapEnvY"),
   extractFn(eeSrc, "patchForPath"),
   extractFn(eeSrc, "handlePasteEnv"),
@@ -483,8 +461,10 @@ function runPaste(rawEnv) {
   const env = { key: "volume", path: ["volumeEnv"], hardMin: 0, hardMax: 100 };
   const stream = { id: "s1" };
   const onChange = (p) => { patched = p; };
-  new Function("envClipboard", "env", "stream", "onChange", pasteSrc)(
-    envClipboard, env, stream, onChange)();
+  // `wouldEmptyEnv` non sta piu' nel JSX (#140): entra come il modulo vero,
+   // che e' esattamente cio' che il componente lega a quel nome.
+  new Function("envClipboard", "env", "stream", "onChange", "wouldEmptyEnv", pasteSrc)(
+    envClipboard, env, stream, onChange, window.PGEEnv.wouldEmptyEnv)();
   return patched;
 }
 
