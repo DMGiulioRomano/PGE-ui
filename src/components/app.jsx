@@ -69,6 +69,23 @@ const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate, sl
 // project is loaded from the server (server.py lists configs/*.yml on boot).
 const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
+/* Il backend che produce gli stem, dichiarato UNA volta (#151).
+ *
+ * Il motore ne ha tre; l'editor ne usa uno, e il bridge ha lo stesso default
+ * (`opts.get("renderer", "numpy")` in server.py, pinnato da una guardia
+ * sorgente). Il selettore e' la issue #150, e non e' questa.
+ *
+ * Quello che va costruito prima del selettore e' l'ASSE: il motore mette
+ * `renderer_type` nel proprio fingerprint accanto alla semantica (PGE #228),
+ * quindi uno stem dipende anche da chi l'ha scritto. `rendererOfThisRun` in
+ * `runRender` e `rendererCtx` qui sotto leggono entrambi questa costante, e non due
+ * letterali: due copie sono il modo in cui il nome che va in argv e quello che
+ * finisce nel record smettono di concordare — un disaccordo che non si vede,
+ * perche' produce un pallino verde. Il giorno del selettore, questa riga
+ * diventa una preferenza e i due lettori la seguono senza toccarli.
+ */
+const RENDERER = "numpy";
+
 // Preferences store. Was provided by the design-tool tweaks-panel (removed);
 // now a thin local hook over the node-tested merge in tweaks-store.js. Keeps the
 // setTweak(key, val) / setTweak({ ... }) signature used across this file.
@@ -240,6 +257,11 @@ function App() {
      voce assente = non si sa, e non si pretende niente. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
+  /* Il terzo asse (#151): il backend che ha scritto ogni stem. Un solo lato in
+     stato, perche' quello vivo e' una costante del modulo — l'editor sa con chi
+     renderizzerebbe adesso. Voce assente = stem reso prima che l'editor lo
+     registrasse, e chi classifica la legge come stale. */
+  const [renderedRenderer, setRenderedRenderer] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
      l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
@@ -566,6 +588,11 @@ function App() {
     } else {
       setRenderedSem({});
     }
+    if (backend.render.loadRenderers) {
+      backend.render.loadRenderers(basename).then(r => setRenderedRenderer(r || {}));
+    } else {
+      setRenderedRenderer({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -611,10 +638,18 @@ function App() {
   const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
     [renderedSem, engineSem]);
 
+  /* E la coppia dell'asse "backend", con la stessa forma e per la stessa
+     ragione. `current` e' la costante del modulo: qui non c'e' un lato ignoto
+     come per la semantica — il backend con cui l'editor renderizzerebbe adesso
+     lo sa sempre, e' una sua scelta, non una lettura del motore. */
+  const rendererCtx = useMemoApp(() => ({ rendered: renderedRenderer, current: RENDERER }),
+    [renderedRenderer]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx),
-    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor,
+                                          semCtx, rendererCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendererCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -623,6 +658,7 @@ function App() {
       currentStreamId: renderStatus.currentStreamId,
       streamProgress,
       sem: semCtx,
+      rend: rendererCtx,
     });
   }
 
@@ -1669,6 +1705,13 @@ function App() {
        su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
        numero di DOPO su stem scritti leggendo quello di PRIMA. */
     const semOfThisRun = await refreshEngineSem();
+    /* Il backend di QUESTO giro, fissato accanto al numero e per la stessa
+       ragione: i due consumatori — il corpo del POST e l'handler degli
+       `stream-done` — devono leggere la stessa variabile, non la costante due
+       volte. Oggi il valore non puo' cambiare a meta' render (e' una costante
+       del modulo); il giorno in cui diventa una preferenza si', e allora
+       questa riga e' gia' al posto giusto. */
+    const rendererOfThisRun = RENDERER;
     // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
     // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
     // giro di rete davanti al motore per un dato che a nessuno serve subito.
@@ -1683,7 +1726,7 @@ function App() {
     const opts = {
       yamlBasename: basename,
       yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
-      renderer: "numpy",
+      renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
       // Force the grain sidecar on when the grain view is open, otherwise the
@@ -1747,6 +1790,27 @@ function App() {
         setRenderedSem(m => {
           const sem = semOfThisRun;
           if (sem !== null) return { ...m, [e.streamId]: sem };
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
+        // ...e il backend che l'ha scritto (#151). Stessa riga, stesso momento:
+        // i due record descrivono lo stesso stem dello stesso giro, e backend.js
+        // li persiste insieme.
+        //
+        // Col nome ignoto la voce si cancella, come per il numero — e la regola
+        // sta qui e non solo in backend.js perche' i due lati devono dire la
+        // stessa cosa: backend.js cancella dal localStorage, e uno stato in
+        // memoria che tenesse il nome di prima mostrerebbe un colore diverso
+        // fino alla riapertura del progetto. Oggi il ramo non scatta (RENDERER
+        // e' una costante non vuota); il giorno del selettore lo farebbe, e una
+        // divergenza che dura una sessione e' peggio di una che non esiste.
+        setRenderedRenderer(m => {
+          if (rendererOfThisRun) {
+            return m[e.streamId] === rendererOfThisRun
+              ? m : { ...m, [e.streamId]: rendererOfThisRun };
+          }
           if (!(e.streamId in m)) return m;
           const next = { ...m };
           delete next[e.streamId];

@@ -124,7 +124,7 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            store["pge-local-stems"]);
   }
 
-  console.log("\n── e con l'indice se ne vanno le versioni di semantica ──");
+  console.log("\n── e con l'indice se ne vanno i record di provenienza ──");
   {
     // Le due mappe persistite non hanno lo stesso destino, e la ragione e'
     // cosa affermano. `pge-local-fp` parla dello YAML ("com'era lo stream
@@ -134,16 +134,28 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // ereditata, afferma una lettura che nella output/ nuova nessuno ha
     // osservato, e con lo YAML identico l'impronta combacia. Verde su stem
     // scritti diversi, cioe' il caso per cui l'asse esiste (#133).
+    // Il backend che ha scritto lo stem (`pge-local-renderer`, #151) e' della prima
+    // specie, non della seconda: dice dei file esattamente come la semantica —
+    // "quel motore audio ha prodotto QUESTO file" — e nella output/ nuova
+    // nessuno l'ha osservato. Ereditato, con lo YAML identico l'impronta
+    // combacia e il pallino torna verde su stem che un altro backend ha
+    // scritto diversi.
     store["pge-local-fp"]  = JSON.stringify({ proj: { stream1: "abc" } });
     store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
+    store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "csound" } });
     assert("le versioni ci sono, prima",
            (await backend.render.loadSemantics("proj")).stream1 === 3);
+    assert("e i backend anche",
+           (await backend.render.loadRenderers("proj")).stream1 === "csound");
 
     const res = await backend.setWorkspace("/brani2");
     assert("la commutazione riesce", res.ok === true);
     assert("le versioni di semantica se ne vanno con l'indice",
            Object.keys(await backend.render.loadSemantics("proj")).length === 0,
            store["pge-local-sem"]);
+    assert("e i backend con loro",
+           Object.keys(await backend.render.loadRenderers("proj")).length === 0,
+           store["pge-local-renderer"]);
     assert("le impronte no: dicono dello YAML, non dei file",
            (await backend.render.loadCache("proj")).stream1 === "abc");
   }
@@ -151,12 +163,16 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
   console.log("\n── un cambio rifiutato lascia stare anche quelle ──");
   {
     store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
+    store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "csound" } });
     REFUSE = { status: 400, error: "non esiste: /refuso" };
     await backend.setWorkspace("/refuso");
     REFUSE = null;
     assert("le versioni restano dove sono",
            (await backend.render.loadSemantics("proj")).stream1 === 3);
+    assert("e i backend pure",
+           (await backend.render.loadRenderers("proj")).stream1 === "csound");
     delete store["pge-local-sem"];
+    delete store["pge-local-renderer"];
   }
 
   console.log("\n── e /stems lo ripopola dalla cartella nuova ──");

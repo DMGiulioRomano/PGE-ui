@@ -1,5 +1,6 @@
 /* =============================================================================
- * test-semantics-store.js — l'asse "semantica del motore" di backend.js (#133).
+ * test-semantics-store.js — i due assi di provenienza di backend.js
+ * (#133 la semantica del motore, #151 il backend che ha scritto lo stem).
  *
  * `render-status.js` decide il colore del pallino a partire da due numeri: la
  * `VARIATION_SEMANTICS_VERSION` del motore che il bridge ha davanti adesso, e
@@ -18,6 +19,11 @@
  *     suite verde, mentre il comportamento vero sarebbe stato GIALLO PERMANENTE
  *     su ogni stem a ogni reload (versione registrata mai presente, motore
  *     noto), cioe' l'unico esito che il design dichiara inaccettabile.
+ *
+ * Il secondo asse (#151) e' la stessa forma e sta qui accanto al primo, non in
+ * un file suo: i due record si scrivono nello STESSO blocco di `run()`, e
+ * duplicare l'armatura (fetch e localStorage finti) vorrebbe dire due copie che
+ * col tempo smettono di guidare lo stesso backend.
  *
  * Idioma: il backend VERO guidato con `fetch` e `localStorage` finti, come in
  * test-stem-index.js.
@@ -91,6 +97,11 @@ function assert(label, cond, extra) {
 
 function sem(basename) {
   try { return (JSON.parse(store["pge-local-sem"] || "{}"))[basename] || null; }
+  catch { return null; }
+}
+
+function rend(basename) {
+  try { return (JSON.parse(store["pge-local-renderer"] || "{}"))[basename] || null; }
   catch { return null; }
 }
 
@@ -325,6 +336,152 @@ console.log("\n── col numero ignoto la voce si CANCELLA, non resta indietro 
          JSON.stringify(now));
   assert("gli altri restano dove sono", now && now.stream2 === 3, JSON.stringify(now));
   SEM_DOWN = false;
+}
+
+/* ===========================================================================
+ * 3. Il secondo record: il backend che ha scritto lo stem (#151).
+ *
+ * Mappa parallela a `pge-local-sem`, non un campo dentro l'hash — l'hash
+ * risponde a "l'utente ha modificato lo YAML", e quale motore audio ha scritto
+ * il file non e' una modifica dell'utente. Qui si verifica da dove arriva il
+ * nome; `test-render-status.js` verifica cosa ne fa il pallino.
+ * ========================================================================= */
+console.log("\n── un render registra il backend, anche a vuoto ──");
+{
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  SEM_DOWN = false; SEM_VERSION = 3;
+  await backend.semanticsVersion({ refresh: true });
+
+  // Come per la semantica, il percorso che regge la promessa "quel giallo si
+  // spegne da solo al primo giro": lo `stream-done` di uno stream SALTATO.
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: true },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy",
+      streams: [{ id: "stream1" }] },
+    () => {});
+
+  assert("pge-local-renderer porta il backend dello stem",
+         JSON.stringify(rend("proj")) === JSON.stringify({ stream1: "numpy" }),
+         `pge-local-renderer = ${store["pge-local-renderer"]}`);
+  const loaded = await backend.render.loadRenderers("proj");
+  assert("loadRenderers lo rilegge",
+         JSON.stringify(loaded) === JSON.stringify({ stream1: "numpy" }),
+         `loadRenderers = ${JSON.stringify(loaded)}`);
+  assert("e la semantica e' rimasta al suo posto, separata",
+         (sem("proj") || {}).stream1 === 3,
+         `pge-local-sem = ${store["pge-local-sem"]}`);
+}
+
+console.log("\n── il nome e' quello del GIRO, non una costante del modulo ──");
+{
+  // Oggi la UI cabla numpy, ma il record deve dire cosa ha girato davvero: e'
+  // l'unica cosa che rende l'asse utile il giorno in cui il backend diventa
+  // una scelta (#150). Un valore scritto dentro backend.js sarebbe verde su
+  // qualunque cambio.
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "csound",
+      streams: [{ id: "stream1" }] },
+    () => {});
+  assert("un render csound lascia scritto csound",
+         (rend("proj") || {}).stream1 === "csound", JSON.stringify(rend("proj")));
+}
+
+console.log("\n── un render parziale non cancella il backend degli altri stem ──");
+{
+  store = { "pge-local-renderer": JSON.stringify({ proj: { stream1: "csound", stream2: "csound" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy",
+      streams: [{ id: "stream1" }, { id: "stream2" }] },
+    () => {});
+
+  const now = rend("proj");
+  assert("lo stem reso prende il backend di adesso", now && now.stream1 === "numpy",
+         JSON.stringify(now));
+  assert("quello non toccato tiene il suo", now && now.stream2 === "csound",
+         JSON.stringify(now));
+}
+
+console.log("\n── col backend ignoto la voce si CANCELLA, non resta indietro ──");
+{
+  // Stessa regola della semantica, e per la stessa ragione: un nome VECCHIO su
+  // uno stem NUOVO e' un'affermazione falsa, l'assenza e' la verita'. Qui il
+  // caso non e' il bridge giu' ma un chiamante che non dichiara il backend —
+  // e li' non c'e' nessuna cella su cui ripiegare, perche' il nome non arriva
+  // dal motore: e' la scelta di chi rende.
+  store = { "pge-local-renderer": JSON.stringify({ proj: { stream1: "csound", stream2: "csound" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "stream1" }] },
+    () => {});
+
+  const now = rend("proj");
+  assert("lo stem appena reso perde il backend di prima", now && !("stream1" in now),
+         JSON.stringify(now));
+  assert("gli altri restano dove sono", now && now.stream2 === "csound",
+         JSON.stringify(now));
+}
+
+console.log("\n── e una stringa che non e' un nome vale come assenza ──");
+{
+  // `""` scritto nel record sarebbe indistinguibile da uno stem senza record
+  // per chi legge, ma non per `staleReason`, che confronta i valori: il
+  // risultato sarebbe uno stem eternamente giallo con un nome che nessun
+  // render puo' eguagliare. Non si scrive.
+  for (const bad of ["", 0, null, 7, {}]) {
+    store = { "pge-local-renderer": JSON.stringify({ proj: { stream1: "csound" } }) };
+    const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+    NDJSON = [
+      { type: "stream-done", streamId: "stream1", cached: false },
+      { type: "done", ok: true, generated: [] },
+    ];
+    await backend.render.run(
+      { yamlBasename: "proj", outputFormat: "wav", renderer: bad,
+        streams: [{ id: "stream1" }] },
+      () => {});
+    assert(`renderer=${JSON.stringify(bad)} → voce cancellata, non scritta`,
+           rend("proj") && !("stream1" in rend("proj")), JSON.stringify(rend("proj")));
+  }
+}
+
+console.log("\n── i due record viaggiano insieme in un giro solo (sorgente) ──");
+{
+  assert("run() prende il backend da chi chiama, come la semantica",
+         /opts\.renderer/.test(BACKEND_SRC),
+         "un valore cablato dentro backend.js sarebbe verde su qualunque cambio");
+  assert("app.jsx carica i backend registrati al cambio progetto",
+         /loadRenderers\([\s\S]{0,120}?setRenderedRenderer/.test(APP_SRC));
+  /* La dichiarazione unica: il nome che finisce nel corpo del POST e quello che
+     finisce nell'asse devono essere LA STESSA variabile, non due copie. Due
+     copie sono il modo in cui i due lati smettono di concordare — e qui il
+     disaccordo non si vede, perche' produce un pallino verde. E' la lezione dei
+     `Seg` di #149, sullo stesso repo. */
+  assert("app.jsx dichiara il backend una volta sola",
+         (APP_SRC.match(/"numpy"/g) || []).length === 1,
+         "due letterali sono due dichiarazioni: la prossima modifica ne muove una");
+  assert("...e il POST e l'asse leggono quella dichiarazione",
+         /renderer:\s*rendererOfThisRun\b/.test(APP_SRC) &&
+         /setRenderedRenderer\([\s\S]{0,300}?rendererOfThisRun\b/.test(APP_SRC),
+         "se uno dei due prende un'altra strada, l'asse giudica un render che " +
+         "non e' quello che e' andato in porto");
 }
 
   bodyDone = true;

@@ -371,6 +371,40 @@
           localStorage.setItem("pge-local-sem", JSON.stringify(all));
         } catch {}
       },
+
+      // Il backend che ha prodotto ogni stem (#151). Terza mappa parallela alle
+      // altre due, con la stessa forma e la stessa regola, perche' e' la stessa
+      // classe di dato: qualcosa da cui lo stem dipende e che il testo YAML non
+      // dice. Il motore lo mette nel PROPRIO fingerprint accanto alla semantica
+      // (`renderer_type`, PGE #228), quindi renderizzare con un backend e
+      // rilanciare con un altro gli fa rifare gli stem — e con tre backend che
+      // esistono per essere confrontati e' lo scenario d'uso, non il caso limite.
+      //
+      // Fuori dall'hash come la semantica, e la ragione non e' che i due hash
+      // non combaciano — non si confrontano mai, vedi loadCache qui sopra.
+      // E' che l'hash risponde a "l'utente ha modificato lo YAML": metterci
+      // dentro il backend farebbe dire al pallino "yaml" su uno YAML che
+      // nessuno ha toccato. Il criterio e' quello di #134 — raggiunge lo YAML?
+      // — e qui la risposta e' no.
+      //
+      // Voce assente = stem reso prima che l'editor registrasse il nome. Chi
+      // classifica la legge come stale: oggi non scopre niente (la UI cabla un
+      // solo backend) e costa un giro a vuoto, ma e' la direzione giusta il
+      // giorno in cui la scelta arriva nelle Settings (#150).
+      async loadRenderers(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistRenderers(yamlBasename, rnds) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          all[yamlBasename] = rnds;
+          localStorage.setItem("pge-local-renderer", JSON.stringify(all));
+        } catch {}
+      },
       cancel() {
         if (cancelAbort) cancelAbort.abort();
         // fire-and-forget POST so the server kills the subprocess too
@@ -547,6 +581,34 @@
               else next[id] = sem;
             }
             this._persistSem(opts.yamlBasename, next);
+
+            // ...e il backend con cui li ha scritti (#151). Stessa regola e
+            // stesso blocco: i due record parlano dello stesso giro, e
+            // scriverli in due punti diversi e' il modo in cui uno dei due
+            // finisce per descrivere un render che non e' quello andato in
+            // porto.
+            //
+            // Il nome NON si inventa qui: arriva da `opts.renderer`, cioe' dal
+            // campo che questo stesso POST ha mandato al bridge. Una costante
+            // scritta in questo modulo direbbe "numpy" anche dopo un render
+            // csound, cioe' verde su ogni cambio di backend — che e' esattamente
+            // l'asse spento.
+            //
+            // Quello che non e' un nome vale come ignoto, e la voce si CANCELLA
+            // invece di restare indietro, come per il numero: un backend vecchio
+            // su uno stem nuovo e' un'affermazione falsa, l'assenza e' la verita'.
+            // E una stringa vuota registrata sarebbe peggio di entrambe — chi
+            // classifica confronta i valori, quindi sarebbe uno stem giallo per
+            // sempre, con un nome che nessun render puo' eguagliare.
+            const rend = (typeof opts.renderer === "string" && opts.renderer)
+              ? opts.renderer : null;
+            const prevRenderers = await this.loadRenderers(opts.yamlBasename);
+            const nextRenderers = { ...prevRenderers };
+            for (const id of Object.keys(localFps)) {
+              if (rend === null) delete nextRenderers[id];
+              else nextRenderers[id] = rend;
+            }
+            this._persistRenderers(opts.yamlBasename, nextRenderers);
           }
           return lastResult;
         } catch (e) {
@@ -770,9 +832,11 @@
       // verde vuole uno stem nell'indice, e l'indice e' quello che la riga
       // qui sotto svuota.
       //
-      // Le versioni di semantica in `pge-local-sem` NO, e la differenza sta in
-      // cosa affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
-      // scritto un motore che leggeva cosi'" — cioe' degli stessi file di cui
+      // I due record di provenienza NO — la semantica in `pge-local-sem` e il
+      // backend in `pge-local-renderer` (#151) — e la differenza sta in cosa
+      // affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
+      // scritto un motore che leggeva cosi'", "l'ha scritto quel backend" —
+      // cioe' degli stessi file di cui
       // l'indice qui sopra e' l'inventario, quelli della output/ di prima.
       // Ereditate in una cartella nuova affermano una lettura che li' nessuno
       // ha osservato, e con lo YAML identico l'impronta combacia: verde su
@@ -784,6 +848,7 @@
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();
       try { localStorage.removeItem("pge-local-sem"); } catch {}
+      try { localStorage.removeItem("pge-local-renderer"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
       return body;
     }

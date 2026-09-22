@@ -34,9 +34,11 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 console.log("\n── module surface ──");
 assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.STALE === "stale" &&
   RS.STATES.NEVER === "never" && RS.STATES.RUNNING === "running");
-assert("TOOLTIPS present (5 strings)", RS.TOOLTIPS &&
+assert("TOOLTIPS present (6 strings)", RS.TOOLTIPS &&
   RS.TOOLTIPS.staleSemantics ===
     "the engine's reading of this YAML doesn't match this stem — re-render to update" &&
+  RS.TOOLTIPS.staleRenderer ===
+    "another backend rendered this stem — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&
@@ -233,6 +235,181 @@ console.log("\n── il pallino dice PERCHE' e' giallo ──");
 }
 
 /* ---------------------------------------------------------------------------
+ * TERZO ASSE: il backend che ha prodotto lo stem (#151).
+ *
+ * `renderer_type` e' entrato nel fingerprint del MOTORE accanto alla semantica
+ * (PGE #228 / PR #240), ed e' la stessa classe di dipendenza: qualcosa da cui
+ * lo stem dipende e che il testo YAML non dice. Tre backend esistono per essere
+ * confrontati, quindi renderizzare con uno e rilanciare con un altro e' lo
+ * scenario d'uso, non il caso limite.
+ *
+ * Sta FUORI dall'hash della UI per la stessa ragione della semantica, e non
+ * perche' l'hash non combacia con quello del motore — i due non si confrontano
+ * mai (`loadCache` in backend.js: manifest per-browser, FNV-1a contro SHA-256).
+ * La ragione e' che l'hash risponde a «l'utente ha modificato questo stream», e
+ * quale backend ha scritto lo stem non e' una modifica dell'utente: dentro
+ * l'hash, il pallino direbbe `stale` con motivo `yaml` su uno YAML che nessuno
+ * ha toccato. Il criterio e' quello di #134 — «raggiunge lo YAML?» — e qui la
+ * risposta e' no.
+ * ------------------------------------------------------------------------- */
+console.log("\n── staleReason: il terzo asse, il backend ──");
+{
+  assert("yaml diverso vince su tutto",
+    RS.staleReason("a", "b", null, { rendered: "numpy", current: "numpy" }) === "yaml");
+  assert("stesso backend a yaml fermo → null",
+    RS.staleReason("a", "a", null, { rendered: "numpy", current: "numpy" }) === null);
+  assert("backend diverso a yaml fermo → 'renderer'",
+    RS.staleReason("a", "a", null, { rendered: "numpy", current: "csound" }) === "renderer");
+
+  // I due ignoti, identici a quelli della semantica, e la differenza e' sempre
+  // se il giallo si possa poi spegnere.
+  //
+  // Backend corrente ignoto: nessuna pretesa. Qui non e' nemmeno prudenza —
+  // e' che un giallo del genere non lo cancellerebbe nessun render, visto che
+  // `_persistRenderers` scrive solo quando il nome si sa.
+  assert("nessun rend → null (comportamento pre-#151 esatto)",
+    RS.staleReason("a", "a", null, undefined) === null);
+  assert("rend vuoto → null",
+    RS.staleReason("a", "a", null, {}) === null);
+  assert("backend corrente ignoto → null",
+    RS.staleReason("a", "a", null, { rendered: "numpy", current: null }) === null);
+  assert("...anche senza record dello stem: due ignoti non fanno un'asserzione",
+    RS.staleReason("a", "a", null, { rendered: undefined, current: null }) === null);
+
+  /* Record assente con backend noto: "renderer". E' lo stem scritto prima che
+     l'editor registrasse il nome, cioe' OGNI stem esistente quando questo asse
+     e' entrato.
+     Oggi quel giallo non scopre niente — la UI ha sempre e solo scritto numpy —
+     e costa un giro a vuoto per progetto, che si spegne da solo (il motore
+     emette `stream-done` anche per gli stream che SALTA, `cached: true`). Ma
+     l'alternativa non e' neutra: tacere qui vuol dire che il giorno in cui la
+     scelta arriva nelle Settings (#150) gli stem numpy di prima restano VERDI
+     sotto csound, cioe' un render di meno proprio nel caso per cui l'asse
+     esiste. La regola del repo e' la prima direzione. */
+  assert("stem senza backend registrato, corrente noto → 'renderer'",
+    RS.staleReason("a", "a", null, { rendered: undefined, current: "numpy" }) === "renderer");
+
+  // La stringa vuota non e' un nome di backend: se lo fosse, uno stem scritto
+  // da «» sarebbe indistinguibile da uno senza record. Il guardiano e' la
+  // stessa `== null` della semantica, quindi "" e' un valore e si CONFRONTA.
+  assert("'' e' un valore, non un'assenza, e non concorda con numpy",
+    RS.staleReason("a", "a", null, { rendered: "", current: "numpy" }) === "renderer");
+  assert("...e concorda con se stessa",
+    RS.staleReason("a", "a", null, { rendered: "", current: "" }) === null);
+}
+
+// I quattro incroci del terzo asse, come per la semantica: la tabella rende
+// visibile che i due `null` non sono lo stesso caso.
+{
+  const M = [
+    // [rendered,   current,   atteso,      cosa e' nel mondo reale]
+    [undefined,     "numpy",   "renderer",  "stem reso prima di questo asse"],
+    ["csound",      "numpy",   "renderer",  "stem reso da csound, editor su numpy"],
+    ["numpy",       "numpy",   null,        "stem reso da numpy, editor su numpy"],
+    ["csound",      null,      null,        "backend corrente ignoto: giallo ineliminabile"],
+  ];
+  assert("la tabella degli incroci ha davvero quattro righe", M.length === 4, `${M.length}`);
+  const bad = M.filter(([r, c, atteso]) =>
+    RS.staleReason("a", "a", null, { rendered: r, current: c }) !== atteso);
+  assert("i quattro incroci rendered x current",
+    bad.length === 0,
+    bad.map(([r, c, atteso, why]) =>
+      `rendered=${r} current=${c}: atteso ${atteso}, ottenuto ` +
+      `${RS.staleReason("a", "a", null, { rendered: r, current: c })} (${why})`).join("\n      "));
+}
+
+console.log("\n── i due assi del motore convivono senza spegnersi a vicenda ──");
+{
+  // Ognuno da solo, con l'altro assente: e' la prova che non c'e' una scorciatoia
+  // che li lega (un `if (sem)` che ingloba anche il ramo del backend, per dire).
+  assert("solo la semantica parla",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }, { rendered: "numpy", current: "numpy" })
+      === "semantics");
+  assert("solo il backend parla",
+    RS.staleReason("a", "a", { rendered: 3, engine: 3 }, { rendered: "csound", current: "numpy" })
+      === "renderer");
+
+  /* E soprattutto: un motore IGNOTO non zittisce il backend. I due assi hanno
+     sorgenti diverse — il numero arriva dal bridge (`GET /semantics-version`,
+     quindi `null` col bridge giu' o la route assente), il nome e' una scelta
+     dell'editor e si sa sempre — quindi il ramo che chiude la semantica non
+     deve chiudere anche l'altro. Scritto come un `return null` anticipato, come
+     era prima che l'asse esistesse, l'avrebbe fatto: bridge giu' e ogni stem
+     verde anche sotto un backend diverso. */
+  assert("motore ignoto, backend noto: il backend parla lo stesso",
+    RS.staleReason("a", "a", { rendered: 3, engine: null }, { rendered: "csound", current: "numpy" })
+      === "renderer");
+  assert("...e senza sem affatto",
+    RS.staleReason("a", "a", undefined, { rendered: "csound", current: "numpy" })
+      === "renderer");
+
+  /* Quando parlano entrambi il pallino e' comunque uno solo, e il testo ne dice
+     uno. La precedenza e' la semantica, e la scelta e' deliberata per due
+     ragioni: il comportamento gia' esistente non cambia in NESSUN caso che
+     esistesse prima (l'asse nuovo e' additivo), e un render solo li spegne
+     entrambi comunque — quindi la precedenza non costa un giro a nessuno. */
+  assert("se parlano entrambi, la semantica tiene la voce",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }, { rendered: "csound", current: "numpy" })
+      === "semantics");
+  assert("...e lo yaml le precede tutte e due",
+    RS.staleReason("a", "b", { rendered: 2, engine: 3 }, { rendered: "csound", current: "numpy" })
+      === "yaml");
+}
+
+console.log("\n── classifyStream e il pallino con l'asse del backend ──");
+{
+  assert("stem mai renderizzato resta 'never' anche a backend diverso",
+    RS.classifyStream(null, "x", true, null, { rendered: "csound", current: "numpy" }) === "never");
+  assert("stem senza file su disco resta 'never'",
+    RS.classifyStream("x", "x", false, null, { rendered: "csound", current: "numpy" }) === "never");
+  assert("yaml fermo + backend cambiato → 'stale'",
+    RS.classifyStream("x", "x", true, null, { rendered: "csound", current: "numpy" }) === "stale");
+  assert("yaml fermo + stesso backend → 'fresh'",
+    RS.classifyStream("x", "x", true, null, { rendered: "numpy", current: "numpy" }) === "fresh");
+  assert("senza rend, la firma a 4 argomenti si comporta come prima",
+    RS.classifyStream("x", "x", true, { rendered: 3, engine: 3 }) === "fresh" &&
+    RS.classifyStream("x", "x", true, { rendered: 2, engine: 3 }) === "stale");
+
+  const ctx = {
+    currentFps: { a: "1", b: "2", c: "3", d: "4" },
+    lastRenderedFps: { a: "1", b: "9", c: "3", d: "4" },
+    hasStem: () => true,
+    running: false, currentStreamId: null, streamProgress: {},
+    sem: { rendered: { a: 3, b: 3, c: 2, d: 3 }, engine: 3 },
+    rend: { rendered: { a: "numpy", b: "numpy", c: "numpy", d: "csound" }, current: "numpy" },
+  };
+  assert("backend cambiato a yaml fermo → il terzo testo",
+    eq(RS.statusForStream("d", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleRenderer }));
+  assert("gli altri due motivi tengono il loro testo",
+    eq(RS.statusForStream("b", ctx), { state: "stale", tooltip: RS.TOOLTIPS.stale }) &&
+    eq(RS.statusForStream("c", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleSemantics }));
+  assert("niente da dire → fresh",
+    eq(RS.statusForStream("a", ctx), { state: "fresh", tooltip: RS.TOOLTIPS.fresh }));
+
+  // Come per la semantica: il conteggio aggregato e il pallino devono vedere lo
+  // stesso stem giallo, e la coppia { rendered, current } la estrae una funzione
+  // sola (rendererFor). Divergendo, il riepilogo direbbe "3 rendered" con tre pallini
+  // gialli sotto.
+  const streams = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+  assert("summarize concorda con statusForStream",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem, ctx.sem, ctx.rend),
+       { fresh: 1, stale: 3, never: 0, total: 4 }));
+  assert("senza rend, summarize conta come prima di #151",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem, ctx.sem),
+       { fresh: 2, stale: 2, never: 0, total: 4 }));
+}
+
+/* L'asse sta ACCANTO all'hash, non dentro: la premessa dell'intero disegno, e
+ * l'unica meta' verificabile senza il motore. `tests/parity/` chiede al motore
+ * che tre backend diano tre hash; qui si chiede alla UI che il suo hash non
+ * sappia nemmeno cosa sia un backend — se `fingerprintStream` cominciasse a
+ * prenderlo, il pallino direbbe `yaml` su uno YAML che nessuno ha toccato, e
+ * ogni stem gia' reso diventerebbe stale col motivo sbagliato. */
+assert("il fingerprint della UI non prende il backend",
+  fingerprintStream.length <= 2,
+  `fingerprintStream ha ${fingerprintStream.length} parametri`);
+
+/* ---------------------------------------------------------------------------
  * Guardie sul sorgente: la catena che porta il numero dal motore al pallino.
  * Nessuna di queste righe gira in node (sono React / fetch), e ognuna e' un
  * anello che, se salta, spegne l'asse in silenzio — il pallino torna verde e
@@ -315,27 +492,40 @@ console.log("\n── la catena dal motore al pallino ──");
     "il ref invece lo riscrive chiunque rilegga, render in volo compreso — " +
     "e i tre punti di rilettura non sono esclusivi col render in corso");
 
-  /* Il TERZO asse dell'hash del motore, tenuto a bada da un valore cablato.
+  /* Il TERZO asse, e la catena che lo tiene acceso (#151).
    *
    * `renderer_type` sta nel fingerprint del motore accanto alla semantica
    * (`tests/parity/test-fingerprint-parity.js` lo verifica: tre backend, tre
-   * hash). La UI non ha un asse per lui, e va bene finche' il backend e' UNO:
-   * app.jsx lo cabla e il bridge ha lo stesso default. Se i due divergessero,
-   * o se la scelta arrivasse nelle Settings — il motore ha tre backend — il
-   * pallino tornerebbe verde su stem che il motore riscrivera', cioe' PGE #222
-   * su un asse diverso. Questa guardia e' il promemoria che quel giorno
-   * l'asse va costruito, non un'opzione da aggiungere e basta. */
-  assert("app.jsx cabla un solo backend",
-    /renderer:\s*"numpy"/.test(appSrc) &&
-    !/renderer:\s*(tweaks|renderOptions|opts)\./.test(appSrc),
-    "se il backend diventa una scelta, serve un asse come quello della " +
-    "semantica: il motore lo ha dentro il proprio fingerprint");
+   * hash). Qui era scritto che la UI non aveva un asse per lui e che «va bene
+   * finche' il backend e' UNO» — cioe' un debito, con questa guardia come
+   * promemoria. L'asse ora c'e', e il promemoria diventa il suo presidio:
+   * quello che resta cablato e' la SCELTA (una sola, #150 ha il selettore),
+   * non la conoscenza di chi ha scritto lo stem. */
+  assert("app.jsx dichiara un backend solo, e in un posto solo",
+    /const RENDERER = "numpy";/.test(appSrc) &&
+    (appSrc.match(/"numpy"/g) || []).length === 1 &&
+    !/renderer:\s*(tweaks|renderOptions)\./.test(appSrc),
+    "il selettore e' #150; qui si pretende che il nome abbia una sola " +
+    "sorgente, perche' due copie divergono in silenzio (pallino verde)");
   {
     const srvSrc = SG.codeOf(path.join(__dirname, "../../server.py"));
     assert("...e il bridge ha lo stesso default",
       /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc),
       "i due lati devono concordare: chi rende e chi hasha sono lo stesso giro");
   }
+  /* I tre anelli che nessuna esecuzione in node tocca. Ognuno, saltando,
+     spegne l'asse in silenzio: il pallino torna verde e la suite resta verde
+     con lui — che e' esattamente come il debito e' rimasto aperto finora. */
+  assert("app.jsx registra il backend dello stem appena reso",
+    /setRenderedRenderer\([\s\S]{0,300}?rendererOfThisRun\b/.test(appSrc),
+    "senza, il record resta a quello del render precedente");
+  assert("...e ricarica i record al cambio progetto",
+    /loadRenderers\([\s\S]{0,120}?setRenderedRenderer/.test(appSrc),
+    "senza, l'asse vale solo per gli stem resi in questa sessione");
+  assert("...e la coppia arriva a ENTRAMBI i lettori",
+    /rend:\s*rendererCtx\b/.test(appSrc) &&
+    /summarize\([\s\S]{0,200}?rendererCtx\b/.test(appSrc),
+    "pallino e riepilogo devono contare lo stesso stem giallo");
 
   /* La versione del motore si richiede in TRE punti, e questa e' la guardia che
    * tiene in vita l'asse. Con la sola chiamata al boot — effetto con dipendenze
@@ -385,8 +575,12 @@ console.log("\n── la catena dal motore al pallino ──");
       `setRenderStatus a ${raise}, await a ${wait}: col timeout di 10 s di jget ` +
       `un click su Render non produce feedback per dieci secondi`);
   }
+  // `semCtx\b` e non `semCtx\)`: la coppia non e' piu' l'ultimo argomento da
+  // quando accanto viaggia quella del backend (#151), e pinnare la POSIZIONE
+  // invece della presenza rende rossa una firma che si allunga — cioe' fa
+  // gridare la guardia sull'unica modifica che non e' il suo difetto.
   assert("app passa la coppia a entrambi i consumatori",
-    /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
+    /summarize\([^)]*semCtx\b/.test(appSrc) && /sem: semCtx,/.test(appSrc),
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
 }
 
