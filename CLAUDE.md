@@ -75,9 +75,12 @@ exists, the fourth only when a browser is installed):
   format-aware `peaksUrl`/`spectrogramUrl`/`stemDur` of #153, plus source
   guards on the audio-error path and on the app.jsx wiring that passes the
   format), and `test-semantics-store.js` (where the two
-  numbers of the semantics axis come from: `semanticsVersion` re-reading the
-  bridge, and a whole `render.run()` writing/reading `pge-local-sem` — the real
-  backend driven with a fake `fetch` and `localStorage`), and
+  provenance records come from: `semanticsVersion` re-reading the
+  bridge, and a whole `render.run()` writing/reading `pge-local-sem` and
+  `pge-local-renderer` — the real
+  backend driven with a fake `fetch` and `localStorage`; the renderer half
+  lives beside the semantics one because both are written in the same block of
+  `run()`, and a second copy of that harness would drift), and
   `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
   killed between the `_dead` check and the write used to raise an unhandled
   `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
@@ -525,10 +528,12 @@ spectrograms, grain data, the grain refs, `stemRevRef` and `lastRenderedFps`,
 reloads media + projects, then reopens a project and **calls `loadCache`
 itself** — two folders can hold a project of the same name, and there
 `activeProject` doesn't change, so the effect keyed on it never re-fires and
-every clip would read ⚪ with stems sitting on disk. The engine-semantics
-records (`pge-local-sem`) go with the index, and for the same reason: they are a
-statement about the *files* — "an engine that read the YAML this way wrote this
-stem" — i.e. about exactly what the index inventoried, the previous `output/`.
+every clip would read ⚪ with stems sitting on disk. The two provenance
+records (`pge-local-sem` for the engine's reading, `pge-local-renderer` for the
+backend that wrote the file) go with the index, and for the same reason: they
+are statements about the *files* — "an engine that read the YAML this way wrote
+this stem", "that backend produced it" — i.e. about exactly what the index
+inventoried, the previous `output/`.
 Inherited into a new folder they assert a reading nobody observed there, and
 with identical YAML the fingerprint matches: 🟢 on stems an older engine wrote
 differently, which is the case the axis was added for (#133). Without a record
@@ -1315,7 +1320,7 @@ drops out entirely: in the YAML it isn't distinguishable from an absent one.
 
 The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
 
-**Staleness has a second axis, and it is not in the hash.** The engine's
+**Staleness has two more axes, and neither is in the hash.** The first: the engine's
 `VARIATION_SEMANTICS_VERSION` (`stream_cache_manager.py`) says *how* it reads
 the YAML; it sits inside the engine's fingerprint, so a bump marks every stem of
 every project dirty at rest. The UI hash deliberately has no counterpart — the
@@ -1323,7 +1328,8 @@ two hashes answer different questions ("did the user edit this" vs "must the
 engine redo this stem") — but the *dot* answers the engine's, and at the 2→3 bump
 (PGE #222) it showed 🟢 on stems the engine was about to rewrite. So the version
 is a second axis beside the hash, never a field inside it: `staleReason` in
-`render-status.js` returns `"yaml"` or `"semantics"`, the version is recorded
+`render-status.js` returns `"yaml"`, `"semantics"` or `"renderer"` (the third
+axis, below), the version is recorded
 per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
@@ -1353,17 +1359,6 @@ rests on, and it was written as guaranteed. `run()` still falls back to the
 cell when the field is absent: absent would mean "don't know", and there it
 would be a lie that deletes the entries of stems just rendered.
 
-**The engine has a third axis in its own hash: `renderer_type`.** It sits
-beside the semantics version and for the same reason — something a stem depends
-on that the YAML text doesn't state. The UI has no axis for it, and that is
-fine while the backend is *one*: `app.jsx` hardcodes `renderer: "numpy"` and
-`server.py` defaults to the same (a source guard in `test-render-status.js`
-pins the pair, and a parity case pins that three backends really give three
-hashes). The day the choice reaches Settings — the engine has three — the dot
-goes green on stems the engine will rewrite: PGE #222 again, on a different
-axis. That guard is the reminder that the axis has to be built, not just an
-option added.
-
 Two rules hold it up:
 
 - **The two unknowns are not the same unknown**, and the difference is whether
@@ -1386,7 +1381,52 @@ Two rules hold it up:
   engine's hash.
 
 A stale-by-semantics dot carries its own tooltip; the state stays `stale` so
-nothing downstream needs a new case.
+nothing downstream needs a new case — and the same holds for the third axis
+below: `statusForStream` indexes the reason into a tooltip table rather than
+branching per axis, so a fourth one cannot end up wearing the YAML text.
+
+**There is a third axis, and it is the backend that wrote the stem** (#151).
+`renderer_type` sits inside the engine's fingerprint beside the semantics
+version (PGE #228), for the same reason — something a stem depends on that the
+YAML text doesn't state — and with three backends that exist to be compared,
+rendering with one and relaunching with another is the use case, not the edge.
+So the UI mirrors it the same way the version is mirrored: `staleReason`
+returns `"renderer"` too, the name is recorded per stream beside the
+fingerprints (`loadRenderers` / `_persistRenderers`, localStorage key
+`pge-local-renderer`), and `statusForStream` has its own tooltip for it.
+
+**The reason it is not in the hash is not the one the issue gave.** #151 said
+the UI's hash would stop matching the engine's manifest and every stem would
+read 🟡 forever. The two hashes are never compared: `loadCache` keeps its own
+per-browser manifest (FNV-1a against the engine's SHA-256) and nothing in
+`src/` reads `GET /cache_manifest`. The real reason is #134's criterion —
+*does it reach the YAML?* — and the answer is no: the UI hash answers "did the
+user edit this stream", which a change of backend doesn't move. Folded in, the
+dot would read `stale` with reason `yaml` on a YAML nobody touched, and the
+reason is the whole point of having reasons.
+
+**The two unknowns follow the semantics rule, and the "absent" branch is the
+one that earns its keep later.** A *current* backend that isn't known claims
+nothing; a *stem* with no recorded backend and a known current one reads
+`stale`. Today that discovers nothing — `RENDERER` is one declaration in
+`app.jsx` and the UI has only ever written `numpy` — so it costs one empty pass
+per project, which clears itself on the first `stream-done`, `cached: true`
+included. Staying silent instead would mean that the day the choice reaches
+Settings (#150), the numpy stems written before it stay 🟢 under csound: one
+render too few, in exactly the case the axis exists for.
+
+**The name goes out from one declaration.** `RENDERER` in `app.jsx` is read by
+`rendererOfThisRun` (the POST body *and* the `stream-done` handler, the same
+"fix the value for this run" rule as the semantics version) and by `rendererCtx`
+(the live side of the axis). Two literals would be two declarations, and the
+disagreement between the name that reaches argv and the name that reaches the
+record is invisible — it shows up as a green dot. `server.py` defaults to the
+same string, and a source guard in `test-render-status.js` pins both the single
+declaration and the bridge's default; a parity case pins the two halves of the
+pact — three backends give the engine three hashes, and the UI's axis
+discriminates the same pairs while its hash stays blind to them. What is still
+hardcoded is the **choice**, which is #150; the *knowledge* of who wrote the
+stem no longer is.
 
 ### YAML round-trip (`yaml-bridge.js`)
 
