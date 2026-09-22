@@ -6,6 +6,7 @@ These don't need the engine repo (no main.py is spawned). The kill/watchdog
 tests spawn a short-lived python sleeper. Run: pytest tests/python/ -v
 """
 
+import ast
 import glob
 import json
 import os
@@ -30,14 +31,48 @@ def _types(events):
     return [e["type"] for e in events]
 
 
+def _ids_state(ids, total=None, **over):
+    """Lo `state` che costruisce /render: gli id dichiarati dalla richiesta.
+
+    Dichiararli non e' piu' facoltativo (#162): il filtro sugli id e' totale,
+    quindi uno `state` senza `ids` e' una richiesta che non dichiara nessuno
+    stream e da cui non si deriva nessun evento. Vedi
+    `test_parse_render_line_without_ids_derives_nothing`.
+    """
+    st = {"streamId": None, "index": 0,
+          "total": len(ids) if total is None else total,
+          "ids": set(ids), "summary": False}
+    st.update(over)
+    return st
+
+
+# La riga di testa del blocco riassuntivo, nella forma in cui il parser la
+# vede: `cli.py` la stampa con un `\n` davanti, che `readline` consuma.
+# Quella del motore vivo la chiede `test_engine_summary_head_opens_the_block`.
+SUMMARY_HEAD = " Generazione completata! 2 file generati:"
+
+
+def _open_summary(state):
+    """Apre il blocco riassuntivo come lo apre il motore: con la sua riga.
+
+    Non con `state["summary"] = True`: il gate e' fatto di due meta' — la
+    riga che apre e la riga che chiude — e una fixture che ne salta la prima
+    lascerebbe scoperta proprio quella su cui il blocco puo' non aprirsi piu'.
+    """
+    evs = rp.parse_render_line(SUMMARY_HEAD, state)
+    assert _types(evs) == ["log"]            # la testa non e' un evento
+    assert state["summary"] is True
+    return state
+
+
 def test_parse_render_line_always_logs():
-    state = {"streamId": None, "total": 0, "index": 0}
+    state = _ids_state({"stream1"})
     evs = rp.parse_render_line("hello world", state)
     assert evs == [{"type": "log", "line": "hello world"}]
 
 
 def test_parse_render_line_dirty_emits_start_only():
-    state = {"streamId": None, "total": 3, "index": 0}
+    state = _ids_state({"stream1"}, total=3)
     evs = rp.parse_render_line("[CACHE] stream1: DIRTY", state)
     assert _types(evs) == ["log", "stream-start"]
     start = evs[1]
@@ -48,7 +83,7 @@ def test_parse_render_line_dirty_emits_start_only():
 
 
 def test_parse_render_line_clean_emits_start_and_done():
-    state = {"streamId": None, "total": 3, "index": 0}
+    state = _ids_state({"stream1"}, total=3)
     evs = rp.parse_render_line("[CACHE] stream1: clean", state)
     assert _types(evs) == ["log", "stream-start", "stream-done"]
     assert evs[2] == {"type": "stream-done", "streamId": "stream1", "cached": True}
@@ -57,7 +92,7 @@ def test_parse_render_line_clean_emits_start_and_done():
 
 
 def test_parse_render_line_next_cache_closes_previous_dirty():
-    state = {"streamId": None, "total": 2, "index": 0}
+    state = _ids_state({"stream1", "stream2"}, total=2)
     rp.parse_render_line("[CACHE] stream1: DIRTY", state)   # s1 pending
     evs = rp.parse_render_line("[CACHE] stream2: clean", state)
     # prev dirty s1 done, then s2 start + done (cached)
@@ -68,8 +103,9 @@ def test_parse_render_line_next_cache_closes_previous_dirty():
 
 
 def test_parse_render_line_stem_path_closes_dangling_dirty():
-    state = {"streamId": None, "total": 1, "index": 0}
+    state = _ids_state({"stream1"}, total=1)
     rp.parse_render_line("[CACHE] stream1: DIRTY", state)   # s1 pending
+    _open_summary(state)
     evs = rp.parse_render_line("    /abs/path/output/PGE_test__stream1.aif", state)
     assert _types(evs) == ["log", "stream-done"]
     assert evs[1] == {"type": "stream-done", "streamId": "stream1", "cached": False}
@@ -77,7 +113,8 @@ def test_parse_render_line_stem_path_closes_dangling_dirty():
 
 
 def test_parse_render_line_stem_path_other_stream_no_done():
-    state = {"streamId": "stream1", "total": 1, "index": 1}
+    state = _ids_state({"stream1"}, total=1, streamId="stream1", index=1)
+    _open_summary(state)
     evs = rp.parse_render_line("    /abs/output/PGE_test__streamX.aif", state)
     assert _types(evs) == ["log"]            # path is for a different stream
     assert state["streamId"] == "stream1"
@@ -92,15 +129,6 @@ def test_parse_render_line_stem_path_other_stream_no_done():
 # righe che non sono stream e che `_RE_CACHE_LINE` leggeva come tali,
 # inventando stream `Manifest` e `GC` in ogni giro.
 # ---------------------------------------------------------------------------
-
-def _ids_state(ids, total=None, **over):
-    """Lo `state` che costruisce /render: gli id dichiarati dalla richiesta."""
-    st = {"streamId": None, "index": 0,
-          "total": len(ids) if total is None else total,
-          "ids": set(ids)}
-    st.update(over)
-    return st
-
 
 def test_parse_render_line_ignores_manifest_line():
     state = _ids_state({"stream1"})
@@ -127,11 +155,26 @@ def test_parse_render_line_ghost_does_not_close_pending_dirty():
     assert state["streamId"] == "stream1"   # ancora in corso
 
 
-def test_parse_render_line_without_ids_keeps_legacy_behaviour():
-    """Richiesta che non dichiara gli stream: nessun insieme, nessun filtro."""
-    state = {"streamId": None, "total": 0, "index": 0}
+@pytest.mark.parametrize("ids", [set(), None])
+def test_parse_render_line_without_ids_derives_nothing(ids):
+    """Richiesta che non dichiara gli stream: nessun evento (#162).
+
+    Era l'inverso — nessun insieme, nessun filtro — e il prezzo era che
+    l'unica cosa capace di distinguere una riga di stream da una riga di
+    servizio del motore (o da una riga che nel processo del motore ha scritto
+    qualcun altro) restava inerte proprio quando nessuno l'aveva armata.
+
+    Il browser gli id li dichiara sempre, quindi a cambiare comportamento e'
+    solo una richiesta che non li dichiara — e li' i pallini non li perde
+    nessuno: il fallback dell'evento `done` in backend.js emette uno
+    `stream-done` sintetico per ogni stem trovato su disco. Si perde la barra
+    viva, non un pallino.
+    """
+    state = {"streamId": None, "total": 0, "index": 0, "ids": ids}
     evs = rp.parse_render_line("[CACHE] stream1: clean", state)
-    assert _types(evs) == ["log", "stream-start", "stream-done"]
+    assert _types(evs) == ["log"]
+    assert state["streamId"] is None
+    assert state["index"] == 0
 
 
 @pytest.mark.parametrize("sid", ["bass-1", "voce.2", "a_b", "S1", "x.y-z_1"])
@@ -141,6 +184,7 @@ def test_parse_render_line_stem_path_closes_ids_outside_word_charset(sid):
     giro non riceveva mai il suo `stream-done`."""
     state = _ids_state({sid})
     rp.parse_render_line(f"[CACHE] {sid}: DIRTY", state)
+    _open_summary(state)
     evs = rp.parse_render_line(f"    /abs/output/PGE_test__{sid}.wav", state)
     assert _types(evs) == ["log", "stream-done"]
     assert evs[1] == {"type": "stream-done", "streamId": sid, "cached": False}
@@ -151,9 +195,194 @@ def test_parse_render_line_stem_path_still_discriminates():
     """Allargare la regex non deve chiudere lo stream sbagliato."""
     state = _ids_state({"bass-1", "voce.2"})
     rp.parse_render_line("[CACHE] bass-1: DIRTY", state)
+    _open_summary(state)
     evs = rp.parse_render_line("    /abs/output/PGE_test__voce.2.wav", state)
     assert _types(evs) == ["log"]
     assert state["streamId"] == "bass-1"
+
+
+# ---------------------------------------------------------------------------
+# Il blocco riassuntivo: la riga di path vale solo li' dentro (#162)
+#
+# `_RE_STEM_PATH` accetta qualunque riga INDENTATA che finisca per
+# `__<qualcosa>.<aif|aiff|wav|flac>`, e i messaggi d'errore del motore citano i
+# path dei sample con la stessa forma. Bastava un sample il cui nome finisse
+# come lo stem dello stream in volo per chiuderlo in anticipo: pallino verde su
+# uno stem mai scritto, che e' il solo errore che questo parser non puo'
+# permettersi.
+#
+# A discriminare non e' la forma — irrigidirla costerebbe i path con gli spazi,
+# e con essi lo `stream-done` dell'ULTIMO stream DIRTY del giro, l'unico che da
+# questa riga dipende — ma la POSIZIONE.
+# ---------------------------------------------------------------------------
+
+def test_sample_path_in_an_error_message_does_not_close_a_stream():
+    """Il reperto della PGE #178, misurato: `  Path cercato: …__streamA.wav`.
+
+    Fuori dal blocco quella riga non e' un path di stem, e lo stream in volo
+    resta in volo — il `done` vero lo dara' il motore quando lo scrive.
+    """
+    state = _ids_state({"streamA"})
+    rp.parse_render_line("[CACHE] streamA: DIRTY", state)
+    evs = rp.parse_render_line("  Path cercato: refs/voce__streamA.wav", state)
+    assert _types(evs) == ["log"], evs[1:]
+    assert state["streamId"] == "streamA"
+
+
+def test_summary_block_closes_on_the_first_unindented_line():
+    """Il blocco finisce dove finisce l'indentazione.
+
+    Sotto i path il motore stampa `Reaper project:`, `Grain JSON:`, `Log:` —
+    tutte a colonna zero — e prima ancora la riga vuota di
+    `print("\nGenerazione partitura grafica...")`. Nessuna di quelle e' un
+    terminatore dichiarato: a chiudere e' la colonna.
+    """
+    state = _ids_state({"streamA"})
+    rp.parse_render_line("[CACHE] streamA: DIRTY", state)
+    _open_summary(state)
+    rp.parse_render_line("Grain JSON: /out/proj__streamA.json", state)
+    assert state["summary"] is False
+    evs = rp.parse_render_line("  Path cercato: refs/voce__streamA.wav", state)
+    assert _types(evs) == ["log"], evs[1:]
+    assert state["streamId"] == "streamA"
+
+
+def test_summary_block_survives_a_path_with_spaces():
+    """Dentro il blocco la riga puo' essere qualunque cosa, e deve poterlo.
+
+    E' la ragione per cui la regex non si e' ristretta: `/Users/me/My
+    Music/proj__s1.wav` e' un path legittimo, e ogni irrigidimento sulla forma
+    della riga si sarebbe pagato con lo `stream-done` perduto proprio
+    dell'unico stream che da questa riga dipende.
+    """
+    state = _ids_state({"s1"})
+    rp.parse_render_line("[CACHE] s1: DIRTY", state)
+    _open_summary(state)
+    evs = rp.parse_render_line("    /Users/me/My Music/proj__s1.wav", state)
+    assert _types(evs) == ["log", "stream-done"]
+    assert evs[1] == {"type": "stream-done", "streamId": "s1", "cached": False}
+
+
+def test_a_cache_line_inside_the_block_still_closes_it():
+    """Una `[CACHE]` non e' indentata, quindi chiude il blocco come le altre.
+
+    Conta perche' e' l'ordine in cui le due meta' del parser si incontrano: il
+    ramo `[CACHE]` esce con un `return`, e se la chiusura stesse dopo di lui il
+    blocco resterebbe aperto per il resto del giro.
+    """
+    state = _ids_state({"s1", "s2"}, total=2)
+    _open_summary(state)
+    evs = rp.parse_render_line("[CACHE] s2: DIRTY", state)
+    assert _types(evs) == ["log", "stream-start"]
+    assert state["summary"] is False
+
+
+def test_engine_summary_head_opens_the_block():
+    """La riga di testa la chiede al motore, non la trascrive.
+
+    Il gate si apre su una riga di prosa italiana, quindi la sua sola
+    debolezza e' che quella prosa cambi: allora il blocco non si aprirebbe
+    piu', e l'ultimo stem tornerebbe giallo dopo un render riuscito. E' la
+    direzione buona (un render di troppo, mai uno di meno), ma non deve
+    restare alla prosa — qui la riga si LEGGE dal sorgente della CLI, e la si
+    riconosce dalla sua posizione: e' il `print` che precede il `for` il cui
+    corpo e' un solo `print` di sola indentazione piu' interpolazione, cioe'
+    il blocco di path da cui `_RE_STEM_PATH` ricava il suo evento.
+    """
+    err = engine_corpus.corpus_error()
+    assert err is None, err
+    reason = engine_corpus.skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    heads = _engine_summary_heads()
+    assert heads, (
+        "nessun blocco `print(testa)` + `for: print(f'    {x}')` nella CLI del "
+        f"motore ({engine_corpus.ENGINE_ROOT}/src/pge/cli.py): la sonda gira a "
+        "vuoto — il riepilogo si e' spostato, e con lui il gate del parser"
+    )
+    for head in heads:
+        # `print()` scrive `\n testa`, e `readline` spezza: al parser arriva
+        # l'ultima riga soltanto.
+        riga = head.replace("{}", "5").split("\n")[-1]
+        assert rp._RE_SUMMARY_HEAD.match(riga), (
+            f"il motore apre il blocco con {riga!r}, che `_RE_SUMMARY_HEAD` "
+            "non riconosce: il gate non si apre piu' e l'ultimo stream DIRTY "
+            "del giro non riceve il suo stream-done"
+        )
+
+
+def _fstring_form(node):
+    """La forma di un literal di `print`, con le interpolazioni a `{}`.
+
+    None quando l'argomento non e' una stringa (una variabile, una somma):
+    li' il sorgente non dice che forma avra' la riga.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not isinstance(node, ast.JoinedStr):
+        return None
+    out = []
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            out.append(part.value)
+        elif isinstance(part, ast.FormattedValue):
+            out.append("{}")
+        else:
+            return None
+    return "".join(out)
+
+
+def _print_form(stmt):
+    """La forma della riga stampata da `stmt`, se `stmt` e' un `print(literal)`."""
+    if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+        return None
+    call = stmt.value
+    if not (isinstance(call.func, ast.Name) and call.func.id == "print"):
+        return None
+    if len(call.args) != 1:
+        return None
+    return _fstring_form(call.args[0])
+
+
+def _engine_summary_heads():
+    """Le righe con cui la CLI del motore apre un blocco di path indentati.
+
+    Riconosciuto per struttura e non per parole: un `for` il cui corpo e' un
+    solo `print` di una f-string fatta di sola indentazione piu'
+    interpolazione — la sagoma del blocco riassuntivo, la stessa che il
+    contratto di stdout del motore chiama `_ha_forma_di_path` — e, subito
+    prima, il `print` che lo annuncia.
+    """
+    cli = os.path.join(engine_corpus.ENGINE_ROOT, "src", "pge", "cli.py")
+    if not os.path.exists(cli):
+        return []
+    with open(cli, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+
+    heads = []
+    for node in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(node, field, None)
+            if not isinstance(block, list):
+                continue
+            for prev, cur in zip(block, block[1:]):
+                if not isinstance(cur, ast.For) or len(cur.body) != 1:
+                    continue
+                inner = _print_form(cur.body[0])
+                if inner is None or not _RE_FORMA_DI_PATH.match(inner):
+                    continue
+                head = _print_form(prev)
+                if head is not None:
+                    heads.append(head)
+    return heads
+
+
+# «Indentazione piu' interpolazione e nient'altro»: la sagoma del blocco
+# riassuntivo, letta come la legge il contratto di stdout del motore
+# (`_ha_forma_di_path` in tests/shared/test_stdout_contract.py). Qui serve solo
+# a RICONOSCERE il blocco nel sorgente, non a giudicarlo.
+_RE_FORMA_DI_PATH = re.compile(r"^\s+\{\}\s*$")
 
 
 # --- la sonda: le righe [CACHE] chieste al motore, non trascritte -----------

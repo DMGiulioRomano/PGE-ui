@@ -1247,13 +1247,15 @@ def make_app(root: Path, render_timeout: float = 600.0,
                     # Gli id dichiarati dalla richiesta: e' l'unica cosa che
                     # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
                     # che il motore stampa a ogni render con --cache. Vuoto (o
-                    # assente) significa "richiesta che non dichiara gli stream":
-                    # nessun filtro, comportamento storico. Vedi render_pipeline.
+                    # assente) significa "richiesta che non dichiara nessuno
+                    # stream", e da li' non si deriva nessun evento: il filtro
+                    # non e' piu' inerte quando nessuno lo arma (#162). Vedi
+                    # render_pipeline.
                     req_streams = opts.get("streams") or []
                     stream_ids  = {str(s.get("id")) for s in req_streams
                                    if isinstance(s, dict) and s.get("id") is not None}
                     state = {"streamId": None, "total": len(req_streams), "index": 0,
-                             "ids": stream_ids or None}
+                             "ids": stream_ids, "summary": False}
                     # Read line-by-line and stream to client.
                     for raw in iter(proc.stdout.readline, ""):
                         line = raw.rstrip("\n")

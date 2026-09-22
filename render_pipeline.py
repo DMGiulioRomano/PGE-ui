@@ -44,11 +44,59 @@ _RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
 # che il pallino chiedeva. Il confronto con lo stream in corso, sotto, e' la
 # vera discriminante — qui basta riconoscere la riga.
 _RE_STEM_PATH  = re.compile(r"^\s+(.+__.+)\.(?:aif|aiff|wav|flac)\s*$", re.IGNORECASE)
+# La testa del blocco riassuntivo di `cli.py`, e con essa l'unico punto dello
+# stdout in cui `_RE_STEM_PATH` vale qualcosa:
+#
+#     \n Generazione completata! {n} file generati:
+#         {path}
+#         {path}
+#
+# Serve perche' quella regex e' una forma che le righe umane condividono: le
+# basta una riga INDENTATA che finisca per `__<qualcosa>.<aif|aiff|wav|flac>`,
+# e i messaggi d'errore del motore citano i path dei sample con la stessa
+# forma. Misurato (PGE #178):
+#
+#     '  Path cercato: refs/voce__streamA.wav'
+#         → stream-done di `streamA`, su uno stem mai scritto
+#
+# Bastava cioe' un sample il cui nome finisse come lo stem dello stream in
+# volo — il guard `endswith("__" + prev)` regge tutti gli altri casi, e' la
+# coincidenza di suffisso che passa — e il pallino diventava verde con
+# nessun audio dietro, che e' il solo errore che questo parser non puo'
+# permettersi.
+#
+# Restringere la regex non era la strada: un path puo' contenere spazi
+# (`/Users/me/My Music/proj__s1.wav`), quindi ogni irrigidimento sulla forma
+# della riga si paga con lo `stream-done` perduto dell'ULTIMO stream DIRTY del
+# giro — il solo che da questa riga dipende, gli altri li chiude la `[CACHE]`
+# successiva. A discriminare non e' la forma ma la POSIZIONE: quei path il
+# motore li stampa in un blocco solo, sotto la sua riga di testa, e li' dentro
+# ogni riga indentata E' un path.
+#
+# Se un giorno la riga di testa cambiasse parole il blocco non si aprirebbe
+# piu', e quell'ultimo stem tornerebbe giallo dopo un render riuscito: un
+# render di troppo, mai uno di meno, che e' la direzione buona. Ma non resta
+# alla prosa — `test_render_pipeline.py` legge il literal dai sorgenti del
+# motore e diventa rosso il giorno che si muove.
+_RE_SUMMARY_HEAD = re.compile(r"^\s*Generazione completata!.*:\s*$")
+# Riga indentata e non vuota: finche' escono cosi', il blocco e' ancora aperto.
+_RE_INDENTED = re.compile(r"^\s+\S")
 
 
 def parse_render_line(line: str, state: dict) -> list:
     """Turn a single stdout line into one or more browser-bound events."""
     events = [{"type": "log", "line": line}]
+
+    # Il blocco riassuntivo si apre sulla sua riga di testa...
+    if _RE_SUMMARY_HEAD.match(line):
+        state["summary"] = True
+        return events
+    # ...e si chiude alla prima riga che non e' indentata. Non serve un
+    # terminatore dal motore: sotto il blocco escono `Reaper project:`,
+    # `Grain JSON:`, `Log:` — tutte a colonna zero — e prima ancora la riga
+    # vuota che `print("\nGenerazione partitura grafica...")` antepone.
+    if state.get("summary") and not _RE_INDENTED.match(line):
+        state["summary"] = False
 
     # [CACHE] stream1: clean  → cached, emit start+done immediately
     # [CACHE] stream1: DIRTY  → about to render, emit start only
@@ -56,11 +104,25 @@ def parse_render_line(line: str, state: dict) -> list:
     if m:
         sid   = m.group(1)
         # Un id che la richiesta non ha dichiarato non e' uno stream: e' una
-        # riga di servizio del motore (Manifest, GC) che ha la stessa forma.
-        # `ids` assente = richiesta che non dichiara gli stream: nessun
-        # insieme, nessun filtro, comportamento storico.
-        ids = state.get("ids")
-        if ids is not None and sid not in ids:
+        # riga di servizio del motore (Manifest, GC) che ha la stessa forma,
+        # o una riga che nel processo del motore ha scritto qualcun altro.
+        #
+        # Il filtro e' TOTALE (#162): `ids` assente o vuoto non significa piu'
+        # "nessun filtro" ma "la richiesta non ha dichiarato nessuno stream",
+        # e da una richiesta che non dichiara niente non si deriva niente.
+        # Prima era l'inverso, e il prezzo era che l'unica cosa capace di
+        # distinguere `[CACHE] stream1: clean` da `[CACHE] Manifest: <path>`
+        # restava inerte proprio quando nessuno le aveva detto su cosa
+        # lavorare: due stream inventati per giro, barra 3/2, un toast che
+        # dichiara una cache mai avvenuta.
+        #
+        # Il browser gli id li dichiara sempre (`streams: data.streams` in
+        # app.jsx), quindi a cambiare comportamento e' solo una richiesta che
+        # non li dichiara — e li' c'e' una rete: il fallback dell'evento
+        # `done` in backend.js emette uno `stream-done` sintetico per ogni
+        # stem che il server ha trovato SU DISCO. Perdere questi eventi costa
+        # la barra di avanzamento viva, mai un pallino sbagliato.
+        if sid not in (state.get("ids") or ()):
             return events
         dirty = m.group(2).strip().upper() == "DIRTY"
         total = state.get("total", 0)
@@ -81,7 +143,10 @@ def parse_render_line(line: str, state: dict) -> list:
 
     # Summary path lines: "    /abs/path/output/PGE_test__stream1.aif"
     # Extract stream_id from filename to emit stream-done for the last DIRTY stream.
-    m2 = _RE_STEM_PATH.match(line)
+    #
+    # Solo DENTRO il blocco riassuntivo: fuori, questa forma e' condivisa con
+    # le righe umane del motore — vedi `_RE_SUMMARY_HEAD`.
+    m2 = _RE_STEM_PATH.match(line) if state.get("summary") else None
     if m2:
         prev = state.get("streamId")
         # Il confronto e' sul suffisso e non su un gruppo catturato: sia il
