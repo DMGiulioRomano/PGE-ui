@@ -443,6 +443,182 @@ def test_no_engine_cache_line_invents_a_stream():
 
 
 # ---------------------------------------------------------------------------
+# I due canali: protocollo e' stdout, e basta (#162)
+#
+# Il bridge lanciava il motore con `stderr=subprocess.STDOUT`, quindi i due
+# flussi finivano nello stesso `readline` e OGNI riga di stderr passava per
+# `parse_render_line`. Il motore si e' dato la regola «nessuno, su nessun
+# canale, scrive righe con la forma del protocollo» e la sorveglia (PGE #178),
+# ma quella regola vincola il motore e non i suoi host: `logging` scrive su
+# stderr, e la diagnostica del motore accesa da chi lancia
+# (`logging.basicConfig(level=DEBUG, format="%(message)s")`) bastava ad aprire
+# e chiudere uno stream di nome `gaussian`, che non esiste.
+# ---------------------------------------------------------------------------
+
+_PROTOCOLLO_FINTO = "[CACHE] gaussian: registrata"
+
+
+def test_render_events_stderr_is_log_and_nothing_else():
+    state = _ids_state({"gaussian"})
+    evs = rp.render_events(rp.STDERR, _PROTOCOLLO_FINTO, state)
+    assert evs == [{"type": "log", "line": _PROTOCOLLO_FINTO}]
+    assert state["streamId"] is None
+    assert state["index"] == 0
+
+
+def test_render_events_stdout_is_the_parser():
+    """Il controllo del test qui sopra: la stessa riga, sullo stesso `state`,
+    dal canale giusto produce gli eventi. Senza, `render_events` potrebbe
+    tacere su tutto e il test precedente resterebbe verde."""
+    state = _ids_state({"gaussian"})
+    evs = rp.render_events(rp.STDOUT, _PROTOCOLLO_FINTO, state)
+    # `registrata` non e' `DIRTY`, quindi lo stream nasce e muore sulla riga:
+    # esattamente i due eventi che l'editor ha ricevuto per uno stream che non
+    # esiste, quando i due canali erano uno.
+    assert _types(evs) == ["log", "stream-start", "stream-done"]
+    assert evs[1]["streamId"] == "gaussian"
+    assert state["index"] == 1
+
+
+def test_render_events_stderr_cannot_open_the_summary_block():
+    """Nemmeno lo stato del blocco e' scrivibile da stderr.
+
+    Aprirlo da li' rimetterebbe in piedi il secondo reperto per un'altra
+    porta: una riga di errore indentata che cita un sample chiuderebbe di
+    nuovo in anticipo lo stream in volo.
+    """
+    state = _ids_state({"s1"})
+    rp.render_events(rp.STDERR, SUMMARY_HEAD, state)
+    assert state["summary"] is False
+    rp.parse_render_line("[CACHE] s1: DIRTY", state)
+    evs = rp.render_events(rp.STDERR, "    /out/proj__s1.wav", state)
+    assert _types(evs) == ["log"]
+    assert state["streamId"] == "s1"
+
+
+def _drive(script, ids):
+    """Lancia uno pseudo-motore come lo lancia /render, e raccoglie gli eventi.
+
+    Stessa catena della route: `RenderState.start` apre i due pipe,
+    `merged_output` li riunisce etichettati, `render_events` decide.
+    """
+    st = rp.RenderState()
+    proc = st.start([sys.executable, "-c", script], Path("."))
+    state = _ids_state(ids, summary=False)
+    events, channels = [], []
+    for channel, line in rp.merged_output(proc):
+        channels.append((channel, line))
+        events.extend(rp.render_events(channel, line, state))
+    proc.wait(timeout=10)
+    st.clear()
+    return events, channels, state
+
+
+_MOTORE_FINTO = (
+    "import sys\n"
+    "def out(s):\n"
+    "    sys.stdout.write(s + chr(10)); sys.stdout.flush()\n"
+    "def err(s):\n"
+    "    sys.stderr.write(s + chr(10)); sys.stderr.flush()\n"
+    "out('[CACHE] stream1: DIRTY')\n"
+    "err('[CACHE] gaussian: registrata')\n"
+    "out(' Generazione completata! 1 file generati:')\n"
+    "err('  Path cercato: refs/voce__stream1.wav')\n"
+    "out('    /out/proj__stream1.wav')\n"
+)
+
+
+def test_a_diagnostic_line_on_stderr_invents_no_stream():
+    """Il reperto 1 della PGE #178, misurato dalla catena intera."""
+    events, channels, state = _drive(_MOTORE_FINTO, {"stream1", "gaussian"})
+
+    # Le righe ci sono tutte: separare i canali non perde niente nel terminale.
+    assert len(channels) == 5, channels
+    assert sum(1 for e in events if e["type"] == "log") == 5
+
+    streamish = [e for e in events if e["type"] != "log"]
+    assert streamish == [
+        {"type": "stream-start", "streamId": "stream1", "index": 0, "total": 2},
+        {"type": "stream-done", "streamId": "stream1", "cached": False},
+    ], streamish
+    assert not any(e.get("streamId") == "gaussian" for e in streamish)
+    assert state["streamId"] is None
+
+
+def test_merged_output_labels_each_line_with_its_channel():
+    _, channels, _ = _drive(_MOTORE_FINTO, {"stream1"})
+    per_canale = {}
+    for channel, line in channels:
+        per_canale.setdefault(channel, []).append(line)
+    assert set(per_canale) == {rp.STDOUT, rp.STDERR}
+    # L'ordine DENTRO un canale e' esatto — e' l'unico da cui il parser
+    # dipende, visto che lo stato per stream si muove sulle sole righe di
+    # stdout. Quello FRA i canali resta approssimato, come lo era prima.
+    assert per_canale[rp.STDOUT] == [
+        "[CACHE] stream1: DIRTY",
+        " Generazione completata! 1 file generati:",
+        "    /out/proj__stream1.wav",
+    ]
+    assert per_canale[rp.STDERR] == [
+        "[CACHE] gaussian: registrata",
+        "  Path cercato: refs/voce__stream1.wav",
+    ]
+
+
+def test_merged_output_drains_a_talkative_stderr():
+    """Entrambi i pipe vanno drenati sempre: leggendone uno solo, il figlio si
+    blocca appena l'altro si riempie — che e' la sola comodita' che
+    `stderr=subprocess.STDOUT` dava."""
+    script = (
+        "import sys\n"
+        "for i in range(2000):\n"
+        "    sys.stderr.write('rumore %d' % i + chr(10))\n"
+        "sys.stdout.write('[CACHE] s1: clean' + chr(10))\n"
+    )
+    events, channels, _ = _drive(script, {"s1"})
+    assert sum(1 for c, _ in channels if c == rp.STDERR) == 2000
+    assert [e["type"] for e in events if e["type"] != "log"] == [
+        "stream-start", "stream-done"]
+
+
+def test_merged_output_without_a_stderr_pipe():
+    """Un processo aperto senza quel pipe vale una pompa in meno, non un
+    errore: `merged_output` legge quello che c'e'."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "print('[CACHE] s1: clean')"],
+        stdout=subprocess.PIPE, text=True, bufsize=1)
+    righe = list(rp.merged_output(proc))
+    proc.wait(timeout=10)
+    assert righe == [(rp.STDOUT, "[CACHE] s1: clean")]
+
+
+def test_render_state_start_keeps_the_two_pipes_apart():
+    st = rp.RenderState()
+    proc = st.start([sys.executable, "-c", "pass"], Path("."))
+    assert proc.stdout is not None and proc.stderr is not None
+    assert proc.stdout is not proc.stderr
+    proc.wait(timeout=10)
+    st.clear()
+
+
+def test_render_route_reads_the_channel():
+    """La route non deve poter scavalcare la decisione sul canale.
+
+    `render_events` e' il posto dove «protocollo e' stdout» e' scritto una
+    volta sola; una chiamata diretta a `parse_render_line` dal ciclo di
+    /render la riporterebbe a leggere stderr, e nessuno degli assert qui sopra
+    se ne accorgerebbe — girano tutti sotto il modulo, non sotto la route.
+    """
+    src = Path(rp.__file__).resolve().parent / "server.py"
+    testo = src.read_text(encoding="utf-8")
+    assert "for channel, line in merged_output(proc):" in testo, (
+        "il ciclo di /render non legge piu' i due canali etichettati")
+    assert "render_events(channel, line, state)" in testo
+    assert "parse_render_line" not in testo, (
+        "server.py chiama di nuovo il parser senza passare dal canale")
+
+
+# ---------------------------------------------------------------------------
 # build_render_command — flag construction (incl. the --show-static fix)
 # ---------------------------------------------------------------------------
 

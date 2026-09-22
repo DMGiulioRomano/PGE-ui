@@ -6,9 +6,17 @@ watchdog. No Flask here — the /render and /render/cancel routes in server.py
 own the HTTP/NDJSON concerns and delegate process mechanics to this module.
 """
 
+import queue
 import re
 import subprocess
 import threading
+
+
+# I due canali del sottoprocesso del motore. Non sono un'etichetta di comodo:
+# protocollo e' uno solo dei due, e tenerli distinti e' meta' della #162. Vedi
+# `merged_output` e `render_events`.
+STDOUT = "stdout"
+STDERR = "stderr"
 
 
 # Regexes for parsing main.py's stdout into structured UI events.
@@ -84,7 +92,11 @@ _RE_INDENTED = re.compile(r"^\s+\S")
 
 
 def parse_render_line(line: str, state: dict) -> list:
-    """Turn a single stdout line into one or more browser-bound events."""
+    """Turn a single **stdout** line into one or more browser-bound events.
+
+    Il canale lo sceglie `render_events`, che e' l'unico chiamante legittimo:
+    da stderr non si deriva niente, e il perche' sta li'.
+    """
     events = [{"type": "log", "line": line}]
 
     # Il blocco riassuntivo si apre sulla sua riga di testa...
@@ -160,6 +172,78 @@ def parse_render_line(line: str, state: dict) -> list:
     return events
 
 
+def render_events(channel: str, line: str, state: dict) -> list:
+    """Gli eventi di una riga, decisi dal CANALE da cui arriva.
+
+    Protocollo e' stdout e basta. stderr e' log, e non e' pignoleria: il
+    bridge lanciava il motore con `stderr=subprocess.STDOUT`, quindi i due
+    flussi finivano nello stesso `readline` e OGNI riga di stderr passava per
+    `parse_render_line`.
+
+    Il motore si e' dato la regola «nessuno, su nessun canale, scrive righe
+    con la forma del protocollo» e la sorveglia
+    (`tests/shared/test_stdout_contract.py`, PGE #178). Ma quella regola
+    vincola il motore, non i suoi host: `logging` scrive su stderr, e
+    qualunque libreria di terze parti dentro quel processo puo' ancora
+    stampare una riga di quella forma. Misurato con la diagnostica del motore
+    accesa come la accenderebbe chiunque —
+    `logging.basicConfig(level=DEBUG, format="%(message)s")` — un record
+    `[CACHE] %s: registrata` produceva `stream-start` piu' `stream-done` per
+    uno stream di nome `gaussian`, che non esiste. Nel formato di default a
+    salvarlo era solo il prefisso `DEBUG:pge.diagnostics:` che il formatter
+    antepone: una scelta di chi lancia, non una garanzia.
+
+    Il descrittore di file non separava niente perche' a unirli eravamo noi.
+    Separati (`merged_output`), separa — ed e' l'unica meta' del problema che
+    il motore non puo' riparare da solo.
+    """
+    if channel != STDOUT:
+        return [{"type": "log", "line": line}]
+    return parse_render_line(line, state)
+
+
+def _pump(stream, channel, q):
+    """Legge un pipe riga per riga e lo versa nella coda. `None` = EOF."""
+    try:
+        for raw in iter(stream.readline, ""):
+            q.put((channel, raw.rstrip("\n")))
+    finally:
+        q.put((channel, None))
+
+
+def merged_output(proc):
+    """Yield `(canale, riga)` dai due pipe del processo, in ordine d'arrivo.
+
+    Due pompe daemon su una coda. I pipe vanno drenati ENTRAMBI e sempre, o il
+    figlio si blocca appena quello non letto si riempie — che e' la ragione
+    per cui `stderr=subprocess.STDOUT` era comodo, e l'unica.
+
+    L'ordine FRA i due canali resta approssimato, esattamente come lo era
+    prima: li' a decidere era il buffering dei due flussi dentro il processo
+    del motore (stdout di protocollo e' flushato, il resto no), qui e' la
+    coda. L'ordine DENTRO ciascun canale invece e' esatto, ed e' l'unico da
+    cui `parse_render_line` dipende: lo stato per stream si muove sulle sole
+    righe di stdout.
+
+    `proc.stderr` a None (un processo aperto senza quel pipe, o un doppio
+    costruito a mano nei test) vale una pompa in meno, non un errore.
+    """
+    q = queue.Queue()
+    live = 0
+    for channel, stream in ((STDOUT, proc.stdout), (STDERR, proc.stderr)):
+        if stream is None:
+            continue
+        live += 1
+        threading.Thread(target=_pump, args=(stream, channel, q),
+                         daemon=True).start()
+    while live:
+        channel, line = q.get()
+        if line is None:
+            live -= 1
+            continue
+        yield channel, line
+
+
 class RenderState:
     """Mutable state for the single in-flight render (only one at a time).
 
@@ -176,13 +260,20 @@ class RenderState:
         self.lock = threading.Lock()
 
     def start(self, cmd, cwd):
-        """Spawn the subprocess under the lock and remember it. Returns proc."""
+        """Spawn the subprocess under the lock and remember it. Returns proc.
+
+        I due flussi restano DUE (#162). Erano uno — `stderr=subprocess.STDOUT`
+        — e quella fusione e' l'intera prima meta' della issue: il parser di
+        protocollo leggeva anche cio' che il motore non aveva scelto di
+        stampare. Chi legge e' `merged_output`, che li riunisce etichettati:
+        due pompe, una coda, e il canale arriva fino a `render_events`.
+        """
         with self.lock:
             self.cancelled = False
             self.proc = subprocess.Popen(
                 cmd, cwd=str(cwd),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True, bufsize=1,
             )
             return self.proc

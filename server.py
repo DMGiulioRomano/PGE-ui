@@ -83,7 +83,8 @@ from audio_pipeline import (
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
-    RenderState, parse_render_line, build_render_command, start_watchdog,
+    RenderState, render_events, merged_output, build_render_command,
+    start_watchdog,
 )
 
 
@@ -91,7 +92,7 @@ from render_pipeline import (
 # Helpers
 #
 # Audio (sox transcode / peaks / spectrogram, path resolution) lives in
-# audio_pipeline.py, render orchestration (parse_render_line, RenderState,
+# audio_pipeline.py, render orchestration (render_events, RenderState,
 # command build, watchdog) in render_pipeline.py, and the AST reads of the
 # engine's own source in engine_introspect.py. Only the engine-venv bootstrap
 # stays here — it's used by /setup and the render route and is a distinct
@@ -1256,16 +1257,17 @@ def make_app(root: Path, render_timeout: float = 600.0,
                                    if isinstance(s, dict) and s.get("id") is not None}
                     state = {"streamId": None, "total": len(req_streams), "index": 0,
                              "ids": stream_ids, "summary": False}
-                    # Read line-by-line and stream to client.
-                    for raw in iter(proc.stdout.readline, ""):
-                        line = raw.rstrip("\n")
+                    # Read line-by-line and stream to client. Il canale arriva
+                    # fin qui perche' solo stdout e' protocollo: vedi
+                    # render_events, che e' il posto dove quella regola vive.
+                    for channel, line in merged_output(proc):
                         if rs.is_cancelled():
                             proc.terminate()
                             yield json.dumps({"type": "log",
                                               "line": "[ABORT] cancelled"}) + "\n"
                             yield json.dumps({"type": "done", "ok": False}) + "\n"
                             return
-                        for ev in parse_render_line(line, state):
+                        for ev in render_events(channel, line, state):
                             yield json.dumps(ev) + "\n"
                     proc.wait()
                     ok = (proc.returncode == 0)
