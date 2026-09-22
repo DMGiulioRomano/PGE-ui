@@ -27,11 +27,16 @@
 
 const { parity, loadUiLibs } = require("./harness.js");
 
-const window = loadUiLibs(["yaml-bridge.js", "backend.js"], {
+const window = loadUiLibs(["yaml-bridge.js", "backend.js", "render-status.js"], {
   localStorage: { getItem: () => null, setItem: () => {} },
   fetch: () => Promise.reject(new Error("nessuna rete nei test")),
 });
 const { fingerprintStream } = window.PGEBackend;
+// render-status.js perche' i due assi di staleness che NON stanno nell'hash
+// (semantica, backend) sono meta' del patto: senza di loro «la UI non ha
+// questo campo» e' una divergenza senza rete, e i casi qui sotto possono solo
+// descriverla invece di pretendere che sia coperta altrove.
+const RS = window.PGERenderStatus;
 const { serializeStream, parseStream } = window.PGEYaml;
 
 /* Lo stesso stream di base di test-fingerprint.js, meno i campi che quel test
@@ -468,13 +473,17 @@ parity({
        *
        * `renderer_type` e' entrato nel fingerprint del motore accanto alla
        * semantica, ed e' la stessa classe di dipendenza — qualcosa da cui lo
-       * stem dipende e che il testo YAML non dice. Oggi non morde: la UI cabla
-       * `renderer: "numpy"` e il bridge ha lo stesso default (pinnato dalla
-       * guardia sorgente in test-render-status.js). Il giorno in cui la scelta
-       * del backend arriva nelle Settings — il motore ne ha tre — il pallino
-       * torna verde su stem che il motore riscrivera': PGE #222 daccapo, su un
-       * asse diverso. Questa sonda esiste perche' quel giorno il conto sia gia'
-       * stato fatto. */
+       * stem dipende e che il testo YAML non dice. Qui era scritto che «oggi
+       * non morde» perche' la UI cabla un solo backend, e che il giorno del
+       * selettore sarebbe stato PGE #222 daccapo su un asse diverso: era un
+       * debito, e questa sonda il suo promemoria.
+       *
+       * Il debito e' chiuso (#151): la UI ha il suo asse, accanto all'hash e
+       * non dentro. Quindi la sonda non descrive piu' una divergenza, ne
+       * pretende la forma — che il motore discrimini i tre backend DENTRO
+       * l'hash, e che la UI li discrimini FUORI, con l'hash che resta cieco.
+       * Sono le due meta' di un patto: se una delle due cade, il pallino
+       * mente in uno dei due versi. */
       label: "il backend e' un terzo asse dentro l'hash del motore",
       run: async (ask, assert, ctx) => {
         const s = base();
@@ -489,13 +498,51 @@ parity({
           new Set(hexes).size === backends.length,
           backends.map((b, i) => `${b}: ${hexes[i]}`).join("\n      "));
 
-        // ...e la UI non ce l'ha, come non ha la semantica: divergenza voluta,
-        // elencata nel README. Il fingerprint JS non prende nemmeno il backend
-        // come argomento — se un domani lo prendesse, questa riga parlerebbe.
-        assert("il fingerprint della UI non conosce il backend (divergenza voluta)",
+        /* Meta' UI, primo tempo: l'hash resta cieco al backend, come alla
+           semantica. Non e' un'omissione da colmare — l'hash risponde a
+           "l'utente ha modificato lo YAML", e chi ha scritto il file non e' una
+           modifica dell'utente: dentro l'hash il pallino direbbe `yaml` su uno
+           YAML che nessuno ha toccato. Il fingerprint JS non prende nemmeno il
+           backend come argomento, e questa riga parla il giorno che lo
+           prendesse. */
+        assert("il fingerprint della UI non conosce il backend (voluto)",
           fingerprintStream.length <= 2,
           `fingerprintStream ha ${fingerprintStream.length} parametri: se ora ` +
-          "prende il renderer, l'asse va costruito e questa nota va aggiornata");
+          "prende il renderer, il motivo del pallino diventa 'yaml' su uno " +
+          "YAML fermo");
+
+        /* Meta' UI, secondo tempo — ed e' quella che prima mancava. I tre
+           backend che il motore distingue nell'hash, la UI li distingue
+           nell'asse: `staleReason` deve dire "renderer" per ogni coppia che il
+           motore considera diversa, e tacere su ogni coppia che considera
+           uguale. L'atteso non e' scritto a mano: viene dagli hash che il
+           motore ha appena risposto, sugli stessi nomi del giro qui sopra — se
+           un domani due backend dessero lo stesso hash, questa meta' pretende
+           che anche la UI li consideri equivalenti, senza toccare una riga.
+           Dei tre nomi la UI non ha comunque nessuna copia: sono il corpus di
+           questa sonda, non un registro che l'editor spedisce (popolarlo dal
+           motore e' il punto 1 di #150, insieme al selettore). */
+        const coppie = [];
+        for (const a of backends) for (const b of backends) coppie.push([a, b]);
+        const sbagliate = coppie.filter(([a, b]) => {
+          const atteso = (hexes[backends.indexOf(a)] === hexes[backends.indexOf(b)])
+            ? null : "renderer";
+          return RS.staleReason("h", "h", null, { rendered: a, current: b }) !== atteso;
+        });
+        assert(`l'asse della UI discrimina le stesse ${coppie.length} coppie`,
+          sbagliate.length === 0,
+          sbagliate.map(([a, b]) =>
+            `${a} → ${b}: ottenuto ` +
+            `${RS.staleReason("h", "h", null, { rendered: a, current: b })}`).join("\n      "));
+
+        /* E il record assente non e' verde. E' lo stem reso prima che l'asse
+           esistesse: il motore, per lui, ha gia' un `renderer_type` nel proprio
+           hash — quello del giro che l'ha scritto — mentre la UI non sa quale.
+           Verde li' vuol dire un render di meno esattamente sulla popolazione
+           piu' numerosa. */
+        assert("...e uno stem senza record non passa per fresco",
+          RS.staleReason("h", "h", null, { rendered: undefined, current: backends[0] })
+            === "renderer");
       },
     },
   ],

@@ -130,7 +130,9 @@ La cartella è nata contro `2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
 `VARIATION_SEMANTICS_VERSION` da 2 a 3 — il primo cambiamento che questi test
 hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` e il
 commit qui sopra è entrato `renderer_type` nel fingerprint del motore (`bcc2c84`):
-un terzo asse, oggi tenuto a bada da un backend cablato su entrambi i lati.
+un terzo asse, che la UI ha poi costruito accanto al proprio hash (#151) invece
+di infilarlo dentro — la scelta del backend resta cablata, ma la *conoscenza* di
+chi ha scritto lo stem no.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -272,7 +274,7 @@ commento.
 | dove | differenza | perché |
 |---|---|---|
 | fingerprint | `onset` muove l'hash del motore, non quello della UI | spostare una clip sulla timeline non cambia l'audio dello stem |
-| fingerprint | `renderer_type` è nell'hash del motore e non ha un asse nella UI | oggi il backend è cablato su entrambi i lati (`app.jsx` e il default di `server.py`, pinnati da una guardia sorgente); il giorno che diventa una scelta serve un asse come quello della semantica |
+| fingerprint | `renderer_type` è nell'hash del motore e **fuori** da quello della UI | come la semantica: è un asse di staleness accanto all'hash (`staleReason` → `"renderer"`, record per stem in `pge-local-renderer`), non un campo dentro. La sonda chiede entrambe le metà — tre backend, tre hash nel motore; le stesse coppie discriminate dall'asse nella UI |
 | magnify-spec | SPEC vuoto: valido per la UI, rifiutato dal motore | nella UI "campo vuoto" significa "nessun target", e il flag non parte |
 | magnify-spec | `stream=` vuoto: rifiutato dalla UI, accettato dal motore | la UI è più stretta; una lente su nessuno stream è un refuso |
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
