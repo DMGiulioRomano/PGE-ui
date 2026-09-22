@@ -37,7 +37,9 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
   const total = status?.total || 0;
   const done = status?.done || 0;
   const cur = status?.currentStreamId;
-  const pct = total ? Math.min(1, (done + (status?.streamProgress || 0)) / total) : 0;
+  // Stream interi: l'addendo `status.streamProgress` che stava qui dentro era
+  // sempre 0 — nessuno emetteva l'evento che lo muoveva (#162).
+  const pct = total ? Math.min(1, done / total) : 0;
 
   function toggle(key, val) {
     onOptionsChange({ ...options, [key]: val });

@@ -81,19 +81,23 @@ console.log("\n── statusForStream(streamId, ctx) ──");
     currentFps:      { a: "1", b: "2", c: "3" },
     lastRenderedFps: { a: "1", b: "9" /* c missing */ },
     hasStem: (id) => id !== "z",
-    running: false, currentStreamId: null, streamProgress: {},
+    running: false, currentStreamId: null,
   };
   assert("fresh", eq(RS.statusForStream("a", base), { state: "fresh", tooltip: RS.TOOLTIPS.fresh }));
   assert("stale", eq(RS.statusForStream("b", base), { state: "stale", tooltip: RS.TOOLTIPS.stale }));
   assert("never", eq(RS.statusForStream("c", base), { state: "never", tooltip: RS.TOOLTIPS.never }));
 
-  const running = { ...base, running: true, currentStreamId: "a", streamProgress: { a: 0.42 } };
-  assert("running with progress",
-    eq(RS.statusForStream("a", running), { state: "running", progress: 0.42, tooltip: RS.TOOLTIPS.running }));
-
-  const runningNoProg = { ...base, running: true, currentStreamId: "a", streamProgress: {} };
-  assert("running progress defaults to 0",
-    eq(RS.statusForStream("a", runningNoProg), { state: "running", progress: 0, tooltip: RS.TOOLTIPS.running }));
+  /* Lo stato RUNNING non porta un `progress` (#162): lo leggeva da una mappa
+     che solo l'evento `stream-progress` riempiva, e quell'evento non lo emette
+     nessuno — vedi il censimento in fondo al file. La barra per clip stava
+     quindi a 0% per tutto il render, e a 100% nell'istante fra uno
+     `stream-done` e lo `stream-start` successivo, sullo stream gia' finito. */
+  const running = { ...base, running: true, currentStreamId: "a" };
+  assert("running",
+    eq(RS.statusForStream("a", running), { state: "running", tooltip: RS.TOOLTIPS.running }));
+  assert("running non dichiara un avanzamento dentro lo stream",
+    !("progress" in RS.statusForStream("a", running)),
+    JSON.stringify(RS.statusForStream("a", running)));
 
   // Running, but a *different* stream is current → falls through to classify.
   assert("running for other stream falls through to classify",
@@ -209,7 +213,7 @@ console.log("\n── il pallino dice PERCHE' e' giallo ──");
     currentFps: { a: "1", b: "2", c: "3" },
     lastRenderedFps: { a: "1", b: "9", c: "3" },
     hasStem: () => true,
-    running: false, currentStreamId: null, streamProgress: {},
+    running: false, currentStreamId: null,
     sem: { rendered: { a: 3, b: 3, c: 2 }, engine: 3 },
   };
   assert("yaml modificato → il testo di sempre",
@@ -388,6 +392,86 @@ console.log("\n── la catena dal motore al pallino ──");
   assert("app passa la coppia a entrambi i consumatori",
     /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
+}
+
+/* ---------------------------------------------------------------------------
+ * Ogni evento che l'editor gestisce, qualcuno lo emette (#162).
+ *
+ * `app.jsx` aveva un ramo `e.type === "stream-progress"` che scriveva stato e
+ * disegnava una barra dentro il pallino della clip — e quell'evento non lo
+ * emetteva nessuno: ne' server.py, ne' render_pipeline.py, e il motore non ha
+ * una riga da cui ricavarlo (l'avanzamento che stdout sa portare e' per stream
+ * intero, `[CACHE] <id>: …`). Codice morto con la forma di una funzione: la
+ * barra stava a 0% per tutto il render, e a 100% nell'istante fra uno
+ * `stream-done` e lo `stream-start` successivo, sullo stream gia' finito.
+ *
+ * Il censimento e' DERIVATO dai sorgenti, mai una lista scritta qui: una lista
+ * sarebbe una seconda copia della verita', e chi aggiunge un evento non e' chi
+ * si ricorda di aggiornarla — tacerebbe esattamente mentre i due lati stanno
+ * per divergere. Vale nei due versi: un consumatore senza emettitore e' il
+ * difetto di sopra, e il giorno che `stream-progress` esista davvero sara'
+ * perche' il protocollo e' diventato esplicito (condizione 2 delle tre in
+ * `docs/explanation/contratto-stdout.md` del motore) — allora l'emettitore
+ * arriva per primo e questa sezione resta verde da sola.
+ * ------------------------------------------------------------------------- */
+console.log("\n── ogni evento gestito ha un emettitore ──");
+{
+  const root = path.join(__dirname, "../..");
+  const code = (rel) => SG.codeOf(path.join(root, rel));
+  const all = (src, re) => {
+    const out = new Set();
+    let m; const rx = new RegExp(re.source, "g");
+    while ((m = rx.exec(src))) out.add(m[1]);
+    return out;
+  };
+
+  // Emettitori: il bridge (NDJSON) piu' gli eventi sintetici che backend.js
+  // fabbrica dal `done` — sono eventi a tutti gli effetti, il consumatore non
+  // li distingue.
+  const bridge = [code("server.py"), code("render_pipeline.py")].join("\n");
+  const emitted = new Set([
+    ...all(bridge, /"type":\s*"([a-z-]+)"/),
+    ...all(code("src/lib/backend.js"), /\btype:\s*"([a-z-]+)"/),
+  ]);
+  // Consumatori: chi si dirama sul tipo dell'evento.
+  const consumed = new Set([
+    ...all(code("src/components/app.jsx"), /\b\w+\.type === "([a-z-]+)"/),
+    ...all(code("src/lib/backend.js"),     /\b\w+\.type === "([a-z-]+)"/),
+  ]);
+
+  /* Una lettura che torna vuota non accusa niente: e' il modo silenzioso di
+     sparire che questo repo conosce gia' da `backend.envelopeKeys()` che torna
+     `[]` e il filtro che si nasconde. Quindi le due letture si misurano prima
+     di confrontarle. */
+  for (const t of ["log", "done", "stream-start", "stream-done"]) {
+    assert(`la lettura degli emettitori trova "${t}"`, emitted.has(t),
+      [...emitted].join(", ") || "(vuota)");
+  }
+  assert("la lettura dei consumatori trova qualcosa", consumed.size >= 3,
+    [...consumed].join(", ") || "(vuota)");
+
+  const orfani = [...consumed].filter(t => !emitted.has(t));
+  assert("nessun evento gestito senza qualcuno che lo emetta",
+    orfani.length === 0,
+    `gestiti da app.jsx/backend.js ma emessi da nessuno: ${orfani.join(", ")}`);
+}
+
+console.log("\n── niente residuo dell'avanzamento dentro lo stream ──");
+{
+  /* Lo stato che quel ramo era il solo a scrivere. Toglierlo a meta' avrebbe
+     lasciato una mappa azzerata a ogni render e letta da nessuno — e una barra
+     larga 0 px nel pallino, che e' peggio di nessuna barra: sembra rotta. */
+  const appSrc  = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+  const rsSrc   = SG.codeOf(path.join(__dirname, "../../src/lib/render-status.js"));
+  const tlSrc   = SG.codeOf(path.join(__dirname, "../../src/components/Timeline.jsx"));
+  const rbSrc   = SG.codeOf(path.join(__dirname, "../../src/components/RenderButton.jsx"));
+  assert("app.jsx non tiene piu' streamProgress", !/streamProgress/.test(appSrc));
+  assert("render-status.js non legge piu' una mappa di avanzamento",
+    !/streamProgress/.test(rsSrc));
+  assert("Timeline.jsx non disegna piu' la barra dentro il pallino",
+    !/crs-bar/.test(tlSrc));
+  assert("RenderButton conta stream interi",
+    /done \/ total/.test(rbSrc) && !/streamProgress/.test(rbSrc));
 }
 
 /* ── un solo run() per volta, e pretesa eseguendo ──────────────────────────

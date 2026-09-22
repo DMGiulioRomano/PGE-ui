@@ -342,11 +342,22 @@ function App() {
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
   const [logLines, setLogLines] = useStateApp([]);
+  /* Niente campo di avanzamento dentro lo stream, ne' qui ne' nella mappa per
+     stream che stava sotto (#162). Il ramo `stream-progress` di `run()` era il
+     solo scrittore di entrambi, e quell'evento non lo emette nessuno: non
+     server.py, non render_pipeline.py, e il motore non ha una riga da cui
+     ricavarlo — l'avanzamento che stdout sa portare e' per stream intero
+     (`[CACHE] <id>: …`), non dentro uno. Quindi la barra per clip disegnava
+     0% per tutto il render e 100% nell'istante fra uno `stream-done` e lo
+     `stream-start` successivo, che non e' informazione: e' residuo.
+     Il giorno che l'evento esista davvero sara' perche' il protocollo e'
+     diventato esplicito — e' la condizione 2 delle tre che PGE #178 elenca
+     (`docs/explanation/contratto-stdout.md` del motore) — e allora lo stato
+     torna insieme al suo emettitore, non prima. */
   const [renderStatus, setRenderStatus] = useStateApp({
-    running: false, total: 0, done: 0, currentStreamId: null, streamProgress: 0,
+    running: false, total: 0, done: 0, currentStreamId: null,
     lastOk: null, lastGenerated: 0,
   });
-  const [streamProgress, setStreamProgress] = useStateApp({});  // {streamId: progress 0..1}
   const [toasts, setToasts] = useStateApp([]);
   const toastIdRef = useRefApp(0);
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
@@ -621,7 +632,6 @@ function App() {
       currentFps, lastRenderedFps, hasStem: hasStemFor,
       running: renderStatus.running,
       currentStreamId: renderStatus.currentStreamId,
-      streamProgress,
       sem: semCtx,
     });
   }
@@ -1651,8 +1661,7 @@ function App() {
        bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
        e poi il render partiva lo stesso. */
     setLogLines([]);
-    setStreamProgress({});
-    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, streamProgress: 0, lastOk: null, lastGenerated: 0 });
+    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
       pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
@@ -1718,10 +1727,7 @@ function App() {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
       } else if (e.type === "stream-start") {
         curStreamId = e.streamId;
-        setRenderStatus(s => ({ ...s, currentStreamId: e.streamId, streamProgress: 0 }));
-      } else if (e.type === "stream-progress") {
-        setStreamProgress(p => ({ ...p, [e.streamId]: e.progress }));
-        setRenderStatus(s => ({ ...s, streamProgress: e.progress }));
+        setRenderStatus(s => ({ ...s, currentStreamId: e.streamId }));
       } else if (e.type === "stream-done") {
         if (e.cached) cacheHits++;
         // cached=false → il motore ha riscritto il grain JSON: marcalo per il
@@ -1733,8 +1739,7 @@ function App() {
           // non cambia (es. spostamento clip: onset escluso dal fingerprint).
           stemRevRef.current[e.streamId] = (stemRevRef.current[e.streamId] || 0) + 1;
         }
-        setStreamProgress(p => ({ ...p, [e.streamId]: 1 }));
-        setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
+        setRenderStatus(s => ({ ...s, done: s.done + 1 }));
         // bump fp for this stream (so UI marks it fresh)
         setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
         // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
@@ -1756,7 +1761,7 @@ function App() {
     });
 
     setRenderStatus(s => ({
-      ...s, running: false, currentStreamId: null, streamProgress: 0,
+      ...s, running: false, currentStreamId: null,
       lastOk: !!result.ok, lastGenerated: (result.generated || []).length,
     }));
 
