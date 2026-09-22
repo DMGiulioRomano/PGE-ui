@@ -171,14 +171,43 @@ is engine code, not the author's work.
 ```jsonc
 { "type": "log",           "line": "..." }
 { "type": "stream-start",  "streamId": "stream3", "index": 2, "total": 5 }
-{ "type": "stream-done",   "streamId": "stream3", "cached": false, "output": "output/PGE_test__stream3.aif" }
+{ "type": "stream-done",   "streamId": "stream3", "cached": false }
 { "type": "done", "ok": true, "generated": ["output/..."], "returncode": 0 }
 ```
 
-The server parses `main.py`'s stdout (`[3/5] stream3  rendering…` and
-`→ output/…`) into these structured events so the UI can highlight the
-"currently rendering" clip without you having to change anything in the
-python engine.
+The server derives them from `main.py`'s **stdout**, so the UI can highlight
+the clip being rendered without anything changing in the python engine. Two
+line shapes carry the whole protocol, and everything else becomes a `log` the
+editor prints without reading:
+
+| line | event |
+| --- | --- |
+| `[CACHE] <id>: DIRTY\|clean` | `stream-start`, and `stream-done` when clean |
+| an indented path ending in `__<id>.<aif\|aiff\|wav\|flac>`, **inside the summary block** | `stream-done` of the last DIRTY stream of the round |
+
+Three rules are worth knowing, because each of them is a way the dots used to
+lie (issue #162, engine issue PythonGranularEngine#178, whose
+`docs/explanation/contratto-stdout.md` declares the engine's side of this
+contract):
+
+- **stderr is not protocol.** The two pipes are kept apart and reunited
+  labelled, so a line written by `logging` — or by any third-party library
+  inside the engine's process — can only ever become a `log`. Merged into
+  stdout, as they used to be, a diagnostic record shaped like `[CACHE] x: y`
+  opened and closed a stream that does not exist.
+- **A line is a stream only if the request declared its id.** `POST /render`
+  carries `streams`, and that set is what tells `[CACHE] stream1: clean` from
+  `[CACHE] Manifest: <path>`, which the engine prints on every `--cache`
+  render. A request that declares no streams derives no stream events; its
+  dots still resolve, from the `generated` list in `done`.
+- **The path line only counts under `Generazione completata! N file
+  generati:`**, and until the first unindented line. Outside that block the
+  same shape belongs to the engine's prose — an error citing
+  `refs/voce__streamA.wav` would otherwise close stream `streamA` on a stem
+  nobody wrote.
+
+There is no per-stream `stream-progress` event: the finest grain stdout can
+carry is a whole stream.
 
 ---
 
