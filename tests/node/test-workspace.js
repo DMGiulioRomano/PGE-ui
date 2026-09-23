@@ -148,6 +148,22 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            (await backend.render.loadCache("proj")).stream1 === "abc");
   }
 
+  console.log("\n── e con l'indice se ne vanno i backend registrati (#150) ──");
+  {
+    // Stessa ragione della semantica: `pge-local-renderer` dice "questo stem
+    // l'ha scritto supercollider", cioe' parla dei FILE della output/ di prima.
+    // Ereditato, con lo YAML identico e lo stesso backend scelto, darebbe verde
+    // su stem che nella cartella nuova ha scritto chissa' chi.
+    store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "supercollider" } });
+    assert("i backend ci sono, prima",
+           (await backend.render.loadStemRenderers("proj")).stream1 === "supercollider");
+    const res = await backend.setWorkspace("/brani3");
+    assert("la commutazione riesce", res.ok === true);
+    assert("i backend registrati se ne vanno con l'indice",
+           Object.keys(await backend.render.loadStemRenderers("proj")).length === 0,
+           store["pge-local-renderer"]);
+  }
+
   console.log("\n── un cambio rifiutato lascia stare anche quelle ──");
   {
     store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
@@ -157,6 +173,13 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     assert("le versioni restano dove sono",
            (await backend.render.loadSemantics("proj")).stream1 === 3);
     delete store["pge-local-sem"];
+    store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "csound" } });
+    REFUSE = { status: 400, error: "non esiste: /refuso" };
+    await backend.setWorkspace("/refuso");
+    REFUSE = null;
+    assert("...e cosi' i backend registrati",
+           (await backend.render.loadStemRenderers("proj")).stream1 === "csound");
+    delete store["pge-local-renderer"];
   }
 
   console.log("\n── e /stems lo ripopola dalla cartella nuova ──");
@@ -284,6 +307,8 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // lo stato resterebbe quello della cartella di prima.
     assert("azzera anche le versioni di semantica in stato",
            /setRenderedSem\(\{\}\)/.test(h));
+    assert("...e i backend registrati in stato (#150)",
+           /setRenderedRenderer\(\{\}\)/.test(h));
     assert("ricarica progetti e media", /refreshProjects\(\)/.test(h) && /refreshMedia\(\)/.test(h));
     // Due cartelle possono avere un progetto omonimo: li' `activeProject` non
     // cambia e l'effetto su [activeProject] non riparte. Senza questa riga

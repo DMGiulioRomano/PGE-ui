@@ -288,6 +288,63 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       drawn && drawn.curve === true, JSON.stringify(drawn));
 
     /* ============================================================
+     * 3b — il selettore del backend nel popover di render (#150)
+     * ============================================================ */
+    console.log("\n── popover di render: il selettore del backend ──");
+
+    /* Il selettore e' l'unico pezzo di #150 che si vede, e l'unico che in node
+     * gira solo per guardia sorgente: qui si apre davvero. Il motore finto
+     * dichiara `numpy` e `stub` (bridge.py), quindi i bottoni sono quelli e
+     * nell'ordine di `available_types()` — il popover non ne tiene una copia. */
+    const rendererSeg = () => page.evaluate(() => {
+      const row = [...document.querySelectorAll(".rs-pop .rs-row")]
+        .find(r => (r.querySelector(".rs-k") || {}).textContent === "renderer");
+      if (!row) return null;
+      return [...row.querySelectorAll(".pge-seg button")].map(b => ({
+        name: b.textContent.trim(), on: b.classList.contains("on"),
+        disabled: b.disabled }));
+    });
+    const commandLine = () => page.evaluate(() => {
+      const c = document.querySelector(".rs-pop .rs-cmd-body");
+      return c ? c.textContent : "";
+    });
+    const clickRenderer = (name) => page.evaluate((n) => {
+      const row = [...document.querySelectorAll(".rs-pop .rs-row")]
+        .find(r => (r.querySelector(".rs-k") || {}).textContent === "renderer");
+      const b = row && [...row.querySelectorAll(".pge-seg button")]
+        .find(x => x.textContent.trim() === n);
+      if (b) b.click();
+      return !!b;
+    }, name);
+
+    await page.click(".rs-caret");
+    await page.waitForSelector(".rs-pop");
+    await wait(300);          // l'apertura rilegge GET /renderers
+    const seg0 = await rendererSeg();
+    assert("un bottone per backend del motore, nel suo ordine",
+      seg0 && JSON.stringify(seg0.map(b => b.name)) === JSON.stringify(["numpy", "stub"]),
+      JSON.stringify(seg0));
+    assert("acceso il default (numpy), e cliccabili entrambi",
+      seg0 && seg0[0].on && !seg0[1].on && seg0.every(b => !b.disabled),
+      JSON.stringify(seg0));
+    assert("l'anteprima del comando dice numpy",
+      /--renderer numpy\b/.test(await commandLine()), await commandLine());
+
+    assert("il bottone dell'altro backend c'e'", await clickRenderer("stub"));
+    await wait(200);
+    const seg1 = await rendererSeg();
+    assert("il clic accende l'altro backend",
+      seg1 && !seg1[0].on && seg1[1].on, JSON.stringify(seg1));
+    assert("...e l'anteprima lo segue",
+      /--renderer stub\b/.test(await commandLine()), await commandLine());
+
+    await clickRenderer("numpy");
+    await wait(200);
+    const seg2 = await rendererSeg();
+    assert("si torna a numpy", seg2 && seg2[0].on && !seg2[1].on, JSON.stringify(seg2));
+    await page.click(".rs-caret");   // chiude il popover
+
+    /* ============================================================
      * 4 — undo / redo
      * ============================================================ */
     console.log("\n── undo · redo ──");

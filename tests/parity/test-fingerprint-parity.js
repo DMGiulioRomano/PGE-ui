@@ -27,7 +27,7 @@
 
 const { parity, loadUiLibs } = require("./harness.js");
 
-const window = loadUiLibs(["yaml-bridge.js", "backend.js"], {
+const window = loadUiLibs(["yaml-bridge.js", "backend.js", "render-status.js"], {
   localStorage: { getItem: () => null, setItem: () => {} },
   fetch: () => Promise.reject(new Error("nessuna rete nei test")),
 });
@@ -464,21 +464,40 @@ parity({
       },
     },
     {
-      /* Il TERZO asse: il backend che ha prodotto lo stem.
+      /* Il TERZO asse: il backend che ha prodotto lo stem (PGE-ui #150).
        *
        * `renderer_type` e' entrato nel fingerprint del motore accanto alla
        * semantica, ed e' la stessa classe di dipendenza — qualcosa da cui lo
-       * stem dipende e che il testo YAML non dice. Oggi non morde: la UI cabla
-       * `renderer: "numpy"` e il bridge ha lo stesso default (pinnato dalla
-       * guardia sorgente in test-render-status.js). Il giorno in cui la scelta
-       * del backend arriva nelle Settings — il motore ne ha tre — il pallino
-       * torna verde su stem che il motore riscrivera': PGE #222 daccapo, su un
-       * asse diverso. Questa sonda esiste perche' quel giorno il conto sia gia'
-       * stato fatto. */
-      label: "il backend e' un terzo asse dentro l'hash del motore",
+       * stem dipende e che il testo YAML non dice. Finche' la UI cablava
+       * `numpy` non mordeva, e questo caso lo diceva: "il giorno in cui la
+       * scelta arriva, il conto e' gia' fatto". E' arrivata — il popover offre
+       * i backend del motore — e il conto e' diventato un asse di staleness in
+       * render-status.js, separato dall'hash come quello della semantica.
+       *
+       * Quello che si pretende adesso e' la DERIVATA dell'asse: per ogni
+       * coppia di backend che il motore distingue nel proprio hash, la UI
+       * marca lo stem stale per la ragione giusta. Le coppie non sono scritte
+       * qui: vengono dall'elenco che il motore stesso dichiara. */
+      label: "il backend e' un terzo asse, e la UI lo vede come il motore",
       run: async (ask, assert, ctx) => {
+        const c = (await ask("constants", {})).value;
+        const backends = c.renderer_types;
+        assert("il motore dichiara i suoi backend (pge.api.renderer_types)",
+          Array.isArray(backends) && backends.length >= 2,
+          `${JSON.stringify(backends)} ${c.renderer_types_error || ""}`);
+        if (!Array.isArray(backends) || !backends.length) return;
+
+        // La strada VERA dell'elenco verso il popover: GET /renderers chiama
+        // engine_introspect.engine_renderer_types, lo stesso lettore AST usato
+        // qui. Se il motore sposta l'insieme o lo rende un'espressione, l'AST
+        // torna [] e il popover ricade sul solo backend corrente, zitto — e'
+        // questo assert a farlo parlare. L'ordine conta: il popover disegna i
+        // bottoni in quell'ordine, ed e' quello di `available_types()`.
+        assert("il lettore AST del bridge da' lo stesso elenco, nello stesso ordine",
+          JSON.stringify(c.renderer_types_ast) === JSON.stringify(backends),
+          `ast=${JSON.stringify(c.renderer_types_ast)} importato=${JSON.stringify(backends)}`);
+
         const s = base();
-        const backends = ["numpy", "csound", "supercollider"];
         const answers = await ask(backends.map(r => ({
           op: "fingerprint", args: { stream: yamlDict(s), renderer: r } })));
         for (const [i, r] of answers.entries()) {
@@ -489,13 +508,35 @@ parity({
           new Set(hexes).size === backends.length,
           backends.map((b, i) => `${b}: ${hexes[i]}`).join("\n      "));
 
-        // ...e la UI non ce l'ha, come non ha la semantica: divergenza voluta,
-        // elencata nel README. Il fingerprint JS non prende nemmeno il backend
-        // come argomento — se un domani lo prendesse, questa riga parlerebbe.
-        assert("il fingerprint della UI non conosce il backend (divergenza voluta)",
+        // La derivata: dove il motore rifarebbe lo stem (hash diverso), il
+        // pallino e' giallo per la ragione "renderer"; dove non lo rifarebbe
+        // (stesso backend), niente. Lo stesso fingerprint UI da entrambi i lati
+        // isola l'asse: e' lo stream fermo e il backend che cambia.
+        const fp = fingerprintStream(s, "wav");
+        const RS = window.PGERenderStatus;
+        const bad = [];
+        for (const [i, a] of backends.entries()) {
+          for (const [j, b] of backends.entries()) {
+            const engineMoves = hexes[i] !== hexes[j];
+            const why = RS.staleReason(fp, fp, null, { rendered: a, current: b });
+            const uiMoves = why === "renderer";
+            if (engineMoves !== uiMoves || (!engineMoves && why !== null)) {
+              bad.push(`${a} → ${b}: motore ${engineMoves ? "rifa'" : "tiene"}, ` +
+                       `UI ${why === null ? "verde" : why}`);
+            }
+          }
+        }
+        assert("per ogni coppia di backend la UI concorda col motore",
+          bad.length === 0, bad.join("\n      "));
+
+        // ...e resta un asse, non un campo dell'hash: il fingerprint della UI
+        // non prende il backend, come non prende la semantica. Divergenza
+        // voluta, elencata nel README: se un domani lo prendesse, i due modi di
+        // dire "stale" sarebbero due, e il tooltip non saprebbe quale.
+        assert("il fingerprint della UI non conosce il backend (e' un asse a parte)",
           fingerprintStream.length <= 2,
           `fingerprintStream ha ${fingerprintStream.length} parametri: se ora ` +
-          "prende il renderer, l'asse va costruito e questa nota va aggiornata");
+          "prende il renderer, l'asse in render-status.js e' un doppione");
       },
     },
   ],

@@ -31,6 +31,13 @@
  *     onEvent({type, line?, streamId?, progress?})
  *   render.cancel()
  *   render.loadCache(yamlBasename)→ Promise<{[streamId]: fingerprint}>
+ *   render.loadStemRenderers(yamlBasename) → Promise<{[streamId]: renderer}>:
+ *                                   il backend che ha scritto ogni stem (#150),
+ *                                   l'asse "renderer" di render-status.js
+ *   renderers()                   → Promise<[{ name, available, detail }]>: i backend
+ *                                   del motore, nel suo ordine (GET /renderers).
+ *                                   `available` a tre valori: false = manca qualcosa,
+ *                                   null = il bridge non sa cosa serva. [] = non lo so
  *   render.grainsUrl(yamlBasename, streamId)     → string (grain JSON sidecar URL)
  *   render.loadGrainData(yamlBasename, streamId) → Promise<grainData | null>
  *
@@ -371,6 +378,31 @@
           localStorage.setItem("pge-local-sem", JSON.stringify(all));
         } catch {}
       },
+
+      // Il backend audio che ha scritto ogni stem (PGE-ui #150), per progetto e
+      // per stream: mappa parallela a `pge-local-sem`, e per la stessa ragione.
+      // Il motore ha il backend nel PROPRIO fingerprint (`renderer_type`) e
+      // cambiarlo rifa' ogni stem; l'hash della UI no, perche' risponde a
+      // "l'utente ha toccato lo stream", e cambiare backend non lo tocca. Due
+      // domande, due record — e un tooltip che sa dire quale delle due.
+      //
+      // Voce assente = non si sa chi l'ha scritto: stem di prima di #150, o di
+      // un'altra cartella (il cambio di workspace butta la mappa). Chi
+      // classifica lo tratta da giallo, che si spegne al primo giro.
+      async loadStemRenderers(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistStemRenderers(yamlBasename, map) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          all[yamlBasename] = map;
+          localStorage.setItem("pge-local-renderer", JSON.stringify(all));
+        } catch {}
+      },
       cancel() {
         if (cancelAbort) cancelAbort.abort();
         // fire-and-forget POST so the server kills the subprocess too
@@ -414,8 +446,9 @@
           _persistStemIndex();
         }
         // Il server scrive lo YAML su configs/<basename>.yml PRIMA di costruire
-        // lo stream di eventi, e i suoi tre abort(400) (basename mancante, con
-        // traversal, formato ignoto) precedono quella scrittura. Quindi una
+        // lo stream di eventi, e i suoi quattro rifiuti 400 (basename mancante,
+        // con traversal, backend che il motore non offre, formato ignoto)
+        // precedono quella scrittura. Quindi una
         // risposta buona implica il file scritto, e un fallimento prima di qui
         // implica il contrario: e' quello che il chiamante deve sapere per
         // decidere se la migrazione di `dephase` e' avvenuta.
@@ -547,6 +580,26 @@
               else next[id] = sem;
             }
             this._persistSem(opts.yamlBasename, next);
+
+            // ...e il backend che li ha scritti (#150). E' quello del CORPO di
+            // questa POST — la stessa variabile che il chiamante ha messo in
+            // argv, non una seconda lettura del selettore — e vale anche per
+            // gli stream saltati (`cached: true`): il motore li salta perche' il
+            // suo fingerprint, che contiene il backend, combacia.
+            //
+            // Senza `renderer` nel corpo il bridge rende col suo default, ma
+            // registrarlo qui sarebbe trascrivere quel default: la voce si
+            // cancella, come la versione ignota. "Non lo so" e' la verita', e
+            // il giallo che ne segue si spegne al giro dopo.
+            const rend = typeof opts.renderer === "string" && opts.renderer
+              ? opts.renderer : null;
+            const prevR = await this.loadStemRenderers(opts.yamlBasename);
+            const nextR = { ...prevR };
+            for (const id of Object.keys(localFps)) {
+              if (rend === null) delete nextR[id];
+              else nextR[id] = rend;
+            }
+            this._persistStemRenderers(opts.yamlBasename, nextR);
           }
           return lastResult;
         } catch (e) {
@@ -784,6 +837,11 @@
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();
       try { localStorage.removeItem("pge-local-sem"); } catch {}
+      // `pge-local-renderer` (#150) va con loro, e per la stessa ragione:
+      // "questo stem l'ha scritto supercollider" parla dei file della output/
+      // di prima. Ereditato, con lo YAML identico e lo stesso backend scelto,
+      // darebbe verde su stem che nella cartella nuova ha scritto chissa' chi.
+      try { localStorage.removeItem("pge-local-renderer"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
       return body;
     }
@@ -796,6 +854,22 @@
       try {
         const d = await jget("/envelope-keys");
         return Array.isArray(d.keys) ? d.keys : [];
+      } catch { return []; }
+    }
+
+    // I backend audio del motore (PGE-ui #150), dal bridge: l'elenco lo legge
+    // GET /renderers dal sorgente del motore (`RendererFactory._VALID_TYPES`),
+    // insieme a cosa serve a ciascuno per girare (scsynth nel PATH, la
+    // SynthDef, csound). `[]` per un server.py senza la route, un bridge giu' o
+    // un motore di cui non si legge l'elenco: il popover resta sul backend
+    // corrente, come prima. Le righe senza nome si scartano qui, cosi' chi
+    // disegna i bottoni non deve difendersi da una risposta a meta'.
+    async function renderers() {
+      try {
+        const d = await jget("/renderers");
+        const rows = d && Array.isArray(d.renderers) ? d.renderers : [];
+        return rows.filter(r => r && typeof r === "object"
+                                  && typeof r.name === "string" && r.name);
       } catch { return []; }
     }
 
@@ -860,7 +934,7 @@
     ensureConfig().catch(() => {});
 
     return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup,
-             envelopeKeys, bounds, semanticsVersion, workspace, setWorkspace };
+             envelopeKeys, renderers, bounds, semanticsVersion, workspace, setWorkspace };
   }
 
   window.PGEBackend = {

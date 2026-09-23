@@ -2,8 +2,8 @@
 """bridge.py — il server.py del test headless, senza il motore accanto (#139).
 
 Il boot dell'editor non e' una pagina statica: `app.jsx` interroga /health,
-/projects, /media, /envelope-keys, /bounds, /semantics-version e /diagnose
-prima di avere qualcosa da disegnare, e il progetto arriva da
+/projects, /media, /envelope-keys, /renderers, /bounds, /semantics-version e
+/diagnose prima di avere qualcosa da disegnare, e il progetto arriva da
 `GET /file?kind=projects`. Aprire l'HTML da `file://` mette quindi alla prova
 meta' dell'applicazione — quella che risponde a un bridge irraggiungibile —
 e mai l'altra, che e' quella che la #139 chiede di verificare.
@@ -16,7 +16,7 @@ tests/python/test_render_pipeline.py::test_make_app_smoke, un piano piu' in la':
 li' un `test_client`, qui un socket vero, perche' il browser deve poterci
 parlare.
 
-Due stub, e ognuno spegne una cosa che altrimenti il test farebbe davvero:
+Tre stub, e ognuno spegne una cosa che altrimenti il test farebbe davvero:
 
   src/main.py      — /diagnose lo cerca, e senza sarebbe un check rosso in
                      piu' nel log di boot. Non cambia il verdetto, ma il
@@ -28,6 +28,11 @@ Due stub, e ognuno spegne una cosa che altrimenti il test farebbe davvero:
                      senza, il test si metterebbe a costruire un venv dentro
                      una cartella temporanea, cioe' minuti di rete per un
                      boot che dovrebbe durare secondi.
+  src/pge/rendering/renderer_factory.py
+                   — l'elenco dei backend (#150), che il popover di render
+                     disegna come bottoni: senza, il selettore ricadrebbe sul
+                     solo backend corrente e la sezione del test che lo prova
+                     non avrebbe niente da cliccare.
 
 Il workspace e' una copia temporanea di fixtures/: le sottodirectory che il
 bridge crea (output/, cache/) non devono comparire come roba non tracciata
@@ -63,6 +68,18 @@ def build_tree(base: Path) -> dict:
     (root / ".venv" / "bin").mkdir(parents=True)
     (root / ".venv" / "bin" / "python").write_text("# stub\n")
     (root / "refs").mkdir()
+    # I backend del motore finto (#150): GET /renderers li legge dall'AST di
+    # `RendererFactory._VALID_TYPES`, e il popover ne fa i bottoni. Il secondo
+    # nome e' di comodo apposta: il bridge non sa cosa gli serva, quindi la sua
+    # disponibilita' e' "non lo so" (None) e il bottone resta cliccabile su
+    # qualunque macchina — con csound o supercollider il test dipenderebbe dal
+    # PATH di chi lo lancia. Senza il file, /diagnose avrebbe una riga rossa in
+    # piu' ("renderers"), cioe' il rumore che gli altri due stub tolgono.
+    rendering = root / "src" / "pge" / "rendering"
+    rendering.mkdir(parents=True)
+    (rendering / "renderer_factory.py").write_text(
+        "class RendererFactory:\n"
+        "    _VALID_TYPES = {'numpy', 'stub'}\n")
 
     ws = base / "workspace"
     configs = ws / "configs"

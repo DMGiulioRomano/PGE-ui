@@ -29,7 +29,21 @@
     stale:   "YAML changed since last render — re-render to update",
     staleSemantics: "the engine's reading of this YAML doesn't match this " +
                     "stem — re-render to update",
+    // L'asse "renderer" (#150) quando non si sa chi ha scritto lo stem: prima
+    // di #150, o in un'altra cartella. Quando lo si sa, il testo nomina i due
+    // backend (`rendererTooltip`).
+    staleRenderer:  "the renderer that wrote this stem isn't recorded — " +
+                    "re-render to update",
   };
+
+  // Il giallo dell'asse "renderer" con i due nomi: e' l'unico dei motivi che
+  // l'utente produce senza toccare lo stream, quindi l'unico che il tooltip
+  // deve poter spiegare da solo.
+  function rendererTooltip(rendered, current) {
+    if (rendered == null) return TOOLTIPS.staleRenderer;
+    return `rendered with ${rendered}, the current renderer is ${current} ` +
+           "— re-render to update";
+  }
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
   // the caller passes the already-resolved output format (app.jsx uses
@@ -78,8 +92,30 @@
   //
   // Cioe' la regola del repo applicata bene: un render di troppo, mai uno di
   // meno.
-  function staleReason(lastFp, currentFp, sem) {
+  //
+  // IL TERZO ASSE, il backend (#150): `rend` e' { rendered, current }, il
+  // backend che ha scritto lo stem e quello scelto adesso. Il motore lo ha nel
+  // proprio fingerprint (`renderer_type`, accanto alla semantica) e cambiarlo
+  // rifa' ogni stem; l'hash della UI no, e per la stessa ragione della
+  // semantica: risponde a "l'utente ha toccato lo stream". Dei due ignoti qui ne
+  // resta uno solo, perche' il backend corrente la UI lo sa sempre (e' una sua
+  // scelta):
+  //
+  //   - corrente ignoto (un chiamante che non passa `rend`): nessuna pretesa,
+  //     cioe' la firma di prima di #150;
+  //   - backend dello stem non registrato: "renderer". Come lo stem senza
+  //     versione, e non "tanto era numpy": sarebbe vero per gli stem di questo
+  //     editor prima di #150 e falso per quelli di un'altra cartella dopo un
+  //     cambio di workspace (che la mappa la butta), o per uno stem riscritto
+  //     da un `make` del motore, il cui default e' csound. Si spegne al primo
+  //     giro anche a vuoto, come la semantica: il motore salta lo stream
+  //     (`cached: true`) solo se il SUO fingerprint, backend compreso, combacia.
+  //
+  // Viene prima della semantica nel motivo detto: e' una scelta appena fatta
+  // dall'utente, e il tooltip che la nomina e' quello che gli serve.
+  function staleReason(lastFp, currentFp, sem, rend) {
     if (lastFp !== currentFp) return "yaml";
+    if (rend && rend.current != null && rend.rendered !== rend.current) return "renderer";
     const rendered = sem && sem.rendered;
     const engine = sem && sem.engine;
     if (engine == null) return null;
@@ -91,18 +127,19 @@
   // hasStem is a boolean. !lastFp uses falsiness on purpose (undefined / "" / 0
   // all read as never), matching the original `!last` guard in app.jsx.
   // `sem` is optional: omitting it is the pre-#133 behaviour exactly.
-  function classifyStream(lastFp, currentFp, hasStem, sem) {
+  function classifyStream(lastFp, currentFp, hasStem, sem, rend) {
     if (!lastFp || !hasStem) return STATES.NEVER;
-    return staleReason(lastFp, currentFp, sem) === null ? STATES.FRESH : STATES.STALE;
+    return staleReason(lastFp, currentFp, sem, rend) === null ? STATES.FRESH : STATES.STALE;
   }
 
   // Aggregate fresh/stale/never counts across all streams. hasStem is (id)=>bool.
   // `sem` is optional: { rendered: {[streamId]: version}, engine: version|null }.
-  function summarize(streams, currentFps, lastRenderedFps, hasStem, sem) {
+  // `rend` is optional: { rendered: {[streamId]: renderer}, current: renderer }.
+  function summarize(streams, currentFps, lastRenderedFps, hasStem, sem, rend) {
     let fresh = 0, stale = 0, never = 0;
     for (const s of streams) {
       const state = classifyStream(lastRenderedFps[s.id], currentFps[s.id], hasStem(s.id),
-                                   semFor(sem, s.id));
+                                   semFor(sem, s.id), rendFor(rend, s.id));
       if (state === STATES.FRESH) fresh++;
       else if (state === STATES.STALE) stale++;
       else never++;
@@ -119,18 +156,27 @@
     return { rendered: (sem.rendered || {})[streamId], engine: sem.engine };
   }
 
+  // Lo stesso, per l'asse "renderer": { rendered, current } del singolo stream.
+  function rendFor(rend, streamId) {
+    if (!rend) return null;
+    return { rendered: (rend.rendered || {})[streamId], current: rend.current };
+  }
+
   // Per-stream status object consumed by Timeline.jsx (ClipRenderStatus).
   // ctx = { currentFps, lastRenderedFps, hasStem:(id)=>bool, running:bool,
-  //         currentStreamId, streamProgress, sem }.
+  //         currentStreamId, streamProgress, sem, rend }.
   function statusForStream(streamId, ctx) {
     if (ctx.running && ctx.currentStreamId === streamId) {
       return { state: STATES.RUNNING, progress: ctx.streamProgress[streamId] || 0, tooltip: TOOLTIPS.running };
     }
     const sem = semFor(ctx.sem, streamId);
+    const rend = rendFor(ctx.rend, streamId);
     const lastFp = ctx.lastRenderedFps[streamId];
-    const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId), sem);
-    if (state === STATES.STALE && staleReason(lastFp, ctx.currentFps[streamId], sem) === "semantics") {
-      return { state, tooltip: TOOLTIPS.staleSemantics };
+    const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId), sem, rend);
+    if (state === STATES.STALE) {
+      const why = staleReason(lastFp, ctx.currentFps[streamId], sem, rend);
+      if (why === "renderer") return { state, tooltip: rendererTooltip(rend.rendered, rend.current) };
+      if (why === "semantics") return { state, tooltip: TOOLTIPS.staleSemantics };
     }
     return { state, tooltip: TOOLTIPS[state] };
   }
@@ -143,5 +189,6 @@
     staleReason,
     summarize,
     statusForStream,
+    rendererTooltip,
   };
 })();

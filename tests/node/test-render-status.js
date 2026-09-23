@@ -34,14 +34,17 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 console.log("\n── module surface ──");
 assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.STALE === "stale" &&
   RS.STATES.NEVER === "never" && RS.STATES.RUNNING === "running");
-assert("TOOLTIPS present (5 strings)", RS.TOOLTIPS &&
+assert("TOOLTIPS present (6 strings)", RS.TOOLTIPS &&
+  RS.TOOLTIPS.staleRenderer ===
+    "the renderer that wrote this stem isn't recorded — re-render to update" &&
   RS.TOOLTIPS.staleSemantics ===
     "the engine's reading of this YAML doesn't match this stem — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&
   RS.TOOLTIPS.stale === "YAML changed since last render — re-render to update");
-for (const fn of ["fingerprintAll", "classifyStream", "staleReason", "summarize", "statusForStream"])
+for (const fn of ["fingerprintAll", "classifyStream", "staleReason", "summarize", "statusForStream",
+                  "rendererTooltip"])
   assert(`exports ${fn}`, typeof RS[fn] === "function");
 
 console.log("\n── classifyStream(lastFp, currentFp, hasStem) ──");
@@ -233,6 +236,96 @@ console.log("\n── il pallino dice PERCHE' e' giallo ──");
 }
 
 /* ---------------------------------------------------------------------------
+ * L'asse "renderer" (PGE-ui #150).
+ *
+ * Il motore ha tre backend (numpy, csound, supercollider) e il backend sta nel
+ * SUO fingerprint accanto alla semantica (`renderer_type`, stream_cache_manager):
+ * lo stesso YAML reso da due backend da' due file diversi, e rendere con un
+ * backend dopo l'altro rifa' ogni stem. Finche' la UI ne offriva uno solo,
+ * cablato, il pallino non aveva bisogno di saperlo; col selettore si',
+ * altrimenti resta verde su stem che il motore rifara' — PGE #222 su un altro
+ * asse.
+ *
+ * E' un asse come la semantica, non un campo dell'hash: l'hash della UI dice
+ * "l'utente ha toccato lo stream", e cambiare backend non tocca lo stream. Due
+ * record per stem, due domande, e un tooltip che dice quale.
+ *
+ * Il backend CORRENTE la UI lo sa sempre (e' una sua scelta), quindi dei due
+ * ignoti della semantica qui ne resta uno: lo stem di cui non e' registrato chi
+ * l'ha scritto. E si tratta come la semantica tratta lo stem senza versione:
+ * giallo, che si spegne al primo giro anche a vuoto (`stream-done` con
+ * `cached: true` registra il backend come un render vero). "Tanto prima era
+ * numpy" sarebbe vero per gli stem di questo editor prima di #150 e falso per
+ * quelli di un'altra cartella dopo un cambio di workspace, dove il record si
+ * butta — e anche per uno stem riscritto da un `make` del motore, il cui
+ * default e' csound.
+ * ------------------------------------------------------------------------- */
+console.log("\n── staleReason: il terzo asse, il backend ──");
+{
+  const R = (rendered, current) => ({ rendered, current });
+  assert("stesso yaml, backend diverso → 'renderer'",
+    RS.staleReason("a", "a", null, R("numpy", "supercollider")) === "renderer");
+  assert("stesso yaml, stesso backend → null",
+    RS.staleReason("a", "a", null, R("supercollider", "supercollider")) === null);
+  assert("backend dello stem non registrato, corrente noto → 'renderer'",
+    RS.staleReason("a", "a", null, R(undefined, "numpy")) === "renderer",
+    "e' lo stem scritto prima dell'asse, o in un'altra cartella: di chi sia " +
+    "non si sa, e il motore lo rifara' se non era questo backend");
+  assert("backend corrente ignoto → nessuna pretesa (firma pre-#150)",
+    RS.staleReason("a", "a", null, R("numpy", null)) === null &&
+    RS.staleReason("a", "a", null, undefined) === null &&
+    RS.staleReason("a", "a", null, {}) === null);
+  assert("lo yaml modificato vince: e' il motivo che l'utente ha appena prodotto",
+    RS.staleReason("a", "b", null, R("numpy", "csound")) === "yaml");
+  assert("il backend viene prima della semantica nel motivo detto",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }, R("numpy", "csound")) === "renderer");
+  assert("...e senza differenza di backend la semantica parla come prima",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }, R("csound", "csound")) === "semantics");
+}
+
+console.log("\n── classifyStream / summarize / statusForStream con l'asse renderer ──");
+{
+  const rend = { rendered: "numpy", current: "supercollider" };
+  assert("mai renderizzato resta 'never' anche a backend diverso",
+    RS.classifyStream(null, "x", true, null, rend) === "never");
+  assert("senza file su disco resta 'never'",
+    RS.classifyStream("x", "x", false, null, rend) === "never");
+  assert("yaml fermo + backend cambiato → 'stale'",
+    RS.classifyStream("x", "x", true, null, rend) === "stale");
+  assert("yaml fermo + stesso backend → 'fresh'",
+    RS.classifyStream("x", "x", true, null, { rendered: "numpy", current: "numpy" }) === "fresh");
+
+  const ctx = {
+    currentFps: { a: "1", b: "2", c: "3", d: "4" },
+    lastRenderedFps: { a: "1", b: "2", c: "3", d: "9" },
+    hasStem: () => true,
+    running: false, currentStreamId: null, streamProgress: {},
+    rend: { rendered: { a: "csound", b: "numpy", /* c assente */ d: "numpy" },
+            current: "csound" },
+  };
+  assert("stesso backend → fresh",
+    eq(RS.statusForStream("a", ctx), { state: "fresh", tooltip: RS.TOOLTIPS.fresh }));
+  const b = RS.statusForStream("b", ctx);
+  assert("backend diverso → stale, e il tooltip nomina i due backend",
+    b.state === "stale" && b.tooltip === RS.rendererTooltip("numpy", "csound") &&
+    /numpy/.test(b.tooltip) && /csound/.test(b.tooltip), JSON.stringify(b));
+  assert("backend non registrato → stale, col tooltip dell'ignoto",
+    eq(RS.statusForStream("c", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleRenderer }));
+  assert("yaml modificato → il testo di sempre, anche a backend diverso",
+    eq(RS.statusForStream("d", ctx), { state: "stale", tooltip: RS.TOOLTIPS.stale }));
+
+  // Il riepilogo deve vedere gli stessi gialli dei pallini: la coppia
+  // { rendered, current } la estrae una funzione sola, come semFor.
+  const streams = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+  assert("summarize concorda con statusForStream",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem, null, ctx.rend),
+       { fresh: 1, stale: 3, never: 0, total: 4 }));
+  assert("senza rend, summarize conta come prima di #150",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem),
+       { fresh: 3, stale: 1, never: 0, total: 4 }));
+}
+
+/* ---------------------------------------------------------------------------
  * Guardie sul sorgente: la catena che porta il numero dal motore al pallino.
  * Nessuna di queste righe gira in node (sono React / fetch), e ognuna e' un
  * anello che, se salta, spegne l'asse in silenzio — il pallino torna verde e
@@ -315,26 +408,48 @@ console.log("\n── la catena dal motore al pallino ──");
     "il ref invece lo riscrive chiunque rilegga, render in volo compreso — " +
     "e i tre punti di rilettura non sono esclusivi col render in corso");
 
-  /* Il TERZO asse dell'hash del motore, tenuto a bada da un valore cablato.
+  /* Il TERZO asse dell'hash del motore, costruito (PGE-ui #150).
    *
    * `renderer_type` sta nel fingerprint del motore accanto alla semantica
    * (`tests/parity/test-fingerprint-parity.js` lo verifica: tre backend, tre
-   * hash). La UI non ha un asse per lui, e va bene finche' il backend e' UNO:
-   * app.jsx lo cabla e il bridge ha lo stesso default. Se i due divergessero,
-   * o se la scelta arrivasse nelle Settings — il motore ha tre backend — il
-   * pallino tornerebbe verde su stem che il motore riscrivera', cioe' PGE #222
-   * su un asse diverso. Questa guardia e' il promemoria che quel giorno
-   * l'asse va costruito, non un'opzione da aggiungere e basta. */
-  assert("app.jsx cabla un solo backend",
-    /renderer:\s*"numpy"/.test(appSrc) &&
-    !/renderer:\s*(tweaks|renderOptions|opts)\./.test(appSrc),
-    "se il backend diventa una scelta, serve un asse come quello della " +
-    "semantica: il motore lo ha dentro il proprio fingerprint");
+   * hash). Finche' la UI ne offriva uno, cablato, questa guardia pretendeva il
+   * cablaggio e diceva che il giorno della scelta l'asse andava costruito. E'
+   * quel giorno: la scelta c'e', e quel che si pretende adesso e' che il
+   * backend MANDATO e quello REGISTRATO siano la stessa variabile del giro —
+   * come la versione di semantica (`semOfThisRun`). Due letture di
+   * `renderOptions.renderer`, una al POST e una allo `stream-done`, possono
+   * cadere a cavallo di un clic sul selettore: il pallino direbbe il backend
+   * nuovo su uno stem che il motore ha scritto col vecchio. */
+  assert("il backend del giro si legge una volta sola",
+    /const rendererOfThisRun = renderOptions\.renderer;/.test(appSrc));
+  assert("...va nel corpo della POST",
+    /renderer:\s*rendererOfThisRun\b/.test(appSrc),
+    "se il corpo legge altro, il backend registrato non e' quello che ha reso");
+  assert("...e lo registra lo stream-done, non una seconda lettura",
+    /setRenderedRenderer\([\s\S]{0,200}?\[e\.streamId\]:\s*rendererOfThisRun/.test(appSrc) &&
+    !/setRenderedRenderer\([\s\S]{0,200}?\[e\.streamId\]:\s*renderOptions\./.test(appSrc));
+  assert("il pallino e il riepilogo leggono lo stesso contesto",
+    /rend:\s*rendCtx\b/.test(appSrc) &&
+    /summarize\([^)]*semCtx,\s*rendCtx\)/.test(appSrc),
+    "due contesti vorrebbe dire un riepilogo e dei pallini che non concordano");
+  /* `tweaks.renderRenderer` e non `renderOptions.renderer`: il memo sta in
+     alto, fra quelli dello stato, e `renderOptions` e' un `const` dichiarato
+     molto piu' in basso nello stesso corpo — leggerlo li' e' una TDZ, cioe' un
+     ReferenceError al primo render. Le due letture sono dello stesso tweak
+     nello stesso render: e' la stessa variabile per costruzione. */
+  assert("...costruito col backend scelto adesso",
+    /rendCtx = useMemoApp\(\(\) => \(\{\s*rendered:\s*renderedRenderer,\s*current:\s*tweaks\.renderRenderer\s*\}\)/.test(appSrc) &&
+    /renderer:\s*tweaks\.renderRenderer\b/.test(appSrc));
   {
+    /* I due default concordano ancora, per una ragione diversa da prima: un
+     * editor piu' vecchio (o un client qualunque) che non manda `renderer`
+     * rende col default del bridge, e l'editor di adesso parte dallo stesso.
+     * Divergessero, la prima scelta del popover non sarebbe il backend che
+     * l'utente vede acceso. */
     const srvSrc = SG.codeOf(path.join(__dirname, "../../server.py"));
-    assert("...e il bridge ha lo stesso default",
-      /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc),
-      "i due lati devono concordare: chi rende e chi hasha sono lo stesso giro");
+    assert("il default dell'editor e' quello del bridge",
+      /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc) &&
+      /"renderRenderer":\s*"numpy"/.test(appSrc));
   }
 
   /* La versione del motore si richiede in TRE punti, e questa e' la guardia che
@@ -386,7 +501,7 @@ console.log("\n── la catena dal motore al pallino ──");
       `un click su Render non produce feedback per dieci secondi`);
   }
   assert("app passa la coppia a entrambi i consumatori",
-    /summarize\([^)]*semCtx\)/.test(appSrc) && /sem: semCtx,/.test(appSrc),
+    /summarize\([^)]*semCtx[,)]/.test(appSrc) && /sem: semCtx,/.test(appSrc),
     "riepilogo e pallini leggerebbero dati diversi sullo stesso stem");
 }
 

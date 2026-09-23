@@ -34,6 +34,10 @@ const TWEAK_DEFAULTS = {
   "renderPageDuration": 15,
   "renderReaper": false,
   "renderPreclean": false,
+  // Il backend audio (#150). Lo stesso default del bridge
+  // (`opts.get("renderer", "numpy")`): numpy non chiede binari esterni, ed e'
+  // quello che l'editor ha sempre mandato.
+  "renderRenderer": "numpy",
   "terminalOpen": false,
   "terminalHeight": 220,
   "shortcutRender": "r",
@@ -240,6 +244,12 @@ function App() {
      voce assente = non si sa, e non si pretende niente. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
+  /* Il terzo asse (#150): il backend audio che ha scritto ogni stem. Il
+     corrente e' `tweaks.renderRenderer`; quando i due divergono il motore
+     rifara' lo stem (il backend sta nel suo fingerprint) e il pallino lo dice.
+     Voce assente = non si sa chi l'ha scritto: giallo, che si spegne al primo
+     giro. Vedi staleReason in render-status.js. */
+  const [renderedRenderer, setRenderedRenderer] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
      l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
@@ -320,6 +330,25 @@ function App() {
     } catch { /* bridge giu' o route assente: il fallback statico resta */ }
     return null;
   }
+
+  /* I backend audio del motore e cosa serve a ciascuno per girare (#150).
+   *
+   * Due call site: il boot, e l'apertura del popover di render. Il secondo e'
+   * quello che conta: la disponibilita' e' una proprieta' della MACCHINA (scsynth
+   * nel PATH, la SynthDef compilata), e chi installa SuperCollider con l'editor
+   * aperto deve vederlo quando torna a scegliere, non al prossimo reload. Il
+   * bridge non la mette in cache per la stessa ragione.
+   *
+   * Best-effort come gli altri: un server.py senza la route, un bridge giu' o un
+   * motore di cui non si legge l'elenco danno [], e il popover resta sul
+   * backend corrente, bloccato — il comportamento di prima. */
+  async function refreshRenderers() {
+    const backend = window.PGEBackend.current;
+    if (!backend || !backend.renderers) return;
+    let rows = [];
+    try { rows = await backend.renderers(); } catch { rows = []; }
+    setEngineRenderers(Array.isArray(rows) ? rows : []);
+  }
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -357,6 +386,10 @@ function App() {
   // Valid score-envelope names for the --plot-envelopes filter, fetched from
   // the engine via server.py (issue #31). [] = feature unavailable → filter hidden.
   const [envelopeKeys, setEnvelopeKeys] = useStateApp([]);
+  // I backend audio del motore, con la disponibilita' di ciascuno (#150): la
+  // lista la legge il bridge dal sorgente del motore (GET /renderers), il
+  // popover ne fa i bottoni. [] = non lo so → resta il backend corrente.
+  const [engineRenderers, setEngineRenderers] = useStateApp([]);
   const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
   const [envFocusKey, setEnvFocusKey] = useStateApp(null);
 
@@ -420,6 +453,9 @@ function App() {
             .then(keys => setEnvelopeKeys(Array.isArray(keys) ? keys : []))
             .catch(() => {});
         }
+        // I backend audio del motore, per il selettore del popover (#150).
+        // Primo dei due punti in cui si chiede — vedi refreshRenderers.
+        refreshRenderers();
         // Pull the engine's parameter clamps so the UI's bounds + envelope
         // auto-fit track the engine instead of the static fallback. Best-effort:
         // an older server.py / engine returns {} and the fallback stays.
@@ -566,6 +602,12 @@ function App() {
     } else {
       setRenderedSem({});
     }
+    // ...e il backend che ha scritto ogni stem (#150), per la stessa ragione.
+    if (backend.render.loadStemRenderers) {
+      backend.render.loadStemRenderers(basename).then(m => setRenderedRenderer(m || {}));
+    } else {
+      setRenderedRenderer({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -610,11 +652,18 @@ function App() {
      diverse dello stesso dato. */
   const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
     [renderedSem, engineSem]);
+  /* ...e quella dell'asse "renderer" (#150), per la stessa ragione: il backend
+     che ha scritto ogni stem e quello scelto adesso. Il tweak e non
+     `renderOptions.renderer`: `renderOptions` e' un const dichiarato piu' in
+     basso, e leggerlo qui sarebbe una TDZ. E' lo stesso valore nello stesso
+     render. */
+  const rendCtx = useMemoApp(() => ({ rendered: renderedRenderer, current: tweaks.renderRenderer }),
+    [renderedRenderer, tweaks.renderRenderer]);
 
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx),
-    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx, rendCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -623,6 +672,7 @@ function App() {
       currentStreamId: renderStatus.currentStreamId,
       streamProgress,
       sem: semCtx,
+      rend: rendCtx,
     });
   }
 
@@ -1586,6 +1636,7 @@ function App() {
 
   /* ============ Render ============ */
   const renderOptions = {
+    renderer: tweaks.renderRenderer,
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
     showVoiceOffsets: !!tweaks.renderShowVoiceOffsets,
@@ -1610,6 +1661,7 @@ function App() {
       if (p) setTweak("outputPath", p);
       return;
     }
+    setTweak("renderRenderer", next.renderer);
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
     setTweak("renderShowVoiceOffsets", next.showVoiceOffsets);
@@ -1676,6 +1728,16 @@ function App() {
     // `stream-done` di questo stesso giro.
     refreshEngineBounds();
 
+    /* Il backend di QUESTO giro, letto una volta e passato a mano ai due
+       consumatori — il corpo della POST e l'handler degli `stream-done` — come
+       `semOfThisRun`. Oggi nessun controllo lo cambia a render in corso (il
+       popover si chiude quando il render parte), ma e' la stessa invariante
+       dell'altro asse, e va tenuta per costruzione e non per l'assenza di un
+       bottone: una seconda lettura allo stream-done, il giorno che il backend
+       si potesse cambiare anche da altrove, darebbe al pallino il backend
+       nuovo su uno stem che il motore ha scritto col vecchio. */
+    const rendererOfThisRun = renderOptions.renderer;
+
     let cacheHits = 0;
     let generated = 0;
     let curStreamId = null;
@@ -1683,7 +1745,7 @@ function App() {
     const opts = {
       yamlBasename: basename,
       yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
-      renderer: "numpy",
+      renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
       // Force the grain sidecar on when the grain view is open, otherwise the
@@ -1752,6 +1814,10 @@ function App() {
           delete next[e.streamId];
           return next;
         });
+        // ...e il backend che l'ha scritto (#150), lo stesso del corpo della
+        // POST. Anche per gli stream saltati (`cached`): il motore li salta solo
+        // se il suo fingerprint, che contiene il backend, combacia.
+        setRenderedRenderer(m => ({ ...m, [e.streamId]: rendererOfThisRun }));
       }
     });
 
@@ -1764,7 +1830,7 @@ function App() {
     // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
     // migrazione di `dephase` e' avvenuta anche se poi il render fallisce —
     // percio' qui, non dentro `result.ok`. Ma non quando il file non e' stato
-    // scritto affatto (server down, o uno dei tre abort(400) che precedono la
+    // scritto affatto (server down, o uno dei quattro rifiuti 400 che precedono la
     // scrittura): li' la riscrittura e' ancora da fare e l'avviso deve restare.
     // `!== false` e non truthiness: sul percorso buono il campo non c'e', e
     // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
@@ -1968,6 +2034,9 @@ function App() {
     // non cambia e l'effetto su [activeProject] non riparte) continuerebbe a
     // classificare con le versioni della cartella di prima.
     setRenderedSem({});
+    // Idem per i backend registrati (#150): setWorkspace ha buttato
+    // `pge-local-renderer`, questa e' la sua meta' in memoria.
+    setRenderedRenderer({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};
@@ -2157,6 +2226,8 @@ function App() {
               renderStatus={renderStatus}
               renderOptions={renderOptions} onRenderOptionsChange={setRenderOptions}
               envelopeKeys={envelopeKeys}
+              renderers={engineRenderers}
+              onRenderOptionsOpen={refreshRenderers}
               time={time} duration={compDuration}
               onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
               browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen(o => !o)}
