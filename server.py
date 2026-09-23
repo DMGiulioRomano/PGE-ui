@@ -48,6 +48,7 @@ Endpoints:
     GET  /workspace             — current workspace + its projects
     POST /workspace             — switch workspace ({"path": …}; empty = --root)
     GET  /envelope-keys         — valid --plot-envelopes names (from engine src)
+    GET  /renderers             — the engine's audio backends + whether each can run
     GET  /media                 — list refs/ contents with durations
     GET  /projects              — list configs/*.yml
     GET  /file?kind=…&name=…    — read a file (kind: projects|media|cache|output)
@@ -84,6 +85,7 @@ from audio_pipeline import (
 )
 from render_pipeline import (
     RenderState, parse_render_line, build_render_command, start_watchdog,
+    renderer_availability,
 )
 
 
@@ -104,7 +106,8 @@ from render_pipeline import (
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
 from engine_introspect import (engine_envelope_keys, engine_output_sr,
-                              engine_parameter_bounds, engine_semantics_version,
+                              engine_parameter_bounds, engine_renderer_types,
+                              engine_sc_synthdef, engine_semantics_version,
                               engine_supports_samples_dir)
 
 
@@ -641,6 +644,32 @@ def make_app(root: Path, render_timeout: float = 600.0,
             add("python yaml", False,
                 "engine venv missing — click 'Setup engine' in Settings ⚙")
 
+        # I backend audio del motore (PGE-ui #150). Una riga sola, e verde
+        # quando l'elenco si legge: un backend opzionale che manca non e' un
+        # guasto del sistema — csound su Fedora non e' nemmeno nei repo, e una
+        # riga rossa a ogni avvio accenderebbe il toast "Diagnostic issues"
+        # per tutti. Il dettaglio dice comunque chi manca e perche', che e' la
+        # cosa che la issue chiedeva di sapere prima di perdere un render.
+        # Rosso solo se l'elenco non si legge: li' il popover non ha niente da
+        # offrire oltre al numpy di sempre, e il motore ha cambiato forma.
+        rnames = engine_renderer_types(root)
+        if rnames:
+            rows = renderer_availability(root, rnames,
+                                         synthdef=engine_sc_synthdef(root))
+            # `None` = il bridge non sa cosa serva a quel backend: non e' spento,
+            # ma non e' nemmeno "controllato", e la riga lo dice.
+            ready = [r["name"] if r["available"] else f"{r['name']} (not checked)"
+                     for r in rows if r["available"] is not False]
+            off = [f"{r['name']} ({r['detail']})" for r in rows
+                   if r["available"] is False]
+            add("renderers", True,
+                "available: " + (", ".join(ready) or "none")
+                + (" · unavailable: " + "; ".join(off) if off else ""))
+        else:
+            add("renderers", False,
+                "engine renderer list unreadable (RendererFactory._VALID_TYPES) "
+                "— the render popover offers numpy only")
+
         # stems present?
         stems = list(output.glob("*__*.aif")) + list(output.glob("*__*.wav"))
         add("rendered stems", True, f"{len(stems)} stem files in {output.name}/")
@@ -740,6 +769,24 @@ def make_app(root: Path, render_timeout: float = 600.0,
         UI score-envelope filter isn't hardcoded (issue #31). Empty list = the
         engine predates the feature; the UI then hides the filter."""
         return jsonify({"ok": True, "keys": engine_envelope_keys(root)})
+
+    @app.get("/renderers")
+    def renderers():
+        """I backend audio del motore, nell'ordine del motore, ciascuno con
+        `available` (True / False / None = "non lo so") e un `detail` che dice
+        perche' (PGE-ui #150).
+
+        L'elenco viene dal sorgente del motore (`engine_renderer_types`, AST su
+        `RendererFactory._VALID_TYPES`), come le chiavi di --plot-envelopes:
+        il popover non ne tiene una copia. `[]` = un motore di cui non si legge
+        l'elenco; la UI resta sul numpy di sempre.
+
+        La disponibilita' si rimisura a ogni richiesta, senza cache: il PATH e'
+        quello del sottoprocesso, e chi installa SuperCollider col bridge
+        acceso deve vederlo alla prossima apertura del popover."""
+        names = engine_renderer_types(root)
+        return jsonify({"ok": True, "renderers": renderer_availability(
+            root, names, synthdef=engine_sc_synthdef(root) if names else None)})
 
     @app.get("/bounds")
     def bounds():
@@ -1114,7 +1161,24 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if yml is None:
             abort(400, "bad basename")
 
+        # Il backend (PGE-ui #150). Finisce in argv subito dopo `--renderer`, e
+        # un nome che il motore non conosce lo fa uscire con InvalidRendererError
+        # a config gia' riscritto: si rifiuta qui, prima della scrittura, come il
+        # formato. Contro l'elenco del motore quando si legge; quando no, il nome
+        # passa verbatim e decide il motore — il comportamento di prima.
+        # Un non-nome si rifiuta sempre: `None` in argv e' un TypeError di Popen
+        # dentro il generatore, non un messaggio.
+        # NON si rifiuta un backend indisponibile (binario assente): lo fa gia'
+        # il motore con `*NotFoundError`, che nomina il rimedio. Il popover lo
+        # dice prima, da GET /renderers.
         renderer = opts.get("renderer", "numpy")
+        known_renderers = engine_renderer_types(root)
+        if not isinstance(renderer, str) or not renderer or (
+                known_renderers and renderer not in known_renderers):
+            offered = ", ".join(known_renderers) or "unknown"
+            return jsonify({"ok": False,
+                            "error": f"unknown renderer {renderer!r} — "
+                                     f"this engine offers: {offered}"}), 400
         use_cache = bool(opts.get("useCache", True))
         visualize = bool(opts.get("visualize", False))
         # Per-voice offset curves in the PDF score (PGE #90 / issue #55).

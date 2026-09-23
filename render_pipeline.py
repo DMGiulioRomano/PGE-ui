@@ -7,8 +7,10 @@ own the HTTP/NDJSON concerns and delegate process mechanics to this module.
 """
 
 import re
+import shutil
 import subprocess
 import threading
+from pathlib import Path
 
 
 # Regexes for parsing main.py's stdout into structured UI events.
@@ -273,6 +275,109 @@ def build_render_command(venv_py, root, yml, output_stem, *, renderer, use_cache
             "--log-dir",  str(root / "logs"),
         ]
     return cmd
+
+
+# --- Disponibilita' dei backend (PGE-ui #150) ---------------------------------
+#
+# Cosa serve nel PATH perche' un backend non muoia al primo grano. Il motore
+# lancia i binari per nome (`['csound', ...]`, `sc_config.get('scsynth_bin',
+# 'scsynth')`) e il sottoprocesso eredita l'ambiente del bridge, quindi il PATH
+# che conta e' questo. Sono nomi trascritti, l'unica eccezione alla regola del
+# repo in questo modulo, e per una ragione: il motore li scrive come default
+# DENTRO una chiamata, non come costante di modulo, e una lettura AST di
+# quell'argomento sarebbe piu' fragile della copia. A tenerla onesta e'
+# `test_engine_binaries_on_the_real_engine`, che pretende ogni nome come
+# costante di stringa nel modulo del renderer che lo lancia.
+#
+# numpy non e' qui: gira nel venv del motore, che /diagnose controlla gia'.
+RENDERER_BINARIES = {
+    "csound": ("csound",),
+    "supercollider": ("scsynth",),
+}
+# sclang serve solo a compilare la SynthDef, e solo quando il compilato manca
+# o e' piu' vecchio del sorgente: per questo non sta fra i binari sempre dovuti.
+SC_COMPILER = "sclang"
+
+_INSTALL_HINT = {
+    "csound": "install csound, or render with numpy",
+    "supercollider": ("install SuperCollider (apt install supercollider · "
+                      "brew install --cask supercollider, then put scsynth "
+                      "on the PATH)"),
+}
+
+
+def _sc_needs_compile(source: Path, compiled: Path) -> bool:
+    """La regola del motore (`SuperColliderRenderer._needs_compile`), la stessa
+    di un Makefile: si compila se il `.scsyndef` manca o e' piu' vecchio del
+    sorgente; senza sorgente il compilato vale comunque."""
+    if not compiled.exists():
+        return True
+    if not source.exists():
+        return False
+    return source.stat().st_mtime > compiled.stat().st_mtime
+
+
+def _supercollider_row(root: Path, which, synthdef):
+    scsynth = which("scsynth")
+    if not scsynth:
+        return False, f"scsynth not on PATH — {_INSTALL_HINT['supercollider']}"
+    if synthdef is None:
+        return True, (f"scsynth: {scsynth} · SynthDef not checked "
+                      "(engine layout not recognised)")
+    # Relativi al cwd del sottoprocesso, che e' il root: e' li' che il motore
+    # li risolvera' (vedi `engine_sc_synthdef`).
+    source = root / synthdef["source"]
+    compiled = root / synthdef["dir"] / f"{synthdef['name']}.scsyndef"
+    if not _sc_needs_compile(source, compiled):
+        return True, f"scsynth: {scsynth} · SynthDef compiled"
+    if not source.exists():
+        return False, (f"SynthDef source {synthdef['source']} missing in the "
+                       f"engine, and nothing compiled in {synthdef['dir']}/")
+    sclang = which(SC_COMPILER)
+    if not sclang:
+        return False, ("sclang not on PATH, and the SynthDef isn't compiled "
+                       "yet — run `make sc-synthdef` in the engine once, or "
+                       "install sclang")
+    return True, (f"scsynth: {scsynth} · SynthDef compiled on the first "
+                  f"render (sclang: {sclang})")
+
+
+def renderer_availability(root, names, *, which=shutil.which, synthdef=None) -> list:
+    """Per ogni backend in `names` (l'elenco del motore, nel suo ordine):
+    `{"name", "available", "detail"}`.
+
+    `available` ha TRE valori, e la differenza conta: `True`/`False` quando il
+    bridge sa cosa serve a quel backend, `None` per un backend che non conosce
+    (un quarto aggiunto a monte) — "non lo so", che la UI non traduce in un
+    bottone spento. Il rifiuto, se serve, lo dara' il motore col suo messaggio.
+
+    Nessuna cache: `which` e qualche stat, e chi installa SuperCollider col
+    bridge acceso deve vederlo alla prossima apertura del popover.
+
+    Non e' un gate del render: `/render` non rifiuta un backend indisponibile,
+    perche' il motore lo fa gia' con un messaggio che nomina il rimedio
+    (`*NotFoundError`). Questa funzione serve a dirlo PRIMA, nel popover e in
+    /diagnose — un render perso per saperlo e' quello che la issue chiude."""
+    root = Path(root)
+    rows = []
+    for name in names:
+        if name == "numpy":
+            available, detail = True, "no external binary"
+        elif name == "supercollider":
+            available, detail = _supercollider_row(root, which, synthdef)
+        elif name in RENDERER_BINARIES:
+            missing = [b for b in RENDERER_BINARIES[name] if not which(b)]
+            if missing:
+                available = False
+                detail = (f"{', '.join(missing)} not on PATH — "
+                          f"{_INSTALL_HINT.get(name, 'install it')}")
+            else:
+                available = True
+                detail = " · ".join(f"{b}: {which(b)}" for b in RENDERER_BINARIES[name])
+        else:
+            available, detail = None, "availability not checked by this bridge"
+        rows.append({"name": name, "available": available, "detail": detail})
+    return rows
 
 
 def kill_process(proc, grace: float = 5.0):

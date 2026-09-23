@@ -818,6 +818,26 @@ def _op_constants(args):
         out["loop_units_ast"] = None
         out["loop_units_ast_error"] = str(exc)
 
+    # I backend audio (PGE-ui #150): l'elenco che `pge.api.renderer_types()`
+    # restituisce — e' l'API che il motore ha messo li' apposta perche' un
+    # selettore lo chieda invece di tenerne una copia — e lo stesso letto come
+    # lo legge il bridge, dall'AST di `RendererFactory._VALID_TYPES`, che e'
+    # l'unica strada per cui arriva al popover. `pge.api` e `renderer_factory`
+    # si importano senza numpy (verificato: nessun import pesante a livello di
+    # modulo), quindi niente deroga e niente venv.
+    try:
+        api = ENGINE.module("pge.api")
+        out["renderer_types"] = list(api.renderer_types())
+    except OracleError as exc:
+        out["renderer_types"] = None
+        out["renderer_types_error"] = str(exc)
+    try:
+        out["renderer_types_ast"] = (
+            _introspect("constants").engine_renderer_types(ENGINE.root))
+    except OracleError as exc:
+        out["renderer_types_ast"] = None
+        out["renderer_types_ast_error"] = str(exc)
+
     try:
         ns = _load_magnify_from_source()
         out["magnify_source"] = ns["_source"]
