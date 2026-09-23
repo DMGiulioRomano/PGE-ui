@@ -248,9 +248,9 @@ The browser only does `fetch()`; the server holds all disk access, so the editor
 
 ## Editor surfaces (current state)
 
-**Topbar.** Project name + unsaved indicator, undo/redo, transport (skip-back / play / stop), playhead readout, renderer tag (`numpy`), play-readiness pill (`stems ready` / `N stale · playing old audio` / `no stems · render first`), log toggle, **Save** / **Save As…**, settings ⚙, and the **Render** split-button (corpo + caret popover).
+**Topbar.** Project name + unsaved indicator, undo/redo, transport (skip-back / play / stop), playhead readout, play-readiness pill (`stems ready` / `N stale · playing old audio` / `no stems · render first`), log toggle, **Save** / **Save As…**, settings ⚙, and the **Render** split-button (corpo + caret popover).
 
-**Render popover.** Renderer choice (`numpy`; `csound` reserved), per-stream stems (forced on, required for playback), incremental cache, pdf score, reaper project, preclean output, output folder, and a live preview of the python command.
+**Render popover.** Renderer choice — the engine's own backends (`numpy`, `csound`, `supercollider`), read from its source by `GET /renderers`; a backend whose binary is missing (`csound`, `scsynth`, or `sclang` before the SynthDef is compiled) is greyed out with the reason as its tooltip, and switching backend marks the stems rendered by another one stale (#150) — per-stream stems (forced on, required for playback), incremental cache, pdf score, reaper project, preclean output, output folder, and a live preview of the python command.
 
 **Render in flight.** The button collapses into a progress bar (`rendering 3/5 · stream4`) with a cancel `⨯`. The clip currently being rendered gets a pulsing `rendering…` pill; finished clips get `✓ rendered`. Cached clips (incremental build) flash through as `✓ rendered` without the progress phase.
 
