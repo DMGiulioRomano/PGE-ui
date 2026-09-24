@@ -174,6 +174,13 @@
   // giorno che ne nasce un quarto il ramo nuovo resta senza testo e il pallino
   // giallo torna a dire quello dello YAML — che e' falso e manda a cercare una
   // modifica che nessuno ha fatto.
+  //
+  // La tabella da sola pero' non lo impedisce: una voce dimenticata cade sul
+  // ripiego qui sotto, e il ripiego e' proprio il testo dello YAML (come la
+  // mappa di `ClipRenderStatus` un livello sotto). Lo impedisce
+  // test-render-status.js, che raccoglie i motivi dai `return` di
+  // `staleReason` e pretende una voce per ciascuno — per questo la tabella e'
+  // esposta, e per questo `staleReason` restituisce solo letterali.
   const STALE_TOOLTIP = {
     yaml:      TOOLTIPS.stale,
     semantics: TOOLTIPS.staleSemantics,
@@ -197,6 +204,7 @@
   window.PGERenderStatus = {
     STATES,
     TOOLTIPS,
+    STALE_TOOLTIP,
     fingerprintAll,
     classifyStream,
     staleReason,

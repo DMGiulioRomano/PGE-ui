@@ -404,6 +404,54 @@ console.log("\n── classifyStream e il pallino con l'asse del backend ──"
        { fresh: 2, stale: 2, never: 0, total: 4 }));
 }
 
+/* Ogni motivo che `staleReason` puo' dire ha il suo testo — letto dal
+ * sorgente, non trascritto qui.
+ *
+ * La tabella STALE_TOOLTIP e' nata per questo: con un `if` per asse, il motivo
+ * nuovo resta senza testo e il pallino giallo torna a dire quello dello YAML.
+ * Ma la tabella da sola non lo impedisce: una voce dimenticata cade sul
+ * ripiego, e il ripiego E' il testo dello YAML (`|| TOOLTIPS.stale` qui, e la
+ * mappa di `ClipRenderStatus` in Timeline.jsx un livello sotto). Quello che lo
+ * impedisce e' questa guardia: i motivi si raccolgono dai `return` di
+ * `staleReason` — una lista scritta qui sarebbe una seconda copia, e chi
+ * aggiunge il quarto asse non e' chi si ricorda di aggiornarla. */
+console.log("\n── ogni motivo ha il suo testo (letto dal sorgente) ──");
+{
+  const rsFile = path.join(__dirname, "../../src/lib/render-status.js");
+  const code = SG.codeOf(rsFile);
+  const mask = SG.maskOf(rsFile);
+  const at = code.indexOf("function staleReason(");
+  const open = at < 0 ? -1 : mask.indexOf("{", at);
+  let close = -1;
+  if (open >= 0) {
+    for (let i = open, d = 0; i < mask.length; i++) {
+      if (mask[i] === "{") d++;
+      else if (mask[i] === "}" && --d === 0) { close = i; break; }
+    }
+  }
+  assert("staleReason si trova nel sorgente, col suo corpo",
+    at >= 0 && close > open, `at=${at} open=${open} close=${close}`);
+  const body = close > open ? code.slice(open, close) : "";
+  const returns = [...body.matchAll(/\breturn\s+([^;]*);/g)].map(m => m[1].trim());
+  // Un motivo che non fosse un letterale (`return why;`) sfuggirebbe alla
+  // raccolta qui sotto: e' quello il modo di rendere muta questa guardia, e
+  // allora e' rosso.
+  const opaque = returns.filter(r => r !== "null" && !/^"[^"]*"$/.test(r));
+  assert("staleReason restituisce solo null o un motivo letterale",
+    opaque.length === 0, opaque.join(", "));
+  const reasons = [...new Set(returns.filter(r => /^"[^"]*"$/.test(r)).map(r => r.slice(1, -1)))];
+  assert("la raccolta vede almeno i tre assi di oggi",
+    ["yaml", "semantics", "renderer"].every(r => reasons.includes(r)),
+    JSON.stringify(reasons));
+  const table = RS.STALE_TOOLTIP || {};
+  const missing = reasons.filter(r => typeof table[r] !== "string" || !table[r]);
+  assert("ogni motivo ha una voce nella tabella", missing.length === 0,
+    `senza testo: ${missing.join(", ")} — tabella: ${JSON.stringify(Object.keys(table))}`);
+  const wearingYaml = reasons.filter(r => r !== "yaml" && table[r] === RS.TOOLTIPS.stale);
+  assert("...e nessuno, fuori dallo YAML, porta il testo dello YAML",
+    wearingYaml.length === 0, wearingYaml.join(", "));
+}
+
 /* L'asse sta ACCANTO all'hash, non dentro: la premessa dell'intero disegno, e
  * l'unica meta' verificabile senza il motore. `tests/parity/` chiede al motore
  * che tre backend diano tre hash; qui si chiede alla UI che il suo hash non
