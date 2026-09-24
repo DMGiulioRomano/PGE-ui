@@ -37,8 +37,13 @@ assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.S
 assert("TOOLTIPS present (6 strings)", RS.TOOLTIPS &&
   RS.TOOLTIPS.staleSemantics ===
     "the engine's reading of this YAML doesn't match this stem — re-render to update" &&
+  // Il testo deve essere vero in ENTRAMBI i casi in cui l'asse parla: backend
+  // registrato diverso, e record assente. Il secondo e' l'unico che scatta oggi
+  // (la UI ha sempre e solo scritto numpy), su ogni stem esistente: «another
+  // backend rendered this stem» li' era falso ogni volta che si leggeva, e
+  // mandava a cercare un cambio di backend che nessuno ha fatto (#151).
   RS.TOOLTIPS.staleRenderer ===
-    "another backend rendered this stem — re-render to update" &&
+    "no record that the current backend rendered this stem — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&

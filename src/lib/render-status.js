@@ -22,7 +22,11 @@
   // Tooltip strings kept verbatim from app.jsx so the UI text is unchanged.
   // The two additions are the same yellow dot with a different reason:
   // `staleSemantics` — the YAML did not move, the engine's reading of it did;
-  // `staleRenderer` — neither moved, but another backend wrote the file.
+  // `staleRenderer` — neither moved, and nothing says the current backend
+  // wrote the file. Worded to be true on BOTH branches of that axis: a
+  // different recorded backend, and no record at all — the second being every
+  // stem rendered before #151, i.e. the only case that fires while the UI
+  // writes numpy alone. "Another backend rendered this stem" was false there.
   const TOOLTIPS = {
     running: "rendering this stream…",
     never:   "this stream has never been rendered",
@@ -30,7 +34,8 @@
     stale:   "YAML changed since last render — re-render to update",
     staleSemantics: "the engine's reading of this YAML doesn't match this " +
                     "stem — re-render to update",
-    staleRenderer:  "another backend rendered this stem — re-render to update",
+    staleRenderer:  "no record that the current backend rendered this stem — " +
+                    "re-render to update",
   };
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
