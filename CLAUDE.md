@@ -1382,8 +1382,12 @@ Two rules hold it up:
 
 A stale-by-semantics dot carries its own tooltip; the state stays `stale` so
 nothing downstream needs a new case — and the same holds for the third axis
-below: `statusForStream` indexes the reason into a tooltip table rather than
-branching per axis, so a fourth one cannot end up wearing the YAML text.
+below: `statusForStream` indexes the reason into a tooltip table
+(`STALE_TOOLTIP`) rather than branching per axis. The table alone does not stop
+a fourth reason from wearing the YAML text — a missing entry falls back to it,
+there and again in `ClipRenderStatus` — so `test-render-status.js` collects the
+reasons from the `return` literals of `staleReason` (a non-literal return is
+itself a red) and requires each to have an entry that isn't the YAML one.
 
 **There is a third axis, and it is the backend that wrote the stem** (#151).
 `renderer_type` sits inside the engine's fingerprint beside the semantics
@@ -1413,7 +1417,15 @@ nothing; a *stem* with no recorded backend and a known current one reads
 per project, which clears itself on the first `stream-done`, `cached: true`
 included. Staying silent instead would mean that the day the choice reaches
 Settings (#150), the numpy stems written before it stay 🟢 under csound: one
-render too few, in exactly the case the axis exists for.
+render too few, in exactly the case the axis exists for. The tooltip is worded
+for **both** branches — "no record that the current backend rendered this
+stem" — because the absent one is the only one that fires today, on every stem
+rendered before #151: "another backend rendered this stem" was false every
+time it was read, and sent the author looking for a backend change nobody made.
+The workspace switch drops this record in memory too (`setRenderedRenderer({})`
+in `onWorkspaceChange`, beside `setRenderedSem({})`): on a same-named project
+the `[activeProject]` effect doesn't re-fire, and with the engine unknown the
+previous folder's names would keep its stems green until a reload.
 
 **The name goes out from one declaration.** `RENDERER` in `app.jsx` is read by
 `rendererOfThisRun` (the POST body *and* the `stream-done` handler, the same
