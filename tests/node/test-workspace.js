@@ -300,6 +300,13 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // lo stato resterebbe quello della cartella di prima.
     assert("azzera anche le versioni di semantica in stato",
            /setRenderedSem\(\{\}\)/.test(h));
+    // E la meta' in memoria di `pge-local-renderer` (#151), per la stessa
+    // ragione: setWorkspace la butta dal localStorage, ma su un progetto
+    // omonimo l'effetto non riparte e lo stato terrebbe i backend della
+    // cartella di prima — col motore ignoto, verde su stem che nella output/
+    // nuova nessuno ha visto scrivere, e un colore diverso dopo il reload.
+    assert("...e i backend registrati in stato",
+           /setRenderedRenderer\(\{\}\)/.test(h));
     assert("ricarica progetti e media", /refreshProjects\(\)/.test(h) && /refreshMedia\(\)/.test(h));
     // Due cartelle possono avere un progetto omonimo: li' `activeProject` non
     // cambia e l'effetto su [activeProject] non riparte. Senza questa riga

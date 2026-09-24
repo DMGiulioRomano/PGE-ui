@@ -2032,6 +2032,10 @@ function App() {
     // non cambia e l'effetto su [activeProject] non riparte) continuerebbe a
     // classificare con le versioni della cartella di prima.
     setRenderedSem({});
+    // ...e quella di `pge-local-renderer` (#151), per la stessa ragione: senza,
+    // col motore ignoto gli stem della cartella nuova resterebbero verdi sui
+    // backend registrati in quella di prima, fino al reload.
+    setRenderedRenderer({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};
