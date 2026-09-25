@@ -83,7 +83,7 @@ exists, the fourth only when a browser is installed):
   lives beside the semantics one because both are written in the same block of
   `run()`, and a second copy of that harness would drift — plus the `done`
   fallback claiming only the streams the engine built, muted and solo cases
-  included), and
+  included, and nothing at all on a failed run), and
   `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
   killed between the `_dead` check and the write used to raise an unhandled
   `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
@@ -603,7 +603,14 @@ semantics', and the synthetic `stream-done` would stamp this run's fingerprint,
 version and backend on it (🟢 once unmuted, on a stem the engine will redo).
 So such a stream is indexed and nothing more; `PGEBackend.streamsEngineBuilds`
 is the mirror of that filter, and `test-fingerprint-parity.js` runs it against
-the engine's own method over every mute/solo combination of three streams. That fallback's
+the engine's own method over every mute/solo combination of three streams.
+A **failed** run (`done` with `ok: false`) gets the same treatment for every
+file, built streams included: the bridge lists the disk whatever the exit code,
+and an engine that dies at parse time (a missing sample, a misspelled
+`loop_unit`) has written nothing — claiming the list stamped this run's
+records on every old stem and turned the whole timeline green under a "Render
+failed" toast. Which stems were rewritten before a later death is unknown, and
+unknown reads yellow. `test-semantics-store.js` drives it. That fallback's
 "already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
 fills the index from `/stems` on every project open, so "already handled" used
 to mean "was on disk", and from the second render on the fallback was dead.

@@ -626,6 +626,43 @@ console.log("\n── col solo, il motore costruisce SOLO i solisti (anche se mu
          JSON.stringify(rend("proj")));
 }
 
+console.log("\n── un giro FALLITO non reclama niente, nemmeno gli stream costruiti ──");
+{
+  // L'altro modo in cui un file di `generated` non e' di questo giro. Il bridge
+  // elenca il disco anche quando il motore esce con errore (`ok: false`,
+  // server.py), e un motore che muore al parse — un sample che non c'e', un
+  // `loop_unit` scritto male — non ha scritto niente: i file sono tutti di
+  // prima. Il fallback li reclamava comunque, e senza `--cache` o con la morte
+  // prima del triage e' l'unica sorgente di `stream-done`: impronta dello YAML
+  // appena modificato, semantica e backend di questo giro su audio che nessuno
+  // ha rifatto. Dopo un "Render failed", tutto verde.
+  store = { "pge-local-renderer": JSON.stringify({ proj: { a: "csound" } }),
+            "pge-local-sem": JSON.stringify({ proj: { a: 2 } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "log", line: "SampleNotFoundError: ..." },
+    { type: "done", ok: false, returncode: 1, generated: ["output/proj__a.wav"] },
+  ];
+  const seen = [];
+  const res = await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [{ id: "a", density: 20 }] },
+    (e) => seen.push(e));
+
+  assert("il giro e' riportato fallito", res && res.ok === false, JSON.stringify(res));
+  assert("nessuno `stream-done` sintetico: la meta' in memoria resta ferma",
+         !seen.some(e => e.type === "stream-done"),
+         JSON.stringify(seen.filter(e => e.type === "stream-done")));
+  assert("il backend registrato resta quello che ha scritto il file",
+         (rend("proj") || {}).a === "csound", JSON.stringify(rend("proj")));
+  assert("...e la semantica pure", (sem("proj") || {}).a === 2, JSON.stringify(sem("proj")));
+  const fps = await backend.render.loadCache("proj");
+  assert("...e nessuna impronta dello YAML modificato su un file di prima",
+         !("a" in fps), JSON.stringify(fps));
+  assert("l'indice sa comunque che il file c'e'",
+         backend.render.ownsStem("proj", "a") === true);
+}
+
   bodyDone = true;
 })().catch(e => {
   /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e

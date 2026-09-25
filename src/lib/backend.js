@@ -538,6 +538,16 @@
                   // This covers the case where parse_render_line missed a line.
                   const prefix = opts.yamlBasename + "__";
                   const built = streamsEngineBuilds(opts.streams);
+                  // Un giro FALLITO non ha costruito niente di certo. Il bridge
+                  // elenca il disco anche con `ok: false`, e un motore che
+                  // muore al parse (un sample che manca, un `loop_unit` scritto
+                  // male) non ha scritto un solo file: sono tutti di prima.
+                  // Reclamarli stampava impronta, semantica e backend di questo
+                  // giro su audio che nessuno ha rifatto — verde su tutto dopo
+                  // un "Render failed". Quali stem siano stati riscritti prima
+                  // della morte non si sa, e l'ignoto vale giallo: un render di
+                  // troppo, mai uno di meno.
+                  const claimable = ev.ok === true;
                   for (const genPath of (ev.generated || [])) {
                     const fname = genPath.replace(/^.*[\\/]/, "");
                     const stem  = fname.replace(/\.[^.]+$/, "");
@@ -554,8 +564,9 @@
                     // senza `stream-done`: quell'evento fa scrivere impronta,
                     // semantica e backend di QUESTO giro, qui in `localFps` e
                     // in memoria in app.jsx. Tolto il muto, il pallino sarebbe
-                    // verde su uno stem che il motore rifara'.
-                    if (s && !built.has(s.id)) {
+                    // verde su uno stem che il motore rifara'. Su un giro
+                    // fallito la stessa sorte tocca a tutti, costruiti o no.
+                    if (!claimable || (s && !built.has(s.id))) {
                       if (!(key in stemIndex)) stemIndex[key] = Date.now();
                       continue;
                     }
