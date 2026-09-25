@@ -258,8 +258,10 @@ console.log("\n── a stem present in one format only ──");
    *
    * `if (stemIndex[key]) continue` leggeva "gia' gestito" da un indice che
    * `loadCache` riempie da /stems a ogni apertura di progetto: dal secondo
-   * render in poi il fallback era morto. Ed e' l'unica rete dell'ultimo
-   * stream DIRTY del giro, il solo che dipende dalla riga di path.
+   * render in poi il fallback era morto. Ed e' la rete di ogni stream DIRTY
+   * del giro, che si chiude solo sulla sua riga di path (render_pipeline.py,
+   * #151) — e senza `--cache`, dove righe `[CACHE]` non ce ne sono, e' la
+   * sola sorgente di `stream-done`.
    * ------------------------------------------------------------------ */
   console.log("\n── il fallback di `done` copre anche il secondo render ──");
   {
