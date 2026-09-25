@@ -756,14 +756,50 @@ def test_render_route_reads_the_channel():
     volta sola; una chiamata diretta a `parse_render_line` dal ciclo di
     /render la riporterebbe a leggere stderr, e nessuno degli assert qui sopra
     se ne accorgerebbe — girano tutti sotto il modulo, non sotto la route.
+
+    Letta come CODICE (AST), non come testo: sul testo un commento che citasse
+    la riga del ciclo la teneva verde a ciclo cambiato, e uno che nominasse
+    `parse_render_line` — prosa, in un file che ne documenta il protocollo —
+    la faceva rossa a codice giusto. E si chiede anche che il canale passato a
+    `render_events` sia quello del ciclo: un `render_events(STDOUT, …)` dentro
+    lo stesso `for` rimetterebbe il problema con la forma della soluzione.
     """
     src = Path(rp.__file__).resolve().parent / "server.py"
-    testo = src.read_text(encoding="utf-8")
-    assert "for channel, line in merged_output(proc):" in testo, (
-        "il ciclo di /render non legge piu' i due canali etichettati")
-    assert "render_events(channel, line, state)" in testo
-    assert "parse_render_line" not in testo, (
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    def chiamate(nodo, nome):
+        return [n for n in ast.walk(nodo)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == nome]
+
+    importati = {a.asname or a.name for n in ast.walk(tree)
+                 if isinstance(n, ast.ImportFrom) for a in n.names}
+    assert "parse_render_line" not in importati, (
+        "server.py importa di nuovo il parser senza canale")
+    assert not chiamate(tree, "parse_render_line"), (
         "server.py chiama di nuovo il parser senza passare dal canale")
+
+    cicli = [n for n in ast.walk(tree)
+             if isinstance(n, ast.For) and isinstance(n.iter, ast.Call)
+             and isinstance(n.iter.func, ast.Name)
+             and n.iter.func.id == "merged_output"]
+    assert len(cicli) == 1, (
+        f"attesi un ciclo `for … in merged_output(proc)` in /render, "
+        f"trovati {len(cicli)}")
+    ciclo = cicli[0]
+    assert isinstance(ciclo.target, ast.Tuple) and len(ciclo.target.elts) == 2 \
+        and all(isinstance(e, ast.Name) for e in ciclo.target.elts), (
+        "il ciclo di /render non spacchetta piu' (canale, riga)")
+    canale, riga = (e.id for e in ciclo.target.elts)
+
+    dentro = chiamate(ciclo, "render_events")
+    assert dentro, "il ciclo di /render non passa piu' da render_events"
+    for c in dentro:
+        assert len(c.args) >= 2 \
+            and isinstance(c.args[0], ast.Name) and c.args[0].id == canale \
+            and isinstance(c.args[1], ast.Name) and c.args[1].id == riga, (
+            f"render_events riceve {ast.unparse(c)}: il canale deve essere "
+            f"quello del ciclo (`{canale}`), non una costante")
 
 
 # ---------------------------------------------------------------------------
