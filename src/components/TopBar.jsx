@@ -5,6 +5,7 @@ function TopBar({
   project, title, dirty, seed, onSeedChange,
   playing, onPlay, onStop, onSeekZero, loopEnabled, onToggleLoop,
   onRender, onCancelRender, renderStatus, renderOptions, onRenderOptionsChange, envelopeKeys,
+  renderers, onRenderOptionsOpen,
   time, duration, status,
   onUndo, onRedo, canUndo, canRedo,
   browserOpen, onToggleBrowser,
@@ -85,6 +86,8 @@ function TopBar({
         options={renderOptions}
         onOptionsChange={onRenderOptionsChange}
         envelopeKeys={envelopeKeys}
+        renderers={renderers}
+        onOpen={onRenderOptionsOpen}
         onRender={onRender}
         onCancel={onCancelRender}
         status={renderStatus} />

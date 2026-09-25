@@ -468,9 +468,10 @@ console.log("\n── cosa e' un nome lo dice UNA regola, e la leggono tutti e t
      persistito (`run()` qui sopra), il record in memoria (l'handler degli
      `stream-done` in app.jsx) e il lato vivo dell'asse (`rendererCtx.current`).
      Scritta tre volte, le tre copie non concordavano: stringa non vuota in
-     `run()`, verita' generica nell'handler, nessun filtro sul lato vivo. Oggi
-     RENDERER e' "numpy" e nessuna delle differenze scatta; il giorno del
-     selettore (#150) il valore arriva da una preferenza, e allora:
+     `run()`, verita' generica nell'handler, nessun filtro sul lato vivo.
+     Finche' il nome era la costante "numpy" nessuna delle differenze
+     scattava; col selettore (#150) il valore arriva da una preferenza, e
+     allora:
        - un nome vuoto sul lato vivo e' un `current` NOTO ("" != null) contro
          record che nessun render puo' scrivere, perche' `run()` non li scrive:
          giallo su ogni stem, per sempre — l'unico esito che il design dichiara
@@ -500,7 +501,7 @@ console.log("\n── cosa e' un nome lo dice UNA regola, e la leggono tutti e t
          !/if \(rendererOfThisRun\)/.test(APP_SRC),
          "col test di verita' un 7 resta in memoria e sparisce dal localStorage");
   assert("il lato vivo la chiama",
-         /current:\s*window\.PGEBackend\.rendererName\(RENDERER\)/.test(APP_SRC),
+         /current:\s*window\.PGEBackend\.rendererName\(currentRenderer\)/.test(APP_SRC),
          "un nome vuoto e' un current noto contro record mai scritti: giallo per sempre");
 }
 

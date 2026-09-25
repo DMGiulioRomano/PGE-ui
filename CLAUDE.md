@@ -36,7 +36,8 @@ exists, the fourth only when a browser is installed):
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary, incl. the engine-semantics and renderer
   axes, source guards on the chain that carries the version from the engine to
-  the dot and on the single `RENDERER` declaration its readers share,
+  the dot and on the single read of the backend choice (`currentRenderer`)
+  its readers share,
   a live two-overlapping-renders check that `run()` refuses re-entry, and the
   census — derived from the sources, never a list in the test — that every
   event type the editor branches on is one somebody emits),
@@ -89,6 +90,12 @@ exists, the fourth only when a browser is installed):
   `run()`, and a second copy of that harness would drift — plus the `done`
   fallback claiming only the streams the engine built, muted and solo cases
   included, and nothing at all on a failed run), and
+  `test-renderer-axis.js` (the backend *choice* of #150, on top of that
+  record: `backend.renderers()` reading `GET /renderers`,
+  `PGERendererChoice.choices` deciding which backend buttons the popover
+  lights and greys out, a whole `render.run()` recording the backend picked in
+  the popover, plus source guards on the selector → tweak → POST body chain),
+  and
   `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
   killed between the `_dead` check and the write used to raise an unhandled
   `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
@@ -148,7 +155,12 @@ exists, the fourth only when a browser is installed):
   400), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
-  gated by `engine_corpus.py`), and `test_engine_render.py`
+  gated by `engine_corpus.py`), `test_renderers.py` (#150: the AST reads of the
+  engine's backend list and SynthDef constants, `renderer_availability` against
+  fake binaries on a temporary `PATH`, `GET /renderers`, the `renderers` row of
+  `/diagnose`, `/render` refusing a backend the engine doesn't offer before the
+  config write — plus three canaries on the real engine, the binary names among
+  them), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -354,10 +366,16 @@ been green while proving nothing:
   a missing `src/main.py`, and rightly) over a **stub** engine root plus a
   temporary copy of `tests/e2e/fixtures/`. The project the editor opens is
   versioned in this repo, so a fork PR without the engine secret runs the whole
-  suite. Two stub files are load-bearing: `src/main.py`, so `/diagnose` has one
-  fewer red check to add noise with, and `.venv/bin/python`, because the boot
+  suite. Three stub files are load-bearing: `src/main.py`, so `/diagnose` has one
+  fewer red check to add noise with, `.venv/bin/python`, because the boot
   fires `POST /setup` in the background and without it the test would build a
-  venv instead of booting.
+  venv instead of booting, and `src/pge/rendering/renderer_factory.py` (#150),
+  the backend list the render popover turns into buttons. It declares `numpy`
+  and a made-up `stub` on purpose: the bridge doesn't know what `stub` needs, so
+  its availability is "don't know" and the button is clickable on any machine —
+  with `csound` or `supercollider` the test would depend on the `PATH` of
+  whoever runs it. The suite opens the popover, checks the buttons, switches
+  backend and reads it back in the command preview.
 - **The network is the test's, not the internet's.** `tests/e2e/browser.js`
   routes every request: the four CDN vendor scripts are served from
   `tests/e2e/node_modules` (the npm packages the CDNs publish), the CSS's three
@@ -550,7 +568,10 @@ Inherited into a new folder they assert a reading nobody observed there, and
 with identical YAML the fingerprint matches: 🟢 on stems an older engine wrote
 differently, which is the case the axis was added for (#133). Without a record
 the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
-first pass, even an empty one. What deliberately survives is `pge-local-fp`: it
+first pass, even an empty one. The backend records (`pge-local-renderer`, #150)
+go with them for the identical reason — "supercollider wrote this stem" is a
+statement about the previous `output/` — and `onWorkspaceChange` drops their
+in-memory half too. What deliberately survives is `pge-local-fp`: it
 records what a stream looked like when it was rendered — a statement about the
 YAML, not about the files — so a same-named project with different content
 hashes differently (stale, the safe direction). Identical content, where the
@@ -803,6 +824,73 @@ that **finished**: emitting it here would make the caller record the outcome
 to anyone else listening on the stream. The refusal is the return value's job.
 `test-render-status.js` pins both sides — the caller by source guard, `run()`
 by running two overlapping renders and pressing Cancel.
+
+### Choosing the backend (#150)
+
+The engine renders with three backends — `--renderer numpy|csound|supercollider`
+(PGE #228) — and keeps their list in one place, `RendererFactory._VALID_TYPES`,
+exposed as `pge.api.renderer_types()` precisely so that a selector asks instead
+of keeping a copy. The popover used to show `numpy` lit and `csound` disabled,
+hardcoded, and no third button at all. Now:
+
+- **`GET /renderers`** answers `[{name, available, detail}]` in the engine's
+  order. The list is `engine_introspect.engine_renderer_types` (AST, mtime
+  cache, `[]` = don't know); `test-fingerprint-parity.js` requires it to equal
+  `renderer_types()` imported, order included. The availability is
+  `render_pipeline.renderer_availability`, re-measured on every request (no
+  cache: whoever installs SuperCollider with the bridge up sees it on the next
+  popover open). `available` has **three** values: `false` greys the button out,
+  `null` — a backend the bridge doesn't know the needs of, e.g. a fourth one
+  added upstream — does not, and the engine gets to refuse it with its own
+  message.
+- **What each backend needs** is the one transcription in that module:
+  `RENDERER_BINARIES` (`csound`; `scsynth`) and `SC_COMPILER` (`sclang`). The
+  engine writes those names as defaults *inside a call*
+  (`sc_config.get('scsynth_bin', 'scsynth')`), not as module constants, and an
+  AST read of that argument would be more fragile than the copy —
+  `test_engine_binaries_on_the_real_engine` requires each name as a string
+  constant in the renderer module that spawns it. The `PATH` that counts is the
+  bridge's: `Popen` inherits it. SuperCollider also needs its SynthDef compiled,
+  or compilable: with `supercollider/pgeGrain.scsyndef` missing or older than
+  its `.scd` (the engine's `_needs_compile`, a Makefile rule) the first render
+  runs `sclang`, and without it the engine exits with
+  `SuperColliderNotFoundError` — the Debian `supercollider-server`-only case.
+  Where the SynthDef lives is read, not written: `engine_sc_synthdef` (AST on
+  `DEFAULT_SYNTHDEF_SOURCE` / `DEFAULT_SYNTHDEF_DIR` / `SYNTH_NAME`), resolved
+  against `root` because those defaults are relative to the subprocess's cwd,
+  which is `root`. The bridge sends **no** `--sc-synthdef-*` flag for the same
+  reason: a copy of the engine's defaults in argv would be a second place to
+  keep aligned.
+- **`/diagnose` has one `renderers` row**, green whenever the list is read: an
+  optional backend that is missing is not a system fault (csound isn't even in
+  the Fedora repos), and a red row per missing backend would raise the
+  "Diagnostic issues" toast on every boot for nearly everyone. The detail still
+  names who is missing and why. Red only when the list is unreadable.
+- **`/render` refuses a name the engine doesn't offer** — a JSON 400 before the
+  config write, like the format — and always refuses a non-name (`null` in argv
+  is a `TypeError` from `Popen` inside the generator). With the list unreadable
+  the name passes verbatim, which is the pre-#150 behaviour. It does **not**
+  refuse an *unavailable* backend: the engine already does, with a message that
+  names the remedy; the popover's job is to say it before.
+
+On the browser side the choice is the tweak `renderRenderer` (default `numpy`,
+the bridge's own default — a source guard pins the pair), and which buttons are
+lit and clickable is `PGERendererChoice.choices` (`src/lib/renderer-choice.js`,
+pure, node-tested). No backend name is written in `RenderButton.jsx`. Two edges,
+and neither hides the lit button: with the list unknown only the current backend
+is shown, lit and locked (the old single-button behaviour); a current backend
+the engine no longer offers is shown lit and disabled at the end, so the render
+the bridge would refuse is visible before it is sent. The list is fetched at
+boot and on every popover open (`onOpen` → `refreshRenderers`). A click on the
+already-lit backend writes nothing — `Seg`'s lesson, on hand-written buttons.
+
+Switching backend marks every stem rendered by another one stale — the renderer
+axis described under "Fingerprint parity". Two engine flags are deliberately not
+exposed: `--keep-osc` is a debugging aid, and `--sc-block-size` (1 = sample-
+accurate onsets, higher = faster with quantized onsets) is **not in the engine's
+fingerprint**, so changing it would leave the engine calling every stem clean
+while the onsets it would produce moved — it needs an axis first, and the engine
+to own it.
 
 ### Score options that can kill a render
 
@@ -1313,7 +1401,9 @@ with `fetch-depth: 300`.
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
 bridge and the oracle can use it. It reads the envelope keys, the parameter
-bounds, `VARIATION_SEMANTICS_VERSION`, `DEFAULT_OUTPUT_SR` and `LOOP_UNITS`;
+bounds, `VARIATION_SEMANTICS_VERSION`, `DEFAULT_OUTPUT_SR`, `LOOP_UNITS`, the
+backend list (`RendererFactory._VALID_TYPES`, #150) and where the SuperCollider
+SynthDef lives (`DEFAULT_SYNTHDEF_SOURCE` / `_DIR`, `SYNTH_NAME`);
 each returns an empty/`None` result for an engine that doesn't have the thing,
 and every caller must treat that as "don't know", never as a value. For the sample rate that
 extends to values that aren't sample rates: `0` or a negative reads as unknown,
@@ -1599,25 +1689,28 @@ reason is the whole point of having reasons.
 **The two unknowns follow the semantics rule, and the "absent" branch is the
 one that earns its keep later.** A *current* backend that isn't known claims
 nothing; a *stem* with no recorded backend and a known current one reads
-`stale`. Today that discovers nothing — `RENDERER` is one declaration in
-`app.jsx` and the UI has only ever written `numpy` — so it costs one empty pass
-per project, which clears itself on the first `stream-done`, `cached: true`
-included — except on a muted stream, which the engine doesn't build and so
-keeps its yellow until it sounds again: nobody has vouched for that file, and
-the `done` fallback no longer pretends to (see the NDJSON section). Staying
-silent instead would mean that the day the choice reaches
-Settings (#150), the numpy stems written before it stay 🟢 under csound: one
-render too few, in exactly the case the axis exists for. The tooltip is worded
-for **both** branches — "no record that the current backend rendered this
-stem" — because the absent one is the only one that fires today, on every stem
-rendered before #151: "another backend rendered this stem" was false every
-time it was read, and sent the author looking for a backend change nobody made.
+`stale`. On a stem rendered before #151 that costs one empty pass per project,
+which clears itself on the first `stream-done`, `cached: true` included —
+except on a muted stream, which the engine doesn't build and so keeps its
+yellow until it sounds again: nobody has vouched for that file, and the `done`
+fallback no longer pretends to (see the NDJSON section). Staying silent instead
+would mean that once the choice reached the popover (#150), the numpy stems
+written before it stayed 🟢 under csound: one render too few, in exactly the
+case the axis exists for. The tooltip is worded for **both** branches — "no
+record that the current backend rendered this stem" — because the absent one
+fires on every stem rendered before #151: "another backend rendered this stem"
+was false every time it was read there, and sent the author looking for a
+backend change nobody made.
 The workspace switch drops this record in memory too (`setRenderedRenderer({})`
 in `onWorkspaceChange`, beside `setRenderedSem({})`): on a same-named project
 the `[activeProject]` effect doesn't re-fire, and with the engine unknown the
 previous folder's names would keep its stems green until a reload.
 
-**The name goes out from one declaration.** `RENDERER` in `app.jsx` is read by
+**The name goes out from one read.** Since #150 the backend is the popover's
+choice, the tweak `renderRenderer` (default `numpy`, the one `"numpy"` literal in
+`app.jsx`); it was the module constant `RENDERER` in #151, and the rule it
+carried survived the change: the tweak is read **once**, into
+`currentRenderer` at the top of `App`, and that is what's read by
 `rendererOfThisRun` (the POST body *and* the `stream-done` handler, the same
 "fix the value for this run" rule as the semantics version), by `rendererCtx`
 (the live side of the axis) and by `renderOptions.renderer`, which is what the
@@ -1627,19 +1720,21 @@ a guard that counts the literals of `app.jsx` alone). Two literals would be two
 declarations, and the disagreement between the name that reaches argv and the
 name that reaches the record is invisible — it shows up as a green dot.
 `server.py` defaults to the same string, and a source guard in
-`test-render-status.js` pins the single declaration, the preview reading it and
+`test-render-status.js` pins the single read, the preview reading it and
 the bridge's default; a parity case pins the two halves of the
-pact — three backends give the engine three hashes, and the UI's axis
-discriminates the same pairs while its hash stays blind to them. What is still
-hardcoded is the **choice**, which is #150; the *knowledge* of who wrote the
-stem no longer is.
+pact — the backends the engine declares give it as many hashes, and the UI's
+axis discriminates the same pairs while its hash stays blind to them.
+`currentRenderer` sits at the top of `App` rather than beside `renderOptions`
+because `rendererCtx` is declared far above it, where `renderOptions` would
+still be in its TDZ.
 
 **And what counts as a name is one rule too, `PGEBackend.rendererName`** (a
 non-empty string, else `null`). It has three readers — the persisted record in
 `run()`, the in-memory record in the `stream-done` handler, and the live side
 `rendererCtx.current` — and it used to be written three times, differently:
-non-empty string, bare truthiness, no filter at all. Harmless while `RENDERER`
-is `"numpy"`; the day it comes from a preference, an empty name on the live side
+non-empty string, bare truthiness, no filter at all. Harmless while the name
+was the constant `"numpy"`; since #150 it comes from a preference, and an empty
+name on the live side
 is a *known* `current` (`"" != null`) against records `run()` never writes, i.e.
 every stem yellow forever, and a truthy non-string stays in memory and vanishes
 from localStorage — one colour until the reload, another after.
@@ -2114,7 +2209,7 @@ needs its control: with a `PATH` that narrow, *any* failure would keep a
 `status !== 0` assert green, so the same `PATH` with `realpath` back in it must
 succeed.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/renderer-choice.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a

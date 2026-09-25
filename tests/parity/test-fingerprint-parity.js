@@ -469,7 +469,7 @@ parity({
       },
     },
     {
-      /* Il TERZO asse: il backend che ha prodotto lo stem.
+      /* Il TERZO asse: il backend che ha prodotto lo stem (#151, #150).
        *
        * `renderer_type` e' entrato nel fingerprint del motore accanto alla
        * semantica, ed e' la stessa classe di dipendenza — qualcosa da cui lo
@@ -486,8 +486,24 @@ parity({
        * mente in uno dei due versi. */
       label: "il backend e' un terzo asse dentro l'hash del motore",
       run: async (ask, assert, ctx) => {
+        const c = (await ask("constants", {})).value;
+        const backends = c.renderer_types;
+        assert("il motore dichiara i suoi backend (pge.api.renderer_types)",
+          Array.isArray(backends) && backends.length >= 2,
+          `${JSON.stringify(backends)} ${c.renderer_types_error || ""}`);
+        if (!Array.isArray(backends) || !backends.length) return;
+
+        // La strada VERA dell'elenco verso il popover: GET /renderers chiama
+        // engine_introspect.engine_renderer_types, lo stesso lettore AST usato
+        // qui. Se il motore sposta l'insieme o lo rende un'espressione, l'AST
+        // torna [] e il popover ricade sul solo backend corrente, zitto — e'
+        // questo assert a farlo parlare. L'ordine conta: il popover disegna i
+        // bottoni in quell'ordine, ed e' quello di `available_types()`.
+        assert("il lettore AST del bridge da' lo stesso elenco, nello stesso ordine",
+          JSON.stringify(c.renderer_types_ast) === JSON.stringify(backends),
+          `ast=${JSON.stringify(c.renderer_types_ast)} importato=${JSON.stringify(backends)}`);
+
         const s = base();
-        const backends = ["numpy", "csound", "supercollider"];
         const answers = await ask(backends.map(r => ({
           op: "fingerprint", args: { stream: yamlDict(s), renderer: r } })));
         for (const [i, r] of answers.entries()) {
@@ -520,8 +536,9 @@ parity({
            un domani due backend dessero lo stesso hash, questa meta' pretende
            che anche la UI li consideri equivalenti, senza toccare una riga.
            Dei tre nomi la UI non ha comunque nessuna copia: sono il corpus di
-           questa sonda, non un registro che l'editor spedisce (popolarlo dal
-           motore e' il punto 1 di #150, insieme al selettore). */
+           questa sonda, dichiarato dal motore, e il selettore del popover li
+           riceve dalla stessa lettura AST (GET /renderers, #150) che la
+           sonda confronta qui sopra con l'elenco importato. */
         const coppie = [];
         for (const a of backends) for (const b of backends) coppie.push([a, b]);
         const sbagliate = coppie.filter(([a, b]) => {

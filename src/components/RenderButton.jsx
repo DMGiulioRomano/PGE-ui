@@ -3,7 +3,8 @@
 
 const { useState: useStateRB, useRef: useRefRB, useEffect: useEffectRB } = React;
 
-function RenderButton({ options, onOptionsChange, onRender, onCancel, status, envelopeKeys }) {
+function RenderButton({ options, onOptionsChange, onRender, onCancel, status, envelopeKeys,
+                        renderers, onOpen }) {
   const { Icon } = window.PGE;
   const [open, setOpen] = useStateRB(false);
   const rootRef = useRefRB(null);
@@ -15,6 +16,24 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
   const magnifyErr = window.PGEMagnifySpec
     ? window.PGEMagnifySpec.error(options.magnifyAt)
     : null;
+
+  // I bottoni del backend (#150): l'elenco e la disponibilita' li porta il
+  // bridge (GET /renderers), la scelta di cosa e' cliccabile la fa
+  // `PGERendererChoice.choices`, pura e testata. Nessun nome di backend e'
+  // scritto qui: era la copia — `numpy` acceso, `csound` spento, e il terzo
+  // (SuperCollider, PGE #228) assente — che la issue esiste per togliere.
+  const rendererChoices = window.PGERendererChoice
+    ? window.PGERendererChoice.choices(renderers, options.renderer)
+    : [];
+  const rendererPicked = rendererChoices.find(c => c.on);
+
+  // Il bottone gia' acceso non scrive: e' la lezione di `Seg` (CLAUDE.md), qui
+  // su bottoni scritti a mano — un clic che non chiede niente non deve
+  // diventare una scrittura.
+  function pickRenderer(name) {
+    if (name === options.renderer) return;
+    onOptionsChange({ ...options, renderer: name });
+  }
 
   function toggleEnv(name) {
     const next = selectedEnv.includes(name)
@@ -65,7 +84,13 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
             <span>Render</span>
           </button>
           <button className={"pge-btn primary rs-caret" + (open ? " on" : "")}
-                  onClick={() => setOpen(o => !o)} title="render options" aria-label="render options">
+                  onClick={() => {
+                    // All'apertura si rilegge l'elenco dei backend: la
+                    // disponibilita' e' della macchina, e cambia con l'editor
+                    // aperto (chi ha appena installato scsynth).
+                    if (!open) onOpen && onOpen();
+                    setOpen(o => !o);
+                  }} title="render options" aria-label="render options">
             <svg width="9" height="9" viewBox="0 0 10 10"><path d="M2,4 L5,7 L8,4" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
         </>
@@ -81,8 +106,27 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
           <div className="rs-row">
             <span className="rs-k">renderer</span>
             <div className="pge-seg sm">
-              <button className="on" disabled title="only numpy is available in this build">numpy</button>
-              <button disabled className="dim" title="csound renderer not enabled">csound</button>
+              {rendererChoices.map(c => (
+                <button key={c.name}
+                        className={(c.on ? "on" : "") + (c.disabled && !c.on ? " dim" : "")}
+                        disabled={c.disabled}
+                        title={c.title}
+                        onClick={() => pickRenderer(c.name)}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+            {/* Il perche' del backend scelto, e cosa succede a cambiarlo: il
+                backend sta nel fingerprint del motore, quindi ogni stem reso
+                con un altro torna giallo e verra' rifatto. I campioni non sono
+                identici fra i backend (la lista dei grani si'). */}
+            <div className="rs-hint"
+                 title={"the backend is part of the engine's own fingerprint: stems " +
+                        "rendered by another one read stale and get re-rendered. " +
+                        "The grain list is identical across backends, the samples are not."}>
+              {rendererPicked && rendererPicked.disabled
+                ? rendererPicked.title
+                : "stems from another backend read stale"}
             </div>
           </div>
 
@@ -221,10 +265,10 @@ function buildCommand(o) {
     "src/main.py",
     `configs/${o.projectBasename || "PGE_test"}.yml`,
     `${o.outputDir || "output"}/${o.projectBasename || "PGE_test"}.aif`,
-    // Il nome arriva da app.jsx (`renderOptions.renderer` = `RENDERER`, #151),
-    // come il resto delle opzioni: un letterale qui era una seconda
-    // dichiarazione del backend, che il giorno del selettore (#150) avrebbe
-    // continuato a dire numpy sotto qualunque scelta.
+    // Il nome arriva da app.jsx (`renderOptions.renderer`, la scelta del
+    // popover, #150), come il resto delle opzioni: un letterale qui era una
+    // seconda dichiarazione del backend, che avrebbe continuato a dire numpy
+    // sotto qualunque scelta (#151).
     "--renderer", o.renderer,
     "--per-stream",
   ];

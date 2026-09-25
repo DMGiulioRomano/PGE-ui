@@ -34,6 +34,13 @@ const TWEAK_DEFAULTS = {
   "renderPageDuration": 15,
   "renderReaper": false,
   "renderPreclean": false,
+  // Il backend audio (#150): la scelta del popover di render. E' l'unica
+  // dichiarazione del nome in questo file — era la costante `RENDERER` di
+  // #151 — e ha lo stesso default del bridge (`opts.get("renderer", "numpy")`,
+  // pinnato da una guardia sorgente): numpy non chiede binari esterni, ed e'
+  // quello che l'editor ha sempre mandato. I tre lettori passano da
+  // `currentRenderer` dentro App, vedi li'.
+  "renderRenderer": "numpy",
   "terminalOpen": false,
   "terminalHeight": 220,
   "shortcutRender": "r",
@@ -69,25 +76,6 @@ const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate, sl
 // project is loaded from the server (server.py lists configs/*.yml on boot).
 const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
-/* Il backend che produce gli stem, dichiarato UNA volta (#151).
- *
- * Il motore ne ha tre; l'editor ne usa uno, e il bridge ha lo stesso default
- * (`opts.get("renderer", "numpy")` in server.py, pinnato da una guardia
- * sorgente). Il selettore e' la issue #150, e non e' questa.
- *
- * Quello che va costruito prima del selettore e' l'ASSE: il motore mette
- * `renderer_type` nel proprio fingerprint accanto alla semantica (PGE #228),
- * quindi uno stem dipende anche da chi l'ha scritto. `rendererOfThisRun` in
- * `runRender`, `rendererCtx` e `renderOptions.renderer` qui sotto leggono tutti
- * questa costante, e non tre letterali: tre copie sono il modo in cui il nome
- * che va in argv, quello che l'anteprima del comando dice che ci va
- * (`buildCommand` in RenderButton.jsx) e quello che finisce nel record smettono
- * di concordare — un disaccordo che non si vede, perche' produce un pallino
- * verde. Il giorno del selettore, questa riga diventa una preferenza e i tre
- * lettori la seguono senza toccarli.
- */
-const RENDERER = "numpy";
-
 // Preferences store. Was provided by the design-tool tweaks-panel (removed);
 // now a thin local hook over the node-tested merge in tweaks-store.js. Keeps the
 // setTweak(key, val) / setTweak({ ... }) signature used across this file.
@@ -111,6 +99,18 @@ function mergeStreamPatch(stream, patch, samples) {
 
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  /* Il backend che produce gli stem, letto UNA volta per render (#151, #150).
+     Era una costante del modulo; col selettore del popover e' la preferenza
+     `renderRenderer`, ma la regola resta la stessa: `rendererCtx` (il lato vivo
+     dell'asse), `renderOptions.renderer` (l'anteprima del comando e il bottone
+     acceso) e `rendererOfThisRun` in `runRender` (il corpo della POST e il
+     record) leggono tutti questo nome, non il tweak tre volte. Tre letture
+     sono il modo in cui il nome che va in argv, quello che l'anteprima promette
+     e quello che finisce nel record smettono di concordare — un disaccordo che
+     non si vede, perche' produce un pallino verde. Sta qui in cima e non
+     accanto a `renderOptions` perche' `rendererCtx` e' molto piu' in alto: li'
+     `renderOptions` sarebbe ancora in TDZ. */
+  const currentRenderer = tweaks.renderRenderer;
 
   useEffectApp(() => { window.PGE_TWEAKS = tweaks; }, [tweaks]);
 
@@ -263,9 +263,10 @@ function App() {
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
   /* Il terzo asse (#151): il backend che ha scritto ogni stem. Un solo lato in
-     stato, perche' quello vivo e' una costante del modulo — l'editor sa con chi
-     renderizzerebbe adesso. Voce assente = stem reso prima che l'editor lo
-     registrasse, e chi classifica la legge come stale. */
+     stato, perche' quello vivo e' la scelta del popover (`currentRenderer`,
+     #150) — l'editor sa con chi renderizzerebbe adesso. Voce assente = stem
+     reso prima che l'editor lo registrasse, e chi classifica la legge come
+     stale. */
   const [renderedRenderer, setRenderedRenderer] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
@@ -347,6 +348,25 @@ function App() {
     } catch { /* bridge giu' o route assente: il fallback statico resta */ }
     return null;
   }
+
+  /* I backend audio del motore e cosa serve a ciascuno per girare (#150).
+   *
+   * Due call site: il boot, e l'apertura del popover di render. Il secondo e'
+   * quello che conta: la disponibilita' e' una proprieta' della MACCHINA (scsynth
+   * nel PATH, la SynthDef compilata), e chi installa SuperCollider con l'editor
+   * aperto deve vederlo quando torna a scegliere, non al prossimo reload. Il
+   * bridge non la mette in cache per la stessa ragione.
+   *
+   * Best-effort come gli altri: un server.py senza la route, un bridge giu' o un
+   * motore di cui non si legge l'elenco danno [], e il popover resta sul
+   * backend corrente, bloccato — il comportamento di prima. */
+  async function refreshRenderers() {
+    const backend = window.PGEBackend.current;
+    if (!backend || !backend.renderers) return;
+    let rows = [];
+    try { rows = await backend.renderers(); } catch { rows = []; }
+    setEngineRenderers(Array.isArray(rows) ? rows : []);
+  }
   const [waveforms, setWaveforms] = useStateApp({});  // {streamId: Float32Array of peaks}
   const [spectrograms, setSpectrograms] = useStateApp({});  // {streamId: ArrayBuffer of STFT grid}
   const [grainData, setGrainData] = useStateApp({});  // {streamId: grain JSON sidecar {duration, grains:[…]}}
@@ -401,6 +421,10 @@ function App() {
   // Valid score-envelope names for the --plot-envelopes filter, fetched from
   // the engine via server.py (issue #31). [] = feature unavailable → filter hidden.
   const [envelopeKeys, setEnvelopeKeys] = useStateApp([]);
+  // I backend audio del motore, con la disponibilita' di ciascuno (#150): la
+  // lista la legge il bridge dal sorgente del motore (GET /renderers), il
+  // popover ne fa i bottoni. [] = non lo so → resta il backend corrente.
+  const [engineRenderers, setEngineRenderers] = useStateApp([]);
   const [freezeEnvOnResize, setFreezeEnvOnResize] = useStateApp(false);
   const [envFocusKey, setEnvFocusKey] = useStateApp(null);
 
@@ -464,6 +488,9 @@ function App() {
             .then(keys => setEnvelopeKeys(Array.isArray(keys) ? keys : []))
             .catch(() => {});
         }
+        // I backend audio del motore, per il selettore del popover (#150).
+        // Primo dei due punti in cui si chiede — vedi refreshRenderers.
+        refreshRenderers();
         // Pull the engine's parameter clamps so the UI's bounds + envelope
         // auto-fit track the engine instead of the static fallback. Best-effort:
         // an older server.py / engine returns {} and the fallback stays.
@@ -659,18 +686,21 @@ function App() {
      diverse dello stesso dato. */
   const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
     [renderedSem, engineSem]);
-
   /* E la coppia dell'asse "backend", con la stessa forma e per la stessa
-     ragione. `current` e' la costante del modulo: qui non c'e' un lato ignoto
-     come per la semantica — il backend con cui l'editor renderizzerebbe adesso
-     lo sa sempre, e' una sua scelta, non una lettura del motore.
+     ragione. `current` e' la scelta del popover (`currentRenderer`, #150): qui
+     non c'e' un lato ignoto come per la semantica — il backend con cui
+     l'editor renderizzerebbe adesso lo sa sempre, e' una sua scelta, non una
+     lettura del motore. Cambiarla accende il giallo su ogni stem scritto da un
+     altro backend, che e' il motivo per cui l'asse e' stato costruito prima
+     del selettore.
      Passa comunque da `rendererName`, la regola che decide cosa si registra:
      un valore che non e' un nome sarebbe un `current` noto contro record che
-     nessun render scrive, cioe' giallo per sempre. Il giorno del selettore
-     (#150) quel valore arriva da una preferenza. */
+     nessun render scrive, cioe' giallo per sempre — e adesso il valore arriva
+     da una preferenza, cioe' proprio dal punto in cui le tre copie di prima
+     avrebbero diverso. */
   const rendererCtx = useMemoApp(
-    () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(RENDERER) }),
-    [renderedRenderer]);
+    () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(currentRenderer) }),
+    [renderedRenderer, currentRenderer]);
 
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
@@ -1661,11 +1691,11 @@ function App() {
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
     projectBasename: activeProject.replace(/\.yml$/, ""),
-    // Il backend che l'anteprima del comando stampa (#151). Solo in lettura —
-    // `setRenderOptions` non lo salva, la scelta e' #150 — ma dalla stessa
-    // dichiarazione del POST: `buildCommand` ne teneva un letterale suo, cioe'
-    // un'anteprima "byte per byte" libera di dire numpy sopra un render csound.
-    renderer: RENDERER,
+    // Il backend scelto nel popover (#150): acceso nel selettore e stampato
+    // dall'anteprima del comando, dalla stessa lettura del POST (#151) —
+    // `buildCommand` ne teneva un letterale suo, cioe' un'anteprima "byte per
+    // byte" libera di dire numpy sopra un render csound.
+    renderer: currentRenderer,
     // surfaced so the render popover can warn when grain data is off but the
     // grain view (in-clip or score panel) is open — see onRender forcing below.
     showGrains: !!tweaks.showGrains,
@@ -1677,6 +1707,7 @@ function App() {
       if (p) setTweak("outputPath", p);
       return;
     }
+    setTweak("renderRenderer", next.renderer);
     setTweak("renderUseCache",  next.useCache);
     setTweak("renderVisualize", next.visualize);
     setTweak("renderShowVoiceOffsets", next.showVoiceOffsets);
@@ -1737,11 +1768,12 @@ function App() {
     const semOfThisRun = await refreshEngineSem();
     /* Il backend di QUESTO giro, fissato accanto al numero e per la stessa
        ragione: i due consumatori — il corpo del POST e l'handler degli
-       `stream-done` — devono leggere la stessa variabile, non la costante due
-       volte. Oggi il valore non puo' cambiare a meta' render (e' una costante
-       del modulo); il giorno in cui diventa una preferenza si', e allora
-       questa riga e' gia' al posto giusto. */
-    const rendererOfThisRun = RENDERER;
+       `stream-done` — devono leggere la stessa variabile, non la preferenza
+       due volte. Da #150 la preferenza si cambia dal popover, e una seconda
+       lettura allo `stream-done` che cadesse dopo un clic sul selettore
+       darebbe al pallino il backend nuovo su uno stem che il motore ha scritto
+       col vecchio. */
+    const rendererOfThisRun = currentRenderer;
     // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
     // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
     // giro di rete davanti al motore per un dato che a nessuno serve subito.
@@ -1832,9 +1864,9 @@ function App() {
         // colore diverso fino alla riapertura del progetto. E' la STESSA
         // regola, `rendererName`, non una copia: con un test di verita' qui e
         // la stringa non vuota la', un 7 restava in memoria e spariva dal
-        // localStorage. Oggi il ramo non scatta (RENDERER e' una costante non
-        // vuota); il giorno del selettore lo farebbe, e una divergenza che
-        // dura una sessione e' peggio di una che non esiste.
+        // localStorage. Con la scelta nel popover (#150) il valore viene da
+        // una preferenza, e una divergenza che dura una sessione e' peggio di
+        // una che non esiste.
         setRenderedRenderer(m => {
           const name = window.PGEBackend.rendererName(rendererOfThisRun);
           if (name !== null) {
@@ -1870,7 +1902,7 @@ function App() {
     // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
     // migrazione di `dephase` e' avvenuta anche se poi il render fallisce —
     // percio' qui, non dentro `result.ok`. Ma non quando il file non e' stato
-    // scritto affatto (server down, o uno dei tre abort(400) che precedono la
+    // scritto affatto (server down, o uno dei quattro rifiuti 400 che precedono la
     // scrittura): li' la riscrittura e' ancora da fare e l'avviso deve restare.
     // `!== false` e non truthiness: sul percorso buono il campo non c'e', e
     // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
@@ -2267,6 +2299,8 @@ function App() {
               renderStatus={renderStatus}
               renderOptions={renderOptions} onRenderOptionsChange={setRenderOptions}
               envelopeKeys={envelopeKeys}
+              renderers={engineRenderers}
+              onRenderOptionsOpen={refreshRenderers}
               time={time} duration={compDuration}
               onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo}
               browserOpen={browserOpen} onToggleBrowser={() => setBrowserOpen(o => !o)}

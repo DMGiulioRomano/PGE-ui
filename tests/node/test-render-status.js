@@ -549,26 +549,40 @@ console.log("\n── la catena dal motore al pallino ──");
     "il ref invece lo riscrive chiunque rilegga, render in volo compreso — " +
     "e i tre punti di rilettura non sono esclusivi col render in corso");
 
-  /* Il TERZO asse, e la catena che lo tiene acceso (#151).
+  /* Il TERZO asse, e la catena che lo tiene acceso (#151, #150).
    *
    * `renderer_type` sta nel fingerprint del motore accanto alla semantica
    * (`tests/parity/test-fingerprint-parity.js` lo verifica: tre backend, tre
-   * hash). Qui era scritto che la UI non aveva un asse per lui e che «va bene
-   * finche' il backend e' UNO» — cioe' un debito, con questa guardia come
-   * promemoria. L'asse ora c'e', e il promemoria diventa il suo presidio:
-   * quello che resta cablato e' la SCELTA (una sola, #150 ha il selettore),
-   * non la conoscenza di chi ha scritto lo stem. */
-  assert("app.jsx dichiara un backend solo, e in un posto solo",
-    /const RENDERER = "numpy";/.test(appSrc) &&
+   * hash). #151 ha costruito l'asse con la scelta ancora cablata — la costante
+   * `RENDERER` — e questa guardia ne pretendeva la dichiarazione unica. Con
+   * #150 la scelta e' una preferenza del popover (`renderRenderer`), ma la
+   * pretesa e' la stessa: un nome solo, letto una volta sola, e i tre lettori
+   * (il lato vivo dell'asse, l'anteprima del comando, il backend del giro) che
+   * leggono quella lettura e non il tweak tre volte. Tre letture sono il modo in
+   * cui argv, anteprima e record smettono di concordare, in silenzio: il
+   * risultato e' un pallino verde. */
+  assert("app.jsx dichiara il backend in un posto solo",
     (appSrc.match(/"numpy"/g) || []).length === 1 &&
+    /"renderRenderer":\s*"numpy"/.test(appSrc) &&
+    (appSrc.match(/tweaks\.renderRenderer\b/g) || []).length === 1 &&
+    /const currentRenderer = tweaks\.renderRenderer;/.test(appSrc),
+    "il default e' il tweak, e il tweak si legge una volta: `currentRenderer`");
+  assert("...e i tre lettori leggono quella lettura",
+    /rendererName\(currentRenderer\)/.test(appSrc) &&
+    /const rendererOfThisRun = currentRenderer;/.test(appSrc) &&
+    /renderer:\s*rendererOfThisRun\b/.test(appSrc) &&
     !/renderer:\s*(tweaks|renderOptions)\./.test(appSrc),
-    "il selettore e' #150; qui si pretende che il nome abbia una sola " +
-    "sorgente, perche' due copie divergono in silenzio (pallino verde)");
+    "lato vivo, backend del giro e corpo della POST devono essere lo stesso nome");
   {
+    /* I due default concordano ancora, per una ragione diversa da prima: un
+     * editor piu' vecchio (o un client qualunque) che non manda `renderer`
+     * rende col default del bridge, e l'editor di adesso parte dallo stesso.
+     * Divergessero, la prima scelta del popover non sarebbe il backend che
+     * l'utente vede acceso. */
     const srvSrc = SG.codeOf(path.join(__dirname, "../../server.py"));
-    assert("...e il bridge ha lo stesso default",
-      /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc),
-      "i due lati devono concordare: chi rende e chi hasha sono lo stesso giro");
+    assert("il default dell'editor e' quello del bridge",
+      /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc) &&
+      /"renderRenderer":\s*"numpy"/.test(appSrc));
   }
   /* ...e l'anteprima del comando nel popover di render la legge dalla stessa
      dichiarazione. `buildCommand` teneva un `"--renderer", "numpy"` suo: una
@@ -580,10 +594,10 @@ console.log("\n── la catena dal motore al pallino ──");
   {
     const rbSrc = SG.codeOf(path.join(__dirname, "../../src/components/RenderButton.jsx"));
     assert("...e l'anteprima del comando legge il backend dalla stessa dichiarazione",
-      /renderer:\s*RENDERER\b/.test(appSrc) &&
+      /renderer:\s*currentRenderer\b/.test(appSrc) &&
       /"--renderer",\s*o\.renderer\b/.test(rbSrc) &&
       !/"numpy"/.test(rbSrc),
-      "renderOptions.renderer = RENDERER in app.jsx, e buildCommand stampa " +
+      "renderOptions.renderer = currentRenderer in app.jsx, e buildCommand stampa " +
       "o.renderer: un letterale in RenderButton.jsx e' una seconda sorgente");
   }
   /* I tre anelli che nessuna esecuzione in node tocca. Ognuno, saltando,

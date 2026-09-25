@@ -566,3 +566,118 @@ def engine_loop_units(root: Path) -> list:
 
     _LOOP_UNITS_CACHE[key] = (stamp, units)
     return units
+
+
+_RENDERER_TYPES_CACHE: dict = {}
+
+
+def engine_renderer_types(root: Path) -> list:
+    """I backend audio del motore, come li restituisce `pge.api.renderer_types()`.
+
+    E' l'elenco che popola il selettore del popover di render (PGE-ui #150). Il
+    motore lo tiene in un posto solo — `RendererFactory._VALID_TYPES`, e
+    `available_types()` lo restituisce ordinato — proprio perche' ogni
+    chiamante lo chieda invece di tenerne una copia: e' cosi' che il terzo
+    backend (SuperCollider, PGE #228) era rimasto invisibile a meta' progetto.
+    Qui si legge quell'insieme dall'AST e si ordina come fa `available_types()`;
+    la parita' confronta il risultato con `renderer_types()` importato.
+
+    AST e non import, come il resto del modulo: `renderer_factory` oggi si
+    importa senza numpy, ma il bridge non gira nel venv del motore e non deve
+    dipendere da cosa il motore importa domani.
+
+    Solo dentro `class RendererFactory`: e' l'attributo che `create()` valida,
+    un omonimo altrove non lo e'.
+
+    `[]` = un motore di cui non si legge l'elenco (layout nuovo, un'espressione
+    al posto del letterale): chi chiama resta sul comportamento storico — il
+    default del bridge, numpy — e non si inventa nomi.
+
+    Cache invalidata sull'mtime: un `git pull` nel repo fratello sotto un
+    `make serve` acceso e' esattamente l'evento che aggiunge un backend."""
+    candidates = (
+        root / "src" / "pge" / "rendering" / "renderer_factory.py",
+        root / "src" / "rendering" / "renderer_factory.py",
+    )
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _RENDERER_TYPES_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+
+    types: list = []
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        cls = next((n for n in tree.body
+                    if isinstance(n, ast.ClassDef) and n.name == "RendererFactory"),
+                   None)
+        if cls is None:
+            continue
+        for node in cls.body:
+            value = _assigned_value(node, "_VALID_TYPES")
+            if value is None:
+                continue
+            lit = _ast_literal(value)
+            if (isinstance(lit, (set, frozenset, list, tuple)) and lit
+                    and all(isinstance(t, str) for t in lit)):
+                types = sorted(set(lit))
+            # Il nome c'e': questo file ha gia' risposto, anche "non lo so".
+            break
+        break
+
+    _RENDERER_TYPES_CACHE[key] = (stamp, types)
+    return types
+
+
+def _read_str_constant(src, name):
+    """Il primo `name = '<str>'` di modulo in `src`, o None."""
+    try:
+        tree = ast.parse(src.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for node in tree.body:
+        value = _assigned_value(node, name)
+        if value is None:
+            continue
+        val = _ast_literal(value)
+        return val if isinstance(val, str) and val else None
+    return None
+
+
+def engine_sc_synthdef(root: Path):
+    """Dove il backend SuperCollider cerca la propria SynthDef, o None.
+
+    `{"source", "dir", "name"}` = `DEFAULT_SYNTHDEF_SOURCE` e
+    `DEFAULT_SYNTHDEF_DIR` (`supercollider_renderer.py`) e `SYNTH_NAME`
+    (`sc_score_writer.py`): il compilato e' `<dir>/<name>.scsyndef`. Sono path
+    RELATIVI al cwd del sottoprocesso — la convenzione di `csound/main.orc` —
+    e il bridge lancia il motore con `cwd=root`, quindi e' li' che vanno
+    risolti. Il bridge non li manda in argv: li scrive il motore, e una copia
+    in `--sc-synthdef-source` sarebbe un secondo posto da tenere allineato.
+
+    Servono a una domanda sola, quella di `renderer_availability`: con scsynth
+    nel PATH il render parte anche senza sclang, ma solo se la SynthDef e' gia'
+    compilata. Prima volta senza sclang = SuperColliderNotFoundError.
+
+    AST e non import per una ragione in piu' delle solite: i due moduli
+    importano numpy, che il bridge (e il job node della CI) non hanno.
+
+    Una costante che manca rende None il tutto: di una SynthDef di cui si sa il
+    sorgente ma non il nome compilato non si puo' dire se e' compilata. Chi
+    chiama allora controlla il solo server e dice che la SynthDef non l'ha
+    guardata. Nessuna cache: tre stat su file piccoli, e la domanda si fa a
+    ogni apertura del popover."""
+    rdir = root / "src" / "pge" / "rendering"
+    if not rdir.is_dir():
+        rdir = root / "src" / "rendering"
+    source = _read_str_constant(rdir / "supercollider_renderer.py",
+                                "DEFAULT_SYNTHDEF_SOURCE")
+    sdir = _read_str_constant(rdir / "supercollider_renderer.py",
+                              "DEFAULT_SYNTHDEF_DIR")
+    name = _read_str_constant(rdir / "sc_score_writer.py", "SYNTH_NAME")
+    if source is None or sdir is None or name is None:
+        return None
+    return {"source": source, "dir": sdir, "name": name}

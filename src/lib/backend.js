@@ -44,6 +44,10 @@
  *                                   motore ha scritto ogni stem. Voce assente =
  *                                   non registrato: col lato vivo noto, chi
  *                                   classifica la legge stale (render-status.js).
+ *   renderers()                   → Promise<[{ name, available, detail }]>: i backend
+ *                                   del motore, nel suo ordine (GET /renderers, #150).
+ *                                   `available` a tre valori: false = manca qualcosa,
+ *                                   null = il bridge non sa cosa serva. [] = non lo so
  *   render.grainsUrl(yamlBasename, streamId)     → string (grain JSON sidecar URL)
  *   render.loadGrainData(yamlBasename, streamId) → Promise<grainData | null>
  *
@@ -499,8 +503,9 @@
           _persistStemIndex();
         }
         // Il server scrive lo YAML su configs/<basename>.yml PRIMA di costruire
-        // lo stream di eventi, e i suoi tre abort(400) (basename mancante, con
-        // traversal, formato ignoto) precedono quella scrittura. Quindi una
+        // lo stream di eventi, e i suoi quattro rifiuti 400 (basename mancante,
+        // con traversal, backend che il motore non offre, formato ignoto)
+        // precedono quella scrittura. Quindi una
         // risposta buona implica il file scritto, e un fallimento prima di qui
         // implica il contrario: e' quello che il chiamante deve sapere per
         // decidere se la migrazione di `dephase` e' avvenuta.
@@ -1000,6 +1005,22 @@
       } catch { return []; }
     }
 
+    // I backend audio del motore (PGE-ui #150), dal bridge: l'elenco lo legge
+    // GET /renderers dal sorgente del motore (`RendererFactory._VALID_TYPES`),
+    // insieme a cosa serve a ciascuno per girare (scsynth nel PATH, la
+    // SynthDef, csound). `[]` per un server.py senza la route, un bridge giu' o
+    // un motore di cui non si legge l'elenco: il popover resta sul backend
+    // corrente, come prima. Le righe senza nome si scartano qui, cosi' chi
+    // disegna i bottoni non deve difendersi da una risposta a meta'.
+    async function renderers() {
+      try {
+        const d = await jget("/renderers");
+        const rows = d && Array.isArray(d.renderers) ? d.renderers : [];
+        return rows.filter(r => r && typeof r === "object"
+                                  && typeof r.name === "string" && r.name);
+      } catch { return []; }
+    }
+
     // Engine parameter clamps (min/max/range + pitch), AST-parsed from the
     // engine source by the bridge so the UI's bounds aren't hardcoded. Returns
     // {} for an older server.py without /bounds or an engine without the
@@ -1061,7 +1082,7 @@
     ensureConfig().catch(() => {});
 
     return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup,
-             envelopeKeys, bounds, semanticsVersion, workspace, setWorkspace };
+             envelopeKeys, renderers, bounds, semanticsVersion, workspace, setWorkspace };
   }
 
   window.PGEBackend = {
