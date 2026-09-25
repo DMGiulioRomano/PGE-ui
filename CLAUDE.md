@@ -36,8 +36,10 @@ exists, the fourth only when a browser is installed):
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
   classification + render summary, incl. the engine-semantics and renderer
   axes, source guards on the chain that carries the version from the engine to
-  the dot and on the single `RENDERER` declaration its readers share, and
-  a live two-overlapping-renders check that `run()` refuses re-entry),
+  the dot and on the single `RENDERER` declaration its readers share,
+  a live two-overlapping-renders check that `run()` refuses re-entry, and the
+  census — derived from the sources, never a list in the test — that every
+  event type the editor branches on is one somebody emits),
   `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
   (preferences `applyEdit` merge + a guard against the removed design-tool residue),
@@ -121,7 +123,11 @@ exists, the fourth only when a browser is installed):
   load time that a *later* script defines — the last one derived from the
   sources, not from a table of declared dependencies).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
-  (`parse_render_line` events, `build_render_command` flags, the kill/watchdog,
+  (`parse_render_line` events — including the summary-block gate and its
+  canary, which reads the engine CLI's own head line by *position* rather than
+  by words — the channel split measured by driving `RenderState.start` +
+  `merged_output` + `render_events` over a real subprocess that writes protocol
+  shapes to stderr, `build_render_command` flags, the kill/watchdog,
   and a Flask `make_app` smoke test via `test_client`), `test_cli_resolve.py`
   (the pure resolution of engine root and workspace — the precedence, the
   bounded walk up, the error text, the banner lines, plus the bridge launched
@@ -579,12 +585,62 @@ engine prints `[CACHE] Manifest: <path>` on every `--cache` render and
 the per-stream regex. What discriminates is therefore the **set of ids the
 request declares** (`state["ids"]`, from `opts["streams"]`), not a list of
 reserved prefixes — the next `[CACHE] Something:` upstream would come back in
-through the same door. Absent/empty set = a request that doesn't declare its
-streams: no filter, historical behaviour. The probe in
+through the same door. The probe in
 `tests/python/test_render_pipeline.py` reads the `[CACHE]` literals **out of
 the engine sources** instead of transcribing them: the six older assertions ran
 on lines copied from this module's docstring, which is exactly why `Manifest`
 and `GC` slipped through for so long.
+
+**That filter is total** (#162). An absent or empty `state["ids"]` no longer
+means "no filter, historical behaviour" — it means "the request declared no
+streams", and from a request that declares nothing no event is derived. The old
+reading left the only thing able to tell `[CACHE] stream1: clean` from
+`[CACHE] Manifest: <path>` inert exactly when nobody had armed it. The browser
+always declares them (`streams: data.streams`), so what changes is a request
+that doesn't — and there the dots are safe anyway: on a successful run the
+`done` fallback in `backend.js` emits a synthetic `stream-done` for every stem
+the server found **on disk** (with no list it has no set to judge against, and
+claims them all). What such a request loses is the live progress bar, never a
+dot.
+
+**Protocol is stdout, and only stdout** (#162, PGE #178). `RenderState.start`
+used to spawn the engine with `stderr=subprocess.STDOUT`, so both streams
+landed in one `readline` and **every** stderr line went through
+`parse_render_line`. The engine gave itself the rule "nobody, on any channel,
+writes lines shaped like the protocol" and guards it
+(`tests/shared/test_stdout_contract.py`), but that rule binds the engine, not
+its hosts: `logging` writes to stderr, and any third-party library inside that
+process can still print a line of that shape. Measured with the engine's own
+diagnostics switched on the way anyone would switch them on
+(`logging.basicConfig(level=DEBUG, format="%(message)s")`): one
+`[CACHE] %s: registrata` record produced `stream-start` + `stream-done` for a
+stream named `gaussian`, which does not exist. In the default format the only
+thing saving it was the `DEBUG:pge.diagnostics:` prefix the formatter
+prepends — a choice of whoever launches, not a guarantee from the engine.
+
+The file descriptor separated nothing because *we* were the ones merging it.
+The two pipes stay two now, and `merged_output(proc)` reunites them
+**labelled**: two daemon pumps onto one queue — both pipes have to be drained
+always, or the child blocks the moment the unread one fills, which is the only
+thing `stderr=STDOUT` ever bought — and the channel travels as far as
+`render_events(channel, line, state)`, the one place where "protocol is stdout"
+is written down. Order *between* the channels stays approximate, exactly as it
+was (there the two streams' buffering decided, here the queue); order *within*
+a channel is exact, and that is the only one the parser depends on, since the
+per-stream state moves on stdout lines alone. One consequence worth keeping:
+stderr cannot open the summary block either, so an indented error line citing a
+sample can't re-enter through that door.
+
+**The pipes decode with `errors="replace"`, and that is what keeps the pumps
+alive.** With strict decoding a byte that isn't UTF-8 — csound, a C library, a
+filename in another encoding: the bridge doesn't choose who writes inside the
+engine's process — raised `UnicodeDecodeError` inside a pump's thread; the pump
+died, stopped draining its pipe, the child stopped the moment that pipe filled,
+and the render hung silent until the watchdog. The single reader of before had
+turned the same byte into an `[ERROR]` and a `done`: separating the channels
+made it a hang. Replaced, it is a `\ufffd` in a log line.
+`test_render_pipeline.py` drives it, and `_drive` runs under a time cap so a
+pipe nobody drains is a named red rather than a hung pytest.
 
 **A DIRTY stream is closed by its own summary path line, and by nothing
 else.** The `[CACHE] <id>: DIRTY` line says the stream *will* be rendered, not
@@ -613,6 +669,60 @@ not enough (both a basename and an id may contain `__`: with basename `x__b`,
 and the line is matched on the **whole filename**, `<basename>__<id>`; without
 one the longest pending suffix wins.
 
+**And that line only counts inside the summary block** (#162). `_RE_STEM_PATH`
+accepts any *indented* line ending in `__<something>.<aif|aiff|wav|flac>`, and
+the engine's error messages cite sample paths in the same shape. Measured
+(PGE #178): `  Path cercato: refs/voce__streamA.wav` closed stream `streamA` —
+🟢 on a stem never written, which is the one mistake this parser cannot afford.
+It takes a sample named like a pending stem — `<basename>__<id>` with the whole
+filename matched, a mere suffix without the basename — the filename match
+holding every other case; but that is a coincidence, not a defence. Narrowing
+the regex was not the way out: a path can contain spaces
+(`/Users/me/My Music/proj__s1.wav`), so every tightening on the *shape* of the
+line would be paid with the lost `stream-done` of DIRTY streams, **every one**
+of which depends on it (see above). What discriminates
+is the **position**: the engine prints those paths in one block, under its own
+head line, and inside that block every indented line *is* a path.
+`_RE_SUMMARY_HEAD` opens it and the first unindented line closes it — no
+declared terminator is needed, since what follows the paths is `Reaper
+project:`, `Grain JSON:`, `Log:`, all at column zero, and before them the blank
+line `print("\nGenerazione partitura grafica…")` prepends.
+
+The gate opens on a line of Italian prose, so its one weakness is that prose
+moving: then the block never opens and no path line closes a stream. On a
+successful run the dots don't notice — the `done` fallback claims the built
+streams no `stream-done` closed, through its per-run Set — but the live
+progress goes; on a failed run nothing is claimed, the safe direction. It does
+not stay in prose, though.
+`test_render_pipeline.py` reads the head **out of the engine's CLI** and
+recognizes it by *position* rather than by words: the `print` that precedes the
+`for` whose body is a single `print` of indentation-plus-interpolation, i.e.
+the very block `_RE_STEM_PATH` feeds on. A rename upstream is a named failure
+here, like the `configs/` canary.
+
+**`stream-progress` is gone** (#162). `app.jsx` had an
+`e.type === "stream-progress"` branch writing state and drawing a bar inside
+the clip's status dot, and nobody emitted that event — not `server.py`, not
+`render_pipeline.py`, and the engine has no line to derive it from: the
+progress a line-shaped protocol can carry is per *whole stream*
+(`[CACHE] <id>: …`), not inside one. So the bar read 0% for the entire render
+and 100% for the instant between a `stream-done` and the next `stream-start`,
+on the stream that had just finished — residue, not information. The consumer,
+the `streamProgress` state (both the per-stream map and the `renderStatus`
+scalar), the `progress` field of `statusForStream` and the `.crs-bar` rules
+went with it. The day the event really exists it will be because the protocol
+went explicit — condition 2 of the three PGE #178 lists in the engine's
+`docs/explanation/contratto-stdout.md` — and then the state comes back *with*
+its emitter, not before.
+
+`tests/node/test-render-status.js` holds that shape as a **census derived from
+the sources**, never a list written in the test (a list is a second copy of the
+truth, and the person adding an event is not the person who remembers to update
+it): the event types `app.jsx` and `backend.js` branch on must be a subset of
+those `server.py`, `render_pipeline.py` and `backend.js` emit. A consumer
+without an emitter is the defect above; an emitter without a consumer is
+legitimate and stays green (`venv-done`).
+
 On the browser side the two writes have different rules, deliberately: the
 `stream-done` handler marks the stem index **only for a declared stream** (the
 event comes from a parsed log line, not from a file), while the `done` fallback
@@ -635,7 +745,7 @@ a Ctrl+Z brought it back ⚪ with its stem on disk, and another colour after a
 reload. The set is authoritative only when the request carries it
 (`Array.isArray(opts.streams)`); without a list the fallback claims as it always
 did. That is *not* quite the bridge's rule for `state["ids"]`, which reads an
-empty list as absent: here `[]` is a list, and a YAML with no streams builds
+empty list as absent (both derive no event, #162): here `[]` is a list, and a YAML with no streams builds
 nothing, so every file on disk is an earlier run's (`test-semantics-store.js`
 pins the difference).
 A **failed** run (`done` with `ok: false`) gets the same treatment for every

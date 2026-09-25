@@ -36,6 +36,10 @@ function setupClipCanvas(cvs, width, height) {
  *   stale   — rendered but yaml has changed since
  *   never   — never rendered (no stem on disk)
  *   running — currently being rendered
+ *
+ * `running` e' un pallino e basta: la barra di avanzamento dentro il singolo
+ * stream se n'e' andata con l'evento che avrebbe dovuto muoverla (#162), che
+ * nessuno emetteva. Vedi statusForStream in render-status.js.
  */
 function ClipRenderStatus({ status }) {
   // fresh & up-to-date shows no marker — only never/stale/running/error surface.
@@ -50,9 +54,6 @@ function ClipRenderStatus({ status }) {
   return (
     <div className={"clip-render-status s-" + status.state} title={tip}>
       {isWarn ? <span className="crs-mark">⚠</span> : <span className="crs-dot" />}
-      {typeof status.progress === "number" && status.state === "running" ? (
-        <span className="crs-bar"><span className="crs-bar-fill" style={{ width: (status.progress * 100).toFixed(0) + "%" }} /></span>
-      ) : null}
     </div>
   );
 }

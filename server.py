@@ -83,7 +83,8 @@ from audio_pipeline import (
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
-    RenderState, parse_render_line, build_render_command, start_watchdog,
+    RenderState, render_events, merged_output, build_render_command,
+    start_watchdog,
 )
 
 
@@ -91,7 +92,7 @@ from render_pipeline import (
 # Helpers
 #
 # Audio (sox transcode / peaks / spectrogram, path resolution) lives in
-# audio_pipeline.py, render orchestration (parse_render_line, RenderState,
+# audio_pipeline.py, render orchestration (render_events, RenderState,
 # command build, watchdog) in render_pipeline.py, and the AST reads of the
 # engine's own source in engine_introspect.py. Only the engine-venv bootstrap
 # stays here — it's used by /setup and the render route and is a distinct
@@ -1241,32 +1242,39 @@ def make_app(root: Path, render_timeout: float = 600.0,
                 try:
                     proc = rs.start(cmd, root)
                     # Hard cap: kill a stuck main.py so it can't hold a worker
-                    # thread forever (workers=1, threads=4). The kill closes the
-                    # pipe → readline hits EOF → this loop ends normally. #43
+                    # thread forever (workers=1, threads=4). The kill closes
+                    # both pipes → both pumps of merged_output hit EOF → this
+                    # loop ends normally. #43
                     watchdog = start_watchdog(proc, render_timeout)
                     # Gli id dichiarati dalla richiesta: e' l'unica cosa che
                     # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
                     # che il motore stampa a ogni render con --cache. Vuoto (o
-                    # assente) significa "richiesta che non dichiara gli stream":
-                    # nessun filtro, comportamento storico. Vedi render_pipeline.
+                    # assente) significa "richiesta che non dichiara nessuno
+                    # stream", e da li' non si deriva nessun evento: il filtro
+                    # non e' piu' inerte quando nessuno lo arma (#162). Vedi
+                    # render_pipeline.
                     req_streams = opts.get("streams") or []
                     stream_ids  = {str(s.get("id")) for s in req_streams
                                    if isinstance(s, dict) and s.get("id") is not None}
                     # `basename` perche' la riga di path che chiude uno stream
                     # DIRTY si confronta sul nome file intero: con piu' stream
-                    # in attesa il suffisso non basta. Vedi render_pipeline.
+                    # in attesa il suffisso non basta. `summary` perche' quella
+                    # riga vale solo dentro il blocco riassuntivo (#162). Vedi
+                    # render_pipeline.
                     state = {"pending": [], "total": len(req_streams), "index": 0,
-                             "ids": stream_ids or None, "basename": basename}
-                    # Read line-by-line and stream to client.
-                    for raw in iter(proc.stdout.readline, ""):
-                        line = raw.rstrip("\n")
+                             "ids": stream_ids, "basename": basename,
+                             "summary": False}
+                    # Read line-by-line and stream to client. Il canale arriva
+                    # fin qui perche' solo stdout e' protocollo: vedi
+                    # render_events, che e' il posto dove quella regola vive.
+                    for channel, line in merged_output(proc):
                         if rs.is_cancelled():
                             proc.terminate()
                             yield json.dumps({"type": "log",
                                               "line": "[ABORT] cancelled"}) + "\n"
                             yield json.dumps({"type": "done", "ok": False}) + "\n"
                             return
-                        for ev in parse_render_line(line, state):
+                        for ev in render_events(channel, line, state):
                             yield json.dumps(ev) + "\n"
                     proc.wait()
                     ok = (proc.returncode == 0)

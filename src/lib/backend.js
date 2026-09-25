@@ -28,7 +28,7 @@
  *   fs.writeFile(kind, name, str) → Promise<void>
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
- *     onEvent({type, line?, streamId?, progress?})
+ *     onEvent({type, line?, streamId?})
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
@@ -565,11 +565,12 @@
                   // vecchio di uno rinominato, che senza `--cache` la GC del
                   // motore non tocca — e' di un giro precedente tanto quanto
                   // quello di un muto. Senza la lista non c'e' un insieme
-                  // contro cui giudicare, e vale il comportamento storico.
-                  // Non e' pero' la regola di `state["ids"]` nel bridge, che
-                  // tratta una lista VUOTA come assente: qui `[]` e' una
-                  // lista, e uno YAML senza stream il motore non lo
-                  // costruisce — ogni file su disco e' di prima.
+                  // contro cui giudicare, e vale il comportamento storico —
+                  // che e' anche la rete del bridge: dal #162 da una richiesta
+                  // senza lista non ricava nessun evento dalle righe di log.
+                  // Il bridge pero' tratta una lista VUOTA come assente, e qui
+                  // no: `[]` e' una lista, e uno YAML senza stream il motore
+                  // non lo costruisce — ogni file su disco e' di prima.
                   const declared = Array.isArray(opts.streams);
                   const built = streamsEngineBuilds(opts.streams);
                   // Un giro FALLITO non ha costruito niente di certo. Il bridge

@@ -286,7 +286,9 @@
 
 /* ---------- Clip render-status marker ---------- */
 /* No panel, no label — just a tiny marker. never = red dot, stale/error =
- * warning triangle, running = pulsing accent dot (+ progress bar), fresh = nothing. */
+ * warning triangle, running = pulsing accent dot, fresh = nothing.
+ * La barra dentro il pallino (.crs-bar) e' sparita con l'evento
+ * `stream-progress` che avrebbe dovuto riempirla e che nessuno emetteva (#162). */
 .clip-render-status {
   position: absolute;
   left: 4px;
@@ -308,15 +310,6 @@
 .clip-render-status.s-stale .crs-mark  { color: #F5A524; }
 .clip-render-status.s-error .crs-mark  { color: var(--status-error); }
 .clip-render-status.s-running .crs-dot { background: var(--accent); animation: pgePulse 0.8s infinite; }
-.clip-render-status .crs-bar {
-  display: inline-block; width: 28px; height: 3px;
-  background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden;
-}
-.clip-render-status .crs-bar-fill {
-  height: 100%; background: var(--accent);
-  transition: width 120ms linear;
-}
-
 .clip.muted .clip-render-status { opacity: 0.4; }
 
 /* ---------- Render summary chip in footer ---------- */

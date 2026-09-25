@@ -699,10 +699,11 @@ console.log("\n── lo stem di uno stream CANCELLATO non si reclama nemmeno lu
 
 console.log("\n── una richiesta che non dichiara gli stream resta al comportamento storico ──");
 {
-  // La stessa regola del bridge (`state["ids"]` in server.py): senza una lista
-  // di stream non c'e' un insieme contro cui giudicare, e il fallback reclama
-  // come ha sempre fatto. app.jsx la dichiara sempre; il ramo esiste per non
-  // cambiare in silenzio il contratto di `run()` a chi non la passa.
+  // Senza una lista di stream non c'e' un insieme contro cui giudicare, e il
+  // fallback reclama come ha sempre fatto. app.jsx la dichiara sempre; il ramo
+  // esiste per non cambiare in silenzio il contratto di `run()` a chi non la
+  // passa — ed e' la rete del bridge, che dal #162 da una richiesta senza
+  // lista (`state["ids"]` vuoto) non ricava nessun evento dalle righe di log.
   store = {};
   const backend = window.PGEBackend.create({ baseUrl: "http://x" });
   NDJSON = [
@@ -716,9 +717,9 @@ console.log("\n── una richiesta che non dichiara gli stream resta al comport
          seen.some(e => e.type === "stream-done" && e.streamId === "a"),
          JSON.stringify(seen));
 
-  /* ...ma una lista VUOTA e' una lista, e qui la regola si stacca da quella
-     del bridge, deliberatamente. Per `state["ids"]` vuoto e assente sono la
-     stessa cosa (nessun filtro sulle righe di log); per il fallback no: uno
+  /* ...ma una lista VUOTA e' una lista, deliberatamente. Per `state["ids"]`
+     nel bridge vuoto e assente sono la stessa cosa (dal #162: nessuno stream
+     dichiarato, nessun evento dalle righe di log); per il fallback no: uno
      YAML senza stream il motore non lo costruisce affatto, quindi ogni file
      su disco e' di un giro precedente — uno stream cancellato, per ipotesi —
      e reclamarlo e' il caso del cancellato qui sopra. */
@@ -732,7 +733,7 @@ console.log("\n── una richiesta che non dichiara gli stream resta al comport
     { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
       streams: [] },
     (e) => seen2.push(e));
-  assert("con `streams: []` il fallback non reclama niente (qui non e' la regola del bridge)",
+  assert("con `streams: []` il fallback non reclama niente (vuota non e' assente)",
          !seen2.some(e => e.type === "stream-done") && !rend("proj"),
          JSON.stringify(seen2.filter(e => e.type === "stream-done")));
   assert("...ma l'indice sa del file", backend2.render.ownsStem("proj", "a") === true);

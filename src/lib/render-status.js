@@ -12,8 +12,8 @@
  * a stem on disk" check is injected as a hasStem(id)=>bool closure so the module
  * never reaches into window.PGEBackend.current.
  *
- * State (lastRenderedFps, renderStatus, streamProgress) and all its setters/effects
- * stay in app.jsx — only the pure classification/aggregation moves here.
+ * State (lastRenderedFps, renderStatus) and all its setters/effects stay in
+ * app.jsx — only the pure classification/aggregation moves here.
  * ===========================================================================*/
 
 (function () {
@@ -168,7 +168,15 @@
 
   // Per-stream status object consumed by Timeline.jsx (ClipRenderStatus).
   // ctx = { currentFps, lastRenderedFps, hasStem:(id)=>bool, running:bool,
-  //         currentStreamId, streamProgress, sem, rend }.
+  //         currentStreamId, sem, rend }.
+  //
+  // Lo stato RUNNING non porta un `progress` (#162). Lo portava, letto da una
+  // mappa `streamProgress` che solo l'evento `stream-progress` riempiva — e
+  // quell'evento non lo emette nessuno: ne' server.py ne' render_pipeline.py,
+  // e il motore non ha una riga da cui ricavarlo. La barra per clip stava
+  // quindi a 0% per tutto il render, tranne l'istante fra uno `stream-done` e
+  // lo `stream-start` successivo, in cui leggeva 100% sullo stream gia'
+  // finito. Il pallino pulsante e' tutto cio' che si sa davvero dire.
   //
   // Il motivo si chiede UNA volta e si indicizza: con un `if` per asse, il
   // giorno che ne nasce un quarto il ramo nuovo resta senza testo e il pallino
@@ -188,7 +196,7 @@
   };
   function statusForStream(streamId, ctx) {
     if (ctx.running && ctx.currentStreamId === streamId) {
-      return { state: STATES.RUNNING, progress: ctx.streamProgress[streamId] || 0, tooltip: TOOLTIPS.running };
+      return { state: STATES.RUNNING, tooltip: TOOLTIPS.running };
     }
     const sem = semFor(ctx.sem, streamId);
     const rend = rendererFor(ctx.rend, streamId);

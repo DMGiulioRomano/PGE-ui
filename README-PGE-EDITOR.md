@@ -176,20 +176,47 @@ is engine code, not the author's work.
 { "type": "done", "ok": true, "generated": ["output/..."], "returncode": 0 }
 ```
 
-The server parses `main.py`'s stdout into these structured events without you
-having to change anything in the python engine. Two line shapes matter:
-`[CACHE] <id>: DIRTY|clean` (printed by the cache triage, one per stream the
-engine builds) and the summary block's `    /abs/…/output/<basename>__<id>.<ext>`
-path lines. A `clean` stream gets `stream-start` + `stream-done` (`cached:
-true`) on its `[CACHE]` line; a `DIRTY` one gets `stream-start` there and its
-`stream-done` (`cached: false`) only on the path line naming its stem, which
-the engine prints after writing it — the numpy renderer triages every stream
-before rendering any, so a `[CACHE]` line says nothing about the previous
-stream being done. `stream-done` is what marks a stem as rendered by this run,
-so it must not arrive before the file exists. Without `--cache` there are no
-`[CACHE]` lines at all, and `done.generated` (the stems found on disk) is what
-`backend.js` falls back on; `run()` also emits events of its own on top of
+The server derives them from `main.py`'s **stdout**, without anything changing
+in the python engine. Two line shapes carry the whole protocol, and everything
+else becomes a `log` the editor prints without reading:
+
+| line | event |
+| --- | --- |
+| `[CACHE] <id>: DIRTY\|clean` (the cache triage, one per stream the engine builds) | `stream-start`, plus `stream-done` (`cached: true`) when clean |
+| an indented path ending in `<basename>__<id>.<aif\|aiff\|wav\|flac>`, **inside the summary block** | `stream-done` (`cached: false`) of the DIRTY stream whose stem it names |
+
+A `DIRTY` stream gets its `stream-done` only on the path line naming its stem,
+which the engine prints after writing it — the numpy renderer triages every
+stream before rendering any, so a `[CACHE]` line says nothing about the
+previous stream being done. `stream-done` is what marks a stem as rendered by
+this run, so it must not arrive before the file exists. Without `--cache` there
+are no `[CACHE]` lines at all, and `done.generated` (the stems found on disk) is
+what `backend.js` falls back on; `run()` also emits events of its own on top of
 these — see the contract at the top of `backend.js`.
+
+Three more rules are worth knowing, because each of them is a way the dots used
+to lie (issue #162, engine issue PythonGranularEngine#178, whose
+`docs/explanation/contratto-stdout.md` declares the engine's side of this
+contract):
+
+- **stderr is not protocol.** The two pipes are kept apart and reunited
+  labelled, so a line written by `logging` — or by any third-party library
+  inside the engine's process — can only ever become a `log`. Merged into
+  stdout, as they used to be, a diagnostic record shaped like `[CACHE] x: y`
+  opened and closed a stream that does not exist.
+- **A line is a stream only if the request declared its id.** `POST /render`
+  carries `streams`, and that set is what tells `[CACHE] stream1: clean` from
+  `[CACHE] Manifest: <path>`, which the engine prints on every `--cache`
+  render. A request that declares no streams derives no stream events; on a
+  successful run its dots still resolve, from the `generated` list in `done`.
+- **The path line only counts under `Generazione completata! N file
+  generati:`**, and until the first unindented line. Outside that block the
+  same shape belongs to the engine's prose — an error citing
+  `refs/voce__streamA.wav` would otherwise close stream `streamA` on a stem
+  nobody wrote.
+
+There is no per-stream `stream-progress` event: the finest grain stdout can
+carry is a whole stream.
 
 ---
 
