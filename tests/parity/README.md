@@ -64,6 +64,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
+| `filter_solo_mute` | gli `stream_id` che `Generator._filter_solo_mute` tiene — estratto dall'AST di `generator.py` ed eseguito, perché il modulo tira dentro numpy | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
 | `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto) | tutti |
 
 ## Come si lancia

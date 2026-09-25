@@ -545,5 +545,47 @@ parity({
             === "renderer");
       },
     },
+    {
+      /* Chi reclama uno stem deve sapere quali stream il motore ha COSTRUITO.
+       *
+       * Il fallback di `done` in `run()` scorre `generated`, che e' il disco e
+       * non il giro: uno stream muto (o fuori dal solo) ha li' il file di un
+       * render precedente. `PGEBackend.streamsEngineBuilds` e' il mirror di
+       * `Generator._filter_solo_mute` che lo esclude — e un mirror che sbaglia
+       * scrive impronta, semantica e backend di QUESTO giro su audio che il
+       * motore non ha toccato (troppo largo), o lascia giallo per sempre uno
+       * stem appena reso (troppo stretto).
+       *
+       * Il corpus e' tutte le combinazioni di mute/solo su tre stream, passate
+       * dal serializzatore VERO: la premessa del mirror e' che il motore guardi
+       * la presenza della chiave e che `serializeStream` la scriva solo quando
+       * e' vera, e questa e' l'unica strada che le verifica insieme. */
+      label: "il fallback reclama gli stream che il motore costruisce (solo/mute)",
+      run: async (ask, assert) => {
+        const flags = [[false, false], [true, false], [false, true], [true, true]];
+        const sets = [[]];
+        for (const a of flags) for (const b of flags) for (const c of flags) {
+          sets.push([a, b, c].map(([mute, solo], i) => {
+            const s = base(); s.id = `s${i + 1}`; s.mute = mute; s.solo = solo;
+            return s;
+          }));
+        }
+        const answers = await ask(sets.map(streams => ({
+          op: "filter_solo_mute", args: { streams: streams.map(yamlDict) } })));
+        const bad = [];
+        sets.forEach((streams, i) => {
+          const a = answers[i];
+          const ui = [...window.PGEBackend.streamsEngineBuilds(streams)];
+          const engine = a.ok ? a.value.kept : null;
+          if (!a.ok || JSON.stringify(ui) !== JSON.stringify(engine)) {
+            const desc = streams.map(s => `${s.id}${s.mute ? "M" : ""}${s.solo ? "S" : ""}`).join(" ");
+            bad.push(`[${desc}] ui ${JSON.stringify(ui)} motore ` +
+              (a.ok ? JSON.stringify(engine) : a.error));
+          }
+        });
+        assert(`stessi stream costruiti su ${sets.length} combinazioni`,
+          bad.length === 0, bad.join("\n      "));
+      },
+    },
   ],
 });
