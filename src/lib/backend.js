@@ -177,6 +177,23 @@
     return fnv1a("{" + parts.join(",") + "}" + `|fmt:${format || "aiff"}`);
   }
 
+  /* Cosa conta come nome di backend (#151): una stringa non vuota, e nient'altro
+     — tutto il resto vale "non si sa" e torna `null`. UNA regola con tre
+     lettori: il record persistito (`run()` qui sotto), il record in memoria
+     (l'handler degli `stream-done` in app.jsx) e il lato vivo dell'asse
+     (`rendererCtx.current`, sempre in app.jsx).
+     Stava scritta tre volte, e le tre copie non concordavano — stringa non
+     vuota qui, verita' generica nell'handler, nessun filtro sul lato vivo.
+     Con un nome vuoto sul lato vivo il `current` e' NOTO ("" != null) contro
+     record che `run()` non scrive mai: giallo su ogni stem, e nessun render lo
+     spegne. Con un non-stringa vera il record in memoria lo tiene e quello
+     persistito no: un colore fino al reload, un altro dopo. Oggi il valore e'
+     la costante "numpy" e non scatta niente; il giorno del selettore (#150)
+     arriva da una preferenza, ed e' li' che tre copie divergono. */
+  function rendererName(x) {
+    return (typeof x === "string" && x) ? x : null;
+  }
+
   // fetch with an AbortController timeout so a hung server.py can't leave a
   // promise pending forever (the boot probe in app.jsx uses the same pattern at
   // a tighter 1.5s). Data ops default to 10s. #45
@@ -599,9 +616,9 @@
             // su uno stem nuovo e' un'affermazione falsa, l'assenza e' la verita'.
             // E una stringa vuota registrata sarebbe peggio di entrambe — chi
             // classifica confronta i valori, quindi sarebbe uno stem giallo per
-            // sempre, con un nome che nessun render puo' eguagliare.
-            const rend = (typeof opts.renderer === "string" && opts.renderer)
-              ? opts.renderer : null;
+            // sempre, con un nome che nessun render puo' eguagliare. La regola
+            // e' `rendererName`, la stessa che app.jsx applica ai suoi due lati.
+            const rend = rendererName(opts.renderer);
             const prevRenderers = await this.loadRenderers(opts.yamlBasename);
             const nextRenderers = { ...prevRenderers };
             for (const id of Object.keys(localFps)) {
@@ -930,6 +947,7 @@
 
   window.PGEBackend = {
     fingerprintStream,
+    rendererName,
     // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.
     create(opts) {
       return createLocalBackend(opts);

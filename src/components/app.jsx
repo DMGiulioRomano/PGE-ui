@@ -641,8 +641,13 @@ function App() {
   /* E la coppia dell'asse "backend", con la stessa forma e per la stessa
      ragione. `current` e' la costante del modulo: qui non c'e' un lato ignoto
      come per la semantica — il backend con cui l'editor renderizzerebbe adesso
-     lo sa sempre, e' una sua scelta, non una lettura del motore. */
-  const rendererCtx = useMemoApp(() => ({ rendered: renderedRenderer, current: RENDERER }),
+     lo sa sempre, e' una sua scelta, non una lettura del motore.
+     Passa comunque da `rendererName`, la regola che decide cosa si registra:
+     un valore che non e' un nome sarebbe un `current` noto contro record che
+     nessun render scrive, cioe' giallo per sempre. Il giorno del selettore
+     (#150) quel valore arriva da una preferenza. */
+  const rendererCtx = useMemoApp(
+    () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(RENDERER) }),
     [renderedRenderer]);
 
   /* Aggregate render summary: counts of fresh / stale / never */
@@ -1800,16 +1805,19 @@ function App() {
         // li persiste insieme.
         //
         // Col nome ignoto la voce si cancella, come per il numero — e la regola
-        // sta qui e non solo in backend.js perche' i due lati devono dire la
-        // stessa cosa: backend.js cancella dal localStorage, e uno stato in
-        // memoria che tenesse il nome di prima mostrerebbe un colore diverso
-        // fino alla riapertura del progetto. Oggi il ramo non scatta (RENDERER
-        // e' una costante non vuota); il giorno del selettore lo farebbe, e una
-        // divergenza che dura una sessione e' peggio di una che non esiste.
+        // si applica anche qui e non solo in backend.js perche' i due lati
+        // devono dire la stessa cosa: backend.js cancella dal localStorage, e
+        // uno stato in memoria che tenesse il nome di prima mostrerebbe un
+        // colore diverso fino alla riapertura del progetto. E' la STESSA
+        // regola, `rendererName`, non una copia: con un test di verita' qui e
+        // la stringa non vuota la', un 7 restava in memoria e spariva dal
+        // localStorage. Oggi il ramo non scatta (RENDERER e' una costante non
+        // vuota); il giorno del selettore lo farebbe, e una divergenza che
+        // dura una sessione e' peggio di una che non esiste.
         setRenderedRenderer(m => {
-          if (rendererOfThisRun) {
-            return m[e.streamId] === rendererOfThisRun
-              ? m : { ...m, [e.streamId]: rendererOfThisRun };
+          const name = window.PGEBackend.rendererName(rendererOfThisRun);
+          if (name !== null) {
+            return m[e.streamId] === name ? m : { ...m, [e.streamId]: name };
           }
           if (!(e.streamId in m)) return m;
           const next = { ...m };

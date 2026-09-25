@@ -462,6 +462,48 @@ console.log("\n── e una stringa che non e' un nome vale come assenza ──"
   }
 }
 
+console.log("\n── cosa e' un nome lo dice UNA regola, e la leggono tutti e tre i punti ──");
+{
+  /* «Quello che non e' un nome vale come ignoto» ha tre lettori: il record
+     persistito (`run()` qui sopra), il record in memoria (l'handler degli
+     `stream-done` in app.jsx) e il lato vivo dell'asse (`rendererCtx.current`).
+     Scritta tre volte, le tre copie non concordavano: stringa non vuota in
+     `run()`, verita' generica nell'handler, nessun filtro sul lato vivo. Oggi
+     RENDERER e' "numpy" e nessuna delle differenze scatta; il giorno del
+     selettore (#150) il valore arriva da una preferenza, e allora:
+       - un nome vuoto sul lato vivo e' un `current` NOTO ("" != null) contro
+         record che nessun render puo' scrivere, perche' `run()` non li scrive:
+         giallo su ogni stem, per sempre — l'unico esito che il design dichiara
+         inaccettabile;
+       - un non-stringa vera (7) resta nel record in memoria e sparisce da
+         quello persistito: un colore fino al reload, un altro dopo.
+     Il test esegue la regola e poi pretende che i tre punti la chiamino, non
+     che ne tengano una copia. */
+  const name = window.PGEBackend.rendererName;
+  assert("PGEBackend.rendererName esiste", typeof name === "function",
+         `typeof = ${typeof name}`);
+  if (typeof name === "function") {
+    for (const ok of ["numpy", "csound", "supercollider"]) {
+      assert(`${JSON.stringify(ok)} e' un nome`, name(ok) === ok, String(name(ok)));
+    }
+    for (const bad of ["", 0, null, undefined, 7, {}, [], true]) {
+      assert(`${bad === undefined ? "undefined" : JSON.stringify(bad)} non e' un nome → null`,
+             name(bad) === null, String(name(bad)));
+    }
+  }
+  assert("run() chiama la regola invece di tenerne una copia",
+         /rendererName\(opts\.renderer\)/.test(BACKEND_SRC) &&
+         !/typeof opts\.renderer/.test(BACKEND_SRC),
+         "una seconda copia e' il modo in cui i lettori smettono di concordare");
+  assert("l'handler in memoria la chiama",
+         /setRenderedRenderer\(m => \{[\s\S]{0,200}?rendererName\(rendererOfThisRun\)/.test(APP_SRC) &&
+         !/if \(rendererOfThisRun\)/.test(APP_SRC),
+         "col test di verita' un 7 resta in memoria e sparisce dal localStorage");
+  assert("il lato vivo la chiama",
+         /current:\s*window\.PGEBackend\.rendererName\(RENDERER\)/.test(APP_SRC),
+         "un nome vuoto e' un current noto contro record mai scritti: giallo per sempre");
+}
+
 console.log("\n── i due record viaggiano insieme in un giro solo (sorgente) ──");
 {
   assert("run() prende il backend da chi chiama, come la semantica",

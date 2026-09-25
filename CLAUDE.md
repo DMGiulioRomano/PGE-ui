@@ -1440,6 +1440,17 @@ discriminates the same pairs while its hash stays blind to them. What is still
 hardcoded is the **choice**, which is #150; the *knowledge* of who wrote the
 stem no longer is.
 
+**And what counts as a name is one rule too, `PGEBackend.rendererName`** (a
+non-empty string, else `null`). It has three readers — the persisted record in
+`run()`, the in-memory record in the `stream-done` handler, and the live side
+`rendererCtx.current` — and it used to be written three times, differently:
+non-empty string, bare truthiness, no filter at all. Harmless while `RENDERER`
+is `"numpy"`; the day it comes from a preference, an empty name on the live side
+is a *known* `current` (`"" != null`) against records `run()` never writes, i.e.
+every stem yellow forever, and a truthy non-string stays in memory and vanishes
+from localStorage — one colour until the reload, another after.
+`test-semantics-store.js` runs the rule and requires the three sites to call it.
+
 ### YAML round-trip (`yaml-bridge.js`)
 
 Editor in-memory shape is camelCase JS with **parallel scalar/envelope fields** (e.g. `density` + `densityEnv` — exactly one non-null). YAML on disk is snake_case with a **single field** (scalar or envelope). `parse()` and `serialize()` translate. Unknown stream keys are preserved under `_extra`; unknown keys inside `pointer`/`grain`/`pitch`/`voices` under `<block>._extra`.
