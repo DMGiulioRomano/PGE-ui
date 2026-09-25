@@ -715,6 +715,27 @@ console.log("\n── una richiesta che non dichiara gli stream resta al comport
   assert("senza `streams` il fallback emette lo `stream-done` sintetico",
          seen.some(e => e.type === "stream-done" && e.streamId === "a"),
          JSON.stringify(seen));
+
+  /* ...ma una lista VUOTA e' una lista, e qui la regola si stacca da quella
+     del bridge, deliberatamente. Per `state["ids"]` vuoto e assente sono la
+     stessa cosa (nessun filtro sulle righe di log); per il fallback no: uno
+     YAML senza stream il motore non lo costruisce affatto, quindi ogni file
+     su disco e' di un giro precedente — uno stream cancellato, per ipotesi —
+     e reclamarlo e' il caso del cancellato qui sopra. */
+  store = {};
+  const backend2 = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "done", ok: true, generated: ["output/proj__a.wav"] },
+  ];
+  const seen2 = [];
+  await backend2.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [] },
+    (e) => seen2.push(e));
+  assert("con `streams: []` il fallback non reclama niente (qui non e' la regola del bridge)",
+         !seen2.some(e => e.type === "stream-done") && !rend("proj"),
+         JSON.stringify(seen2.filter(e => e.type === "stream-done")));
+  assert("...ma l'indice sa del file", backend2.render.ownsStem("proj", "a") === true);
 }
 
   bodyDone = true;

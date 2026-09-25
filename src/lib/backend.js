@@ -552,8 +552,11 @@
                   // vecchio di uno rinominato, che senza `--cache` la GC del
                   // motore non tocca — e' di un giro precedente tanto quanto
                   // quello di un muto. Senza la lista non c'e' un insieme
-                  // contro cui giudicare, e vale il comportamento storico: la
-                  // stessa regola di `state["ids"]` nel bridge.
+                  // contro cui giudicare, e vale il comportamento storico.
+                  // Non e' pero' la regola di `state["ids"]` nel bridge, che
+                  // tratta una lista VUOTA come assente: qui `[]` e' una
+                  // lista, e uno YAML senza stream il motore non lo
+                  // costruisce — ogni file su disco e' di prima.
                   const declared = Array.isArray(opts.streams);
                   const built = streamsEngineBuilds(opts.streams);
                   // Un giro FALLITO non ha costruito niente di certo. Il bridge

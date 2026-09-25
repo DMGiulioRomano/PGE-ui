@@ -615,7 +615,10 @@ of a stream that isn't there (`undefined`) into the in-memory fingerprints, so
 a Ctrl+Z brought it back ⚪ with its stem on disk, and another colour after a
 reload. The set is authoritative only when the request carries it
 (`Array.isArray(opts.streams)`); without a list the fallback claims as it always
-did — the bridge's own rule for `state["ids"]`.
+did. That is *not* quite the bridge's rule for `state["ids"]`, which reads an
+empty list as absent: here `[]` is a list, and a YAML with no streams builds
+nothing, so every file on disk is an earlier run's (`test-semantics-store.js`
+pins the difference).
 A **failed** run (`done` with `ok: false`) gets the same treatment for every
 file, built streams included: the bridge lists the disk whatever the exit code,
 and an engine that dies at parse time (a missing sample, a misspelled
