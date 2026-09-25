@@ -138,8 +138,9 @@ the two sits the engine venv setup, minutes in which no subprocess exists yet
 and the render is nonetheless under way, with its paths already pinned.
 
 Browser-side, a successful switch drops the stem index, the on-disk stem
-durations, the peaks, the spectrograms, the grain sidecars and the recorded
-engine-semantics versions, then reloads the project list and reopens a project
+durations, the peaks, the spectrograms, the grain sidecars and the two
+provenance records — engine-semantics version and rendering backend per stem —
+then reloads the project list and reopens a project
 (same name if the new folder has one). Keeping any of it would mean a clip with a
 green dot and no audio behind it — the 404 an `<audio>` element reports by never
 firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
