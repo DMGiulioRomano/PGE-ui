@@ -19,8 +19,17 @@ import threading
 #   " Generazione completata! 5 file generati:"
 #   "    /abs/path/to/output/PGE_test__stream1.aif"
 #
-# Note: [CACHE] lines appear one per stream as each starts.
-# The absolute path lines appear all together at the end (summary block).
+# The absolute path lines appear all together at the end (summary block), after
+# every stem is written — and they are the ONLY line that says a DIRTY stem has
+# been written. The [CACHE] lines don't: this parser used to read them as "one
+# per stream as each starts" and closed the previous DIRTY stream on the next
+# one, but the numpy renderer triages EVERY stream before writing any
+# (`NumpyAudioRenderer.render_streams`, "Fase 1 — triage cache"), so they
+# arrive in one burst. That claimed every DIRTY stream but the last before the
+# engine had touched a sample — and a `stream-done` is a claim: the browser
+# stamps this run's fingerprint, semantics and backend on it (PGE-ui #151).
+# A run that died after the triage left them green on audio nobody rewrote.
+# So a DIRTY stream waits for its own path line, whatever the renderer's order.
 #
 # Ma non tutte le righe `[CACHE]` sono stream, e la forma non le distingue:
 # il motore stampa `[CACHE] Manifest: <path>` a ogni render con --cache e
@@ -38,11 +47,10 @@ _RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
 #
 # L'id NON e' vincolato a `\w`: il charset che `renameStream` (app.jsx)
 # pubblicizza sono lettere, cifre, `.`, `_` e `-`, quindi `\w` escludeva `.` e
-# `-`. Solo l'ULTIMO stream DIRTY del giro dipende da questa riga (gli altri li
-# chiude la riga `[CACHE]` successiva), e per lui il `stream-done` non
-# arrivava mai: pallino giallo dopo un render che aveva fatto esattamente cio'
-# che il pallino chiedeva. Il confronto con lo stream in corso, sotto, e' la
-# vera discriminante — qui basta riconoscere la riga.
+# `-`. Ogni stream DIRTY dipende da questa riga (vedi sopra), e con `-` o `.`
+# il `stream-done` non arrivava mai: pallino giallo dopo un render che aveva
+# fatto esattamente cio' che il pallino chiedeva. Il confronto con gli stream
+# in attesa, sotto, e' la vera discriminante — qui basta riconoscere la riga.
 _RE_STEM_PATH  = re.compile(r"^\s+(.+__.+)\.(?:aif|aiff|wav|flac)\s*$", re.IGNORECASE)
 
 
@@ -66,32 +74,41 @@ def parse_render_line(line: str, state: dict) -> list:
         total = state.get("total", 0)
         idx   = state.get("index", 0)
         state["index"] = idx + 1
-        # Previous DIRTY stream is done now that we're starting the next one
-        prev = state.get("streamId")
-        if prev:
-            events.append({"type": "stream-done", "streamId": prev, "cached": False})
-            state["streamId"] = None
         events.append({"type": "stream-start",
                         "streamId": sid, "index": idx, "total": total})
         if not dirty:
             events.append({"type": "stream-done", "streamId": sid, "cached": True})
         else:
-            state["streamId"] = sid  # track: this stream is being rendered
+            # Da rendere: resta in attesa della SUA riga di path, non della
+            # prossima `[CACHE]` (vedi l'intestazione).
+            state.setdefault("pending", []).append(sid)
         return events
 
     # Summary path lines: "    /abs/path/output/PGE_test__stream1.aif"
-    # Extract stream_id from filename to emit stream-done for the last DIRTY stream.
+    # Each one closes the pending DIRTY stream whose stem it names.
     m2 = _RE_STEM_PATH.match(line)
     if m2:
-        prev = state.get("streamId")
-        # Il confronto e' sul suffisso e non su un gruppo catturato: sia il
-        # basename sia l'id possono contenere `__`, quindi non c'e' una
-        # posizione del separatore da indovinare — c'e' un solo id che questa
-        # riga puo' chiudere, ed e' quello in corso.
-        if prev and m2.group(1).endswith("__" + prev):
+        pending = state.get("pending") or []
+        fname = re.split(r"[\\/]", m2.group(1))[-1]
+        base = state.get("basename")
+        if base is not None:
+            # Col basename noto il nome del file e' esattamente
+            # `<basename>__<id>`: nessun separatore da indovinare. Il suffisso
+            # non basta con piu' stream in attesa, perche' sia il basename sia
+            # l'id possono contenere `__` — con basename `x__b`, il file di `a`
+            # (`x__b__a`) finisce anche per `__b__a`.
+            head = base + "__"
+            sid = fname[len(head):] if fname.startswith(head) else None
+            hit = sid if sid in pending else None
+        else:
+            # Senza basename (una richiesta che non lo passa) resta il
+            # suffisso, e fra piu' candidati vince il piu' lungo.
+            hits = [p for p in pending if fname.endswith("__" + p)]
+            hit = max(hits, key=len) if hits else None
+        if hit is not None:
+            pending.remove(hit)
             events.append({"type": "stream-done",
-                            "streamId": prev, "cached": False})
-            state["streamId"] = None
+                            "streamId": hit, "cached": False})
     return events
 
 

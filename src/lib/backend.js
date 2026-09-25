@@ -503,9 +503,9 @@
         // Il fallback di `done` chiedeva la stessa cosa a `stemIndex`, che pero'
         // `loadCache` riempie da /stems a ogni apertura di progetto: li'
         // "gia' gestito" voleva dire "esisteva su disco", quindi dal secondo
-        // render in poi il fallback era morto — e il fallback e' l'unica rete
-        // dell'ultimo stream DIRTY del giro, il solo che dipende dalla riga di
-        // path stampata in fondo.
+        // render in poi il fallback era morto — e il fallback e' la rete di
+        // ogni stream DIRTY del giro, che dipende tutto dalla sua riga di path
+        // stampata in fondo (render_pipeline.py).
         const doneThisRun = new Set();
         // Un giro fallito che ha elencato file su disco: impronta, semantica e
         // backend non si reclamano, ma le durate si rileggono (vedi il `done`).

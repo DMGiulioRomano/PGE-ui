@@ -586,13 +586,32 @@ the engine sources** instead of transcribing them: the six older assertions ran
 on lines copied from this module's docstring, which is exactly why `Manifest`
 and `GC` slipped through for so long.
 
+**A DIRTY stream is closed by its own summary path line, and by nothing
+else.** The `[CACHE] <id>: DIRTY` line says the stream *will* be rendered, not
+that the previous one *was*: the parser used to close the previous DIRTY stream
+on the next `[CACHE]`, reading them as "one per stream as each starts", but the
+numpy renderer triages **every** stream before writing any
+(`NumpyAudioRenderer.render_streams`, "Fase 1 — triage cache"), so they arrive
+in one burst. Every DIRTY stream but the last got its `stream-done` before the
+engine had touched a sample — and that event is a claim (fingerprint,
+semantics, backend). On a successful run the cost was the drawing: the peaks
+were fetched from the old file and never re-read. On a run that died after the
+triage it was 🟢 on audio nobody rewrote, the very outcome the `done` fallback
+below refuses on a failed run. So `parse_render_line` keeps the DIRTY ids in
+`state["pending"]` and closes each on the path line that names its stem, which
+the engine prints only after the render; a death before the summary block
+closes none. The cost is progress granularity — the DIRTY dots turn together at
+the end — and it is the truthful one. `tests/python/test_render_pipeline.py`
+replays the triage-first order, the summary and a death in between.
+
 The stream id in the summary path line is **not** constrained to `\w`:
-`renameStream` advertises letters, digits, `.`, `_` and `-`, and only the
-*last* DIRTY stream of a round depends on that line (the others are closed by
-the next `[CACHE]`), so an id with `-` or `.` never got its `stream-done` —
-🟡 after a render that did exactly what the dot asked, and two renders needed
-per edit. The comparison is on the `__<id>` suffix, so there is no separator
-position to guess.
+`renameStream` advertises letters, digits, `.`, `_` and `-`, so an id with `-`
+or `.` never got its `stream-done` — 🟡 after a render that did exactly what the
+dot asked, and two renders needed per edit. With several ids pending a suffix is
+not enough (both a basename and an id may contain `__`: with basename `x__b`,
+`a`'s stem `x__b__a` also ends in `__b__a`), so `/render` passes the basename
+and the line is matched on the **whole filename**, `<basename>__<id>`; without
+one the longest pending suffix wins.
 
 On the browser side the two writes have different rules, deliberately: the
 `stream-done` handler marks the stem index **only for a declared stream** (the

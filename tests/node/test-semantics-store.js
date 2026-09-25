@@ -531,7 +531,7 @@ console.log("\n── i due record viaggiano insieme in un giro solo (sorgente) 
  *
  * `generated` non e' l'elenco dei file che il render ha scritto: e' quello dei
  * file che il bridge trova su disco DOPO il render (`output/<basename>__*`,
- * server.py). Il fallback lo usa come rete per l'ultimo stream DIRTY del giro,
+ * server.py). Il fallback lo usa come rete per ogni stream DIRTY del giro,
  * e senza `--cache` e' l'UNICA sorgente di `stream-done` (le righe `[CACHE]`
  * non ci sono). Ma uno stream muto — o fuori dal solo — il motore non lo
  * costruisce affatto (`Generator._filter_solo_mute`): il suo file e' di un
