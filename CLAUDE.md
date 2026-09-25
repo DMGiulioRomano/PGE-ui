@@ -81,7 +81,9 @@ exists, the fourth only when a browser is installed):
   `pge-local-renderer` — the real
   backend driven with a fake `fetch` and `localStorage`; the renderer half
   lives beside the semantics one because both are written in the same block of
-  `run()`, and a second copy of that harness would drift), and
+  `run()`, and a second copy of that harness would drift — plus the `done`
+  fallback claiming only the streams the engine built, muted and solo cases
+  included), and
   `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
   killed between the `_dead` check and the write used to raise an unhandled
   `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
@@ -593,7 +595,15 @@ On the browser side the two writes have different rules, deliberately: the
 `stream-done` handler marks the stem index **only for a declared stream** (the
 event comes from a parsed log line, not from a file), while the `done` fallback
 does not validate — `generated` is the list of files the server found on disk,
-so even a deleted stream's stem exists and the index must know. That fallback's
+so even a deleted stream's stem exists and the index must know. What it must
+not do is **claim** a file this run didn't write: a declared stream the engine
+doesn't build — muted, or outside the solo set (`Generator._filter_solo_mute`)
+— has an earlier run's stem on disk, perhaps another backend's or another
+semantics', and the synthetic `stream-done` would stamp this run's fingerprint,
+version and backend on it (🟢 once unmuted, on a stem the engine will redo).
+So such a stream is indexed and nothing more; `PGEBackend.streamsEngineBuilds`
+is the mirror of that filter, and `test-fingerprint-parity.js` runs it against
+the engine's own method over every mute/solo combination of three streams. That fallback's
 "already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
 fills the index from `/stems` on every project open, so "already handled" used
 to mean "was on disk", and from the second render on the fallback was dead.
@@ -1095,8 +1105,9 @@ with the engine. Those pacts used to live only in prose. They are now executable
 (`fingerprint` — optionally with the semantics version swapped, to ask whether
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
-`parameter_bounds`, `constants` — the last one carrying the name registries and
-the constants the mirrors copy whole, `ENVELOPE_COLORS` included);
+`parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
+name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
+included);
 `tests/parity/oracle.js` is the node client (one python process per suite);
 `tests/parity/harness.js` runs the suites and, crucially, **counts and names the
 cases that did not run** when the engine is absent — a skipped parity case is a
@@ -1105,10 +1116,11 @@ failure under `PGE_PARITY_STRICT=1` and in CI when the engine is present.
 Two rules when touching it:
 
 - **The oracle imports from the engine, it never reimplements it.** A copy would
-  be a third mirror to keep aligned. The one exception is the `--magnify-at`
-  grammar, which lives in `pge.cli` (unimportable without numpy/soundfile/
-  matplotlib): the oracle extracts those AST nodes from `cli.py` and executes
-  them — the engine's own bytes.
+  be a third mirror to keep aligned. The two exceptions have one shape: the
+  `--magnify-at` grammar, which lives in `pge.cli` (unimportable without
+  numpy/soundfile/matplotlib), and `Generator._filter_solo_mute`, whose module
+  drags in numpy. The oracle extracts those AST nodes from `cli.py` /
+  `generator.py` and executes them — the engine's own bytes.
 - **No op may need the engine venv.** The CI node job checks the engine out but
   builds no venv, and that is where parity runs. Verified module by module; if
   you add an op that drags in numpy, it will silently stop running there.
@@ -1416,7 +1428,10 @@ nothing; a *stem* with no recorded backend and a known current one reads
 `stale`. Today that discovers nothing — `RENDERER` is one declaration in
 `app.jsx` and the UI has only ever written `numpy` — so it costs one empty pass
 per project, which clears itself on the first `stream-done`, `cached: true`
-included. Staying silent instead would mean that the day the choice reaches
+included — except on a muted stream, which the engine doesn't build and so
+keeps its yellow until it sounds again: nobody has vouched for that file, and
+the `done` fallback no longer pretends to (see the NDJSON section). Staying
+silent instead would mean that the day the choice reaches
 Settings (#150), the numpy stems written before it stay 🟢 under csound: one
 render too few, in exactly the case the axis exists for. The tooltip is worded
 for **both** branches — "no record that the current backend rendered this
