@@ -390,8 +390,11 @@
       // diversi, quindi il dato e' per stream come l'hash.
       //
       // Voce assente = stem renderizzato prima che l'editor registrasse il
-      // numero. Resta assente: chi classifica non pretende niente da un dato
-      // che non c'e', e il primo render la scrive.
+      // numero. Col motore noto chi classifica la legge come stale — uno stem
+      // scritto da un motore di cui non si sa la lettura — e il primo giro la
+      // scrive, anche a vuoto (`cached: true`). A non pretendere niente e'
+      // l'ALTRO ignoto, il motore: vedi `staleReason` in render-status.js, e
+      // `loadRenderers` qui sotto, che segue la stessa regola.
       async loadSemantics(yamlBasename) {
         try {
           const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");

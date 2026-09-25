@@ -255,8 +255,11 @@ function App() {
   /* La semantica del motore, su due lati (#133). `engineSem` e' quella del
      motore che il bridge ha davanti adesso; `renderedSem` quella con cui ogni
      stem e' stato scritto. Quando divergono lo stem e' vecchio anche a YAML
-     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. `null` /
-     voce assente = non si sa, e non si pretende niente. */
+     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. I due
+     ignoti non sono lo stesso ignoto: `engineSem` a `null` = non si sa, e non
+     si pretende niente; voce assente in `renderedSem` col motore noto = stem di
+     cui non si sa la lettura, e chi classifica lo legge stale (un giro lo
+     spegne, anche a vuoto). Stessa regola del backend qui sotto. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
   /* Il terzo asse (#151): il backend che ha scritto ogni stem. Un solo lato in
