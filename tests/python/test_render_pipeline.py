@@ -14,6 +14,7 @@ import signal
 import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -584,21 +585,40 @@ def test_render_events_stderr_cannot_open_the_summary_block():
     assert state["pending"] == ["s1"]
 
 
-def _drive(script, ids):
+def _drive(script, ids, timeout=20):
     """Lancia uno pseudo-motore come lo lancia /render, e raccoglie gli eventi.
 
     Stessa catena della route: `RenderState.start` apre i due pipe,
     `merged_output` li riunisce etichettati, `render_events` decide.
+
+    Con un tetto. Un figlio fermo su un pipe che nessuno drena e' proprio il
+    difetto che `merged_output` esiste per impedire, e senza tetto si
+    presenterebbe come un pytest appeso invece che come un rosso col suo nome.
+    Scaduto il tempo il processo si termina — cosi' le pompe vedono EOF e il
+    ciclo esce — e il test fallisce dicendo perche'.
     """
     st = rp.RenderState()
     proc = st.start([sys.executable, "-c", script], Path("."))
     state = _ids_state(ids, summary=False)
     events, channels = [], []
-    for channel, line in rp.merged_output(proc):
-        channels.append((channel, line))
-        events.extend(rp.render_events(channel, line, state))
+
+    def consume():
+        for channel, line in rp.merged_output(proc):
+            channels.append((channel, line))
+            events.extend(rp.render_events(channel, line, state))
+
+    reader = threading.Thread(target=consume, daemon=True)
+    reader.start()
+    reader.join(timeout)
+    fermo = reader.is_alive()
+    if fermo:
+        st.cancel()
+        reader.join(10)
     proc.wait(timeout=10)
     st.clear()
+    assert not fermo, (
+        f"lo pseudo-motore non ha finito in {timeout}s: un pipe che nessuno "
+        "drena si e' riempito e il figlio ci si e' fermato sopra")
     return events, channels, state
 
 
@@ -656,11 +676,18 @@ def test_merged_output_labels_each_line_with_its_channel():
 def test_merged_output_drains_a_talkative_stderr():
     """Entrambi i pipe vanno drenati sempre: leggendone uno solo, il figlio si
     blocca appena l'altro si riempie — che e' la sola comodita' che
-    `stderr=subprocess.STDOUT` dava."""
+    `stderr=subprocess.STDOUT` dava.
+
+    «Si riempie» e' la condizione, quindi il volume deve superare il buffer
+    di un pipe (64 KiB su Linux, meno su macOS): con 2000 righe corte, ~22 KB,
+    ci stava dentro intero, e un lettore che drenasse stdout fino a EOF e solo
+    poi stderr — il deadlock classico, quello che questo test nomina — passava
+    verde. Qui sono ~200 KB, scritti prima dell'unica riga di stdout.
+    """
     script = (
         "import sys\n"
         "for i in range(2000):\n"
-        "    sys.stderr.write('rumore %d' % i + chr(10))\n"
+        "    sys.stderr.write(('rumore %d ' % i).ljust(99, '.') + chr(10))\n"
         "sys.stdout.write('[CACHE] s1: clean' + chr(10))\n"
     )
     events, channels, _ = _drive(script, {"s1"})
