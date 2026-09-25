@@ -365,6 +365,12 @@ function App() {
   // Lo includiamo nella chiave peaks così solo gli stream rigenerati rifetchano
   // (spettrogramma e grani si aggiornano già, non avendo questa cache).
   const stemRevRef = useRefApp({});
+  // Il segnale che fa ripartire i tre effetti dei media quando i ref qui sopra
+  // si muovono SENZA uno `stream-done` — cioe' senza che `lastRenderedFps`
+  // cambi riferimento. Oggi un caso solo: `stems-resync`, il giro fallito che
+  // ha trovato stem su disco (#151). Un ref alzato e nessun effetto che riparte
+  // e' un ref che nessuno legge.
+  const [stemResync, setStemResync] = useStateApp(0);
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
@@ -815,7 +821,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.outputFormat]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -847,7 +853,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
   /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
@@ -941,7 +947,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
 
   useEffectApp(() => {
     function onSeek(e) {
@@ -1834,6 +1840,19 @@ function App() {
           delete next[e.streamId];
           return next;
         });
+      } else if (e.type === "stems-resync") {
+        // Il giro e' fallito ma ha trovato stem su disco che il motore puo'
+        // aver riscritto prima di morire (#151). Niente record di provenienza
+        // — quelli li scrive solo lo `stream-done`, e qui non se ne reclama
+        // uno — ma la meta' "media" di un `cached: false`: peaks, grani e
+        // spettrogramma si rileggono dal disco, come backend.js ha appena
+        // fatto con le durate. Senza, la clip suonava lo stem nuovo col
+        // disegno del vecchio.
+        for (const id of e.streamIds || []) {
+          grainRegenRef.current.add(id);
+          stemRevRef.current[id] = (stemRevRef.current[id] || 0) + 1;
+        }
+        setStemResync(n => n + 1);
       }
     });
 

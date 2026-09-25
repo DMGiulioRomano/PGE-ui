@@ -75,7 +75,10 @@ exists, the fourth only when a browser is installed):
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, the
   format-aware `peaksUrl`/`spectrogramUrl`/`stemDur` of #153, plus source
   guards on the audio-error path and on the app.jsx wiring that passes the
-  format), and `test-semantics-store.js` (where the two
+  format; and a failed run re-reading from disk what isn't provenance — the
+  durations, and the drawing through `stems-resync`, executed on the backend
+  side and source-guarded on the three media effects), and
+  `test-semantics-store.js` (where the two
   provenance records come from: `semanticsVersion` re-reading the
   bridge, and a whole `render.run()` writing/reading `pge-local-sem` and
   `pge-local-renderer` — the real
@@ -627,8 +630,22 @@ rewritten every stem and claimed none, and with `localFps` empty the
 `loadCache` at the end of `run()` — the only re-read — never ran, leaving the
 waveform cropped to the previous length. So a failed run that listed files
 re-reads `/stems`; dropping the durations instead would have stretched the
-waveform of an untouched file, on the commonest failure. `test-semantics-store.js`
-and `test-stem-index.js` drive it. That fallback's
+waveform of an untouched file, on the commonest failure.
+The **drawing** is a measure of the file too, and re-reading the duration alone
+was half of it: the synthetic `stream-done` carried both the provenance records
+*and* the media refresh (in `app.jsx` it is what raises `stemRevRef` /
+`grainRegenRef` and, by moving `lastRenderedFps`, re-runs the three media
+effects), so a failed run that gave up the first lost the second — on the
+engine that died after the audio the clip played the new stem while drawing the
+old one's peaks spread over the new length, #153 through another door. So after
+the durations `run()` emits `stems-resync` with the ids the engine may have
+rewritten (built streams only: a muted or undeclared one it certainly didn't
+touch), and `app.jsx` does the media half of a `cached: false` — revision and
+grain refetch — plus `setStemResync`, the signal the three effects list in
+their deps, since here `lastRenderedFps` doesn't move. On an engine that died at
+parse time it re-reads an untouched file and the bridge answers from its
+mtime-keyed peaks cache: one request too many, never a wrong drawing.
+`test-semantics-store.js` and `test-stem-index.js` drive it. That fallback's
 "already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
 fills the index from `/stems` on every project open, so "already handled" used
 to mean "was on disk", and from the second render on the fallback was dead.

@@ -342,6 +342,107 @@ console.log("\n── a stem present in one format only ──");
            "waveform torna stirato sulla clip");
   }
 
+  /* ------------------------------------------------------------------
+   * ...e il DISEGNO nemmeno e' provenienza: peaks, spettrogramma e grani
+   * sono misure del file come la durata, e vanno riletti insieme a lei.
+   *
+   * Lo `stream-done` sintetico portava due cose insieme: i record di
+   * provenienza (impronta, semantica, backend) e la rilettura del disegno —
+   * in app.jsx e' lui che alza `stemRevRef` e `grainRegenRef`, e cambiando
+   * `lastRenderedFps` fa ripartire i tre effetti che caricano i media. Un
+   * giro fallito rinuncia al primo, giustamente, e con lui perdeva il
+   * secondo: sul giro che muore dopo l'audio la durata si rileggeva, il
+   * disegno no, e la clip suonava lo stem nuovo mostrando i peaks del
+   * vecchio distesi sulla misura nuova — "l'audio nuovo e il disegno
+   * vecchio", cioe' #153 da un'altra porta.
+   *
+   * Quindi un evento suo, emesso DOPO la rilettura delle durate (chi lo
+   * riceve ridisegna, e il ridisegno deve trovare la misura nuova), e solo
+   * per gli stream che il motore puo' aver riscritto: un muto o un id che
+   * lo YAML non ha piu' il motore certamente non li ha toccati.
+   * ------------------------------------------------------------------ */
+  console.log("\n── un giro fallito rilegge dal disco anche il disegno, non solo la durata ──");
+  {
+    DISK = ["proj__bass-1.wav", "proj__muto.wav", "proj__gone.wav"];
+    DUR  = { "proj__bass-1.wav": 2.0, "proj__muto.wav": 3.0, "proj__gone.wav": 4.0 };
+    const be = mkBackendWithRender([
+      { type: "done", ok: false, returncode: 1,
+        generated: ["output/proj__bass-1.wav", "output/proj__muto.wav", "output/proj__gone.wav"] },
+    ]);
+    await be.render.loadCache("proj");
+    RENDER_WRITES = { "proj__bass-1.wav": 1.0 };   // morto DOPO aver scritto l'audio
+    const seen = [];
+    let durAtResync = null;
+    await be.render.run(
+      { yamlBasename: "proj", outputFormat: "wav",
+        streams: [{ id: "bass-1" }, { id: "muto", mute: true }] },
+      (e) => {
+        seen.push(e);
+        if (e.type === "stems-resync") durAtResync = be.render.stemDur("proj", "bass-1");
+      });
+    const resync = seen.filter(e => e.type === "stems-resync");
+    assert("un evento solo, `stems-resync`", resync.length === 1,
+           JSON.stringify(seen.map(e => e.type)));
+    assert("...con lo stream che il motore puo' aver riscritto, e solo lui",
+           resync.length === 1 && JSON.stringify(resync[0].streamIds) === JSON.stringify(["bass-1"]),
+           JSON.stringify(resync[0] && resync[0].streamIds) +
+           " — il muto e il cancellato il motore non li ha toccati");
+    assert("...emesso quando la durata e' gia' quella nuova",
+           durAtResync === 1.0,
+           `stemDur al momento dell'evento = ${durAtResync}: chi ridisegna ` +
+           "troverebbe la misura vecchia");
+    assert("...e sempre nessun reclamo", !seen.some(e => e.type === "stream-done"),
+           JSON.stringify(seen.filter(e => e.type === "stream-done")));
+  }
+  {
+    // Un giro RIUSCITO non lo emette: li' il disegno lo rilegge lo
+    // `stream-done`, e un secondo segnale sarebbe una seconda rilettura.
+    DISK = ["proj__bass-1.wav"];
+    DUR  = { "proj__bass-1.wav": 2.0 };
+    const be = mkBackendWithRender([
+      { type: "done", ok: true, generated: ["output/proj__bass-1.wav"] },
+    ]);
+    const seen = [];
+    await be.render.run(
+      { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "bass-1" }] },
+      (e) => seen.push(e));
+    assert("un giro riuscito non emette `stems-resync`",
+           !seen.some(e => e.type === "stems-resync"), JSON.stringify(seen.map(e => e.type)));
+
+    // ...e nemmeno uno fallito che non ha trovato niente su disco.
+    const be2 = mkBackendWithRender([{ type: "done", ok: false, returncode: 1, generated: [] }]);
+    const seen2 = [];
+    await be2.render.run(
+      { yamlBasename: "proj", outputFormat: "wav", streams: [{ id: "bass-1" }] },
+      (e) => seen2.push(e));
+    assert("un giro fallito senza file non lo emette",
+           !seen2.some(e => e.type === "stems-resync"), JSON.stringify(seen2.map(e => e.type)));
+  }
+
+  /* L'altra meta' non gira in node: e' React. Sono tre anelli, e ognuno,
+   * saltando, rimette il disegno vecchio in silenzio. */
+  console.log("\n── `stems-resync` arriva ai tre effetti dei media (source guard) ──");
+  {
+    const appSrc = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
+    // Il ramo fino alla chiusura della callback di `run()`, non una finestra a
+    // lunghezza fissa: `codeOf` tiene la lunghezza del file (i commenti
+    // diventano spazi), quindi un commento piu' lungo spostava il codice fuori
+    // dalla finestra e la guardia diventava rossa su un ramo sano.
+    const at = appSrc.indexOf('e.type === "stems-resync"');
+    const end = at < 0 ? -1 : appSrc.indexOf("\n    });", at);
+    const branch = at < 0 ? "" : appSrc.slice(at, end < 0 ? undefined : end);
+    assert("app.jsx gestisce `stems-resync`", at >= 0);
+    assert("...alzando la revisione dei peaks e il rifetch dei grani per ogni id",
+           /stemRevRef\.current\[id\]/.test(branch) && /grainRegenRef\.current\.add\(id\)/.test(branch),
+           "senza, gli effetti ripartono e rileggono la cache per la chiave di prima");
+    assert("...e facendo ripartire gli effetti",
+           /setStemResync\(/.test(branch),
+           "senza, la revisione alzata resta nel ref e nessuno la legge");
+    const deps = appSrc.match(/\}, \[streamMediaKey, lastRenderedFps, stemResync,/g) || [];
+    assert("i tre effetti dei media (peaks, spettrogrammi, grani) dipendono dal segnale",
+           deps.length === 3, `${deps.length} effetti su 3`);
+  }
+
   bodyDone = true;
 })().catch(e => {
   /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e

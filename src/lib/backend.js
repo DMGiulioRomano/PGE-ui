@@ -510,6 +510,9 @@
         // Un giro fallito che ha elencato file su disco: impronta, semantica e
         // backend non si reclamano, ma le durate si rileggono (vedi il `done`).
         let resyncDurations = false;
+        // ...e il disegno degli stem che il motore PUO' aver riscritto, che e'
+        // una misura del file come la durata: vedi `stems-resync` in fondo.
+        const resyncIds = [];
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -594,8 +597,13 @@
                     // memoria diventava quella di uno stream assente), e un
                     // altro colore al reload. Su un giro fallito la stessa
                     // sorte tocca a tutti, costruiti o no.
-                    if (!claimable || (declared && !(s && built.has(s.id)))) {
+                    const engineBuilt = !declared || !!(s && built.has(s.id));
+                    if (!claimable || !engineBuilt) {
                       if (!(key in stemIndex)) stemIndex[key] = Date.now();
+                      // Su un giro fallito, lo stem di uno stream che il
+                      // motore costruisce puo' essere stato riscritto prima
+                      // della morte: non si reclama, ma si ridisegna.
+                      if (!claimable && engineBuilt) resyncIds.push(streamId);
                       continue;
                     }
                     doneThisRun.add(streamId);
@@ -705,6 +713,21 @@
             // riscritto e la durata e' la nuova — dove lasciarla cadere
             // avrebbe stirato sulla clip anche il waveform di un file intatto.
             await this.loadCache(opts.yamlBasename);
+          }
+          // ...e lo stesso vale per il DISEGNO. Lo `stream-done` sintetico
+          // portava due cose insieme: i record di provenienza e la rilettura
+          // di peaks, spettrogramma e grani (in app.jsx e' lui che alza
+          // `stemRevRef` / `grainRegenRef` e fa ripartire i tre effetti).
+          // Il giro fallito rinuncia al primo e perdeva anche il secondo: sul
+          // motore morto dopo l'audio la clip suonava lo stem nuovo con i
+          // peaks del vecchio distesi sulla misura nuova — #153 da un'altra
+          // porta. Quindi un evento suo, che reclama niente e ridisegna
+          // soltanto, emesso DOPO le durate: chi ridisegna deve trovare la
+          // misura nuova. Sul motore morto al parse rilegge un file intatto,
+          // e il server risponde coi peaks che aveva (cache sull'mtime):
+          // una richiesta di troppo, mai un disegno sbagliato.
+          if (resyncIds.length) {
+            onEvent && onEvent({ type: "stems-resync", streamIds: resyncIds });
           }
           return lastResult;
         } catch (e) {
