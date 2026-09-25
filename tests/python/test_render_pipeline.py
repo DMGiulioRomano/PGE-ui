@@ -2787,6 +2787,22 @@ def test_engine_range_units_resolves_module_names(tmp_path):
     assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
 
 
+def test_engine_range_units_name_rebound_to_an_expression_is_unknown(tmp_path):
+    """Il nome vale la sua ULTIMA assegnazione prima della tupla, non l'ultima
+    che era un letterale. Riassegnato a un'espressione, il valore vero non si
+    legge dall'AST: la risposta e' "non lo so", non il letterale di prima — che
+    la UI riceverebbe come verita' del motore e che la parita' confronterebbe
+    con una copia uguale e ugualmente vecchia."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path,
+        "RANGE_UNIT_ABSOLUTE = 'absolute'\n"
+        "RANGE_UNIT_RELATIVE = 'relative'\n"
+        "RANGE_UNIT_RELATIVE = _spelling('relative')\n"
+        "RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, RANGE_UNIT_RELATIVE)\n")
+    assert ei.engine_range_units(tmp_path) == []
+
+
 def test_engine_range_units_sees_a_live_bump(tmp_path):
     import engine_introspect as ei
     _stub_parameter_definitions(tmp_path, "RANGE_UNITS = ('absolute', 'relative')\n")

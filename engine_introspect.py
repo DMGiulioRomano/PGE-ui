@@ -592,49 +592,50 @@ def _module_constant(candidates, name):
 
     Come `_read_int_constant`: il primo file che dichiara il nome ha risposto,
     anche quando la risposta e' "non lo so" — un'omonima in un layout piu'
-    vecchio non sarebbe la costante di questo motore."""
+    vecchio non sarebbe la costante di questo motore.
+
+    Le assegnazioni le riconosce `_assigned_value`, come in ogni altra lettura
+    del modulo: una seconda copia di quel riconoscimento e' il modo in cui una
+    delle due smette di vedere la grafia annotata."""
     for src in candidates:
         try:
             tree = ast.parse(src.read_text(encoding="utf-8"))
         except Exception:
             continue
-        literals = {}
+        before = []
         found = None
         for node in tree.body:
-            if isinstance(node, ast.Assign):
-                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-                value = node.value
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                names = [node.target.id]
-                value = node.value
-            else:
-                continue
-            if value is None:
-                continue
-            if name in names:
-                found = value
+            found = _assigned_value(node, name)
+            if found is not None:
                 break
-            lit = _ast_literal(value)
-            if isinstance(lit, (str, int, float)):
-                for n in names:
-                    literals[n] = lit
+            before.append(node)
         if found is None:
             continue
         if isinstance(found, (ast.Tuple, ast.List)):
             out = []
             for elt in found.elts:
-                if isinstance(elt, ast.Name):
-                    if elt.id not in literals:
-                        return None
-                    out.append(literals[elt.id])
-                    continue
-                lit = _ast_literal(elt)
+                lit = (_bound_literal(before, elt.id) if isinstance(elt, ast.Name)
+                       else _ast_literal(elt))
                 if lit is None:
                     return None
                 out.append(lit)
             return tuple(out)
         return _ast_literal(found)
     return None
+
+
+def _bound_literal(nodes, name):
+    """Il letterale scalare (str, int, float) che `name` vale dopo `nodes`, o
+    None. Conta l'ULTIMA assegnazione, non l'ultima che era un letterale: un
+    nome riassegnato a un'espressione vale quell'espressione, che l'AST non sa
+    ridurre, e tenere il letterale di prima sarebbe consegnare un valore vecchio
+    come se fosse del motore."""
+    lit = None
+    for node in nodes:
+        value = _assigned_value(node, name)
+        if value is not None:
+            lit = _ast_literal(value)
+    return lit if isinstance(lit, (str, int, float)) else None
 
 
 _RANGE_UNITS_CACHE: dict = {}
