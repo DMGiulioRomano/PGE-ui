@@ -696,6 +696,39 @@ def test_merged_output_drains_a_talkative_stderr():
         "stream-start", "stream-done"]
 
 
+def test_a_byte_that_is_not_utf8_does_not_stop_its_pump():
+    """Una pompa che muore smette di drenare il suo pipe.
+
+    I pipe sono in modalita' testo, e con la decodifica stretta un byte che
+    non e' UTF-8 alzava `UnicodeDecodeError` dentro il thread della pompa: il
+    suo `finally` dichiarava EOF, il thread moriva, e quel pipe non lo leggeva
+    piu' nessuno — il figlio si fermava appena pieno, e `merged_output`
+    aspettava l'altro canale fino al watchdog (600 s di default), senza una
+    riga nel terminale. Col lettore unico di prima lo stesso byte risaliva nel
+    ciclo di /render: `[ERROR] UnicodeDecodeError` e un `done` subito. La
+    separazione dei canali l'aveva reso un render appeso e muto.
+
+    Chi scrive su stderr nel processo del motore non lo sceglie il bridge —
+    csound, una libreria C, un nome file in un'altra codifica — quindi la
+    decodifica rimpiazza invece di alzare: una riga di log con un `\ufffd`,
+    mai una pompa morta.
+    """
+    script = (
+        "import sys\n"
+        "sys.stderr.buffer.write(b'nome: \\xff\\xfe' + bytes([10]))\n"
+        "sys.stderr.flush()\n"
+        "for i in range(2000):\n"
+        "    sys.stderr.write('x' * 99 + chr(10))\n"
+        "sys.stdout.write('[CACHE] s1: clean' + chr(10))\n"
+    )
+    events, channels, _ = _drive(script, {"s1"})
+    err = [line for c, line in channels if c == rp.STDERR]
+    assert len(err) == 2001, len(err)
+    assert err[0].startswith("nome: ") and "\ufffd" in err[0], err[0]
+    assert [e["type"] for e in events if e["type"] != "log"] == [
+        "stream-start", "stream-done"]
+
+
 def test_merged_output_without_a_stderr_pipe():
     """Un processo aperto senza quel pipe vale una pompa in meno, non un
     errore: `merged_output` legge quello che c'e'."""

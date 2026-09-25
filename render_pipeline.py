@@ -286,6 +286,16 @@ class RenderState:
         protocollo leggeva anche cio' che il motore non aveva scelto di
         stampare. Chi legge e' `merged_output`, che li riunisce etichettati:
         due pompe, una coda, e il canale arriva fino a `render_events`.
+
+        `errors="replace"` e' la condizione perche' le pompe restino vive. Con
+        la decodifica stretta un byte che non e' UTF-8 — csound, una libreria
+        C, un nome file in un'altra codifica: chi scrive nel processo del
+        motore non lo sceglie il bridge — alza `UnicodeDecodeError` dentro il
+        thread della pompa, che muore e smette di drenare il suo pipe; il
+        figlio si ferma appena quello e' pieno, e il render resta appeso e muto
+        fino al watchdog. Col lettore unico di prima lo stesso byte era un
+        `[ERROR]` e un `done` subito. Rimpiazzato, e' un `\ufffd` in una riga
+        di log.
         """
         with self.lock:
             self.cancelled = False
@@ -293,7 +303,7 @@ class RenderState:
                 cmd, cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True, bufsize=1,
+                text=True, errors="replace", bufsize=1,
             )
             return self.proc
 

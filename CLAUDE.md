@@ -631,6 +631,17 @@ per-stream state moves on stdout lines alone. One consequence worth keeping:
 stderr cannot open the summary block either, so an indented error line citing a
 sample can't re-enter through that door.
 
+**The pipes decode with `errors="replace"`, and that is what keeps the pumps
+alive.** With strict decoding a byte that isn't UTF-8 — csound, a C library, a
+filename in another encoding: the bridge doesn't choose who writes inside the
+engine's process — raised `UnicodeDecodeError` inside a pump's thread; the pump
+died, stopped draining its pipe, the child stopped the moment that pipe filled,
+and the render hung silent until the watchdog. The single reader of before had
+turned the same byte into an `[ERROR]` and a `done`: separating the channels
+made it a hang. Replaced, it is a `\ufffd` in a log line.
+`test_render_pipeline.py` drives it, and `_drive` runs under a time cap so a
+pipe nobody drains is a named red rather than a hung pytest.
+
 **A DIRTY stream is closed by its own summary path line, and by nothing
 else.** The `[CACHE] <id>: DIRTY` line says the stream *will* be rendered, not
 that the previous one *was*: the parser used to close the previous DIRTY stream
