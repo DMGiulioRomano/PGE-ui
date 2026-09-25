@@ -134,8 +134,8 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // ereditata, afferma una lettura che nella output/ nuova nessuno ha
     // osservato, e con lo YAML identico l'impronta combacia. Verde su stem
     // scritti diversi, cioe' il caso per cui l'asse esiste (#133).
-    // Il backend che ha scritto lo stem (`pge-local-renderer`, #151) e' della prima
-    // specie, non della seconda: dice dei file esattamente come la semantica —
+    // Il backend che ha scritto lo stem (`pge-local-renderer`, #151) e' della seconda
+    // specie, non della prima: dice dei file esattamente come la semantica —
     // "quel motore audio ha prodotto QUESTO file" — e nella output/ nuova
     // nessuno l'ha osservato. Ereditato, con lo YAML identico l'impronta
     // combacia e il pallino torna verde su stem che un altro backend ha
