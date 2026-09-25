@@ -34,9 +34,12 @@ const TWEAK_DEFAULTS = {
   "renderPageDuration": 15,
   "renderReaper": false,
   "renderPreclean": false,
-  // Il backend audio (#150). Lo stesso default del bridge
-  // (`opts.get("renderer", "numpy")`): numpy non chiede binari esterni, ed e'
-  // quello che l'editor ha sempre mandato.
+  // Il backend audio (#150): la scelta del popover di render. E' l'unica
+  // dichiarazione del nome in questo file — era la costante `RENDERER` di
+  // #151 — e ha lo stesso default del bridge (`opts.get("renderer", "numpy")`,
+  // pinnato da una guardia sorgente): numpy non chiede binari esterni, ed e'
+  // quello che l'editor ha sempre mandato. I tre lettori passano da
+  // `currentRenderer` dentro App, vedi li'.
   "renderRenderer": "numpy",
   "terminalOpen": false,
   "terminalHeight": 220,
@@ -96,6 +99,18 @@ function mergeStreamPatch(stream, patch, samples) {
 
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  /* Il backend che produce gli stem, letto UNA volta per render (#151, #150).
+     Era una costante del modulo; col selettore del popover e' la preferenza
+     `renderRenderer`, ma la regola resta la stessa: `rendererCtx` (il lato vivo
+     dell'asse), `renderOptions.renderer` (l'anteprima del comando e il bottone
+     acceso) e `rendererOfThisRun` in `runRender` (il corpo della POST e il
+     record) leggono tutti questo nome, non il tweak tre volte. Tre letture
+     sono il modo in cui il nome che va in argv, quello che l'anteprima promette
+     e quello che finisce nel record smettono di concordare — un disaccordo che
+     non si vede, perche' produce un pallino verde. Sta qui in cima e non
+     accanto a `renderOptions` perche' `rendererCtx` e' molto piu' in alto: li'
+     `renderOptions` sarebbe ancora in TDZ. */
+  const currentRenderer = tweaks.renderRenderer;
 
   useEffectApp(() => { window.PGE_TWEAKS = tweaks; }, [tweaks]);
 
@@ -240,15 +255,18 @@ function App() {
   /* La semantica del motore, su due lati (#133). `engineSem` e' quella del
      motore che il bridge ha davanti adesso; `renderedSem` quella con cui ogni
      stem e' stato scritto. Quando divergono lo stem e' vecchio anche a YAML
-     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. `null` /
-     voce assente = non si sa, e non si pretende niente. */
+     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. I due
+     ignoti non sono lo stesso ignoto: `engineSem` a `null` = non si sa, e non
+     si pretende niente; voce assente in `renderedSem` col motore noto = stem di
+     cui non si sa la lettura, e chi classifica lo legge stale (un giro lo
+     spegne, anche a vuoto). Stessa regola del backend qui sotto. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
-  /* Il terzo asse (#150): il backend audio che ha scritto ogni stem. Il
-     corrente e' `tweaks.renderRenderer`; quando i due divergono il motore
-     rifara' lo stem (il backend sta nel suo fingerprint) e il pallino lo dice.
-     Voce assente = non si sa chi l'ha scritto: giallo, che si spegne al primo
-     giro. Vedi staleReason in render-status.js. */
+  /* Il terzo asse (#151): il backend che ha scritto ogni stem. Un solo lato in
+     stato, perche' quello vivo e' la scelta del popover (`currentRenderer`,
+     #150) — l'editor sa con chi renderizzerebbe adesso. Voce assente = stem
+     reso prima che l'editor lo registrasse, e chi classifica la legge come
+     stale. */
   const [renderedRenderer, setRenderedRenderer] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
@@ -367,15 +385,32 @@ function App() {
   // Lo includiamo nella chiave peaks così solo gli stream rigenerati rifetchano
   // (spettrogramma e grani si aggiornano già, non avendo questa cache).
   const stemRevRef = useRefApp({});
+  // Il segnale che fa ripartire i tre effetti dei media quando i ref qui sopra
+  // si muovono SENZA uno `stream-done` — cioe' senza che `lastRenderedFps`
+  // cambi riferimento. Oggi un caso solo: `stems-resync`, il giro fallito che
+  // ha trovato stem su disco (#151). Un ref alzato e nessun effetto che riparte
+  // e' un ref che nessuno legge.
+  const [stemResync, setStemResync] = useStateApp(0);
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
   const [logLines, setLogLines] = useStateApp([]);
+  /* Niente campo di avanzamento dentro lo stream, ne' qui ne' nella mappa per
+     stream che stava sotto (#162). Il ramo `stream-progress` di `run()` era il
+     solo scrittore di entrambi, e quell'evento non lo emette nessuno: non
+     server.py, non render_pipeline.py, e il motore non ha una riga da cui
+     ricavarlo — l'avanzamento che stdout sa portare e' per stream intero
+     (`[CACHE] <id>: …`), non dentro uno. Quindi la barra per clip disegnava
+     0% per tutto il render e 100% nell'istante fra uno `stream-done` e lo
+     `stream-start` successivo, che non e' informazione: e' residuo.
+     Il giorno che l'evento esista davvero sara' perche' il protocollo e'
+     diventato esplicito — e' la condizione 2 delle tre che PGE #178 elenca
+     (`docs/explanation/contratto-stdout.md` del motore) — e allora lo stato
+     torna insieme al suo emettitore, non prima. */
   const [renderStatus, setRenderStatus] = useStateApp({
-    running: false, total: 0, done: 0, currentStreamId: null, streamProgress: 0,
+    running: false, total: 0, done: 0, currentStreamId: null,
     lastOk: null, lastGenerated: 0,
   });
-  const [streamProgress, setStreamProgress] = useStateApp({});  // {streamId: progress 0..1}
   const [toasts, setToasts] = useStateApp([]);
   const toastIdRef = useRefApp(0);
   const [settingsOpen, setSettingsOpen] = useStateApp(false);
@@ -602,9 +637,8 @@ function App() {
     } else {
       setRenderedSem({});
     }
-    // ...e il backend che ha scritto ogni stem (#150), per la stessa ragione.
-    if (backend.render.loadStemRenderers) {
-      backend.render.loadStemRenderers(basename).then(m => setRenderedRenderer(m || {}));
+    if (backend.render.loadRenderers) {
+      backend.render.loadRenderers(basename).then(r => setRenderedRenderer(r || {}));
     } else {
       setRenderedRenderer({});
     }
@@ -652,27 +686,35 @@ function App() {
      diverse dello stesso dato. */
   const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
     [renderedSem, engineSem]);
-  /* ...e quella dell'asse "renderer" (#150), per la stessa ragione: il backend
-     che ha scritto ogni stem e quello scelto adesso. Il tweak e non
-     `renderOptions.renderer`: `renderOptions` e' un const dichiarato piu' in
-     basso, e leggerlo qui sarebbe una TDZ. E' lo stesso valore nello stesso
-     render. */
-  const rendCtx = useMemoApp(() => ({ rendered: renderedRenderer, current: tweaks.renderRenderer }),
-    [renderedRenderer, tweaks.renderRenderer]);
+  /* E la coppia dell'asse "backend", con la stessa forma e per la stessa
+     ragione. `current` e' la scelta del popover (`currentRenderer`, #150): qui
+     non c'e' un lato ignoto come per la semantica — il backend con cui
+     l'editor renderizzerebbe adesso lo sa sempre, e' una sua scelta, non una
+     lettura del motore. Cambiarla accende il giallo su ogni stem scritto da un
+     altro backend, che e' il motivo per cui l'asse e' stato costruito prima
+     del selettore.
+     Passa comunque da `rendererName`, la regola che decide cosa si registra:
+     un valore che non e' un nome sarebbe un `current` noto contro record che
+     nessun render scrive, cioe' giallo per sempre — e adesso il valore arriva
+     da una preferenza, cioe' proprio dal punto in cui le tre copie di prima
+     avrebbero diverso. */
+  const rendererCtx = useMemoApp(
+    () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(currentRenderer) }),
+    [renderedRenderer, currentRenderer]);
 
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx, rendCtx),
-    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendCtx]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor,
+                                          semCtx, rendererCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendererCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
       currentFps, lastRenderedFps, hasStem: hasStemFor,
       running: renderStatus.running,
       currentStreamId: renderStatus.currentStreamId,
-      streamProgress,
       sem: semCtx,
-      rend: rendCtx,
+      rend: rendererCtx,
     });
   }
 
@@ -819,7 +861,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.outputFormat]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -851,7 +893,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
   /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
@@ -945,7 +987,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
 
   useEffectApp(() => {
     function onSeek(e) {
@@ -1636,7 +1678,6 @@ function App() {
 
   /* ============ Render ============ */
   const renderOptions = {
-    renderer: tweaks.renderRenderer,
     useCache: tweaks.renderUseCache !== false,
     visualize: !!tweaks.renderVisualize,
     showVoiceOffsets: !!tweaks.renderShowVoiceOffsets,
@@ -1650,6 +1691,11 @@ function App() {
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
     projectBasename: activeProject.replace(/\.yml$/, ""),
+    // Il backend scelto nel popover (#150): acceso nel selettore e stampato
+    // dall'anteprima del comando, dalla stessa lettura del POST (#151) —
+    // `buildCommand` ne teneva un letterale suo, cioe' un'anteprima "byte per
+    // byte" libera di dire numpy sopra un render csound.
+    renderer: currentRenderer,
     // surfaced so the render popover can warn when grain data is off but the
     // grain view (in-clip or score panel) is open — see onRender forcing below.
     showGrains: !!tweaks.showGrains,
@@ -1703,8 +1749,7 @@ function App() {
        bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
        e poi il render partiva lo stesso. */
     setLogLines([]);
-    setStreamProgress({});
-    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, streamProgress: 0, lastOk: null, lastGenerated: 0 });
+    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
       pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
@@ -1721,22 +1766,20 @@ function App() {
        su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
        numero di DOPO su stem scritti leggendo quello di PRIMA. */
     const semOfThisRun = await refreshEngineSem();
+    /* Il backend di QUESTO giro, fissato accanto al numero e per la stessa
+       ragione: i due consumatori — il corpo del POST e l'handler degli
+       `stream-done` — devono leggere la stessa variabile, non la preferenza
+       due volte. Da #150 la preferenza si cambia dal popover, e una seconda
+       lettura allo `stream-done` che cadesse dopo un clic sul selettore
+       darebbe al pallino il backend nuovo su uno stem che il motore ha scritto
+       col vecchio. */
+    const rendererOfThisRun = currentRenderer;
     // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
     // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
     // giro di rete davanti al motore per un dato che a nessuno serve subito.
     // La versione di semantica invece si aspetta eccome: la registrano gli
     // `stream-done` di questo stesso giro.
     refreshEngineBounds();
-
-    /* Il backend di QUESTO giro, letto una volta e passato a mano ai due
-       consumatori — il corpo della POST e l'handler degli `stream-done` — come
-       `semOfThisRun`. Oggi nessun controllo lo cambia a render in corso (il
-       popover si chiude quando il render parte), ma e' la stessa invariante
-       dell'altro asse, e va tenuta per costruzione e non per l'assenza di un
-       bottone: una seconda lettura allo stream-done, il giorno che il backend
-       si potesse cambiare anche da altrove, darebbe al pallino il backend
-       nuovo su uno stem che il motore ha scritto col vecchio. */
-    const rendererOfThisRun = renderOptions.renderer;
 
     let cacheHits = 0;
     let generated = 0;
@@ -1780,10 +1823,7 @@ function App() {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
       } else if (e.type === "stream-start") {
         curStreamId = e.streamId;
-        setRenderStatus(s => ({ ...s, currentStreamId: e.streamId, streamProgress: 0 }));
-      } else if (e.type === "stream-progress") {
-        setStreamProgress(p => ({ ...p, [e.streamId]: e.progress }));
-        setRenderStatus(s => ({ ...s, streamProgress: e.progress }));
+        setRenderStatus(s => ({ ...s, currentStreamId: e.streamId }));
       } else if (e.type === "stream-done") {
         if (e.cached) cacheHits++;
         // cached=false → il motore ha riscritto il grain JSON: marcalo per il
@@ -1795,8 +1835,7 @@ function App() {
           // non cambia (es. spostamento clip: onset escluso dal fingerprint).
           stemRevRef.current[e.streamId] = (stemRevRef.current[e.streamId] || 0) + 1;
         }
-        setStreamProgress(p => ({ ...p, [e.streamId]: 1 }));
-        setRenderStatus(s => ({ ...s, done: s.done + 1, streamProgress: 0 }));
+        setRenderStatus(s => ({ ...s, done: s.done + 1 }));
         // bump fp for this stream (so UI marks it fresh)
         setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
         // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
@@ -1814,15 +1853,48 @@ function App() {
           delete next[e.streamId];
           return next;
         });
-        // ...e il backend che l'ha scritto (#150), lo stesso del corpo della
-        // POST. Anche per gli stream saltati (`cached`): il motore li salta solo
-        // se il suo fingerprint, che contiene il backend, combacia.
-        setRenderedRenderer(m => ({ ...m, [e.streamId]: rendererOfThisRun }));
+        // ...e il backend che l'ha scritto (#151). Stessa riga, stesso momento:
+        // i due record descrivono lo stesso stem dello stesso giro, e backend.js
+        // li persiste insieme.
+        //
+        // Col nome ignoto la voce si cancella, come per il numero — e la regola
+        // si applica anche qui e non solo in backend.js perche' i due lati
+        // devono dire la stessa cosa: backend.js cancella dal localStorage, e
+        // uno stato in memoria che tenesse il nome di prima mostrerebbe un
+        // colore diverso fino alla riapertura del progetto. E' la STESSA
+        // regola, `rendererName`, non una copia: con un test di verita' qui e
+        // la stringa non vuota la', un 7 restava in memoria e spariva dal
+        // localStorage. Con la scelta nel popover (#150) il valore viene da
+        // una preferenza, e una divergenza che dura una sessione e' peggio di
+        // una che non esiste.
+        setRenderedRenderer(m => {
+          const name = window.PGEBackend.rendererName(rendererOfThisRun);
+          if (name !== null) {
+            return m[e.streamId] === name ? m : { ...m, [e.streamId]: name };
+          }
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
+      } else if (e.type === "stems-resync") {
+        // Il giro e' fallito ma ha trovato stem su disco che il motore puo'
+        // aver riscritto prima di morire (#151). Niente record di provenienza
+        // — quelli li scrive solo lo `stream-done`, e qui non se ne reclama
+        // uno — ma la meta' "media" di un `cached: false`: peaks, grani e
+        // spettrogramma si rileggono dal disco, come backend.js ha appena
+        // fatto con le durate. Senza, la clip suonava lo stem nuovo col
+        // disegno del vecchio.
+        for (const id of e.streamIds || []) {
+          grainRegenRef.current.add(id);
+          stemRevRef.current[id] = (stemRevRef.current[id] || 0) + 1;
+        }
+        setStemResync(n => n + 1);
       }
     });
 
     setRenderStatus(s => ({
-      ...s, running: false, currentStreamId: null, streamProgress: 0,
+      ...s, running: false, currentStreamId: null,
       lastOk: !!result.ok, lastGenerated: (result.generated || []).length,
     }));
 
@@ -2034,8 +2106,9 @@ function App() {
     // non cambia e l'effetto su [activeProject] non riparte) continuerebbe a
     // classificare con le versioni della cartella di prima.
     setRenderedSem({});
-    // Idem per i backend registrati (#150): setWorkspace ha buttato
-    // `pge-local-renderer`, questa e' la sua meta' in memoria.
+    // ...e quella di `pge-local-renderer` (#151), per la stessa ragione: senza,
+    // col motore ignoto gli stem della cartella nuova resterebbero verdi sui
+    // backend registrati in quella di prima, fino al reload.
     setRenderedRenderer({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();

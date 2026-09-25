@@ -64,6 +64,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
+| `filter_solo_mute` | gli `stream_id` che `Generator._filter_solo_mute` tiene — estratto dall'AST di `generator.py` ed eseguito, perché il modulo tira dentro numpy | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
 | `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150) | tutti |
 
 ## Come si lancia
@@ -130,9 +131,9 @@ La cartella è nata contro `2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
 `VARIATION_SEMANTICS_VERSION` da 2 a 3 — il primo cambiamento che questi test
 hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` e il
 commit qui sopra è entrato `renderer_type` nel fingerprint del motore (`bcc2c84`):
-un terzo asse, a lungo tenuto a bada da un backend cablato su entrambi i lati e
-costruito con PGE-ui #150, quando il popover ha cominciato a offrire i backend
-del motore — vedi la riga della tabella qui sotto.
+un terzo asse, che la UI ha poi costruito accanto al proprio hash (#151) invece
+di infilarlo dentro — e su cui la scelta del backend nel popover (#150) poggia:
+la *conoscenza* di chi ha scritto lo stem c'era prima della scelta.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -274,7 +275,7 @@ commento.
 | dove | differenza | perché |
 |---|---|---|
 | fingerprint | `onset` muove l'hash del motore, non quello della UI | spostare una clip sulla timeline non cambia l'audio dello stem |
-| fingerprint | `renderer_type` è nell'hash del motore e non in quello della UI | è un **asse a parte** (`staleReason` in `render-status.js`, #150), come la semantica: l'hash della UI dice "l'utente ha toccato lo stream", e cambiare backend non lo tocca. La suite non pretende l'identità ma la derivata: per ogni coppia di backend che il motore dichiara, la UI è gialla per la ragione `renderer` esattamente dove l'hash del motore si muove |
+| fingerprint | `renderer_type` è nell'hash del motore e **fuori** da quello della UI | come la semantica: è un asse di staleness accanto all'hash (`staleReason` → `"renderer"`, record per stem in `pge-local-renderer`), non un campo dentro. La sonda chiede entrambe le metà — tre backend, tre hash nel motore; le stesse coppie discriminate dall'asse nella UI |
 | magnify-spec | SPEC vuoto: valido per la UI, rifiutato dal motore | nella UI "campo vuoto" significa "nessun target", e il flag non parte |
 | magnify-spec | `stream=` vuoto: rifiutato dalla UI, accettato dal motore | la UI è più stretta; una lente su nessuno stream è un refuso |
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |

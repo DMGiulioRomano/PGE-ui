@@ -24,10 +24,12 @@ sarebbe un terzo specchio da tenere allineato, cioe' il problema che questo
 file esiste per chiudere. Ogni op qui sotto e' un adattatore: normalizza gli
 argomenti, chiama il motore, serializza il risultato o l'eccezione.
 
-L'unica deroga e' `parse_magnify_spec`, dove `pge.cli` non e' importabile
-senza numpy/soundfile/matplotlib: li' l'oracolo estrae dal file `cli.py` i
-soli nodi AST della grammatica e li esegue. Sono comunque i byte del motore,
-non una parafrasi — vedi `_load_magnify_from_source`.
+Le deroghe sono due, e hanno la stessa forma: `parse_magnify_spec`, dove
+`pge.cli` non e' importabile senza numpy/soundfile/matplotlib, e
+`filter_solo_mute`, dove `pge.engine.generator` tira dentro numpy. Li'
+l'oracolo estrae dal file i soli nodi AST che servono e li esegue. Sono
+comunque i byte del motore, non una parafrasi — vedi
+`_load_magnify_from_source` e `_load_filter_solo_mute`.
 
 ## Il protocollo
 
@@ -249,6 +251,7 @@ _OP_REQUIRES = {
     "build_time_distribution": "pge.envelopes.time_distribution",
     "parameter_bounds": "pge.parameters.parameter_definitions",
     "parse_magnify_spec": None,   # sorgente, non import (vedi sotto)
+    "filter_solo_mute": None,     # idem
     "constants": "pge.rendering.stream_cache_manager",
 }
 
@@ -448,6 +451,72 @@ def _op_parse_magnify_spec(args):
         exc.oracle_stdout = buf.getvalue().strip()
         raise
     return {"targets": targets, "source": ns["_source"]}
+
+
+# =============================================================================
+# OP — filter_solo_mute
+# =============================================================================
+
+_SOLO_MUTE_FN = None
+
+
+def _load_filter_solo_mute():
+    """`Generator._filter_solo_mute`, presa dai byte di `generator.py`.
+
+    `import pge.engine.generator` tira dentro Stream e i renderer, cioe' numpy:
+    il job node della CI non ha il venv del motore. Il metodo pero' non tocca
+    niente di tutto cio' — legge la presenza di due chiavi e stampa — quindi
+    si estrae il suo FunctionDef dal corpo della classe e lo si esegue come
+    funzione libera, con `self` a None. Se il metodo si sposta o cambia nome,
+    l'op fallisce dicendolo, che e' il fallimento giusto; se usa `self`, il
+    `None` lo fa esplodere invece di rispondere a caso.
+    """
+    global _SOLO_MUTE_FN
+    if _SOLO_MUTE_FN is not None:
+        return _SOLO_MUTE_FN
+
+    import ast
+
+    path = ENGINE.root / "src" / "pge" / "engine" / "generator.py"
+    if not path.exists():
+        raise OracleError(f"filter_solo_mute: {path} non esiste")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    picked = None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Generator":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "_filter_solo_mute":
+                    picked = item
+    if picked is None:
+        raise OracleError(
+            f"filter_solo_mute: {path.name} non definisce "
+            f"Generator._filter_solo_mute — la regola si e' spostata, "
+            f"l'oracolo va aggiornato"
+        )
+    ns = {"__name__": "pge_generator_solo_mute_slice"}
+    exec(compile(ast.Module(body=[picked], type_ignores=[]), str(path), "exec"), ns)
+    _SOLO_MUTE_FN = ns["_filter_solo_mute"]
+    return _SOLO_MUTE_FN
+
+
+@op("filter_solo_mute")
+def _op_filter_solo_mute(args):
+    """Gli `stream_id` degli stream che il motore costruisce, in ordine.
+
+    args:
+        streams  lista di dict come appaiono nello YAML (snake_case)
+
+    Il print del metodo (`⚡ SOLO MODE`, `🔇 N stream muted`) finirebbe
+    comunque su stderr, ma una riga per caso seppellirebbe le asserzioni:
+    si cattura e si butta.
+    """
+    streams = args.get("streams")
+    if not isinstance(streams, list) or not all(isinstance(s, dict) for s in streams):
+        raise OracleError("filter_solo_mute: 'streams' deve essere una lista di dict")
+    fn = _load_filter_solo_mute()
+    with contextlib.redirect_stdout(io.StringIO()):
+        kept = fn(None, streams)
+    return {"kept": [s.get("stream_id") for s in kept]}
 
 
 # =============================================================================

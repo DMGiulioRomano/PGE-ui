@@ -56,7 +56,9 @@ function RenderButton({ options, onOptionsChange, onRender, onCancel, status, en
   const total = status?.total || 0;
   const done = status?.done || 0;
   const cur = status?.currentStreamId;
-  const pct = total ? Math.min(1, (done + (status?.streamProgress || 0)) / total) : 0;
+  // Stream interi: l'addendo `status.streamProgress` che stava qui dentro era
+  // sempre 0 — nessuno emetteva l'evento che lo muoveva (#162).
+  const pct = total ? Math.min(1, done / total) : 0;
 
   function toggle(key, val) {
     onOptionsChange({ ...options, [key]: val });
@@ -263,6 +265,10 @@ function buildCommand(o) {
     "src/main.py",
     `configs/${o.projectBasename || "PGE_test"}.yml`,
     `${o.outputDir || "output"}/${o.projectBasename || "PGE_test"}.aif`,
+    // Il nome arriva da app.jsx (`renderOptions.renderer`, la scelta del
+    // popover, #150), come il resto delle opzioni: un letterale qui era una
+    // seconda dichiarazione del backend, che avrebbe continuato a dire numpy
+    // sotto qualunque scelta (#151).
     "--renderer", o.renderer,
     "--per-stream",
   ];

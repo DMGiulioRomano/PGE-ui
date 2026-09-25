@@ -32,6 +32,11 @@ const window = loadUiLibs(["yaml-bridge.js", "backend.js", "render-status.js"], 
   fetch: () => Promise.reject(new Error("nessuna rete nei test")),
 });
 const { fingerprintStream } = window.PGEBackend;
+// render-status.js perche' i due assi di staleness che NON stanno nell'hash
+// (semantica, backend) sono meta' del patto: senza di loro «la UI non ha
+// questo campo» e' una divergenza senza rete, e i casi qui sotto possono solo
+// descriverla invece di pretendere che sia coperta altrove.
+const RS = window.PGERenderStatus;
 const { serializeStream, parseStream } = window.PGEYaml;
 
 /* Lo stesso stream di base di test-fingerprint.js, meno i campi che quel test
@@ -464,21 +469,22 @@ parity({
       },
     },
     {
-      /* Il TERZO asse: il backend che ha prodotto lo stem (PGE-ui #150).
+      /* Il TERZO asse: il backend che ha prodotto lo stem (#151, #150).
        *
        * `renderer_type` e' entrato nel fingerprint del motore accanto alla
        * semantica, ed e' la stessa classe di dipendenza — qualcosa da cui lo
-       * stem dipende e che il testo YAML non dice. Finche' la UI cablava
-       * `numpy` non mordeva, e questo caso lo diceva: "il giorno in cui la
-       * scelta arriva, il conto e' gia' fatto". E' arrivata — il popover offre
-       * i backend del motore — e il conto e' diventato un asse di staleness in
-       * render-status.js, separato dall'hash come quello della semantica.
+       * stem dipende e che il testo YAML non dice. Qui era scritto che «oggi
+       * non morde» perche' la UI cabla un solo backend, e che il giorno del
+       * selettore sarebbe stato PGE #222 daccapo su un asse diverso: era un
+       * debito, e questa sonda il suo promemoria.
        *
-       * Quello che si pretende adesso e' la DERIVATA dell'asse: per ogni
-       * coppia di backend che il motore distingue nel proprio hash, la UI
-       * marca lo stem stale per la ragione giusta. Le coppie non sono scritte
-       * qui: vengono dall'elenco che il motore stesso dichiara. */
-      label: "il backend e' un terzo asse, e la UI lo vede come il motore",
+       * Il debito e' chiuso (#151): la UI ha il suo asse, accanto all'hash e
+       * non dentro. Quindi la sonda non descrive piu' una divergenza, ne
+       * pretende la forma — che il motore discrimini i tre backend DENTRO
+       * l'hash, e che la UI li discrimini FUORI, con l'hash che resta cieco.
+       * Sono le due meta' di un patto: se una delle due cade, il pallino
+       * mente in uno dei due versi. */
+      label: "il backend e' un terzo asse dentro l'hash del motore",
       run: async (ask, assert, ctx) => {
         const c = (await ask("constants", {})).value;
         const backends = c.renderer_types;
@@ -508,35 +514,94 @@ parity({
           new Set(hexes).size === backends.length,
           backends.map((b, i) => `${b}: ${hexes[i]}`).join("\n      "));
 
-        // La derivata: dove il motore rifarebbe lo stem (hash diverso), il
-        // pallino e' giallo per la ragione "renderer"; dove non lo rifarebbe
-        // (stesso backend), niente. Lo stesso fingerprint UI da entrambi i lati
-        // isola l'asse: e' lo stream fermo e il backend che cambia.
-        const fp = fingerprintStream(s, "wav");
-        const RS = window.PGERenderStatus;
-        const bad = [];
-        for (const [i, a] of backends.entries()) {
-          for (const [j, b] of backends.entries()) {
-            const engineMoves = hexes[i] !== hexes[j];
-            const why = RS.staleReason(fp, fp, null, { rendered: a, current: b });
-            const uiMoves = why === "renderer";
-            if (engineMoves !== uiMoves || (!engineMoves && why !== null)) {
-              bad.push(`${a} → ${b}: motore ${engineMoves ? "rifa'" : "tiene"}, ` +
-                       `UI ${why === null ? "verde" : why}`);
-            }
-          }
-        }
-        assert("per ogni coppia di backend la UI concorda col motore",
-          bad.length === 0, bad.join("\n      "));
-
-        // ...e resta un asse, non un campo dell'hash: il fingerprint della UI
-        // non prende il backend, come non prende la semantica. Divergenza
-        // voluta, elencata nel README: se un domani lo prendesse, i due modi di
-        // dire "stale" sarebbero due, e il tooltip non saprebbe quale.
-        assert("il fingerprint della UI non conosce il backend (e' un asse a parte)",
+        /* Meta' UI, primo tempo: l'hash resta cieco al backend, come alla
+           semantica. Non e' un'omissione da colmare — l'hash risponde a
+           "l'utente ha modificato lo YAML", e chi ha scritto il file non e' una
+           modifica dell'utente: dentro l'hash il pallino direbbe `yaml` su uno
+           YAML che nessuno ha toccato. Il fingerprint JS non prende nemmeno il
+           backend come argomento, e questa riga parla il giorno che lo
+           prendesse. */
+        assert("il fingerprint della UI non conosce il backend (voluto)",
           fingerprintStream.length <= 2,
           `fingerprintStream ha ${fingerprintStream.length} parametri: se ora ` +
-          "prende il renderer, l'asse in render-status.js e' un doppione");
+          "prende il renderer, il motivo del pallino diventa 'yaml' su uno " +
+          "YAML fermo");
+
+        /* Meta' UI, secondo tempo — ed e' quella che prima mancava. I tre
+           backend che il motore distingue nell'hash, la UI li distingue
+           nell'asse: `staleReason` deve dire "renderer" per ogni coppia che il
+           motore considera diversa, e tacere su ogni coppia che considera
+           uguale. L'atteso non e' scritto a mano: viene dagli hash che il
+           motore ha appena risposto, sugli stessi nomi del giro qui sopra — se
+           un domani due backend dessero lo stesso hash, questa meta' pretende
+           che anche la UI li consideri equivalenti, senza toccare una riga.
+           Dei tre nomi la UI non ha comunque nessuna copia: sono il corpus di
+           questa sonda, dichiarato dal motore, e il selettore del popover li
+           riceve dalla stessa lettura AST (GET /renderers, #150) che la
+           sonda confronta qui sopra con l'elenco importato. */
+        const coppie = [];
+        for (const a of backends) for (const b of backends) coppie.push([a, b]);
+        const sbagliate = coppie.filter(([a, b]) => {
+          const atteso = (hexes[backends.indexOf(a)] === hexes[backends.indexOf(b)])
+            ? null : "renderer";
+          return RS.staleReason("h", "h", null, { rendered: a, current: b }) !== atteso;
+        });
+        assert(`l'asse della UI discrimina le stesse ${coppie.length} coppie`,
+          sbagliate.length === 0,
+          sbagliate.map(([a, b]) =>
+            `${a} → ${b}: ottenuto ` +
+            `${RS.staleReason("h", "h", null, { rendered: a, current: b })}`).join("\n      "));
+
+        /* E il record assente non e' verde. E' lo stem reso prima che l'asse
+           esistesse: il motore, per lui, ha gia' un `renderer_type` nel proprio
+           hash — quello del giro che l'ha scritto — mentre la UI non sa quale.
+           Verde li' vuol dire un render di meno esattamente sulla popolazione
+           piu' numerosa. */
+        assert("...e uno stem senza record non passa per fresco",
+          RS.staleReason("h", "h", null, { rendered: undefined, current: backends[0] })
+            === "renderer");
+      },
+    },
+    {
+      /* Chi reclama uno stem deve sapere quali stream il motore ha COSTRUITO.
+       *
+       * Il fallback di `done` in `run()` scorre `generated`, che e' il disco e
+       * non il giro: uno stream muto (o fuori dal solo) ha li' il file di un
+       * render precedente. `PGEBackend.streamsEngineBuilds` e' il mirror di
+       * `Generator._filter_solo_mute` che lo esclude — e un mirror che sbaglia
+       * scrive impronta, semantica e backend di QUESTO giro su audio che il
+       * motore non ha toccato (troppo largo), o lascia giallo per sempre uno
+       * stem appena reso (troppo stretto).
+       *
+       * Il corpus e' tutte le combinazioni di mute/solo su tre stream, passate
+       * dal serializzatore VERO: la premessa del mirror e' che il motore guardi
+       * la presenza della chiave e che `serializeStream` la scriva solo quando
+       * e' vera, e questa e' l'unica strada che le verifica insieme. */
+      label: "il fallback reclama gli stream che il motore costruisce (solo/mute)",
+      run: async (ask, assert) => {
+        const flags = [[false, false], [true, false], [false, true], [true, true]];
+        const sets = [[]];
+        for (const a of flags) for (const b of flags) for (const c of flags) {
+          sets.push([a, b, c].map(([mute, solo], i) => {
+            const s = base(); s.id = `s${i + 1}`; s.mute = mute; s.solo = solo;
+            return s;
+          }));
+        }
+        const answers = await ask(sets.map(streams => ({
+          op: "filter_solo_mute", args: { streams: streams.map(yamlDict) } })));
+        const bad = [];
+        sets.forEach((streams, i) => {
+          const a = answers[i];
+          const ui = [...window.PGEBackend.streamsEngineBuilds(streams)];
+          const engine = a.ok ? a.value.kept : null;
+          if (!a.ok || JSON.stringify(ui) !== JSON.stringify(engine)) {
+            const desc = streams.map(s => `${s.id}${s.mute ? "M" : ""}${s.solo ? "S" : ""}`).join(" ");
+            bad.push(`[${desc}] ui ${JSON.stringify(ui)} motore ` +
+              (a.ok ? JSON.stringify(engine) : a.error));
+          }
+        });
+        assert(`stessi stream costruiti su ${sets.length} combinazioni`,
+          bad.length === 0, bad.join("\n      "));
       },
     },
   ],

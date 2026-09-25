@@ -1,19 +1,19 @@
 /* =============================================================================
- * test-renderer-axis.js — il backend audio come scelta, e come asse (#150).
+ * test-renderer-axis.js — il backend audio come SCELTA (#150), sopra l'asse.
  *
  * Il motore rende con tre backend (`--renderer numpy|csound|supercollider`,
  * PGE #228) e il backend sta nel SUO fingerprint: cambiarlo rifa' ogni stem.
- * `test-render-status.js` verifica la DECISIONE (staleReason con l'asse
- * "renderer"); qui le tre cose che la tengono in piedi e che nessuna
- * esecuzione toccava:
+ * L'asse che lo dice al pallino c'era gia' (#151): la decisione la verifica
+ * `test-render-status.js`, il record `pge-local-renderer` (parziale, ignoto,
+ * muto, giro fallito) `test-semantics-store.js`. Qui le tre cose che #150
+ * aggiunge sopra, e che nessuna esecuzione toccava:
  *
  *   1. l'elenco dei backend, che arriva dal bridge (`backend.renderers()`,
  *      GET /renderers) e diventa i bottoni del popover
  *      (`window.PGERendererChoice.choices`): nessuna copia dei nomi qui;
- *   2. la persistenza per stem (`loadStemRenderers` / `_persistStemRenderers`,
- *      `pge-local-renderer`), eseguita con un giro vero di `render.run()`:
- *      resa un no-op, l'asse non si spegne — si blocca sul GIALLO, perche' un
- *      backend mai registrato e' un backend ignoto;
+ *   2. che il backend scelto nel popover — non solo quello di sempre —
+ *      arrivi al corpo della POST e al record, eseguito con un giro vero di
+ *      `render.run()`;
  *   3. il cablaggio che dal selettore arriva all'argv e al pallino, per
  *      guardia sorgente dove non gira in node (JSX).
  *
@@ -199,99 +199,17 @@ console.log("\n── un render registra il backend, anche a vuoto ──");
     lastRenderBody && lastRenderBody.renderer === "supercollider");
   assert("pge-local-renderer porta il backend dello stem",
     eq(recorded("proj"), { stream1: "supercollider" }), store["pge-local-renderer"]);
-  assert("loadStemRenderers lo rilegge",
-    eq(await backend.render.loadStemRenderers("proj"), { stream1: "supercollider" }));
+  assert("loadRenderers lo rilegge",
+    eq(await backend.render.loadRenderers("proj"), { stream1: "supercollider" }));
 }
 
-console.log("\n── un render parziale non tocca gli altri stem ──");
-{
-  store = { "pge-local-renderer": JSON.stringify({ proj: { stream1: "numpy", stream2: "numpy" } }) };
-  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
-  NDJSON = [
-    { type: "stream-done", streamId: "stream1", cached: false },
-    { type: "done", ok: true, generated: [] },
-  ];
-  await backend.render.run(
-    { yamlBasename: "proj", outputFormat: "wav", renderer: "csound", semanticsVersion: 3,
-      streams: [{ id: "stream1" }, { id: "stream2" }] },
-    () => {});
-  const now = recorded("proj");
-  assert("lo stem reso prende il backend di adesso", now && now.stream1 === "csound", JSON.stringify(now));
-  assert("quello non toccato tiene il suo", now && now.stream2 === "numpy", JSON.stringify(now));
-}
-
-console.log("\n── una riga di servizio del motore non registra niente ──");
-{
-  // `[CACHE] Manifest: …` ha la forma di uno stream (render_pipeline.py): il
-  // bridge la filtra, ma se passasse il browser non deve inventarsi uno stem.
-  store = {};
-  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
-  NDJSON = [
-    { type: "stream-done", streamId: "Manifest", cached: true },
-    { type: "done", ok: true, generated: [] },
-  ];
-  await backend.render.run(
-    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
-      streams: [{ id: "stream1" }] },
-    () => {});
-  assert("niente voce per un id che la richiesta non dichiara",
-    recorded("proj") === null || !("Manifest" in recorded("proj")), store["pge-local-renderer"]);
-}
-
-console.log("\n── senza backend nel corpo la voce si CANCELLA ──");
-{
-  // Un chiamante che non dice il backend: il bridge rende col suo default, ma
-  // registrarlo qui vorrebbe dire trascrivere quel default. "Non lo so" e' la
-  // verita', e il giallo che ne segue si spegne al giro successivo.
-  store = { "pge-local-renderer": JSON.stringify({ proj: { stream1: "csound", stream2: "csound" } }) };
-  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
-  NDJSON = [
-    { type: "stream-done", streamId: "stream1", cached: false },
-    { type: "done", ok: true, generated: [] },
-  ];
-  await backend.render.run(
-    { yamlBasename: "proj", outputFormat: "wav", semanticsVersion: 3,
-      streams: [{ id: "stream1" }] },
-    () => {});
-  const now = recorded("proj");
-  assert("lo stem appena reso perde il backend di prima", now && !("stream1" in now),
-    JSON.stringify(now));
-  assert("gli altri restano dove sono", now && now.stream2 === "csound", JSON.stringify(now));
-}
-
-console.log("\n── un rientro rifiutato non scrive ──");
-{
-  store = {};
-  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
-  // Il primo giro resta appeso sul reader: il secondo deve essere rifiutato
-  // senza registrare niente (non ha reso niente).
-  let release;
-  const gate = new Promise(r => { release = r; });
-  const saved = global.fetch;
-  global.fetch = (url, init) => String(url).endsWith("/render")
-    ? gate.then(() => ({ ok: true, body: ndjsonBody([{ type: "done", ok: true, generated: [] }]) }))
-    : saved(url, init);
-  const first = backend.render.run(
-    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
-      streams: [{ id: "stream1" }] }, () => {});
-  const second = await backend.render.run(
-    { yamlBasename: "proj", outputFormat: "wav", renderer: "csound", semanticsVersion: 3,
-      streams: [{ id: "stream1" }] }, () => {});
-  release();
-  await first;
-  global.fetch = saved;
-  assert("il secondo ingresso e' rifiutato", second.ok === false);
-  assert("...e non registra un backend che non ha reso niente",
-    recorded("proj") === null, store["pge-local-renderer"]);
-}
-
-console.log("\n── loadStemRenderers regge un archivio rotto ──");
+console.log("\n── loadRenderers regge un archivio rotto ──");
 {
   const backend = window.PGEBackend.create({ baseUrl: "http://x" });
   store = { "pge-local-renderer": "{non json" };
-  assert("JSON rotto → {}", eq(await backend.render.loadStemRenderers("proj"), {}));
+  assert("JSON rotto → {}", eq(await backend.render.loadRenderers("proj"), {}));
   store = { "pge-local-renderer": JSON.stringify({ proj: "numpy" }) };
-  assert("voce non oggetto → {}", eq(await backend.render.loadStemRenderers("proj"), {}));
+  assert("voce non oggetto → {}", eq(await backend.render.loadRenderers("proj"), {}));
 }
 
 /* ===========================================================================
@@ -328,17 +246,16 @@ console.log("\n── dal selettore all'argv e al pallino (sorgente) ──");
   assert("l'elenco si chiede anche al boot",
     (app.match(/(?<!function )refreshRenderers\(\)/g) || []).length >= 1);
 
+  /* La scelta e' un tweak, letto una volta (`currentRenderer`) e riscritto
+     dal popover. Che i tre lettori dell'asse leggano quella lettura lo
+     pretende test-render-status.js; qui la meta' che #150 aggiunge: che il
+     selettore la scriva, e che il bottone acceso la legga. */
   assert("la scelta e' un tweak, letto e riscritto",
-    /renderer:\s*tweaks\.renderRenderer\b/.test(app) &&
+    /const currentRenderer = tweaks\.renderRenderer;/.test(app) &&
+    /renderer:\s*currentRenderer\b/.test(app) &&
     /setTweak\("renderRenderer",\s*next\.renderer\)/.test(app));
-  assert("app carica i backend registrati al cambio progetto",
-    /loadStemRenderers\([\s\S]{0,120}?setRenderedRenderer/.test(app));
 
   assert("backend: la route e' quella del bridge", /"\/renderers"/.test(be));
-  assert("backend: run() registra opts.renderer, non un default",
-    /typeof opts\.renderer === "string"/.test(be) && /_persistStemRenderers\(/.test(be));
-  assert("backend: col backend ignoto la voce si cancella",
-    /if \(rend === null\) delete nextR\[id\];/.test(be));
 }
 
   bodyDone = true;

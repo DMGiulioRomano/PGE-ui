@@ -6,11 +6,19 @@ watchdog. No Flask here — the /render and /render/cancel routes in server.py
 own the HTTP/NDJSON concerns and delegate process mechanics to this module.
 """
 
+import queue
 import re
 import shutil
 import subprocess
 import threading
 from pathlib import Path
+
+
+# I due canali del sottoprocesso del motore. Non sono un'etichetta di comodo:
+# protocollo e' uno solo dei due, e tenerli distinti e' meta' della #162. Vedi
+# `merged_output` e `render_events`.
+STDOUT = "stdout"
+STDERR = "stderr"
 
 
 # Regexes for parsing main.py's stdout into structured UI events.
@@ -21,8 +29,17 @@ from pathlib import Path
 #   " Generazione completata! 5 file generati:"
 #   "    /abs/path/to/output/PGE_test__stream1.aif"
 #
-# Note: [CACHE] lines appear one per stream as each starts.
-# The absolute path lines appear all together at the end (summary block).
+# The absolute path lines appear all together at the end (summary block), after
+# every stem is written — and they are the ONLY line that says a DIRTY stem has
+# been written. The [CACHE] lines don't: this parser used to read them as "one
+# per stream as each starts" and closed the previous DIRTY stream on the next
+# one, but the numpy renderer triages EVERY stream before writing any
+# (`NumpyAudioRenderer.render_streams`, "Fase 1 — triage cache"), so they
+# arrive in one burst. That claimed every DIRTY stream but the last before the
+# engine had touched a sample — and a `stream-done` is a claim: the browser
+# stamps this run's fingerprint, semantics and backend on it (PGE-ui #151).
+# A run that died after the triage left them green on audio nobody rewrote.
+# So a DIRTY stream waits for its own path line, whatever the renderer's order.
 #
 # Ma non tutte le righe `[CACHE]` sono stream, e la forma non le distingue:
 # il motore stampa `[CACHE] Manifest: <path>` a ogni render con --cache e
@@ -40,17 +57,68 @@ _RE_CACHE_LINE = re.compile(r"^\[CACHE\]\s+(\S+):\s+(.+)$")
 #
 # L'id NON e' vincolato a `\w`: il charset che `renameStream` (app.jsx)
 # pubblicizza sono lettere, cifre, `.`, `_` e `-`, quindi `\w` escludeva `.` e
-# `-`. Solo l'ULTIMO stream DIRTY del giro dipende da questa riga (gli altri li
-# chiude la riga `[CACHE]` successiva), e per lui il `stream-done` non
-# arrivava mai: pallino giallo dopo un render che aveva fatto esattamente cio'
-# che il pallino chiedeva. Il confronto con lo stream in corso, sotto, e' la
-# vera discriminante — qui basta riconoscere la riga.
+# `-`. Ogni stream DIRTY dipende da questa riga (vedi sopra), e con `-` o `.`
+# il `stream-done` non arrivava mai: pallino giallo dopo un render che aveva
+# fatto esattamente cio' che il pallino chiedeva. Il confronto con gli stream
+# in attesa, sotto, e' la vera discriminante — qui basta riconoscere la riga.
 _RE_STEM_PATH  = re.compile(r"^\s+(.+__.+)\.(?:aif|aiff|wav|flac)\s*$", re.IGNORECASE)
+# La testa del blocco riassuntivo di `cli.py`, e con essa l'unico punto dello
+# stdout in cui `_RE_STEM_PATH` vale qualcosa:
+#
+#     \n Generazione completata! {n} file generati:
+#         {path}
+#         {path}
+#
+# Serve perche' quella regex e' una forma che le righe umane condividono: le
+# basta una riga INDENTATA che finisca per `__<qualcosa>.<aif|aiff|wav|flac>`,
+# e i messaggi d'errore del motore citano i path dei sample con la stessa
+# forma. Misurato (PGE #178):
+#
+#     '  Path cercato: refs/voce__streamA.wav'
+#         → stream-done di `streamA`, su uno stem mai scritto
+#
+# Bastava cioe' un sample chiamato come lo stem di uno stream in attesa
+# (`<basename>__<id>`, o col solo suffisso quando la richiesta non passa il
+# basename) — il confronto sul nome file regge tutti gli altri casi, e' la
+# coincidenza di nome che passa — e il pallino diventava verde con nessun
+# audio dietro, che e' il solo errore che questo parser non puo' permettersi.
+#
+# Restringere la regex non era la strada: un path puo' contenere spazi
+# (`/Users/me/My Music/proj__s1.wav`), e ogni stream DIRTY dipende da questa
+# riga per il suo `stream-done` (vedi l'intestazione, #151). A discriminare non
+# e' la forma ma la POSIZIONE: quei path il motore li stampa in un blocco solo,
+# sotto la sua riga di testa, e li' dentro ogni riga indentata E' un path.
+#
+# Se un giorno la riga di testa cambiasse parole il blocco non si aprirebbe
+# piu', e nessuna riga di path chiuderebbe uno stream. Su un giro riuscito i
+# pallini non se ne accorgono — il fallback dell'evento `done` in backend.js
+# reclama gli stream costruiti che nessuno `stream-done` ha chiuso — ma si
+# perde l'avanzamento vivo; su un giro fallito non si reclama niente, che e'
+# la direzione buona. Comunque non resta alla prosa: `test_render_pipeline.py`
+# legge la riga dai sorgenti del motore e diventa rosso il giorno che si muove.
+_RE_SUMMARY_HEAD = re.compile(r"^\s*Generazione completata!.*:\s*$")
+# Riga indentata e non vuota: finche' escono cosi', il blocco e' ancora aperto.
+_RE_INDENTED = re.compile(r"^\s+\S")
 
 
 def parse_render_line(line: str, state: dict) -> list:
-    """Turn a single stdout line into one or more browser-bound events."""
+    """Turn a single **stdout** line into one or more browser-bound events.
+
+    Il canale lo sceglie `render_events`, che e' l'unico chiamante legittimo:
+    da stderr non si deriva niente, e il perche' sta li'.
+    """
     events = [{"type": "log", "line": line}]
+
+    # Il blocco riassuntivo si apre sulla sua riga di testa...
+    if _RE_SUMMARY_HEAD.match(line):
+        state["summary"] = True
+        return events
+    # ...e si chiude alla prima riga che non e' indentata. Non serve un
+    # terminatore dal motore: sotto il blocco escono `Reaper project:`,
+    # `Grain JSON:`, `Log:` — tutte a colonna zero — e prima ancora la riga
+    # vuota che `print("\nGenerazione partitura grafica...")` antepone.
+    if state.get("summary") and not _RE_INDENTED.match(line):
+        state["summary"] = False
 
     # [CACHE] stream1: clean  → cached, emit start+done immediately
     # [CACHE] stream1: DIRTY  → about to render, emit start only
@@ -58,43 +126,143 @@ def parse_render_line(line: str, state: dict) -> list:
     if m:
         sid   = m.group(1)
         # Un id che la richiesta non ha dichiarato non e' uno stream: e' una
-        # riga di servizio del motore (Manifest, GC) che ha la stessa forma.
-        # `ids` assente = richiesta che non dichiara gli stream: nessun
-        # insieme, nessun filtro, comportamento storico.
-        ids = state.get("ids")
-        if ids is not None and sid not in ids:
+        # riga di servizio del motore (Manifest, GC) che ha la stessa forma,
+        # o una riga che nel processo del motore ha scritto qualcun altro.
+        #
+        # Il filtro e' TOTALE (#162): `ids` assente o vuoto non significa piu'
+        # "nessun filtro" ma "la richiesta non ha dichiarato nessuno stream",
+        # e da una richiesta che non dichiara niente non si deriva niente.
+        # Prima era l'inverso, e il prezzo era che l'unica cosa capace di
+        # distinguere `[CACHE] stream1: clean` da `[CACHE] Manifest: <path>`
+        # restava inerte proprio quando nessuno le aveva detto su cosa
+        # lavorare: due stream inventati per giro, barra 3/2, un toast che
+        # dichiara una cache mai avvenuta.
+        #
+        # Il browser gli id li dichiara sempre (`streams: data.streams` in
+        # app.jsx), quindi a cambiare comportamento e' solo una richiesta che
+        # non li dichiara — e li' c'e' una rete: su un giro riuscito il
+        # fallback dell'evento `done` in backend.js emette uno `stream-done`
+        # sintetico per ogni stem che il server ha trovato SU DISCO (senza una
+        # lista non ha un insieme contro cui giudicare, e li' reclama tutto).
+        # Perdere questi eventi costa la barra di avanzamento viva, mai un
+        # pallino sbagliato.
+        if sid not in (state.get("ids") or ()):
             return events
         dirty = m.group(2).strip().upper() == "DIRTY"
         total = state.get("total", 0)
         idx   = state.get("index", 0)
         state["index"] = idx + 1
-        # Previous DIRTY stream is done now that we're starting the next one
-        prev = state.get("streamId")
-        if prev:
-            events.append({"type": "stream-done", "streamId": prev, "cached": False})
-            state["streamId"] = None
         events.append({"type": "stream-start",
                         "streamId": sid, "index": idx, "total": total})
         if not dirty:
             events.append({"type": "stream-done", "streamId": sid, "cached": True})
         else:
-            state["streamId"] = sid  # track: this stream is being rendered
+            # Da rendere: resta in attesa della SUA riga di path, non della
+            # prossima `[CACHE]` (vedi l'intestazione).
+            state.setdefault("pending", []).append(sid)
         return events
 
     # Summary path lines: "    /abs/path/output/PGE_test__stream1.aif"
-    # Extract stream_id from filename to emit stream-done for the last DIRTY stream.
-    m2 = _RE_STEM_PATH.match(line)
+    # Each one closes the pending DIRTY stream whose stem it names.
+    #
+    # Solo DENTRO il blocco riassuntivo: fuori, questa forma e' condivisa con
+    # le righe umane del motore — vedi `_RE_SUMMARY_HEAD`.
+    m2 = _RE_STEM_PATH.match(line) if state.get("summary") else None
     if m2:
-        prev = state.get("streamId")
-        # Il confronto e' sul suffisso e non su un gruppo catturato: sia il
-        # basename sia l'id possono contenere `__`, quindi non c'e' una
-        # posizione del separatore da indovinare — c'e' un solo id che questa
-        # riga puo' chiudere, ed e' quello in corso.
-        if prev and m2.group(1).endswith("__" + prev):
+        pending = state.get("pending") or []
+        fname = re.split(r"[\\/]", m2.group(1))[-1]
+        base = state.get("basename")
+        if base is not None:
+            # Col basename noto il nome del file e' esattamente
+            # `<basename>__<id>`: nessun separatore da indovinare. Il suffisso
+            # non basta con piu' stream in attesa, perche' sia il basename sia
+            # l'id possono contenere `__` — con basename `x__b`, il file di `a`
+            # (`x__b__a`) finisce anche per `__b__a`.
+            head = base + "__"
+            sid = fname[len(head):] if fname.startswith(head) else None
+            hit = sid if sid in pending else None
+        else:
+            # Senza basename (una richiesta che non lo passa) resta il
+            # suffisso, e fra piu' candidati vince il piu' lungo.
+            hits = [p for p in pending if fname.endswith("__" + p)]
+            hit = max(hits, key=len) if hits else None
+        if hit is not None:
+            pending.remove(hit)
             events.append({"type": "stream-done",
-                            "streamId": prev, "cached": False})
-            state["streamId"] = None
+                            "streamId": hit, "cached": False})
     return events
+
+
+def render_events(channel: str, line: str, state: dict) -> list:
+    """Gli eventi di una riga, decisi dal CANALE da cui arriva.
+
+    Protocollo e' stdout e basta. stderr e' log, e non e' pignoleria: il
+    bridge lanciava il motore con `stderr=subprocess.STDOUT`, quindi i due
+    flussi finivano nello stesso `readline` e OGNI riga di stderr passava per
+    `parse_render_line`.
+
+    Il motore si e' dato la regola «nessuno, su nessun canale, scrive righe
+    con la forma del protocollo» e la sorveglia
+    (`tests/shared/test_stdout_contract.py`, PGE #178). Ma quella regola
+    vincola il motore, non i suoi host: `logging` scrive su stderr, e
+    qualunque libreria di terze parti dentro quel processo puo' ancora
+    stampare una riga di quella forma. Misurato con la diagnostica del motore
+    accesa come la accenderebbe chiunque —
+    `logging.basicConfig(level=DEBUG, format="%(message)s")` — un record
+    `[CACHE] %s: registrata` produceva `stream-start` piu' `stream-done` per
+    uno stream di nome `gaussian`, che non esiste. Nel formato di default a
+    salvarlo era solo il prefisso `DEBUG:pge.diagnostics:` che il formatter
+    antepone: una scelta di chi lancia, non una garanzia.
+
+    Il descrittore di file non separava niente perche' a unirli eravamo noi.
+    Separati (`merged_output`), separa — ed e' l'unica meta' del problema che
+    il motore non puo' riparare da solo.
+    """
+    if channel != STDOUT:
+        return [{"type": "log", "line": line}]
+    return parse_render_line(line, state)
+
+
+def _pump(stream, channel, q):
+    """Legge un pipe riga per riga e lo versa nella coda. `None` = EOF."""
+    try:
+        for raw in iter(stream.readline, ""):
+            q.put((channel, raw.rstrip("\n")))
+    finally:
+        q.put((channel, None))
+
+
+def merged_output(proc):
+    """Yield `(canale, riga)` dai due pipe del processo, in ordine d'arrivo.
+
+    Due pompe daemon su una coda. I pipe vanno drenati ENTRAMBI e sempre, o il
+    figlio si blocca appena quello non letto si riempie — che e' la ragione
+    per cui `stderr=subprocess.STDOUT` era comodo, e l'unica.
+
+    L'ordine FRA i due canali resta approssimato, esattamente come lo era
+    prima: li' a decidere era il buffering dei due flussi dentro il processo
+    del motore (stdout di protocollo e' flushato, il resto no), qui e' la
+    coda. L'ordine DENTRO ciascun canale invece e' esatto, ed e' l'unico da
+    cui `parse_render_line` dipende: lo stato per stream si muove sulle sole
+    righe di stdout.
+
+    `proc.stderr` a None (un processo aperto senza quel pipe, o un doppio
+    costruito a mano nei test) vale una pompa in meno, non un errore.
+    """
+    q = queue.Queue()
+    live = 0
+    for channel, stream in ((STDOUT, proc.stdout), (STDERR, proc.stderr)):
+        if stream is None:
+            continue
+        live += 1
+        threading.Thread(target=_pump, args=(stream, channel, q),
+                         daemon=True).start()
+    while live:
+        channel, line = q.get()
+        if line is None:
+            live -= 1
+            continue
+        yield channel, line
 
 
 class RenderState:
@@ -113,14 +281,31 @@ class RenderState:
         self.lock = threading.Lock()
 
     def start(self, cmd, cwd):
-        """Spawn the subprocess under the lock and remember it. Returns proc."""
+        """Spawn the subprocess under the lock and remember it. Returns proc.
+
+        I due flussi restano DUE (#162). Erano uno — `stderr=subprocess.STDOUT`
+        — e quella fusione e' l'intera prima meta' della issue: il parser di
+        protocollo leggeva anche cio' che il motore non aveva scelto di
+        stampare. Chi legge e' `merged_output`, che li riunisce etichettati:
+        due pompe, una coda, e il canale arriva fino a `render_events`.
+
+        `errors="replace"` e' la condizione perche' le pompe restino vive. Con
+        la decodifica stretta un byte che non e' UTF-8 — csound, una libreria
+        C, un nome file in un'altra codifica: chi scrive nel processo del
+        motore non lo sceglie il bridge — alza `UnicodeDecodeError` dentro il
+        thread della pompa, che muore e smette di drenare il suo pipe; il
+        figlio si ferma appena quello e' pieno, e il render resta appeso e muto
+        fino al watchdog. Col lettore unico di prima lo stesso byte era un
+        `[ERROR]` e un `done` subito. Rimpiazzato, e' un `\ufffd` in una riga
+        di log.
+        """
         with self.lock:
             self.cancelled = False
             self.proc = subprocess.Popen(
                 cmd, cwd=str(cwd),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                stderr=subprocess.PIPE,
+                text=True, errors="replace", bufsize=1,
             )
             return self.proc
 

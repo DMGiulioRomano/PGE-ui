@@ -12,16 +12,21 @@
  * a stem on disk" check is injected as a hasStem(id)=>bool closure so the module
  * never reaches into window.PGEBackend.current.
  *
- * State (lastRenderedFps, renderStatus, streamProgress) and all its setters/effects
- * stay in app.jsx — only the pure classification/aggregation moves here.
+ * State (lastRenderedFps, renderStatus) and all its setters/effects stay in
+ * app.jsx — only the pure classification/aggregation moves here.
  * ===========================================================================*/
 
 (function () {
   const STATES = { FRESH: "fresh", STALE: "stale", NEVER: "never", RUNNING: "running" };
 
   // Tooltip strings kept verbatim from app.jsx so the UI text is unchanged.
-  // `staleSemantics` is the one addition: same yellow dot, different reason —
-  // the YAML did not move, the engine's reading of it did.
+  // The two additions are the same yellow dot with a different reason:
+  // `staleSemantics` — the YAML did not move, the engine's reading of it did;
+  // `staleRenderer` — neither moved, and nothing says the current backend
+  // wrote the file. Worded to be true on BOTH branches of that axis: a
+  // different recorded backend, and no record at all — the second being every
+  // stem rendered before #151, i.e. the only case that fires while the UI
+  // writes numpy alone. "Another backend rendered this stem" was false there.
   const TOOLTIPS = {
     running: "rendering this stream…",
     never:   "this stream has never been rendered",
@@ -29,21 +34,9 @@
     stale:   "YAML changed since last render — re-render to update",
     staleSemantics: "the engine's reading of this YAML doesn't match this " +
                     "stem — re-render to update",
-    // L'asse "renderer" (#150) quando non si sa chi ha scritto lo stem: prima
-    // di #150, o in un'altra cartella. Quando lo si sa, il testo nomina i due
-    // backend (`rendererTooltip`).
-    staleRenderer:  "the renderer that wrote this stem isn't recorded — " +
+    staleRenderer:  "no record that the current backend rendered this stem — " +
                     "re-render to update",
   };
-
-  // Il giallo dell'asse "renderer" con i due nomi: e' l'unico dei motivi che
-  // l'utente produce senza toccare lo stream, quindi l'unico che il tooltip
-  // deve poter spiegare da solo.
-  function rendererTooltip(rendered, current) {
-    if (rendered == null) return TOOLTIPS.staleRenderer;
-    return `rendered with ${rendered}, the current renderer is ${current} ` +
-           "— re-render to update";
-  }
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
   // the caller passes the already-resolved output format (app.jsx uses
@@ -54,7 +47,7 @@
     return out;
   }
 
-  // Perche' uno stem e' stale, o null se non lo e'. Due assi indipendenti:
+  // Perche' uno stem e' stale, o null se non lo e'. Tre assi indipendenti:
   //
   //   "yaml"      — l'utente ha modificato lo stream dall'ultimo render. E'
   //                 l'hash della UI a dirlo, ed e' l'unica cosa che sa dire.
@@ -64,11 +57,24 @@
   //                 mette nel proprio fingerprint (stream_cache_manager.py) e
   //                 rifara' lo stem; senza quest'asse l'editor mostrerebbe
   //                 verde su audio che il motore considera gia' morto.
+  //   "renderer"  — il backend che ha scritto quello stem non e' quello con cui
+  //                 l'editor renderizzerebbe adesso (#151). Il motore mette
+  //                 anche `renderer_type` nel proprio fingerprint (PGE #228):
+  //                 stesso YAML, stessa lettura, file prodotto da un altro
+  //                 motore audio. Tre backend esistono per essere confrontati,
+  //                 quindi renderizzare con uno e rilanciare con un altro e' lo
+  //                 scenario d'uso, non il caso limite.
   //
-  // Il numero NON entra nell'hash della UI, e non e' una svista: l'hash
-  // risponde a "l'utente ha toccato qualcosa", che a un bump del motore non si
-  // muove. Sono due domande, e restano due record (vedi loadSemantics in
-  // backend.js). `sem` e' { rendered, engine }, entrambi opzionali.
+  // Ne' il numero ne' il nome entrano nell'hash della UI, e non e' una svista:
+  // l'hash risponde a "l'utente ha toccato qualcosa", che a un bump del motore
+  // o a un cambio di backend non si muove. Non c'e' nemmeno un hash da far
+  // combaciare — quello del motore la UI non lo legge mai (`loadCache` in
+  // backend.js: manifest per-browser, FNV-1a contro SHA-256). Il criterio e'
+  // quello di #134, "raggiunge lo YAML?", e per entrambi la risposta e' no:
+  // dentro l'hash, il pallino direbbe "yaml" su uno YAML che nessuno ha
+  // toccato. Sono domande diverse, e restano record diversi (vedi
+  // loadSemantics / loadRenderers in backend.js). `sem` e' { rendered, engine },
+  // `rend` e' { rendered, current }, tutti opzionali.
   //
   // I DUE IGNOTI NON SONO LO STESSO IGNOTO, e la differenza e' se il giallo si
   // possa poi spegnere:
@@ -93,40 +99,40 @@
   // Cioe' la regola del repo applicata bene: un render di troppo, mai uno di
   // meno.
   //
-  // IL TERZO ASSE, il backend (#150): `rend` e' { rendered, current }, il
-  // backend che ha scritto lo stem e quello scelto adesso. Il motore lo ha nel
-  // proprio fingerprint (`renderer_type`, accanto alla semantica) e cambiarlo
-  // rifa' ogni stem; l'hash della UI no, e per la stessa ragione della
-  // semantica: risponde a "l'utente ha toccato lo stream". Dei due ignoti qui ne
-  // resta uno solo, perche' il backend corrente la UI lo sa sempre (e' una sua
-  // scelta):
+  // L'asse del backend ha gli stessi due ignoti e la stessa risposta, con una
+  // differenza che vale la pena scrivere perche' e' l'unica ragione per cui il
+  // ramo "record assente" e' li': oggi non scopre niente — la UI ha sempre e
+  // solo scritto numpy, e lo pretende una guardia sorgente — quindi costa un
+  // giro a vuoto per progetto e basta. Serve il giorno in cui la scelta del
+  // backend arriva nelle Settings (#150): li' gli stem resi prima, senza
+  // record, sotto un altro backend resterebbero VERDI, cioe' un render di meno
+  // proprio nel caso per cui l'asse esiste. Tacere adesso vorrebbe dire
+  // costruire l'asse e spegnerlo sulla popolazione piu' numerosa.
   //
-  //   - corrente ignoto (un chiamante che non passa `rend`): nessuna pretesa,
-  //     cioe' la firma di prima di #150;
-  //   - backend dello stem non registrato: "renderer". Come lo stem senza
-  //     versione, e non "tanto era numpy": sarebbe vero per gli stem di questo
-  //     editor prima di #150 e falso per quelli di un'altra cartella dopo un
-  //     cambio di workspace (che la mappa la butta), o per uno stem riscritto
-  //     da un `make` del motore, il cui default e' csound. Si spegne al primo
-  //     giro anche a vuoto, come la semantica: il motore salta lo stream
-  //     (`cached: true`) solo se il SUO fingerprint, backend compreso, combacia.
-  //
-  // Viene prima della semantica nel motivo detto: e' una scelta appena fatta
-  // dall'utente, e il tooltip che la nomina e' quello che gli serve.
+  // La precedenza fra i due assi del motore e' la semantica, ed e' deliberata:
+  // l'asse nuovo e' additivo — nessun caso che esistesse prima cambia risposta
+  // — e un render solo li spegne comunque entrambi, quindi la precedenza non
+  // costa un giro a nessuno.
   function staleReason(lastFp, currentFp, sem, rend) {
     if (lastFp !== currentFp) return "yaml";
-    if (rend && rend.current != null && rend.rendered !== rend.current) return "renderer";
-    const rendered = sem && sem.rendered;
     const engine = sem && sem.engine;
-    if (engine == null) return null;
-    if (rendered == null) return "semantics";
-    return rendered !== engine ? "semantics" : null;
+    if (engine != null) {
+      const rendered = sem.rendered;
+      if (rendered == null || rendered !== engine) return "semantics";
+    }
+    const current = rend && rend.current;
+    if (current != null) {
+      const renderedBy = rend.rendered;
+      if (renderedBy == null || renderedBy !== current) return "renderer";
+    }
+    return null;
   }
 
   // The core stale/fresh/never decision, shared by summarize + statusForStream.
   // hasStem is a boolean. !lastFp uses falsiness on purpose (undefined / "" / 0
   // all read as never), matching the original `!last` guard in app.jsx.
-  // `sem` is optional: omitting it is the pre-#133 behaviour exactly.
+  // `sem` is optional (omitting it is the pre-#133 behaviour exactly), and so
+  // is `rend` (pre-#151).
   function classifyStream(lastFp, currentFp, hasStem, sem, rend) {
     if (!lastFp || !hasStem) return STATES.NEVER;
     return staleReason(lastFp, currentFp, sem, rend) === null ? STATES.FRESH : STATES.STALE;
@@ -134,12 +140,12 @@
 
   // Aggregate fresh/stale/never counts across all streams. hasStem is (id)=>bool.
   // `sem` is optional: { rendered: {[streamId]: version}, engine: version|null }.
-  // `rend` is optional: { rendered: {[streamId]: renderer}, current: renderer }.
+  // `rend` likewise: { rendered: {[streamId]: backend}, current: backend|null }.
   function summarize(streams, currentFps, lastRenderedFps, hasStem, sem, rend) {
     let fresh = 0, stale = 0, never = 0;
     for (const s of streams) {
       const state = classifyStream(lastRenderedFps[s.id], currentFps[s.id], hasStem(s.id),
-                                   semFor(sem, s.id), rendFor(rend, s.id));
+                                   semFor(sem, s.id), rendererFor(rend, s.id));
       if (state === STATES.FRESH) fresh++;
       else if (state === STATES.STALE) stale++;
       else never++;
@@ -147,36 +153,58 @@
     return { fresh, stale, never, total: streams.length };
   }
 
-  // La coppia { rendered, engine } per un singolo stream, dalla forma che
-  // app.jsx tiene in stato. Una funzione sola perche' la usano sia summarize
-  // sia statusForStream, e sbagliarla in uno dei due significa due pallini che
-  // non concordano sullo stesso stem.
+  // La coppia { rendered, <lato vivo> } per un singolo stream, dalla forma che
+  // app.jsx tiene in stato. Una funzione per asse perche' le usano sia
+  // summarize sia statusForStream, e sbagliare l'indicizzazione in uno dei due
+  // significa due pallini che non concordano sullo stesso stem.
   function semFor(sem, streamId) {
     if (!sem) return null;
     return { rendered: (sem.rendered || {})[streamId], engine: sem.engine };
   }
-
-  // Lo stesso, per l'asse "renderer": { rendered, current } del singolo stream.
-  function rendFor(rend, streamId) {
+  function rendererFor(rend, streamId) {
     if (!rend) return null;
     return { rendered: (rend.rendered || {})[streamId], current: rend.current };
   }
 
   // Per-stream status object consumed by Timeline.jsx (ClipRenderStatus).
   // ctx = { currentFps, lastRenderedFps, hasStem:(id)=>bool, running:bool,
-  //         currentStreamId, streamProgress, sem, rend }.
+  //         currentStreamId, sem, rend }.
+  //
+  // Lo stato RUNNING non porta un `progress` (#162). Lo portava, letto da una
+  // mappa `streamProgress` che solo l'evento `stream-progress` riempiva — e
+  // quell'evento non lo emette nessuno: ne' server.py ne' render_pipeline.py,
+  // e il motore non ha una riga da cui ricavarlo. La barra per clip stava
+  // quindi a 0% per tutto il render, tranne l'istante fra uno `stream-done` e
+  // lo `stream-start` successivo, in cui leggeva 100% sullo stream gia'
+  // finito. Il pallino pulsante e' tutto cio' che si sa davvero dire.
+  //
+  // Il motivo si chiede UNA volta e si indicizza: con un `if` per asse, il
+  // giorno che ne nasce un quarto il ramo nuovo resta senza testo e il pallino
+  // giallo torna a dire quello dello YAML — che e' falso e manda a cercare una
+  // modifica che nessuno ha fatto.
+  //
+  // La tabella da sola pero' non lo impedisce: una voce dimenticata cade sul
+  // ripiego qui sotto, e il ripiego e' proprio il testo dello YAML (come la
+  // mappa di `ClipRenderStatus` un livello sotto). Lo impedisce
+  // test-render-status.js, che raccoglie i motivi dai `return` di
+  // `staleReason` e pretende una voce per ciascuno — per questo la tabella e'
+  // esposta, e per questo `staleReason` restituisce solo letterali.
+  const STALE_TOOLTIP = {
+    yaml:      TOOLTIPS.stale,
+    semantics: TOOLTIPS.staleSemantics,
+    renderer:  TOOLTIPS.staleRenderer,
+  };
   function statusForStream(streamId, ctx) {
     if (ctx.running && ctx.currentStreamId === streamId) {
-      return { state: STATES.RUNNING, progress: ctx.streamProgress[streamId] || 0, tooltip: TOOLTIPS.running };
+      return { state: STATES.RUNNING, tooltip: TOOLTIPS.running };
     }
     const sem = semFor(ctx.sem, streamId);
-    const rend = rendFor(ctx.rend, streamId);
+    const rend = rendererFor(ctx.rend, streamId);
     const lastFp = ctx.lastRenderedFps[streamId];
     const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId), sem, rend);
     if (state === STATES.STALE) {
       const why = staleReason(lastFp, ctx.currentFps[streamId], sem, rend);
-      if (why === "renderer") return { state, tooltip: rendererTooltip(rend.rendered, rend.current) };
-      if (why === "semantics") return { state, tooltip: TOOLTIPS.staleSemantics };
+      return { state, tooltip: STALE_TOOLTIP[why] || TOOLTIPS.stale };
     }
     return { state, tooltip: TOOLTIPS[state] };
   }
@@ -184,11 +212,11 @@
   window.PGERenderStatus = {
     STATES,
     TOOLTIPS,
+    STALE_TOOLTIP,
     fingerprintAll,
     classifyStream,
     staleReason,
     summarize,
     statusForStream,
-    rendererTooltip,
   };
 })();
