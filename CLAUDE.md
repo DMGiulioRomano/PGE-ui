@@ -619,7 +619,16 @@ and an engine that dies at parse time (a missing sample, a misspelled
 `loop_unit`) has written nothing — claiming the list stamped this run's
 records on every old stem and turned the whole timeline green under a "Render
 failed" toast. Which stems were rewritten before a later death is unknown, and
-unknown reads yellow. `test-semantics-store.js` drives it. That fallback's
+unknown reads yellow. The **durations** are not provenance, though — they are a
+measure of the file, and the disk knows it: without `--cache` every
+`stream-done` comes from this fallback, so a run that dies *after* the audio
+(grain JSON, score, Reaper export all come after the stems in `cli.py`) has
+rewritten every stem and claimed none, and with `localFps` empty the
+`loadCache` at the end of `run()` — the only re-read — never ran, leaving the
+waveform cropped to the previous length. So a failed run that listed files
+re-reads `/stems`; dropping the durations instead would have stretched the
+waveform of an untouched file, on the commonest failure. `test-semantics-store.js`
+and `test-stem-index.js` drive it. That fallback's
 "already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
 fills the index from `/stems` on every project open, so "already handled" used
 to mean "was on disk", and from the second render on the fallback was dead.

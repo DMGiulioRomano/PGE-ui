@@ -507,6 +507,9 @@
         // dell'ultimo stream DIRTY del giro, il solo che dipende dalla riga di
         // path stampata in fondo.
         const doneThisRun = new Set();
+        // Un giro fallito che ha elencato file su disco: impronta, semantica e
+        // backend non si reclamano, ma le durate si rileggono (vedi il `done`).
+        let resyncDurations = false;
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -560,6 +563,14 @@
                   // della morte non si sa, e l'ignoto vale giallo: un render di
                   // troppo, mai uno di meno.
                   const claimable = ev.ok === true;
+                  // ...pero' la DURATA di quei file non e' un record di
+                  // provenienza: e' una misura, e la sa il disco. Senza
+                  // `--cache` tutti gli `stream-done` vengono da qui, e un giro
+                  // che muore dopo l'audio (grain JSON, partitura, Reaper)
+                  // ha riscritto ogni stem senza che se ne reclami uno — e
+                  // senza `localFps` il `loadCache` in fondo, l'unico che la
+                  // rilegge, non partiva. Vedi sotto.
+                  if (!claimable && (ev.generated || []).length) resyncDurations = true;
                   for (const genPath of (ev.generated || [])) {
                     const fname = genPath.replace(/^.*[\\/]/, "");
                     const stem  = fname.replace(/\.[^.]+$/, "");
@@ -573,7 +584,8 @@
                     // (muto, o fuori dal solo) o che non ha nemmeno letto
                     // (non dichiarato): il file e' di un giro precedente.
                     // L'indice deve sapere che c'e' — `ownsStem` — ma senza
-                    // toccarne la durata, che non e' cambiata, e senza
+                    // toccarne la durata (li' non e' cambiata; su un giro
+                    // fallito la rilegge il disco, in fondo) e senza
                     // `stream-done`: quell'evento fa scrivere impronta,
                     // semantica e backend di QUESTO giro, qui in `localFps` e
                     // in memoria in app.jsx. Tolto il muto, il pallino sarebbe
@@ -685,6 +697,14 @@
               else nextRenderers[id] = rend;
             }
             this._persistRenderers(opts.yamlBasename, nextRenderers);
+          } else if (resyncDurations) {
+            // Nessuno stem reclamato, quindi niente `loadCache` qui sopra: si
+            // chiede al disco solo la misura dei file. E' la verita' in
+            // entrambi i casi — il motore morto al parse non ha toccato
+            // niente e la durata resta quella, quello morto dopo l'audio ha
+            // riscritto e la durata e' la nuova — dove lasciarla cadere
+            // avrebbe stirato sulla clip anche il waveform di un file intatto.
+            await this.loadCache(opts.yamlBasename);
           }
           return lastResult;
         } catch (e) {

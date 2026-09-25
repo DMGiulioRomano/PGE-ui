@@ -292,6 +292,56 @@ console.log("\n── a stem present in one format only ──");
            "restava ritagliato sulla misura di prima");
   }
 
+  /* ------------------------------------------------------------------
+   * Un giro FALLITO non reclama niente (#151) — ma la durata non e' un
+   * record di provenienza, e' una misura del file.
+   *
+   * Senza `--cache` il motore non stampa righe `[CACHE]`, quindi TUTTI gli
+   * `stream-done` vengono dal fallback, e un giro che muore dopo l'audio
+   * (grain JSON, partitura, export Reaper: vengono dopo gli stem in cli.py)
+   * ha riscritto ogni stem senza che il browser ne reclami uno. Giusto per
+   * impronta, semantica e backend: chi ha scritto cosa non si sa, e l'ignoto
+   * vale giallo. Ma la durata la sa il disco, e senza `localFps` il
+   * `loadCache` in fondo a `run()` — l'unico che la rilegge — non partiva:
+   * il waveform restava ritagliato sulla misura di prima dello stem nuovo.
+   * Lasciarla cadere non era la cura: sul fallimento piu' comune (il motore
+   * muore al parse, non scrive niente) toglieva una misura giusta.
+   * ------------------------------------------------------------------ */
+  console.log("\n── un giro fallito non reclama, ma la durata la chiede al disco ──");
+  {
+    DISK = ["proj__bass-1.wav"];
+    DUR  = { "proj__bass-1.wav": 2.0 };
+    const be = mkBackendWithRender([
+      { type: "done", ok: false, returncode: 1, generated: ["output/proj__bass-1.wav"] },
+    ]);
+    await be.render.loadCache("proj");
+    RENDER_WRITES = { "proj__bass-1.wav": 1.0 };   // morto DOPO aver scritto l'audio
+    const seen = [];
+    await be.render.run(
+      { yamlBasename: "proj", streams: [{ id: "bass-1" }], outputFormat: "wav" },
+      (e) => seen.push(e));
+    assert("nessuno `stream-done` sintetico su un giro fallito",
+           !seen.some(e => e.type === "stream-done"),
+           JSON.stringify(seen.filter(e => e.type === "stream-done")));
+    assert("...ma la durata e' quella del file che il disco ha adesso",
+           be.render.stemDur("proj", "bass-1") === 1.0,
+           `stemDur = ${be.render.stemDur("proj", "bass-1")} contro 1.0 sul disco`);
+
+    // E il caso piu' comune: il motore muore al parse e non tocca niente. La
+    // misura che c'era era giusta, e deve restare.
+    const be2 = mkBackendWithRender([
+      { type: "done", ok: false, returncode: 1, generated: ["output/proj__bass-1.wav"] },
+    ]);
+    await be2.render.loadCache("proj");
+    await be2.render.run(
+      { yamlBasename: "proj", streams: [{ id: "bass-1" }], outputFormat: "wav" },
+      () => {});
+    assert("...e su un file non toccato la misura giusta non si perde",
+           be2.render.stemDur("proj", "bass-1") === 1.0,
+           `stemDur = ${be2.render.stemDur("proj", "bass-1")}: senza misura il ` +
+           "waveform torna stirato sulla clip");
+  }
+
   bodyDone = true;
 })().catch(e => {
   /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e
