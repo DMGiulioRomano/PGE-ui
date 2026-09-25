@@ -568,6 +568,142 @@ def engine_loop_units(root: Path) -> list:
     return units
 
 
+def _parameter_definitions_candidates(root: Path):
+    """Dove sta `parameter_definitions.py`, dal layout attuale (src/pge/,
+    PGE #162) al piatto di prima — lo stesso ordine di engine_parameter_bounds."""
+    return (
+        root / "src" / "pge" / "parameters" / "parameter_definitions.py",
+        root / "src" / "parameters" / "parameter_definitions.py",
+    )
+
+
+def _module_constant(candidates, name):
+    """Il valore letterale della costante di modulo `name` nel primo candidato
+    che la dichiara, con i nomi risolti sulle costanti di modulo dello stesso
+    file; `None` se nessun candidato la dichiara o se non e' riducibile a un
+    letterale.
+
+    Serve perche' il motore scrive le tuple di vocabolario per NOME —
+    `RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, RANGE_UNIT_RELATIVE)` — e un
+    `literal_eval` secco su quel nodo risponde "non lo so" sul checkout vero.
+    La risoluzione va di un livello: un nome che punta a un letterale di modulo
+    diventa quel letterale, un nome che non punta a niente (o a
+    un'espressione) fa fallire la lettura invece di lasciare un buco.
+
+    Come `_read_int_constant`: il primo file che dichiara il nome ha risposto,
+    anche quando la risposta e' "non lo so" — un'omonima in un layout piu'
+    vecchio non sarebbe la costante di questo motore.
+
+    Le assegnazioni le riconosce `_assigned_value`, come in ogni altra lettura
+    del modulo: una seconda copia di quel riconoscimento e' il modo in cui una
+    delle due smette di vedere la grafia annotata."""
+    for src in candidates:
+        try:
+            tree = ast.parse(src.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        before = []
+        found = None
+        for node in tree.body:
+            found = _assigned_value(node, name)
+            if found is not None:
+                break
+            before.append(node)
+        if found is None:
+            continue
+        if isinstance(found, (ast.Tuple, ast.List)):
+            out = []
+            for elt in found.elts:
+                lit = (_bound_literal(before, elt.id) if isinstance(elt, ast.Name)
+                       else _ast_literal(elt))
+                if lit is None:
+                    return None
+                out.append(lit)
+            return tuple(out)
+        return _ast_literal(found)
+    return None
+
+
+def _bound_literal(nodes, name):
+    """Il letterale scalare (str, int, float) che `name` vale dopo `nodes`, o
+    None. Conta l'ULTIMA assegnazione, non l'ultima che era un letterale: un
+    nome riassegnato a un'espressione vale quell'espressione, che l'AST non sa
+    ridurre, e tenere il letterale di prima sarebbe consegnare un valore vecchio
+    come se fosse del motore."""
+    lit = None
+    for node in nodes:
+        value = _assigned_value(node, name)
+        if value is not None:
+            lit = _ast_literal(value)
+    return lit if isinstance(lit, (str, int, float)) else None
+
+
+_RANGE_UNITS_CACHE: dict = {}
+
+
+def engine_range_units(root: Path) -> list:
+    """`RANGE_UNITS` del motore (`parameters/parameter_definitions.py`), in
+    ordine.
+
+    E' il vocabolario delle chiavi `<param>_range_unit` da PGE #267 — oggi una
+    sola, `grain.duration_range_unit`. Una grafia fuori lista e'
+    `InvalidFieldValueError` e il render muore; la UI lo dice mentre si scrive
+    (`grainRangeUnitError` in envelope-utils.js), e la copia che tiene resta
+    onesta perche' la parita' la confronta con questa lettura. Stesso ruolo di
+    `engine_loop_units`.
+
+    L'ordine conta: la prima grafia e' la canonica e il default della chiave
+    assente, ed e' quella che il selettore dell'Inspector tratta come «cancella
+    la chiave». `[]` = un motore senza la costante (piu' vecchio di #267), o una
+    costante che non si riduce a stringhe letterali: chi chiama non deve
+    inventarsi un vocabolario."""
+    candidates = _parameter_definitions_candidates(root)
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _RANGE_UNITS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    value = _module_constant(candidates, "RANGE_UNITS")
+    units = (list(value) if isinstance(value, tuple)
+             and value and all(isinstance(u, str) for u in value) else [])
+    _RANGE_UNITS_CACHE[key] = (stamp, units)
+    return units
+
+
+_RELATIVE_RANGE_CACHE: dict = {}
+
+
+def engine_relative_range_bounds(root: Path):
+    """`RELATIVE_RANGE_BOUNDS` del motore come `{"min", "max"}`, o None.
+
+    E' il dominio di un `_range` dichiarato `relative` (PGE #267): una frazione
+    del valore base, oggi `[0, 1]`. Il motore lo tiene separato dal
+    `max_range` di `grain_duration` apposta — che i due valgano 1.0 e' una
+    coincidenza numerica, e alzare l'uno non deve alzare l'altro — e
+    `GRANULAR_PARAMETERS` non ha un campo per un secondo dominio, quindi la UI
+    lo riceve su `/bounds` con una chiave sua (`relative_range`).
+
+    Un dominio che non e' un dominio vale None, come un sample rate assurdo in
+    `engine_output_sr`: due numeri (non bool, finiti perche' letterali) con
+    `min <= max`, altrimenti il clamp della UI si spegnerebbe in silenzio
+    invece di tenere il fallback statico di yaml-bridge.js."""
+    candidates = _parameter_definitions_candidates(root)
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _RELATIVE_RANGE_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    value = _module_constant(candidates, "RELATIVE_RANGE_BOUNDS")
+    out = None
+    if (isinstance(value, tuple) and len(value) == 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in value)
+            and value[0] <= value[1]):
+        out = {"min": value[0], "max": value[1]}
+    _RELATIVE_RANGE_CACHE[key] = (stamp, out)
+    return out
+
+
 _RENDERER_TYPES_CACHE: dict = {}
 
 

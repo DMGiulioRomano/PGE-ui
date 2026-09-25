@@ -2685,3 +2685,213 @@ def test_engine_loop_units_sees_a_live_bump(tmp_path):
     st = src.stat()
     os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
     assert ei.engine_loop_units(tmp_path) == ["seconds", "absolute", "normalized"]
+
+
+# ---------------------------------------------------------------------------
+# engine_range_units / engine_relative_range_bounds — la banda relativa di
+# `grain.duration_range` (PGE #267, PGE-ui #163).
+#
+# Due costanti di `parameter_definitions.py`, accanto a GRANULAR_PARAMETERS:
+#
+#   RANGE_UNITS           il vocabolario di `<param>_range_unit`. Una grafia
+#                         fuori lista e' InvalidFieldValueError, cioe' un render
+#                         che muore: la UI la nomina mentre si scrive
+#                         (`grainRangeUnitError`), e la copia che tiene in
+#                         envelope-utils.js e' onesta solo se la parita' la
+#                         confronta con questa lettura — come LOOP_UNITS.
+#   RELATIVE_RANGE_BOUNDS il dominio della banda quando e' una frazione della
+#                         base. Non e' il `max_range` di grain_duration (che
+#                         vale 1.0 s per coincidenza, e il motore lo dice):
+#                         e' un dominio della MODALITA', e `min_range`/
+#                         `max_range` di GRANULAR_PARAMETERS non possono
+#                         esprimerne due. Viaggia percio' su /bounds con un
+#                         campo suo, `relative_range`.
+#
+# Cache sull'mtime per entrambe, come le altre letture che un `git pull` nel
+# repo fratello puo' cambiare sotto un `make serve` acceso.
+# ---------------------------------------------------------------------------
+
+def _stub_parameter_definitions(root, body, layout="pge"):
+    d = (root / "src" / "pge" / "parameters") if layout == "pge" \
+        else (root / "src" / "parameters")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "parameter_definitions.py").write_text(
+        "import numpy as np  # mai importato dal parser\n" + body)
+
+
+def test_engine_range_units_parses_source(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path,
+        "RANGE_UNIT_ABSOLUTE = 'absolute'\n"
+        "RANGE_UNITS = ('absolute', 'relative')\n")
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
+
+
+def test_engine_range_units_keeps_the_order(tmp_path):
+    """La prima grafia e' la canonica, cioe' il default: il selettore
+    dell'Inspector la tratta come «cancella la chiave». Un insieme perderebbe
+    proprio il dato che il chiamante usa."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, "RANGE_UNITS = ('relative', 'absolute')\n")
+    assert ei.engine_range_units(tmp_path) == ["relative", "absolute"]
+
+
+def test_engine_range_units_annotated(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path, "RANGE_UNITS: tuple = ('absolute', 'relative')\n")
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
+
+
+def test_engine_range_units_legacy_layout(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path, "RANGE_UNITS = ('absolute', 'relative')\n", layout="flat")
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
+
+
+def test_engine_range_units_missing_is_empty(tmp_path):
+    """Un motore piu' vecchio di #267 non ha la costante: `[]` = non lo so."""
+    import engine_introspect as ei
+    assert ei.engine_range_units(tmp_path) == []
+    _stub_parameter_definitions(tmp_path, "SOMETHING_ELSE = 1\n")
+    assert ei.engine_range_units(tmp_path) == []
+
+
+def test_engine_range_units_non_literal_is_empty(tmp_path):
+    """Oggi il motore scrive `RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, ...)`, cioe'
+    due NOMI, non due letterali — e un lettore che si fermasse li' sarebbe muto
+    sul motore vero. I nomi si risolvono sulle assegnazioni di modulo; quel che
+    resta non letterale (una chiamata, un numero) e' "non lo so", non una lista
+    mezza letta."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, "RANGE_UNITS = tuple(_UNITS)\n")
+    assert ei.engine_range_units(tmp_path) == []
+    _stub_parameter_definitions(tmp_path, "RANGE_UNITS = ('absolute', 3)\n")
+    assert ei.engine_range_units(tmp_path) == []
+    _stub_parameter_definitions(tmp_path, "RANGE_UNITS = (UNDEFINED_NAME, 'relative')\n")
+    assert ei.engine_range_units(tmp_path) == []
+
+
+def test_engine_range_units_resolves_module_names(tmp_path):
+    """La grafia del motore vero: le due grafie sono costanti di modulo, e la
+    tupla le nomina. Letta a letterali soltanto, questa lettura tornava `[]`
+    sul checkout reale — e la parita' avrebbe confrontato un vuoto."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path,
+        "RANGE_UNIT_ABSOLUTE = 'absolute'\n"
+        "RANGE_UNIT_RELATIVE: str = 'relative'\n"
+        "RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, RANGE_UNIT_RELATIVE)\n")
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
+
+
+def test_engine_range_units_name_rebound_to_an_expression_is_unknown(tmp_path):
+    """Il nome vale la sua ULTIMA assegnazione prima della tupla, non l'ultima
+    che era un letterale. Riassegnato a un'espressione, il valore vero non si
+    legge dall'AST: la risposta e' "non lo so", non il letterale di prima — che
+    la UI riceverebbe come verita' del motore e che la parita' confronterebbe
+    con una copia uguale e ugualmente vecchia."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path,
+        "RANGE_UNIT_ABSOLUTE = 'absolute'\n"
+        "RANGE_UNIT_RELATIVE = 'relative'\n"
+        "RANGE_UNIT_RELATIVE = _spelling('relative')\n"
+        "RANGE_UNITS = (RANGE_UNIT_ABSOLUTE, RANGE_UNIT_RELATIVE)\n")
+    assert ei.engine_range_units(tmp_path) == []
+
+
+def test_engine_range_units_sees_a_live_bump(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, "RANGE_UNITS = ('absolute', 'relative')\n")
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative"]
+
+    src = tmp_path / "src" / "pge" / "parameters" / "parameter_definitions.py"
+    src.write_text("RANGE_UNITS = ('absolute', 'relative', 'octaves')\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert ei.engine_range_units(tmp_path) == ["absolute", "relative", "octaves"]
+
+
+def test_engine_relative_range_bounds_parses_source(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, "RELATIVE_RANGE_BOUNDS = (0.0, 1.0)\n")
+    assert ei.engine_relative_range_bounds(tmp_path) == {"min": 0.0, "max": 1.0}
+
+
+def test_engine_relative_range_bounds_annotated_and_legacy(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(
+        tmp_path, "RELATIVE_RANGE_BOUNDS: tuple = (0, 2)\n", layout="flat")
+    assert ei.engine_relative_range_bounds(tmp_path) == {"min": 0, "max": 2}
+
+
+def test_engine_relative_range_bounds_missing_is_none(tmp_path):
+    import engine_introspect as ei
+    assert ei.engine_relative_range_bounds(tmp_path) is None
+    _stub_parameter_definitions(tmp_path, "SOMETHING_ELSE = 1\n")
+    assert ei.engine_relative_range_bounds(tmp_path) is None
+
+
+@pytest.mark.parametrize("body", [
+    "RELATIVE_RANGE_BOUNDS = (0.0,)\n",             # un estremo solo
+    "RELATIVE_RANGE_BOUNDS = (0.0, 1.0, 2.0)\n",    # tre
+    "RELATIVE_RANGE_BOUNDS = ('0', '1')\n",         # stringhe
+    "RELATIVE_RANGE_BOUNDS = (True, 1.0)\n",        # bool e' un int in Python
+    "RELATIVE_RANGE_BOUNDS = (1.0, 0.0)\n",         # rovesciato
+    "RELATIVE_RANGE_BOUNDS = (0.0, float('inf'))\n",  # non letterale
+    "RELATIVE_RANGE_BOUNDS = make_bounds()\n",
+])
+def test_engine_relative_range_bounds_rejects_nonsense(tmp_path, body):
+    """Un dominio che non e' un dominio vale "non lo so": la UI clampa dentro
+    questo intervallo, e un min sopra il max (o un NaN) spegnerebbe il clamp in
+    silenzio invece di tenere il fallback statico."""
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, body)
+    assert ei.engine_relative_range_bounds(tmp_path) is None
+
+
+def test_engine_relative_range_bounds_sees_a_live_bump(tmp_path):
+    import engine_introspect as ei
+    _stub_parameter_definitions(tmp_path, "RELATIVE_RANGE_BOUNDS = (0.0, 1.0)\n")
+    assert ei.engine_relative_range_bounds(tmp_path) == {"min": 0.0, "max": 1.0}
+
+    src = tmp_path / "src" / "pge" / "parameters" / "parameter_definitions.py"
+    src.write_text("RELATIVE_RANGE_BOUNDS = (0.0, 2.0)\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert ei.engine_relative_range_bounds(tmp_path) == {"min": 0.0, "max": 2.0}
+
+
+def test_bounds_endpoint_carries_relative_range(tmp_path):
+    """La route che la UI interroga. Il dominio relativo sta su /bounds, accanto
+    ai bound per parametro, perche' e' la stessa domanda — quanto puo' valere
+    `duration_range` — con una risposta che dipende dalla modalita'."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_parameter_definitions(tmp_path, "RELATIVE_RANGE_BOUNDS = (0.0, 1.0)\n")
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert body["ok"] is True
+    assert body["bounds"]["relative_range"] == {"min": 0.0, "max": 1.0}
+
+
+def test_bounds_endpoint_omits_unknown_relative_range(tmp_path):
+    """Chiave assente, non `null`: un motore senza #267 non ha il dominio, e la
+    UI tiene il fallback statico di yaml-bridge.js."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_parameter_files(tmp_path)
+
+    body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_json()
+    assert "relative_range" not in body["bounds"]
