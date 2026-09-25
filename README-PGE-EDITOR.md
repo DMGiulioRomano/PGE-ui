@@ -138,8 +138,9 @@ the two sits the engine venv setup, minutes in which no subprocess exists yet
 and the render is nonetheless under way, with its paths already pinned.
 
 Browser-side, a successful switch drops the stem index, the on-disk stem
-durations, the peaks, the spectrograms, the grain sidecars and the recorded
-engine-semantics versions, then reloads the project list and reopens a project
+durations, the peaks, the spectrograms, the grain sidecars and the two
+provenance records — engine-semantics version and rendering backend per stem —
+then reloads the project list and reopens a project
 (same name if the new folder has one). Keeping any of it would mean a clip with a
 green dot and no audio behind it — the 404 an `<audio>` element reports by never
 firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
@@ -171,14 +172,24 @@ is engine code, not the author's work.
 ```jsonc
 { "type": "log",           "line": "..." }
 { "type": "stream-start",  "streamId": "stream3", "index": 2, "total": 5 }
-{ "type": "stream-done",   "streamId": "stream3", "cached": false, "output": "output/PGE_test__stream3.aif" }
+{ "type": "stream-done",   "streamId": "stream3", "cached": false }
 { "type": "done", "ok": true, "generated": ["output/..."], "returncode": 0 }
 ```
 
-The server parses `main.py`'s stdout (`[3/5] stream3  rendering…` and
-`→ output/…`) into these structured events so the UI can highlight the
-"currently rendering" clip without you having to change anything in the
-python engine.
+The server parses `main.py`'s stdout into these structured events without you
+having to change anything in the python engine. Two line shapes matter:
+`[CACHE] <id>: DIRTY|clean` (printed by the cache triage, one per stream the
+engine builds) and the summary block's `    /abs/…/output/<basename>__<id>.<ext>`
+path lines. A `clean` stream gets `stream-start` + `stream-done` (`cached:
+true`) on its `[CACHE]` line; a `DIRTY` one gets `stream-start` there and its
+`stream-done` (`cached: false`) only on the path line naming its stem, which
+the engine prints after writing it — the numpy renderer triages every stream
+before rendering any, so a `[CACHE]` line says nothing about the previous
+stream being done. `stream-done` is what marks a stem as rendered by this run,
+so it must not arrive before the file exists. Without `--cache` there are no
+`[CACHE]` lines at all, and `done.generated` (the stems found on disk) is what
+`backend.js` falls back on; `run()` also emits events of its own on top of
+these — see the contract at the top of `backend.js`.
 
 ---
 

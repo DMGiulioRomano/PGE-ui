@@ -29,8 +29,21 @@
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?, progress?})
+ *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
+ *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
+ *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
+ *     sintetici dal fallback di `done`, e `{type: "stems-resync", streamIds}`
+ *     dopo un giro fallito che ha trovato stem su disco — niente reclamo, ma
+ *     peaks, spettrogrammi e grani di quegli id vanno riletti (#151).
  *   render.cancel()
  *   render.loadCache(yamlBasename)→ Promise<{[streamId]: fingerprint}>
+ *   render.loadSemantics(yamlBasename) → Promise<{[streamId]: version}>
+ *   render.loadRenderers(yamlBasename) → Promise<{[streamId]: backend}>
+ *                                   I due record di provenienza (#133, #151):
+ *                                   con quale semantica e con quale backend il
+ *                                   motore ha scritto ogni stem. Voce assente =
+ *                                   non registrato: col lato vivo noto, chi
+ *                                   classifica la legge stale (render-status.js).
  *   render.grainsUrl(yamlBasename, streamId)     → string (grain JSON sidecar URL)
  *   render.loadGrainData(yamlBasename, streamId) → Promise<grainData | null>
  *
@@ -175,6 +188,41 @@
       parts.push(JSON.stringify(k) + ":" + body);
     }
     return fnv1a("{" + parts.join(",") + "}" + `|fmt:${format || "aiff"}`);
+  }
+
+  /* Cosa conta come nome di backend (#151): una stringa non vuota, e nient'altro
+     — tutto il resto vale "non si sa" e torna `null`. UNA regola con tre
+     lettori: il record persistito (`run()` qui sotto), il record in memoria
+     (l'handler degli `stream-done` in app.jsx) e il lato vivo dell'asse
+     (`rendererCtx.current`, sempre in app.jsx).
+     Stava scritta tre volte, e le tre copie non concordavano — stringa non
+     vuota qui, verita' generica nell'handler, nessun filtro sul lato vivo.
+     Con un nome vuoto sul lato vivo il `current` e' NOTO ("" != null) contro
+     record che `run()` non scrive mai: giallo su ogni stem, e nessun render lo
+     spegne. Con un non-stringa vera il record in memoria lo tiene e quello
+     persistito no: un colore fino al reload, un altro dopo. Oggi il valore e'
+     la costante "numpy" e non scatta niente; il giorno del selettore (#150)
+     arriva da una preferenza, ed e' li' che tre copie divergono. */
+  function rendererName(x) {
+    return (typeof x === "string" && x) ? x : null;
+  }
+
+  /* Gli id degli stream che il motore COSTRUISCE in un giro: il mirror di
+     `Generator._filter_solo_mute` (generator.py). Con almeno un `solo` si
+     prendono quelli e basta — il `mute` li' non conta, un solista muto suona —,
+     altrimenti tutti meno i muti. Il motore guarda la PRESENZA della chiave, e
+     il serializzatore scrive `solo`/`mute` solo quando veri (yaml-bridge.js),
+     quindi nello stato la presenza e' la verita'.
+     Il lettore e' il fallback di `done` in `run()`: `generated` e' il DISCO,
+     non il giro, e uno stream che il motore non costruisce ha li' il file di un
+     render precedente — magari di un altro backend, o di un'altra semantica.
+     Reclamarlo scriveva i record di provenienza di QUESTO giro su audio che
+     questo giro non ha toccato. `tests/parity/test-fingerprint-parity.js`
+     confronta la regola con i byte del motore. */
+  function streamsEngineBuilds(streams) {
+    const list = (Array.isArray(streams) ? streams : []).filter(s => s && typeof s === "object");
+    const soloMode = list.some(s => s.solo);
+    return new Set(list.filter(s => (soloMode ? s.solo : !s.mute)).map(s => s.id));
   }
 
   // fetch with an AbortController timeout so a hung server.py can't leave a
@@ -355,8 +403,11 @@
       // diversi, quindi il dato e' per stream come l'hash.
       //
       // Voce assente = stem renderizzato prima che l'editor registrasse il
-      // numero. Resta assente: chi classifica non pretende niente da un dato
-      // che non c'e', e il primo render la scrive.
+      // numero. Col motore noto chi classifica la legge come stale — uno stem
+      // scritto da un motore di cui non si sa la lettura — e il primo giro la
+      // scrive, anche a vuoto (`cached: true`). A non pretendere niente e'
+      // l'ALTRO ignoto, il motore: vedi `staleReason` in render-status.js, e
+      // `loadRenderers` qui sotto, che segue la stessa regola.
       async loadSemantics(yamlBasename) {
         try {
           const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
@@ -369,6 +420,40 @@
           const all = JSON.parse(localStorage.getItem("pge-local-sem") || "{}");
           all[yamlBasename] = sems;
           localStorage.setItem("pge-local-sem", JSON.stringify(all));
+        } catch {}
+      },
+
+      // Il backend che ha prodotto ogni stem (#151). Terza mappa parallela alle
+      // altre due, con la stessa forma e la stessa regola, perche' e' la stessa
+      // classe di dato: qualcosa da cui lo stem dipende e che il testo YAML non
+      // dice. Il motore lo mette nel PROPRIO fingerprint accanto alla semantica
+      // (`renderer_type`, PGE #228), quindi renderizzare con un backend e
+      // rilanciare con un altro gli fa rifare gli stem — e con tre backend che
+      // esistono per essere confrontati e' lo scenario d'uso, non il caso limite.
+      //
+      // Fuori dall'hash come la semantica, e la ragione non e' che i due hash
+      // non combaciano — non si confrontano mai, vedi loadCache qui sopra.
+      // E' che l'hash risponde a "l'utente ha modificato lo YAML": metterci
+      // dentro il backend farebbe dire al pallino "yaml" su uno YAML che
+      // nessuno ha toccato. Il criterio e' quello di #134 — raggiunge lo YAML?
+      // — e qui la risposta e' no.
+      //
+      // Voce assente = stem reso prima che l'editor registrasse il nome. Chi
+      // classifica la legge come stale: oggi non scopre niente (la UI cabla un
+      // solo backend) e costa un giro a vuoto, ma e' la direzione giusta il
+      // giorno in cui la scelta arriva nelle Settings (#150).
+      async loadRenderers(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistRenderers(yamlBasename, rnds) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-renderer") || "{}");
+          all[yamlBasename] = rnds;
+          localStorage.setItem("pge-local-renderer", JSON.stringify(all));
         } catch {}
       },
       cancel() {
@@ -431,10 +516,16 @@
         // Il fallback di `done` chiedeva la stessa cosa a `stemIndex`, che pero'
         // `loadCache` riempie da /stems a ogni apertura di progetto: li'
         // "gia' gestito" voleva dire "esisteva su disco", quindi dal secondo
-        // render in poi il fallback era morto — e il fallback e' l'unica rete
-        // dell'ultimo stream DIRTY del giro, il solo che dipende dalla riga di
-        // path stampata in fondo.
+        // render in poi il fallback era morto — e il fallback e' la rete di
+        // ogni stream DIRTY del giro, che dipende tutto dalla sua riga di path
+        // stampata in fondo (render_pipeline.py).
         const doneThisRun = new Set();
+        // Un giro fallito che ha elencato file su disco: impronta, semantica e
+        // backend non si reclamano, ma le durate si rileggono (vedi il `done`).
+        let resyncDurations = false;
+        // ...e il disegno degli stem che il motore PUO' aver riscritto, che e'
+        // una misura del file come la durata: vedi `stems-resync` in fondo.
+        const resyncIds = [];
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -468,6 +559,37 @@
                   // that didn't already get a stream-done event during streaming.
                   // This covers the case where parse_render_line missed a line.
                   const prefix = opts.yamlBasename + "__";
+                  // Una richiesta che dichiara i suoi stream (app.jsx lo fa
+                  // sempre) dice anche quali il motore ha letto: uno stem il
+                  // cui id non e' fra quelli — stream cancellato, o il nome
+                  // vecchio di uno rinominato, che senza `--cache` la GC del
+                  // motore non tocca — e' di un giro precedente tanto quanto
+                  // quello di un muto. Senza la lista non c'e' un insieme
+                  // contro cui giudicare, e vale il comportamento storico.
+                  // Non e' pero' la regola di `state["ids"]` nel bridge, che
+                  // tratta una lista VUOTA come assente: qui `[]` e' una
+                  // lista, e uno YAML senza stream il motore non lo
+                  // costruisce — ogni file su disco e' di prima.
+                  const declared = Array.isArray(opts.streams);
+                  const built = streamsEngineBuilds(opts.streams);
+                  // Un giro FALLITO non ha costruito niente di certo. Il bridge
+                  // elenca il disco anche con `ok: false`, e un motore che
+                  // muore al parse (un sample che manca, un `loop_unit` scritto
+                  // male) non ha scritto un solo file: sono tutti di prima.
+                  // Reclamarli stampava impronta, semantica e backend di questo
+                  // giro su audio che nessuno ha rifatto — verde su tutto dopo
+                  // un "Render failed". Quali stem siano stati riscritti prima
+                  // della morte non si sa, e l'ignoto vale giallo: un render di
+                  // troppo, mai uno di meno.
+                  const claimable = ev.ok === true;
+                  // ...pero' la DURATA di quei file non e' un record di
+                  // provenienza: e' una misura, e la sa il disco. Senza
+                  // `--cache` tutti gli `stream-done` vengono da qui, e un giro
+                  // che muore dopo l'audio (grain JSON, partitura, Reaper)
+                  // ha riscritto ogni stem senza che se ne reclami uno — e
+                  // senza `localFps` il `loadCache` in fondo, l'unico che la
+                  // rilegge, non partiva. Vedi sotto.
+                  if (!claimable && (ev.generated || []).length) resyncDurations = true;
                   for (const genPath of (ev.generated || [])) {
                     const fname = genPath.replace(/^.*[\\/]/, "");
                     const stem  = fname.replace(/\.[^.]+$/, "");
@@ -476,14 +598,38 @@
                     if (!streamId) continue;
                     if (doneThisRun.has(streamId)) continue;  // already handled, this run
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
-                    doneThisRun.add(streamId);
-                    // Qui l'id NON si valida contro `opts.streams`: `generated`
-                    // e' la lista dei file che il server ha trovato su disco,
-                    // quindi anche lo stem di uno stream cancellato esiste
-                    // davvero, e l'indice deve saperlo — e' esattamente la
-                    // domanda a cui `ownsStem` risponde.
-                    _markStemFresh(key);
                     const s = (opts.streams || []).find(x => x.id === streamId);
+                    // Uno stream dichiarato che il motore NON ha costruito
+                    // (muto, o fuori dal solo) o che non ha nemmeno letto
+                    // (non dichiarato): il file e' di un giro precedente.
+                    // L'indice deve sapere che c'e' — `ownsStem` — ma senza
+                    // toccarne la durata (li' non e' cambiata; su un giro
+                    // fallito la rilegge il disco, in fondo) e senza
+                    // `stream-done`: quell'evento fa scrivere impronta,
+                    // semantica e backend di QUESTO giro, qui in `localFps` e
+                    // in memoria in app.jsx. Tolto il muto, il pallino sarebbe
+                    // verde su uno stem che il motore rifara'; annullata la
+                    // cancellazione, ⚪ su uno stem che c'e' (l'impronta in
+                    // memoria diventava quella di uno stream assente), e un
+                    // altro colore al reload. Su un giro fallito la stessa
+                    // sorte tocca a tutti, costruiti o no.
+                    const engineBuilt = !declared || !!(s && built.has(s.id));
+                    if (!claimable || !engineBuilt) {
+                      if (!(key in stemIndex)) stemIndex[key] = Date.now();
+                      // Su un giro fallito, lo stem di uno stream che il
+                      // motore costruisce puo' essere stato riscritto prima
+                      // della morte: non si reclama, ma si ridisegna.
+                      if (!claimable && engineBuilt) resyncIds.push(streamId);
+                      continue;
+                    }
+                    doneThisRun.add(streamId);
+                    // Qui arriva uno stream che il motore ha costruito, o — con
+                    // una richiesta che non dichiara gli stream — qualunque id:
+                    // li' `s` manca, e l'impronta persistita con lui. Che il
+                    // file di uno stream cancellato esista, l'indice lo sa dal
+                    // ramo qui sopra: e' la domanda di `ownsStem`, e non ha
+                    // bisogno di un reclamo.
+                    _markStemFresh(key);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                     onEvent && onEvent({ type: "stream-done", streamId, cached: false });
                   }
@@ -547,6 +693,57 @@
               else next[id] = sem;
             }
             this._persistSem(opts.yamlBasename, next);
+
+            // ...e il backend con cui li ha scritti (#151). Stessa regola e
+            // stesso blocco: i due record parlano dello stesso giro, e
+            // scriverli in due punti diversi e' il modo in cui uno dei due
+            // finisce per descrivere un render che non e' quello andato in
+            // porto.
+            //
+            // Il nome NON si inventa qui: arriva da `opts.renderer`, cioe' dal
+            // campo che questo stesso POST ha mandato al bridge. Una costante
+            // scritta in questo modulo direbbe "numpy" anche dopo un render
+            // csound, cioe' verde su ogni cambio di backend — che e' esattamente
+            // l'asse spento.
+            //
+            // Quello che non e' un nome vale come ignoto, e la voce si CANCELLA
+            // invece di restare indietro, come per il numero: un backend vecchio
+            // su uno stem nuovo e' un'affermazione falsa, l'assenza e' la verita'.
+            // E una stringa vuota registrata sarebbe peggio di entrambe — chi
+            // classifica confronta i valori, quindi sarebbe uno stem giallo per
+            // sempre, con un nome che nessun render puo' eguagliare. La regola
+            // e' `rendererName`, la stessa che app.jsx applica ai suoi due lati.
+            const rend = rendererName(opts.renderer);
+            const prevRenderers = await this.loadRenderers(opts.yamlBasename);
+            const nextRenderers = { ...prevRenderers };
+            for (const id of Object.keys(localFps)) {
+              if (rend === null) delete nextRenderers[id];
+              else nextRenderers[id] = rend;
+            }
+            this._persistRenderers(opts.yamlBasename, nextRenderers);
+          } else if (resyncDurations) {
+            // Nessuno stem reclamato, quindi niente `loadCache` qui sopra: si
+            // chiede al disco solo la misura dei file. E' la verita' in
+            // entrambi i casi — il motore morto al parse non ha toccato
+            // niente e la durata resta quella, quello morto dopo l'audio ha
+            // riscritto e la durata e' la nuova — dove lasciarla cadere
+            // avrebbe stirato sulla clip anche il waveform di un file intatto.
+            await this.loadCache(opts.yamlBasename);
+          }
+          // ...e lo stesso vale per il DISEGNO. Lo `stream-done` sintetico
+          // portava due cose insieme: i record di provenienza e la rilettura
+          // di peaks, spettrogramma e grani (in app.jsx e' lui che alza
+          // `stemRevRef` / `grainRegenRef` e fa ripartire i tre effetti).
+          // Il giro fallito rinuncia al primo e perdeva anche il secondo: sul
+          // motore morto dopo l'audio la clip suonava lo stem nuovo con i
+          // peaks del vecchio distesi sulla misura nuova — #153 da un'altra
+          // porta. Quindi un evento suo, che reclama niente e ridisegna
+          // soltanto, emesso DOPO le durate: chi ridisegna deve trovare la
+          // misura nuova. Sul motore morto al parse rilegge un file intatto,
+          // e il server risponde coi peaks che aveva (cache sull'mtime):
+          // una richiesta di troppo, mai un disegno sbagliato.
+          if (resyncIds.length) {
+            onEvent && onEvent({ type: "stems-resync", streamIds: resyncIds });
           }
           return lastResult;
         } catch (e) {
@@ -770,9 +967,11 @@
       // verde vuole uno stem nell'indice, e l'indice e' quello che la riga
       // qui sotto svuota.
       //
-      // Le versioni di semantica in `pge-local-sem` NO, e la differenza sta in
-      // cosa affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
-      // scritto un motore che leggeva cosi'" — cioe' degli stessi file di cui
+      // I due record di provenienza NO — la semantica in `pge-local-sem` e il
+      // backend in `pge-local-renderer` (#151) — e la differenza sta in cosa
+      // affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
+      // scritto un motore che leggeva cosi'", "l'ha scritto quel backend" —
+      // cioe' degli stessi file di cui
       // l'indice qui sopra e' l'inventario, quelli della output/ di prima.
       // Ereditate in una cartella nuova affermano una lettura che li' nessuno
       // ha osservato, e con lo YAML identico l'impronta combacia: verde su
@@ -784,6 +983,7 @@
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();
       try { localStorage.removeItem("pge-local-sem"); } catch {}
+      try { localStorage.removeItem("pge-local-renderer"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
       return body;
     }
@@ -865,6 +1065,8 @@
 
   window.PGEBackend = {
     fingerprintStream,
+    rendererName,
+    streamsEngineBuilds,
     // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.
     create(opts) {
       return createLocalBackend(opts);

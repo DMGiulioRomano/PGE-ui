@@ -1252,8 +1252,11 @@ def make_app(root: Path, render_timeout: float = 600.0,
                     req_streams = opts.get("streams") or []
                     stream_ids  = {str(s.get("id")) for s in req_streams
                                    if isinstance(s, dict) and s.get("id") is not None}
-                    state = {"streamId": None, "total": len(req_streams), "index": 0,
-                             "ids": stream_ids or None}
+                    # `basename` perche' la riga di path che chiude uno stream
+                    # DIRTY si confronta sul nome file intero: con piu' stream
+                    # in attesa il suffisso non basta. Vedi render_pipeline.
+                    state = {"pending": [], "total": len(req_streams), "index": 0,
+                             "ids": stream_ids or None, "basename": basename}
                     # Read line-by-line and stream to client.
                     for raw in iter(proc.stdout.readline, ""):
                         line = raw.rstrip("\n")

@@ -31,56 +31,58 @@ def _types(events):
 
 
 def test_parse_render_line_always_logs():
-    state = {"streamId": None, "total": 0, "index": 0}
+    state = {"pending": [], "total": 0, "index": 0}
     evs = rp.parse_render_line("hello world", state)
     assert evs == [{"type": "log", "line": "hello world"}]
 
 
 def test_parse_render_line_dirty_emits_start_only():
-    state = {"streamId": None, "total": 3, "index": 0}
+    state = {"pending": [], "total": 3, "index": 0}
     evs = rp.parse_render_line("[CACHE] stream1: DIRTY", state)
     assert _types(evs) == ["log", "stream-start"]
     start = evs[1]
     assert start == {"type": "stream-start", "streamId": "stream1", "index": 0, "total": 3}
-    # DIRTY stream is now tracked as "in progress"
-    assert state["streamId"] == "stream1"
+    # DIRTY stream now waits for its own summary path line
+    assert state["pending"] == ["stream1"]
     assert state["index"] == 1
 
 
 def test_parse_render_line_clean_emits_start_and_done():
-    state = {"streamId": None, "total": 3, "index": 0}
+    state = {"pending": [], "total": 3, "index": 0}
     evs = rp.parse_render_line("[CACHE] stream1: clean", state)
     assert _types(evs) == ["log", "stream-start", "stream-done"]
     assert evs[2] == {"type": "stream-done", "streamId": "stream1", "cached": True}
-    assert state["streamId"] is None        # clean stream isn't left pending
+    assert state["pending"] == []           # clean stream isn't left pending
     assert state["index"] == 1
 
 
-def test_parse_render_line_next_cache_closes_previous_dirty():
-    state = {"streamId": None, "total": 2, "index": 0}
+def test_parse_render_line_next_cache_does_not_close_previous_dirty():
+    """La riga `[CACHE]` seguente non dice che lo stem precedente e' scritto:
+    il renderer numpy le stampa tutte prima di scriverne uno (vedi sotto)."""
+    state = {"pending": [], "total": 2, "index": 0}
     rp.parse_render_line("[CACHE] stream1: DIRTY", state)   # s1 pending
     evs = rp.parse_render_line("[CACHE] stream2: clean", state)
-    # prev dirty s1 done, then s2 start + done (cached)
-    assert _types(evs) == ["log", "stream-done", "stream-start", "stream-done"]
-    assert evs[1] == {"type": "stream-done", "streamId": "stream1", "cached": False}
-    assert evs[2]["streamId"] == "stream2"
-    assert evs[3] == {"type": "stream-done", "streamId": "stream2", "cached": True}
+    # only s2 start + done (cached); s1 still waits for its path line
+    assert _types(evs) == ["log", "stream-start", "stream-done"]
+    assert evs[1]["streamId"] == "stream2"
+    assert evs[2] == {"type": "stream-done", "streamId": "stream2", "cached": True}
+    assert state["pending"] == ["stream1"]
 
 
 def test_parse_render_line_stem_path_closes_dangling_dirty():
-    state = {"streamId": None, "total": 1, "index": 0}
+    state = {"pending": [], "total": 1, "index": 0}
     rp.parse_render_line("[CACHE] stream1: DIRTY", state)   # s1 pending
     evs = rp.parse_render_line("    /abs/path/output/PGE_test__stream1.aif", state)
     assert _types(evs) == ["log", "stream-done"]
     assert evs[1] == {"type": "stream-done", "streamId": "stream1", "cached": False}
-    assert state["streamId"] is None
+    assert state["pending"] == []
 
 
 def test_parse_render_line_stem_path_other_stream_no_done():
-    state = {"streamId": "stream1", "total": 1, "index": 1}
+    state = {"pending": ["stream1"], "total": 1, "index": 1}
     evs = rp.parse_render_line("    /abs/output/PGE_test__streamX.aif", state)
     assert _types(evs) == ["log"]            # path is for a different stream
-    assert state["streamId"] == "stream1"
+    assert state["pending"] == ["stream1"]
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ def test_parse_render_line_stem_path_other_stream_no_done():
 
 def _ids_state(ids, total=None, **over):
     """Lo `state` che costruisce /render: gli id dichiarati dalla richiesta."""
-    st = {"streamId": None, "index": 0,
+    st = {"pending": [], "index": 0,
           "total": len(ids) if total is None else total,
           "ids": set(ids)}
     st.update(over)
@@ -107,7 +109,7 @@ def test_parse_render_line_ignores_manifest_line():
     evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
     assert _types(evs) == ["log"]
     assert state["index"] == 0            # non consuma un posto nella barra
-    assert state["streamId"] is None
+    assert state["pending"] == []
 
 
 def test_parse_render_line_ignores_gc_line():
@@ -124,12 +126,12 @@ def test_parse_render_line_ghost_does_not_close_pending_dirty():
     rp.parse_render_line("[CACHE] stream1: DIRTY", state)
     evs = rp.parse_render_line("[CACHE] Manifest: /engine/cache/proj.json", state)
     assert _types(evs) == ["log"]
-    assert state["streamId"] == "stream1"   # ancora in corso
+    assert state["pending"] == ["stream1"]  # ancora in attesa
 
 
 def test_parse_render_line_without_ids_keeps_legacy_behaviour():
     """Richiesta che non dichiara gli stream: nessun insieme, nessun filtro."""
-    state = {"streamId": None, "total": 0, "index": 0}
+    state = {"pending": [], "total": 0, "index": 0}
     evs = rp.parse_render_line("[CACHE] stream1: clean", state)
     assert _types(evs) == ["log", "stream-start", "stream-done"]
 
@@ -137,14 +139,14 @@ def test_parse_render_line_without_ids_keeps_legacy_behaviour():
 @pytest.mark.parametrize("sid", ["bass-1", "voce.2", "a_b", "S1", "x.y-z_1"])
 def test_parse_render_line_stem_path_closes_ids_outside_word_charset(sid):
     r"""Il charset degli id e' quello di `renameStream` (app.jsx: lettere,
-    cifre, `.`, `_`, `-`), non `\w`: con `-` o `.` l'ultimo stream DIRTY del
-    giro non riceveva mai il suo `stream-done`."""
+    cifre, `.`, `_`, `-`), non `\w`: con `-` o `.` uno stream DIRTY non
+    riceveva mai il suo `stream-done`."""
     state = _ids_state({sid})
     rp.parse_render_line(f"[CACHE] {sid}: DIRTY", state)
     evs = rp.parse_render_line(f"    /abs/output/PGE_test__{sid}.wav", state)
     assert _types(evs) == ["log", "stream-done"]
     assert evs[1] == {"type": "stream-done", "streamId": sid, "cached": False}
-    assert state["streamId"] is None
+    assert state["pending"] == []
 
 
 def test_parse_render_line_stem_path_still_discriminates():
@@ -153,7 +155,86 @@ def test_parse_render_line_stem_path_still_discriminates():
     rp.parse_render_line("[CACHE] bass-1: DIRTY", state)
     evs = rp.parse_render_line("    /abs/output/PGE_test__voce.2.wav", state)
     assert _types(evs) == ["log"]
-    assert state["streamId"] == "bass-1"
+    assert state["pending"] == ["bass-1"]
+
+
+# ---------------------------------------------------------------------------
+# Il `stream-done` di uno stream DIRTY e' un reclamo: il browser ci stampa
+# impronta, semantica e backend del giro (#151). Quindi deve arrivare quando
+# il file e' SCRITTO, e l'unica riga che lo dice e' il suo path nel blocco
+# riassuntivo, stampato dopo il render.
+#
+# La riga `[CACHE]` successiva non lo dice. Il renderer numpy fa il triage di
+# TUTTI gli stream prima di scriverne uno (`NumpyAudioRenderer.render_streams`,
+# "Fase 1 — triage cache"), quindi le righe arrivano in blocco: chiudere lo
+# stream precedente alla riga seguente reclamava ogni DIRTY tranne l'ultimo
+# prima che il motore avesse toccato un campione. Su un giro riuscito il danno
+# era il disegno (peaks letti dal file vecchio, poi mai piu' riletti); su uno
+# che muore dopo il triage era il pallino verde su audio mai riscritto, dopo
+# un "Render failed" — la porta che il fallback di `done` aveva chiuso.
+# ---------------------------------------------------------------------------
+
+def _feed(state, lines):
+    return [e for line in lines for e in rp.parse_render_line(line, state)]
+
+
+def _dones(events):
+    return [(e["streamId"], e["cached"]) for e in events if e["type"] == "stream-done"]
+
+
+_TRIAGE = ["[CACHE] Manifest: /ws/cache/proj.json",
+           "[CACHE] s1: DIRTY", "[CACHE] s2: DIRTY", "[CACHE] s3: clean",
+           "[CACHE] s4: DIRTY"]
+
+
+def test_parse_render_line_triage_does_not_claim_dirty_streams():
+    state = _ids_state({"s1", "s2", "s3", "s4"}, basename="proj")
+    evs = _feed(state, _TRIAGE)
+    assert _dones(evs) == [("s3", True)], (
+        "a triage finito nessuno stem DIRTY e' ancora scritto: solo il clean "
+        "puo' dirsi fatto")
+    assert [e["streamId"] for e in evs if e["type"] == "stream-start"] == \
+        ["s1", "s2", "s3", "s4"]
+
+
+def test_parse_render_line_dirty_closed_by_its_own_summary_path():
+    state = _ids_state({"s1", "s2", "s3", "s4"}, basename="proj")
+    _feed(state, _TRIAGE)
+    evs = _feed(state, [
+        "",
+        " Rendering completato in 1.23s (jobs=4)",
+        "  → s1: 812 grani (2 voci)",
+        " Generazione completata! 4 file generati:",
+        "    /ws/output/proj__s1.wav",
+        "    /ws/output/proj__s2.wav",
+        "    /ws/output/proj__s3.wav",
+        "    /ws/output/proj__s4.wav",
+    ])
+    assert _dones(evs) == [("s1", False), ("s2", False), ("s4", False)]
+
+
+def test_parse_render_line_death_after_triage_claims_no_dirty_stream():
+    state = _ids_state({"s1", "s2", "s3", "s4"}, basename="proj")
+    evs = _feed(state, _TRIAGE + [
+        "Traceback (most recent call last):",
+        '  File "/engine/src/pge/rendering/numpy_audio_renderer.py", line 207',
+        "ValueError: operands could not be broadcast together",
+    ])
+    assert _dones(evs) == [("s3", True)], (
+        "il motore e' morto prima del blocco riassuntivo: dei DIRTY non ne ha "
+        "scritto nessuno di certo, e un reclamo li' e' verde su audio vecchio")
+
+
+def test_parse_render_line_summary_path_matched_on_the_whole_filename():
+    """Con piu' stream in attesa il suffisso da solo non basta: basename `x__b`,
+    id `a` e `b__a`. Il file di `a` e' `x__b__a`, che finisce anche per
+    `__b__a`."""
+    state = _ids_state({"a", "b__a"}, basename="x__b")
+    _feed(state, ["[CACHE] a: DIRTY", "[CACHE] b__a: DIRTY"])
+    evs = _feed(state, ["    /ws/output/x__b__a.wav"])
+    assert _dones(evs) == [("a", False)]
+    evs = _feed(state, ["    /ws/output/x__b__b__a.wav"])
+    assert _dones(evs) == [("b__a", False)]
 
 
 # --- la sonda: le righe [CACHE] chieste al motore, non trascritte -----------
