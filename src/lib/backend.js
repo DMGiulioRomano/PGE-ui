@@ -29,8 +29,21 @@
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?, progress?})
+ *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
+ *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
+ *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
+ *     sintetici dal fallback di `done`, e `{type: "stems-resync", streamIds}`
+ *     dopo un giro fallito che ha trovato stem su disco — niente reclamo, ma
+ *     peaks, spettrogrammi e grani di quegli id vanno riletti (#151).
  *   render.cancel()
  *   render.loadCache(yamlBasename)→ Promise<{[streamId]: fingerprint}>
+ *   render.loadSemantics(yamlBasename) → Promise<{[streamId]: version}>
+ *   render.loadRenderers(yamlBasename) → Promise<{[streamId]: backend}>
+ *                                   I due record di provenienza (#133, #151):
+ *                                   con quale semantica e con quale backend il
+ *                                   motore ha scritto ogni stem. Voce assente =
+ *                                   non registrato: col lato vivo noto, chi
+ *                                   classifica la legge stale (render-status.js).
  *   render.grainsUrl(yamlBasename, streamId)     → string (grain JSON sidecar URL)
  *   render.loadGrainData(yamlBasename, streamId) → Promise<grainData | null>
  *

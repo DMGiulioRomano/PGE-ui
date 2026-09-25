@@ -441,6 +441,25 @@ console.log("\n── a stem present in one format only ──");
     const deps = appSrc.match(/\}, \[streamMediaKey, lastRenderedFps, stemResync,/g) || [];
     assert("i tre effetti dei media (peaks, spettrogrammi, grani) dipendono dal segnale",
            deps.length === 3, `${deps.length} effetti su 3`);
+
+    // ...e l'evento sta nel contratto in testa a backend.js, con la chiave
+    // che app.jsx ne legge. E' un evento che `run()` fabbrica da se', non una
+    // riga del bridge: chi scrive un altro backend lo conosce solo da li', e
+    // un backend che non lo emette rimette il disegno vecchio in silenzio.
+    // Sorgente GREZZO, come la guardia gemella di test-workspace.js: il
+    // contratto E' un commento, e `codeOf` lo cancellerebbe.
+    const be = fs.readFileSync(path.join(__dirname, "../../src/lib/backend.js"), "utf8");
+    const at0 = be.indexOf("Contract (every backend implements)");
+    const contratto = at0 < 0 ? "" : be.slice(at0, be.indexOf("=====*/", at0));
+    assert("il contratto di backend.js elenca `stems-resync` e i suoi `streamIds`",
+           /stems-resync/.test(contratto) && /streamIds/.test(contratto),
+           "un evento che app.jsx consuma e il contratto non nomina e' quello " +
+           "che il prossimo backend dimentica");
+    // Lo stesso per i due record di provenienza che app.jsx carica al cambio
+    // progetto: sono metodi del contratto quanto `loadCache`.
+    assert("...e i due record di provenienza, `loadSemantics` e `loadRenderers`",
+           /loadSemantics\(/.test(contratto) && /loadRenderers\(/.test(contratto),
+           contratto.length ? "mancano dal contratto" : "contratto non trovato");
   }
 
   bodyDone = true;
