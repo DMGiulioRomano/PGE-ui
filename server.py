@@ -1255,8 +1255,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
                     req_streams = opts.get("streams") or []
                     stream_ids  = {str(s.get("id")) for s in req_streams
                                    if isinstance(s, dict) and s.get("id") is not None}
-                    state = {"streamId": None, "total": len(req_streams), "index": 0,
-                             "ids": stream_ids, "summary": False}
+                    # `basename` perche' la riga di path che chiude uno stream
+                    # DIRTY si confronta sul nome file intero: con piu' stream
+                    # in attesa il suffisso non basta. `summary` perche' quella
+                    # riga vale solo dentro il blocco riassuntivo (#162). Vedi
+                    # render_pipeline.
+                    state = {"pending": [], "total": len(req_streams), "index": 0,
+                             "ids": stream_ids, "basename": basename,
+                             "summary": False}
                     # Read line-by-line and stream to client. Il canale arriva
                     # fin qui perche' solo stdout e' protocollo: vedi
                     # render_events, che e' il posto dove quella regola vive.

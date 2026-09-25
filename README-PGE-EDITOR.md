@@ -138,8 +138,9 @@ the two sits the engine venv setup, minutes in which no subprocess exists yet
 and the render is nonetheless under way, with its paths already pinned.
 
 Browser-side, a successful switch drops the stem index, the on-disk stem
-durations, the peaks, the spectrograms, the grain sidecars and the recorded
-engine-semantics versions, then reloads the project list and reopens a project
+durations, the peaks, the spectrograms, the grain sidecars and the two
+provenance records — engine-semantics version and rendering backend per stem —
+then reloads the project list and reopens a project
 (same name if the new folder has one). Keeping any of it would mean a clip with a
 green dot and no audio behind it — the 404 an `<audio>` element reports by never
 firing `canplay`. The per-stream fingerprints (`pge-local-fp`) are the one thing
@@ -175,18 +176,26 @@ is engine code, not the author's work.
 { "type": "done", "ok": true, "generated": ["output/..."], "returncode": 0 }
 ```
 
-The server derives them from `main.py`'s **stdout**, so the UI can highlight
-the clip being rendered without anything changing in the python engine. Two
-line shapes carry the whole protocol, and everything else becomes a `log` the
-editor prints without reading:
+The server derives them from `main.py`'s **stdout**, without anything changing
+in the python engine. Two line shapes carry the whole protocol, and everything
+else becomes a `log` the editor prints without reading:
 
 | line | event |
 | --- | --- |
-| `[CACHE] <id>: DIRTY\|clean` | `stream-start`, and `stream-done` when clean |
-| an indented path ending in `__<id>.<aif\|aiff\|wav\|flac>`, **inside the summary block** | `stream-done` of the last DIRTY stream of the round |
+| `[CACHE] <id>: DIRTY\|clean` (the cache triage, one per stream the engine builds) | `stream-start`, plus `stream-done` (`cached: true`) when clean |
+| an indented path ending in `<basename>__<id>.<aif\|aiff\|wav\|flac>`, **inside the summary block** | `stream-done` (`cached: false`) of the DIRTY stream whose stem it names |
 
-Three rules are worth knowing, because each of them is a way the dots used to
-lie (issue #162, engine issue PythonGranularEngine#178, whose
+A `DIRTY` stream gets its `stream-done` only on the path line naming its stem,
+which the engine prints after writing it — the numpy renderer triages every
+stream before rendering any, so a `[CACHE]` line says nothing about the
+previous stream being done. `stream-done` is what marks a stem as rendered by
+this run, so it must not arrive before the file exists. Without `--cache` there
+are no `[CACHE]` lines at all, and `done.generated` (the stems found on disk) is
+what `backend.js` falls back on; `run()` also emits events of its own on top of
+these — see the contract at the top of `backend.js`.
+
+Three more rules are worth knowing, because each of them is a way the dots used
+to lie (issue #162, engine issue PythonGranularEngine#178, whose
 `docs/explanation/contratto-stdout.md` declares the engine's side of this
 contract):
 
@@ -198,8 +207,8 @@ contract):
 - **A line is a stream only if the request declared its id.** `POST /render`
   carries `streams`, and that set is what tells `[CACHE] stream1: clean` from
   `[CACHE] Manifest: <path>`, which the engine prints on every `--cache`
-  render. A request that declares no streams derives no stream events; its
-  dots still resolve, from the `generated` list in `done`.
+  render. A request that declares no streams derives no stream events; on a
+  successful run its dots still resolve, from the `generated` list in `done`.
 - **The path line only counts under `Generazione completata! N file
   generati:`**, and until the first unindented line. Outside that block the
   same shape belongs to the engine's prose — an error citing

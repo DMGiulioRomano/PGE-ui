@@ -214,7 +214,8 @@ engine checkout and `/render` rewrites them there.
 - It can also be switched while the bridge runs: **⚙ → Workspace**, type a path,
   *usa questa cartella*. The editor reloads the project list and everything that
   describes the previous `output/` — stem index, durations, peaks, grains, the
-  engine-semantics versions — so unsaved edits to the open project are lost.
+  engine-semantics versions, the backend each stem was rendered with — so unsaved
+  edits to the open project are lost.
   Refused mid-render, from the first instant of the render stream.
 - **The samples folder follows too**, on an engine that has `--samples-dir`
   ([PythonGranularEngine#235](https://github.com/DMGiulioRomano/PythonGranularEngine/issues/235)):
@@ -257,7 +258,10 @@ The browser only does `fetch()`; the server holds all disk access, so the editor
 **Per-clip render status.** Bottom-left of each clip:
 
 - 🟢 `✓ rendered` — fingerprint matches the on-disk stem
-- 🟡 `⚠ stale` — yaml changed since last render
+- 🟡 `⚠ stale` — the stem no longer matches what a render would write now; the
+  tooltip says why: the YAML changed since the last render, the engine reads it
+  differently (`VARIATION_SEMANTICS_VERSION` moved), or there is no record that
+  the current backend wrote the stem (#151)
 - ⚪ `· never rendered`
 - 🟠 `rendering…` (with mini bar)
 

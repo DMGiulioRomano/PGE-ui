@@ -69,6 +69,25 @@ const { rescaleStreamEnvelopes, truncateStreamEnvelopes, streamWouldTruncate, sl
 // project is loaded from the server (server.py lists configs/*.yml on boot).
 const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams: [], samples: [] };
 
+/* Il backend che produce gli stem, dichiarato UNA volta (#151).
+ *
+ * Il motore ne ha tre; l'editor ne usa uno, e il bridge ha lo stesso default
+ * (`opts.get("renderer", "numpy")` in server.py, pinnato da una guardia
+ * sorgente). Il selettore e' la issue #150, e non e' questa.
+ *
+ * Quello che va costruito prima del selettore e' l'ASSE: il motore mette
+ * `renderer_type` nel proprio fingerprint accanto alla semantica (PGE #228),
+ * quindi uno stem dipende anche da chi l'ha scritto. `rendererOfThisRun` in
+ * `runRender`, `rendererCtx` e `renderOptions.renderer` qui sotto leggono tutti
+ * questa costante, e non tre letterali: tre copie sono il modo in cui il nome
+ * che va in argv, quello che l'anteprima del comando dice che ci va
+ * (`buildCommand` in RenderButton.jsx) e quello che finisce nel record smettono
+ * di concordare — un disaccordo che non si vede, perche' produce un pallino
+ * verde. Il giorno del selettore, questa riga diventa una preferenza e i tre
+ * lettori la seguono senza toccarli.
+ */
+const RENDERER = "numpy";
+
 // Preferences store. Was provided by the design-tool tweaks-panel (removed);
 // now a thin local hook over the node-tested merge in tweaks-store.js. Keeps the
 // setTweak(key, val) / setTweak({ ... }) signature used across this file.
@@ -236,10 +255,18 @@ function App() {
   /* La semantica del motore, su due lati (#133). `engineSem` e' quella del
      motore che il bridge ha davanti adesso; `renderedSem` quella con cui ogni
      stem e' stato scritto. Quando divergono lo stem e' vecchio anche a YAML
-     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. `null` /
-     voce assente = non si sa, e non si pretende niente. */
+     fermo — il motore lo rifara' diverso — e il pallino deve dirlo. I due
+     ignoti non sono lo stesso ignoto: `engineSem` a `null` = non si sa, e non
+     si pretende niente; voce assente in `renderedSem` col motore noto = stem di
+     cui non si sa la lettura, e chi classifica lo legge stale (un giro lo
+     spegne, anche a vuoto). Stessa regola del backend qui sotto. */
   const [engineSem, setEngineSem] = useStateApp(null);
   const [renderedSem, setRenderedSem] = useStateApp({});
+  /* Il terzo asse (#151): il backend che ha scritto ogni stem. Un solo lato in
+     stato, perche' quello vivo e' una costante del modulo — l'editor sa con chi
+     renderizzerebbe adesso. Voce assente = stem reso prima che l'editor lo
+     registrasse, e chi classifica la legge come stale. */
+  const [renderedRenderer, setRenderedRenderer] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
      l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
@@ -338,6 +365,12 @@ function App() {
   // Lo includiamo nella chiave peaks così solo gli stream rigenerati rifetchano
   // (spettrogramma e grani si aggiornano già, non avendo questa cache).
   const stemRevRef = useRefApp({});
+  // Il segnale che fa ripartire i tre effetti dei media quando i ref qui sopra
+  // si muovono SENZA uno `stream-done` — cioe' senza che `lastRenderedFps`
+  // cambi riferimento. Oggi un caso solo: `stems-resync`, il giro fallito che
+  // ha trovato stem su disco (#151). Un ref alzato e nessun effetto che riparte
+  // e' un ref che nessuno legge.
+  const [stemResync, setStemResync] = useStateApp(0);
   const [terminalOpen, setTerminalOpen] = useStateApp(!!tweaks.terminalOpen);
   const [scopeOpen, setScopeOpen] = useStateApp(!!tweaks.scopeOpen);
   const [grainScoreOpen, setGrainScoreOpen] = useStateApp(!!tweaks.grainScoreOpen);
@@ -577,6 +610,11 @@ function App() {
     } else {
       setRenderedSem({});
     }
+    if (backend.render.loadRenderers) {
+      backend.render.loadRenderers(basename).then(r => setRenderedRenderer(r || {}));
+    } else {
+      setRenderedRenderer({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -622,10 +660,23 @@ function App() {
   const semCtx = useMemoApp(() => ({ rendered: renderedSem, engine: engineSem }),
     [renderedSem, engineSem]);
 
+  /* E la coppia dell'asse "backend", con la stessa forma e per la stessa
+     ragione. `current` e' la costante del modulo: qui non c'e' un lato ignoto
+     come per la semantica — il backend con cui l'editor renderizzerebbe adesso
+     lo sa sempre, e' una sua scelta, non una lettura del motore.
+     Passa comunque da `rendererName`, la regola che decide cosa si registra:
+     un valore che non e' un nome sarebbe un `current` noto contro record che
+     nessun render scrive, cioe' giallo per sempre. Il giorno del selettore
+     (#150) quel valore arriva da una preferenza. */
+  const rendererCtx = useMemoApp(
+    () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(RENDERER) }),
+    [renderedRenderer]);
+
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
-    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor, semCtx),
-    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx]);
+    () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor,
+                                          semCtx, rendererCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendererCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -633,6 +684,7 @@ function App() {
       running: renderStatus.running,
       currentStreamId: renderStatus.currentStreamId,
       sem: semCtx,
+      rend: rendererCtx,
     });
   }
 
@@ -779,7 +831,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.outputFormat]);
 
   // Load STFT spectrograms for clips — only while the spectrogram view is on
   // (heavier than peaks, so don't fetch when hidden). Twin of the peaks effect:
@@ -811,7 +863,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showSpectrograms, tweaks.spectrogramScale, tweaks.outputFormat]);
 
   // Grain JSON sidecars (engine --grain-json) → per-stream data for the grain
   /* Caricamento MIRATO di un solo sidecar, su richiesta del readout della
@@ -905,7 +957,7 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [streamMediaKey, lastRenderedFps, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
+  }, [streamMediaKey, lastRenderedFps, stemResync, activeProject, backendKind, tweaks.showGrains, grainScoreOpen]);
 
   useEffectApp(() => {
     function onSeek(e) {
@@ -1609,6 +1661,11 @@ function App() {
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
     projectBasename: activeProject.replace(/\.yml$/, ""),
+    // Il backend che l'anteprima del comando stampa (#151). Solo in lettura —
+    // `setRenderOptions` non lo salva, la scelta e' #150 — ma dalla stessa
+    // dichiarazione del POST: `buildCommand` ne teneva un letterale suo, cioe'
+    // un'anteprima "byte per byte" libera di dire numpy sopra un render csound.
+    renderer: RENDERER,
     // surfaced so the render popover can warn when grain data is off but the
     // grain view (in-clip or score panel) is open — see onRender forcing below.
     showGrains: !!tweaks.showGrains,
@@ -1678,6 +1735,13 @@ function App() {
        su `renderStatus.running` — quindi leggerli a meta' render puo' dare il
        numero di DOPO su stem scritti leggendo quello di PRIMA. */
     const semOfThisRun = await refreshEngineSem();
+    /* Il backend di QUESTO giro, fissato accanto al numero e per la stessa
+       ragione: i due consumatori — il corpo del POST e l'handler degli
+       `stream-done` — devono leggere la stessa variabile, non la costante due
+       volte. Oggi il valore non puo' cambiare a meta' render (e' una costante
+       del modulo); il giorno in cui diventa una preferenza si', e allora
+       questa riga e' gia' al posto giusto. */
+    const rendererOfThisRun = RENDERER;
     // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
     // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
     // giro di rete davanti al motore per un dato che a nessuno serve subito.
@@ -1692,7 +1756,7 @@ function App() {
     const opts = {
       yamlBasename: basename,
       yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
-      renderer: "numpy",
+      renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
       // Force the grain sidecar on when the grain view is open, otherwise the
@@ -1757,6 +1821,43 @@ function App() {
           delete next[e.streamId];
           return next;
         });
+        // ...e il backend che l'ha scritto (#151). Stessa riga, stesso momento:
+        // i due record descrivono lo stesso stem dello stesso giro, e backend.js
+        // li persiste insieme.
+        //
+        // Col nome ignoto la voce si cancella, come per il numero — e la regola
+        // si applica anche qui e non solo in backend.js perche' i due lati
+        // devono dire la stessa cosa: backend.js cancella dal localStorage, e
+        // uno stato in memoria che tenesse il nome di prima mostrerebbe un
+        // colore diverso fino alla riapertura del progetto. E' la STESSA
+        // regola, `rendererName`, non una copia: con un test di verita' qui e
+        // la stringa non vuota la', un 7 restava in memoria e spariva dal
+        // localStorage. Oggi il ramo non scatta (RENDERER e' una costante non
+        // vuota); il giorno del selettore lo farebbe, e una divergenza che
+        // dura una sessione e' peggio di una che non esiste.
+        setRenderedRenderer(m => {
+          const name = window.PGEBackend.rendererName(rendererOfThisRun);
+          if (name !== null) {
+            return m[e.streamId] === name ? m : { ...m, [e.streamId]: name };
+          }
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
+      } else if (e.type === "stems-resync") {
+        // Il giro e' fallito ma ha trovato stem su disco che il motore puo'
+        // aver riscritto prima di morire (#151). Niente record di provenienza
+        // — quelli li scrive solo lo `stream-done`, e qui non se ne reclama
+        // uno — ma la meta' "media" di un `cached: false`: peaks, grani e
+        // spettrogramma si rileggono dal disco, come backend.js ha appena
+        // fatto con le durate. Senza, la clip suonava lo stem nuovo col
+        // disegno del vecchio.
+        for (const id of e.streamIds || []) {
+          grainRegenRef.current.add(id);
+          stemRevRef.current[id] = (stemRevRef.current[id] || 0) + 1;
+        }
+        setStemResync(n => n + 1);
       }
     });
 
@@ -1973,6 +2074,10 @@ function App() {
     // non cambia e l'effetto su [activeProject] non riparte) continuerebbe a
     // classificare con le versioni della cartella di prima.
     setRenderedSem({});
+    // ...e quella di `pge-local-renderer` (#151), per la stessa ragione: senza,
+    // col motore ignoto gli stem della cartella nuova resterebbero verdi sui
+    // backend registrati in quella di prima, fino al reload.
+    setRenderedRenderer({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};

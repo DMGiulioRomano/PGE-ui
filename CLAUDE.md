@@ -34,8 +34,9 @@ exists, the fourth only when a browser is installed):
   the graphies the time walk used to miss, each asked by comparison against its
   own nested or array twin), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary, incl. the engine-semantics axis, source
-  guards on the chain that carries the version from the engine to the dot,
+  classification + render summary, incl. the engine-semantics and renderer
+  axes, source guards on the chain that carries the version from the engine to
+  the dot and on the single `RENDERER` declaration its readers share,
   a live two-overlapping-renders check that `run()` refuses re-entry, and the
   census — derived from the sources, never a list in the test — that every
   event type the editor branches on is one somebody emits),
@@ -76,10 +77,18 @@ exists, the fourth only when a browser is installed):
   (the `hasStem`/`ownsStem` split over the format-keyed stem index, the
   format-aware `peaksUrl`/`spectrogramUrl`/`stemDur` of #153, plus source
   guards on the audio-error path and on the app.jsx wiring that passes the
-  format), and `test-semantics-store.js` (where the two
-  numbers of the semantics axis come from: `semanticsVersion` re-reading the
-  bridge, and a whole `render.run()` writing/reading `pge-local-sem` — the real
-  backend driven with a fake `fetch` and `localStorage`), and
+  format; and a failed run re-reading from disk what isn't provenance — the
+  durations, and the drawing through `stems-resync`, executed on the backend
+  side and source-guarded on the three media effects), and
+  `test-semantics-store.js` (where the two
+  provenance records come from: `semanticsVersion` re-reading the
+  bridge, and a whole `render.run()` writing/reading `pge-local-sem` and
+  `pge-local-renderer` — the real
+  backend driven with a fake `fetch` and `localStorage`; the renderer half
+  lives beside the semantics one because both are written in the same block of
+  `run()`, and a second copy of that harness would drift — plus the `done`
+  fallback claiming only the streams the engine built, muted and solo cases
+  included, and nothing at all on a failed run), and
   `test-oracle-client.js` (how the parity oracle's node client *dies*: a python
   killed between the `_dead` check and the write used to raise an unhandled
   `EPIPE`, replacing `_die`'s stderr-carrying diagnostic with a raw stack — the
@@ -531,10 +540,12 @@ spectrograms, grain data, the grain refs, `stemRevRef` and `lastRenderedFps`,
 reloads media + projects, then reopens a project and **calls `loadCache`
 itself** — two folders can hold a project of the same name, and there
 `activeProject` doesn't change, so the effect keyed on it never re-fires and
-every clip would read ⚪ with stems sitting on disk. The engine-semantics
-records (`pge-local-sem`) go with the index, and for the same reason: they are a
-statement about the *files* — "an engine that read the YAML this way wrote this
-stem" — i.e. about exactly what the index inventoried, the previous `output/`.
+every clip would read ⚪ with stems sitting on disk. The two provenance
+records (`pge-local-sem` for the engine's reading, `pge-local-renderer` for the
+backend that wrote the file) go with the index, and for the same reason: they
+are statements about the *files* — "an engine that read the YAML this way wrote
+this stem", "that backend produced it" — i.e. about exactly what the index
+inventoried, the previous `output/`.
 Inherited into a new folder they assert a reading nobody observed there, and
 with identical YAML the fingerprint matches: 🟢 on stems an older engine wrote
 differently, which is the case the axis was added for (#133). Without a record
@@ -586,9 +597,11 @@ streams", and from a request that declares nothing no event is derived. The old
 reading left the only thing able to tell `[CACHE] stream1: clean` from
 `[CACHE] Manifest: <path>` inert exactly when nobody had armed it. The browser
 always declares them (`streams: data.streams`), so what changes is a request
-that doesn't — and there the dots are safe anyway: the `done` fallback in
-`backend.js` emits a synthetic `stream-done` for every stem the server found
-**on disk**. What such a request loses is the live progress bar, never a dot.
+that doesn't — and there the dots are safe anyway: on a successful run the
+`done` fallback in `backend.js` emits a synthetic `stream-done` for every stem
+the server found **on disk** (with no list it has no set to judge against, and
+claims them all). What such a request loses is the live progress bar, never a
+dot.
 
 **Protocol is stdout, and only stdout** (#162, PGE #178). `RenderState.start`
 used to spawn the engine with `stderr=subprocess.STDOUT`, so both streams
@@ -618,25 +631,45 @@ per-stream state moves on stdout lines alone. One consequence worth keeping:
 stderr cannot open the summary block either, so an indented error line citing a
 sample can't re-enter through that door.
 
+**A DIRTY stream is closed by its own summary path line, and by nothing
+else.** The `[CACHE] <id>: DIRTY` line says the stream *will* be rendered, not
+that the previous one *was*: the parser used to close the previous DIRTY stream
+on the next `[CACHE]`, reading them as "one per stream as each starts", but the
+numpy renderer triages **every** stream before writing any
+(`NumpyAudioRenderer.render_streams`, "Fase 1 — triage cache"), so they arrive
+in one burst. Every DIRTY stream but the last got its `stream-done` before the
+engine had touched a sample — and that event is a claim (fingerprint,
+semantics, backend). On a successful run the cost was the drawing: the peaks
+were fetched from the old file and never re-read. On a run that died after the
+triage it was 🟢 on audio nobody rewrote, the very outcome the `done` fallback
+below refuses on a failed run. So `parse_render_line` keeps the DIRTY ids in
+`state["pending"]` and closes each on the path line that names its stem, which
+the engine prints only after the render; a death before the summary block
+closes none. The cost is progress granularity — the DIRTY dots turn together at
+the end — and it is the truthful one. `tests/python/test_render_pipeline.py`
+replays the triage-first order, the summary and a death in between.
+
 The stream id in the summary path line is **not** constrained to `\w`:
-`renameStream` advertises letters, digits, `.`, `_` and `-`, and only the
-*last* DIRTY stream of a round depends on that line (the others are closed by
-the next `[CACHE]`), so an id with `-` or `.` never got its `stream-done` —
-🟡 after a render that did exactly what the dot asked, and two renders needed
-per edit. The comparison is on the `__<id>` suffix, so there is no separator
-position to guess.
+`renameStream` advertises letters, digits, `.`, `_` and `-`, so an id with `-`
+or `.` never got its `stream-done` — 🟡 after a render that did exactly what the
+dot asked, and two renders needed per edit. With several ids pending a suffix is
+not enough (both a basename and an id may contain `__`: with basename `x__b`,
+`a`'s stem `x__b__a` also ends in `__b__a`), so `/render` passes the basename
+and the line is matched on the **whole filename**, `<basename>__<id>`; without
+one the longest pending suffix wins.
 
 **And that line only counts inside the summary block** (#162). `_RE_STEM_PATH`
 accepts any *indented* line ending in `__<something>.<aif|aiff|wav|flac>`, and
 the engine's error messages cite sample paths in the same shape. Measured
 (PGE #178): `  Path cercato: refs/voce__streamA.wav` closed stream `streamA` —
 🟢 on a stem never written, which is the one mistake this parser cannot afford.
-It takes a sample whose name ends like the in-flight stem, the
-`endswith("__" + prev)` guard holding every other case — but that is a
-coincidence, not a defence. Narrowing the regex was not the way out: a path can
-contain spaces (`/Users/me/My Music/proj__s1.wav`), so every tightening on the
-*shape* of the line would be paid with the lost `stream-done` of the **last**
-DIRTY stream of the round, the only one that depends on it. What discriminates
+It takes a sample named like a pending stem — `<basename>__<id>` with the whole
+filename matched, a mere suffix without the basename — the filename match
+holding every other case; but that is a coincidence, not a defence. Narrowing
+the regex was not the way out: a path can contain spaces
+(`/Users/me/My Music/proj__s1.wav`), so every tightening on the *shape* of the
+line would be paid with the lost `stream-done` of DIRTY streams, **every one**
+of which depends on it (see above). What discriminates
 is the **position**: the engine prints those paths in one block, under its own
 head line, and inside that block every indented line *is* a path.
 `_RE_SUMMARY_HEAD` opens it and the first unindented line closes it — no
@@ -645,9 +678,11 @@ project:`, `Grain JSON:`, `Log:`, all at column zero, and before them the blank
 line `print("\nGenerazione partitura grafica…")` prepends.
 
 The gate opens on a line of Italian prose, so its one weakness is that prose
-moving: then the block never opens and that last stem reads 🟡 after a render
-that did exactly what the dot asked — the safe direction, one render too many
-and never one too few. It does not stay in prose, though.
+moving: then the block never opens and no path line closes a stream. On a
+successful run the dots don't notice — the `done` fallback claims the built
+streams no `stream-done` closed, through its per-run Set — but the live
+progress goes; on a failed run nothing is claimed, the safe direction. It does
+not stay in prose, though.
 `test_render_pipeline.py` reads the head **out of the engine's CLI** and
 recognizes it by *position* rather than by words: the `print` that precedes the
 `for` whose body is a single `print` of indentation-plus-interpolation, i.e.
@@ -681,7 +716,57 @@ On the browser side the two writes have different rules, deliberately: the
 `stream-done` handler marks the stem index **only for a declared stream** (the
 event comes from a parsed log line, not from a file), while the `done` fallback
 does not validate — `generated` is the list of files the server found on disk,
-so even a deleted stream's stem exists and the index must know. That fallback's
+so even a deleted stream's stem exists and the index must know. What it must
+not do is **claim** a file this run didn't write: a declared stream the engine
+doesn't build — muted, or outside the solo set (`Generator._filter_solo_mute`)
+— has an earlier run's stem on disk, perhaps another backend's or another
+semantics', and the synthetic `stream-done` would stamp this run's fingerprint,
+version and backend on it (🟢 once unmuted, on a stem the engine will redo).
+So such a stream is indexed and nothing more; `PGEBackend.streamsEngineBuilds`
+is the mirror of that filter, and `test-fingerprint-parity.js` runs it against
+the engine's own method over every mute/solo combination of three streams.
+An id the request doesn't declare at all — a deleted stream, or the old name of
+a renamed one, whose stem survives a render without `--cache` because the
+engine's GC runs only with it — is the same case one step further: the engine
+didn't even read it. Claimed, its synthetic `stream-done` wrote `currentFps`
+of a stream that isn't there (`undefined`) into the in-memory fingerprints, so
+a Ctrl+Z brought it back ⚪ with its stem on disk, and another colour after a
+reload. The set is authoritative only when the request carries it
+(`Array.isArray(opts.streams)`); without a list the fallback claims as it always
+did. That is *not* quite the bridge's rule for `state["ids"]`, which reads an
+empty list as absent (both derive no event, #162): here `[]` is a list, and a YAML with no streams builds
+nothing, so every file on disk is an earlier run's (`test-semantics-store.js`
+pins the difference).
+A **failed** run (`done` with `ok: false`) gets the same treatment for every
+file, built streams included: the bridge lists the disk whatever the exit code,
+and an engine that dies at parse time (a missing sample, a misspelled
+`loop_unit`) has written nothing — claiming the list stamped this run's
+records on every old stem and turned the whole timeline green under a "Render
+failed" toast. Which stems were rewritten before a later death is unknown, and
+unknown reads yellow. The **durations** are not provenance, though — they are a
+measure of the file, and the disk knows it: without `--cache` every
+`stream-done` comes from this fallback, so a run that dies *after* the audio
+(grain JSON, score, Reaper export all come after the stems in `cli.py`) has
+rewritten every stem and claimed none, and with `localFps` empty the
+`loadCache` at the end of `run()` — the only re-read — never ran, leaving the
+waveform cropped to the previous length. So a failed run that listed files
+re-reads `/stems`; dropping the durations instead would have stretched the
+waveform of an untouched file, on the commonest failure.
+The **drawing** is a measure of the file too, and re-reading the duration alone
+was half of it: the synthetic `stream-done` carried both the provenance records
+*and* the media refresh (in `app.jsx` it is what raises `stemRevRef` /
+`grainRegenRef` and, by moving `lastRenderedFps`, re-runs the three media
+effects), so a failed run that gave up the first lost the second — on the
+engine that died after the audio the clip played the new stem while drawing the
+old one's peaks spread over the new length, #153 through another door. So after
+the durations `run()` emits `stems-resync` with the ids the engine may have
+rewritten (built streams only: a muted or undeclared one it certainly didn't
+touch), and `app.jsx` does the media half of a `cached: false` — revision and
+grain refetch — plus `setStemResync`, the signal the three effects list in
+their deps, since here `lastRenderedFps` doesn't move. On an engine that died at
+parse time it re-reads an untouched file and the bridge answers from its
+mtime-keyed peaks cache: one request too many, never a wrong drawing.
+`test-semantics-store.js` and `test-stem-index.js` drive it. That fallback's
 "already handled" guard is a **per-run** Set, not `stemIndex`: `loadCache`
 fills the index from `/stems` on every project open, so "already handled" used
 to mean "was on disk", and from the second render on the fallback was dead.
@@ -1183,8 +1268,9 @@ with the engine. Those pacts used to live only in prose. They are now executable
 (`fingerprint` — optionally with the semantics version swapped, to ask whether
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
-`parameter_bounds`, `constants` — the last one carrying the name registries and
-the constants the mirrors copy whole, `ENVELOPE_COLORS` included);
+`parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
+name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
+included);
 `tests/parity/oracle.js` is the node client (one python process per suite);
 `tests/parity/harness.js` runs the suites and, crucially, **counts and names the
 cases that did not run** when the engine is absent — a skipped parity case is a
@@ -1193,10 +1279,11 @@ failure under `PGE_PARITY_STRICT=1` and in CI when the engine is present.
 Two rules when touching it:
 
 - **The oracle imports from the engine, it never reimplements it.** A copy would
-  be a third mirror to keep aligned. The one exception is the `--magnify-at`
-  grammar, which lives in `pge.cli` (unimportable without numpy/soundfile/
-  matplotlib): the oracle extracts those AST nodes from `cli.py` and executes
-  them — the engine's own bytes.
+  be a third mirror to keep aligned. The two exceptions have one shape: the
+  `--magnify-at` grammar, which lives in `pge.cli` (unimportable without
+  numpy/soundfile/matplotlib), and `Generator._filter_solo_mute`, whose module
+  drags in numpy. The oracle extracts those AST nodes from `cli.py` /
+  `generator.py` and executes them — the engine's own bytes.
 - **No op may need the engine venv.** The CI node job checks the engine out but
   builds no venv, and that is where parity runs. Verified module by module; if
   you add an op that drags in numpy, it will silently stop running there.
@@ -1409,7 +1496,7 @@ drops out entirely: in the YAML it isn't distinguishable from an absent one.
 
 The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
 
-**Staleness has a second axis, and it is not in the hash.** The engine's
+**Staleness has two more axes, and neither is in the hash.** The first: the engine's
 `VARIATION_SEMANTICS_VERSION` (`stream_cache_manager.py`) says *how* it reads
 the YAML; it sits inside the engine's fingerprint, so a bump marks every stem of
 every project dirty at rest. The UI hash deliberately has no counterpart — the
@@ -1417,7 +1504,8 @@ two hashes answer different questions ("did the user edit this" vs "must the
 engine redo this stem") — but the *dot* answers the engine's, and at the 2→3 bump
 (PGE #222) it showed 🟢 on stems the engine was about to rewrite. So the version
 is a second axis beside the hash, never a field inside it: `staleReason` in
-`render-status.js` returns `"yaml"` or `"semantics"`, the version is recorded
+`render-status.js` returns `"yaml"`, `"semantics"` or `"renderer"` (the third
+axis, below), the version is recorded
 per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
@@ -1447,17 +1535,6 @@ rests on, and it was written as guaranteed. `run()` still falls back to the
 cell when the field is absent: absent would mean "don't know", and there it
 would be a lie that deletes the entries of stems just rendered.
 
-**The engine has a third axis in its own hash: `renderer_type`.** It sits
-beside the semantics version and for the same reason — something a stem depends
-on that the YAML text doesn't state. The UI has no axis for it, and that is
-fine while the backend is *one*: `app.jsx` hardcodes `renderer: "numpy"` and
-`server.py` defaults to the same (a source guard in `test-render-status.js`
-pins the pair, and a parity case pins that three backends really give three
-hashes). The day the choice reaches Settings — the engine has three — the dot
-goes green on stems the engine will rewrite: PGE #222 again, on a different
-axis. That guard is the reminder that the axis has to be built, not just an
-option added.
-
 Two rules hold it up:
 
 - **The two unknowns are not the same unknown**, and the difference is whether
@@ -1480,7 +1557,82 @@ Two rules hold it up:
   engine's hash.
 
 A stale-by-semantics dot carries its own tooltip; the state stays `stale` so
-nothing downstream needs a new case.
+nothing downstream needs a new case — and the same holds for the third axis
+below: `statusForStream` indexes the reason into a tooltip table
+(`STALE_TOOLTIP`) rather than branching per axis. The table alone does not stop
+a fourth reason from wearing the YAML text — a missing entry falls back to it,
+there and again in `ClipRenderStatus` — so `test-render-status.js` collects the
+reasons from the `return` literals of `staleReason` (a non-literal return is
+itself a red) and requires each to have an entry that isn't the YAML one.
+
+**There is a third axis, and it is the backend that wrote the stem** (#151).
+`renderer_type` sits inside the engine's fingerprint beside the semantics
+version (PGE #228), for the same reason — something a stem depends on that the
+YAML text doesn't state — and with three backends that exist to be compared,
+rendering with one and relaunching with another is the use case, not the edge.
+So the UI mirrors it the same way the version is mirrored: `staleReason`
+returns `"renderer"` too, the name is recorded per stream beside the
+fingerprints (`loadRenderers` / `_persistRenderers`, localStorage key
+`pge-local-renderer`), and `statusForStream` has its own tooltip for it.
+
+**The reason it is not in the hash is not the one the issue gave.** #151 said
+the UI's hash would stop matching the engine's manifest and every stem would
+read 🟡 forever. The two hashes are never compared: `loadCache` keeps its own
+per-browser manifest (FNV-1a against the engine's SHA-256) and nothing in
+`src/` reads `GET /cache_manifest`. The real reason is #134's criterion —
+*does it reach the YAML?* — and the answer is no: the UI hash answers "did the
+user edit this stream", which a change of backend doesn't move. Folded in, the
+dot would read `stale` with reason `yaml` on a YAML nobody touched, and the
+reason is the whole point of having reasons.
+
+**The two unknowns follow the semantics rule, and the "absent" branch is the
+one that earns its keep later.** A *current* backend that isn't known claims
+nothing; a *stem* with no recorded backend and a known current one reads
+`stale`. Today that discovers nothing — `RENDERER` is one declaration in
+`app.jsx` and the UI has only ever written `numpy` — so it costs one empty pass
+per project, which clears itself on the first `stream-done`, `cached: true`
+included — except on a muted stream, which the engine doesn't build and so
+keeps its yellow until it sounds again: nobody has vouched for that file, and
+the `done` fallback no longer pretends to (see the NDJSON section). Staying
+silent instead would mean that the day the choice reaches
+Settings (#150), the numpy stems written before it stay 🟢 under csound: one
+render too few, in exactly the case the axis exists for. The tooltip is worded
+for **both** branches — "no record that the current backend rendered this
+stem" — because the absent one is the only one that fires today, on every stem
+rendered before #151: "another backend rendered this stem" was false every
+time it was read, and sent the author looking for a backend change nobody made.
+The workspace switch drops this record in memory too (`setRenderedRenderer({})`
+in `onWorkspaceChange`, beside `setRenderedSem({})`): on a same-named project
+the `[activeProject]` effect doesn't re-fire, and with the engine unknown the
+previous folder's names would keep its stems green until a reload.
+
+**The name goes out from one declaration.** `RENDERER` in `app.jsx` is read by
+`rendererOfThisRun` (the POST body *and* the `stream-done` handler, the same
+"fix the value for this run" rule as the semantics version), by `rendererCtx`
+(the live side of the axis) and by `renderOptions.renderer`, which is what the
+render popover's command preview prints (`buildCommand` in `RenderButton.jsx`
+used to hold a `"numpy"` of its own — a declaration in another file, invisible to
+a guard that counts the literals of `app.jsx` alone). Two literals would be two
+declarations, and the disagreement between the name that reaches argv and the
+name that reaches the record is invisible — it shows up as a green dot.
+`server.py` defaults to the same string, and a source guard in
+`test-render-status.js` pins the single declaration, the preview reading it and
+the bridge's default; a parity case pins the two halves of the
+pact — three backends give the engine three hashes, and the UI's axis
+discriminates the same pairs while its hash stays blind to them. What is still
+hardcoded is the **choice**, which is #150; the *knowledge* of who wrote the
+stem no longer is.
+
+**And what counts as a name is one rule too, `PGEBackend.rendererName`** (a
+non-empty string, else `null`). It has three readers — the persisted record in
+`run()`, the in-memory record in the `stream-done` handler, and the live side
+`rendererCtx.current` — and it used to be written three times, differently:
+non-empty string, bare truthiness, no filter at all. Harmless while `RENDERER`
+is `"numpy"`; the day it comes from a preference, an empty name on the live side
+is a *known* `current` (`"" != null`) against records `run()` never writes, i.e.
+every stem yellow forever, and a truthy non-string stays in memory and vanishes
+from localStorage — one colour until the reload, another after.
+`test-semantics-store.js` runs the rule and requires the three sites to call it.
 
 ### YAML round-trip (`yaml-bridge.js`)
 
