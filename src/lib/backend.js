@@ -540,6 +540,15 @@
                   // that didn't already get a stream-done event during streaming.
                   // This covers the case where parse_render_line missed a line.
                   const prefix = opts.yamlBasename + "__";
+                  // Una richiesta che dichiara i suoi stream (app.jsx lo fa
+                  // sempre) dice anche quali il motore ha letto: uno stem il
+                  // cui id non e' fra quelli — stream cancellato, o il nome
+                  // vecchio di uno rinominato, che senza `--cache` la GC del
+                  // motore non tocca — e' di un giro precedente tanto quanto
+                  // quello di un muto. Senza la lista non c'e' un insieme
+                  // contro cui giudicare, e vale il comportamento storico: la
+                  // stessa regola di `state["ids"]` nel bridge.
+                  const declared = Array.isArray(opts.streams);
                   const built = streamsEngineBuilds(opts.streams);
                   // Un giro FALLITO non ha costruito niente di certo. Il bridge
                   // elenca il disco anche con `ok: false`, e un motore che
@@ -561,24 +570,29 @@
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
                     const s = (opts.streams || []).find(x => x.id === streamId);
                     // Uno stream dichiarato che il motore NON ha costruito
-                    // (muto, o fuori dal solo): il file e' di un giro
-                    // precedente. L'indice deve sapere che c'e' — `ownsStem` —
-                    // ma senza toccarne la durata, che non e' cambiata, e
-                    // senza `stream-done`: quell'evento fa scrivere impronta,
+                    // (muto, o fuori dal solo) o che non ha nemmeno letto
+                    // (non dichiarato): il file e' di un giro precedente.
+                    // L'indice deve sapere che c'e' — `ownsStem` — ma senza
+                    // toccarne la durata, che non e' cambiata, e senza
+                    // `stream-done`: quell'evento fa scrivere impronta,
                     // semantica e backend di QUESTO giro, qui in `localFps` e
                     // in memoria in app.jsx. Tolto il muto, il pallino sarebbe
-                    // verde su uno stem che il motore rifara'. Su un giro
-                    // fallito la stessa sorte tocca a tutti, costruiti o no.
-                    if (!claimable || (s && !built.has(s.id))) {
+                    // verde su uno stem che il motore rifara'; annullata la
+                    // cancellazione, ⚪ su uno stem che c'e' (l'impronta in
+                    // memoria diventava quella di uno stream assente), e un
+                    // altro colore al reload. Su un giro fallito la stessa
+                    // sorte tocca a tutti, costruiti o no.
+                    if (!claimable || (declared && !(s && built.has(s.id)))) {
                       if (!(key in stemIndex)) stemIndex[key] = Date.now();
                       continue;
                     }
                     doneThisRun.add(streamId);
-                    // Qui l'id NON si valida contro `opts.streams`: `generated`
-                    // e' la lista dei file che il server ha trovato su disco,
-                    // quindi anche lo stem di uno stream cancellato esiste
-                    // davvero, e l'indice deve saperlo — e' esattamente la
-                    // domanda a cui `ownsStem` risponde.
+                    // Qui arriva uno stream che il motore ha costruito, o — con
+                    // una richiesta che non dichiara gli stream — qualunque id:
+                    // li' `s` manca, e l'impronta persistita con lui. Che il
+                    // file di uno stream cancellato esista, l'indice lo sa dal
+                    // ramo qui sopra: e' la domanda di `ownsStem`, e non ha
+                    // bisogno di un reclamo.
                     _markStemFresh(key);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                     onEvent && onEvent({ type: "stream-done", streamId, cached: false });

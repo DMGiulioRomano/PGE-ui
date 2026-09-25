@@ -663,6 +663,60 @@ console.log("\n── un giro FALLITO non reclama niente, nemmeno gli stream cos
          backend.render.ownsStem("proj", "a") === true);
 }
 
+console.log("\n── lo stem di uno stream CANCELLATO non si reclama nemmeno lui ──");
+{
+  // Il terzo modo in cui un file di `generated` non e' di questo giro, e il piu'
+  // ovvio: lo stream non e' nemmeno nello YAML che il motore ha letto. Senza
+  // `--cache` la GC del motore non gira, quindi lo stem di uno stream
+  // cancellato (o rinominato: il nome vecchio resta su disco) sopravvive e il
+  // bridge lo elenca. Il fallback lo indicizzava — giusto, `ownsStem` deve
+  // saperlo — ma lo RECLAMAVA anche: `stream-done` sintetico, e la meta' in
+  // memoria di app.jsx stampava su quell'id impronta (`undefined`, lo stream
+  // non c'e'), semantica e backend di questo giro. Ctrl+Z, e lo stream tornava
+  // ⚪ "never rendered" con lo stem su disco, mentre il localStorage — che quel
+  // ramo non toccava — al reload diceva un altro colore.
+  store = { "pge-local-renderer": JSON.stringify({ proj: { gone: "csound" } }),
+            "pge-local-sem": JSON.stringify({ proj: { gone: 2 } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "done", ok: true,
+      generated: ["output/proj__a.wav", "output/proj__gone.wav"] },
+  ];
+  const seen = [];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [{ id: "a" }] },
+    (e) => seen.push(e));
+  const done = seen.filter(e => e.type === "stream-done").map(e => e.streamId);
+  assert("lo `stream-done` sintetico va solo allo stream costruito",
+         JSON.stringify(done) === JSON.stringify(["a"]), JSON.stringify(done));
+  assert("...l'indice sa comunque che il file del cancellato c'e' (ownsStem)",
+         backend.render.ownsStem("proj", "gone") === true);
+  assert("...e i suoi record restano quelli di chi l'ha scritto",
+         (rend("proj") || {}).gone === "csound" && (sem("proj") || {}).gone === 2,
+         `renderer ${JSON.stringify(rend("proj"))} · sem ${JSON.stringify(sem("proj"))}`);
+}
+
+console.log("\n── una richiesta che non dichiara gli stream resta al comportamento storico ──");
+{
+  // La stessa regola del bridge (`state["ids"]` in server.py): senza una lista
+  // di stream non c'e' un insieme contro cui giudicare, e il fallback reclama
+  // come ha sempre fatto. app.jsx la dichiara sempre; il ramo esiste per non
+  // cambiare in silenzio il contratto di `run()` a chi non la passa.
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "done", ok: true, generated: ["output/proj__a.wav"] },
+  ];
+  const seen = [];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3 },
+    (e) => seen.push(e));
+  assert("senza `streams` il fallback emette lo `stream-done` sintetico",
+         seen.some(e => e.type === "stream-done" && e.streamId === "a"),
+         JSON.stringify(seen));
+}
+
   bodyDone = true;
 })().catch(e => {
   /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e

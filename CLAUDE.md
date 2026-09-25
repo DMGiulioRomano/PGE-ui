@@ -604,6 +604,15 @@ version and backend on it (🟢 once unmuted, on a stem the engine will redo).
 So such a stream is indexed and nothing more; `PGEBackend.streamsEngineBuilds`
 is the mirror of that filter, and `test-fingerprint-parity.js` runs it against
 the engine's own method over every mute/solo combination of three streams.
+An id the request doesn't declare at all — a deleted stream, or the old name of
+a renamed one, whose stem survives a render without `--cache` because the
+engine's GC runs only with it — is the same case one step further: the engine
+didn't even read it. Claimed, its synthetic `stream-done` wrote `currentFps`
+of a stream that isn't there (`undefined`) into the in-memory fingerprints, so
+a Ctrl+Z brought it back ⚪ with its stem on disk, and another colour after a
+reload. The set is authoritative only when the request carries it
+(`Array.isArray(opts.streams)`); without a list the fallback claims as it always
+did — the bridge's own rule for `state["ids"]`.
 A **failed** run (`done` with `ok: false`) gets the same treatment for every
 file, built streams included: the bridge lists the disk whatever the exit code,
 and an engine that dies at parse time (a missing sample, a misspelled
