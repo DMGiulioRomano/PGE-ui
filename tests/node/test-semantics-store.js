@@ -526,6 +526,106 @@ console.log("\n── i due record viaggiano insieme in un giro solo (sorgente) 
          "non e' quello che e' andato in porto");
 }
 
+/* ===========================================================================
+ * 4. Il fallback di `done` reclama solo cio' che il motore ha costruito.
+ *
+ * `generated` non e' l'elenco dei file che il render ha scritto: e' quello dei
+ * file che il bridge trova su disco DOPO il render (`output/<basename>__*`,
+ * server.py). Il fallback lo usa come rete per l'ultimo stream DIRTY del giro,
+ * e senza `--cache` e' l'UNICA sorgente di `stream-done` (le righe `[CACHE]`
+ * non ci sono). Ma uno stream muto — o fuori dal solo — il motore non lo
+ * costruisce affatto (`Generator._filter_solo_mute`): il suo file e' di un
+ * giro precedente, magari di un altro backend o di un'altra semantica.
+ * Reclamarlo scriveva i tre record di QUESTO giro su audio che questo giro non
+ * ha toccato: tolto il muto, verde su uno stem che il motore rifara' — un
+ * render di meno, l'esito che i due assi di provenienza esistono per evitare.
+ * ========================================================================= */
+console.log("\n── il fallback di `done` non reclama lo stem di uno stream muto ──");
+{
+  store = { "pge-local-renderer": JSON.stringify({ proj: { stream2: "csound" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  // Il giro con la cache: `stream1` ha il suo `stream-done`, `stream2` e'
+  // muto quindi il motore non stampa niente per lui — ma il suo file c'e'.
+  NDJSON = [
+    { type: "stream-start", streamId: "stream1", index: 0, total: 2 },
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true,
+      generated: ["output/proj__stream1.wav", "output/proj__stream2.wav"] },
+  ];
+  const seen = [];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [{ id: "stream1" }, { id: "stream2", mute: true }] },
+    (e) => seen.push(e));
+
+  const r = rend("proj") || {};
+  assert("lo stream costruito prende il backend del giro", r.stream1 === "numpy",
+         JSON.stringify(r));
+  assert("quello muto tiene il record di chi l'ha scritto davvero",
+         r.stream2 === "csound",
+         `pge-local-renderer = ${JSON.stringify(r)}: il fallback ha scritto il ` +
+         "backend di questo giro su un file che questo giro non ha toccato");
+  assert("...niente semantica di questo giro sul file di un altro",
+         !("stream2" in (sem("proj") || {})), JSON.stringify(sem("proj")));
+  const fps = await backend.render.loadCache("proj");
+  assert("...e niente impronta: un muto modificato resta giallo",
+         !("stream2" in fps), JSON.stringify(fps));
+  assert("nessuno `stream-done` sintetico per lui: la meta' in memoria " +
+         "di app.jsx legge gli eventi, non il localStorage",
+         !seen.some(e => e.type === "stream-done" && e.streamId === "stream2"),
+         JSON.stringify(seen.filter(e => e.type === "stream-done")));
+  assert("...ma l'indice sa che il file c'e' (ownsStem)",
+         backend.render.ownsStem("proj", "stream2") === true);
+}
+
+console.log("\n── senza --cache il fallback e' l'unica sorgente, e resta tale ──");
+{
+  // Nessuna riga `[CACHE]`, quindi nessun `stream-done` dal bridge: tutto
+  // arriva dal fallback. La correzione non deve spegnerlo sugli stream che il
+  // motore ha davvero costruito — e' la sua ragione d'essere.
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "done", ok: true,
+      generated: ["output/proj__a.wav", "output/proj__b.wav", "output/proj__c.wav"] },
+  ];
+  const seen = [];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [{ id: "a" }, { id: "b", mute: true }, { id: "c" }] },
+    (e) => seen.push(e));
+  const done = seen.filter(e => e.type === "stream-done").map(e => e.streamId).sort();
+  assert("gli stream costruiti ricevono lo `stream-done` sintetico",
+         JSON.stringify(done) === JSON.stringify(["a", "c"]), JSON.stringify(done));
+  assert("...e i loro record", JSON.stringify(rend("proj")) === JSON.stringify({ a: "numpy", c: "numpy" }),
+         JSON.stringify(rend("proj")));
+}
+
+console.log("\n── col solo, il motore costruisce SOLO i solisti (anche se muti) ──");
+{
+  // `_filter_solo_mute`: con almeno un `solo` si prendono quelli e basta, e
+  // il `mute` non conta piu' — un solista muto suona. La regola e' sulla
+  // PRESENZA della chiave, e il serializzatore scrive `solo`/`mute` solo
+  // quando veri, quindi nello stato vale la verita'.
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "done", ok: true,
+      generated: ["output/proj__a.wav", "output/proj__b.wav", "output/proj__c.wav"] },
+  ];
+  const seen = [];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      streams: [{ id: "a", solo: true }, { id: "b" }, { id: "c", solo: true, mute: true }] },
+    (e) => seen.push(e));
+  const done = seen.filter(e => e.type === "stream-done").map(e => e.streamId).sort();
+  assert("il fallback reclama i due solisti e non il terzo",
+         JSON.stringify(done) === JSON.stringify(["a", "c"]), JSON.stringify(done));
+  assert("...e i record dicono lo stesso",
+         JSON.stringify(rend("proj")) === JSON.stringify({ a: "numpy", c: "numpy" }),
+         JSON.stringify(rend("proj")));
+}
+
   bodyDone = true;
 })().catch(e => {
   /* Senza questo catch e' una unhandled rejection: exit 1 con lo stack e

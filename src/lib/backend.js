@@ -194,6 +194,24 @@
     return (typeof x === "string" && x) ? x : null;
   }
 
+  /* Gli id degli stream che il motore COSTRUISCE in un giro: il mirror di
+     `Generator._filter_solo_mute` (generator.py). Con almeno un `solo` si
+     prendono quelli e basta — il `mute` li' non conta, un solista muto suona —,
+     altrimenti tutti meno i muti. Il motore guarda la PRESENZA della chiave, e
+     il serializzatore scrive `solo`/`mute` solo quando veri (yaml-bridge.js),
+     quindi nello stato la presenza e' la verita'.
+     Il lettore e' il fallback di `done` in `run()`: `generated` e' il DISCO,
+     non il giro, e uno stream che il motore non costruisce ha li' il file di un
+     render precedente — magari di un altro backend, o di un'altra semantica.
+     Reclamarlo scriveva i record di provenienza di QUESTO giro su audio che
+     questo giro non ha toccato. `tests/parity/test-fingerprint-parity.js`
+     confronta la regola con i byte del motore. */
+  function streamsEngineBuilds(streams) {
+    const list = (Array.isArray(streams) ? streams : []).filter(s => s && typeof s === "object");
+    const soloMode = list.some(s => s.solo);
+    return new Set(list.filter(s => (soloMode ? s.solo : !s.mute)).map(s => s.id));
+  }
+
   // fetch with an AbortController timeout so a hung server.py can't leave a
   // promise pending forever (the boot probe in app.jsx uses the same pattern at
   // a tighter 1.5s). Data ops default to 10s. #45
@@ -519,6 +537,7 @@
                   // that didn't already get a stream-done event during streaming.
                   // This covers the case where parse_render_line missed a line.
                   const prefix = opts.yamlBasename + "__";
+                  const built = streamsEngineBuilds(opts.streams);
                   for (const genPath of (ev.generated || [])) {
                     const fname = genPath.replace(/^.*[\\/]/, "");
                     const stem  = fname.replace(/\.[^.]+$/, "");
@@ -527,6 +546,19 @@
                     if (!streamId) continue;
                     if (doneThisRun.has(streamId)) continue;  // already handled, this run
                     const key = `${opts.yamlBasename}__${streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`;
+                    const s = (opts.streams || []).find(x => x.id === streamId);
+                    // Uno stream dichiarato che il motore NON ha costruito
+                    // (muto, o fuori dal solo): il file e' di un giro
+                    // precedente. L'indice deve sapere che c'e' — `ownsStem` —
+                    // ma senza toccarne la durata, che non e' cambiata, e
+                    // senza `stream-done`: quell'evento fa scrivere impronta,
+                    // semantica e backend di QUESTO giro, qui in `localFps` e
+                    // in memoria in app.jsx. Tolto il muto, il pallino sarebbe
+                    // verde su uno stem che il motore rifara'.
+                    if (s && !built.has(s.id)) {
+                      if (!(key in stemIndex)) stemIndex[key] = Date.now();
+                      continue;
+                    }
                     doneThisRun.add(streamId);
                     // Qui l'id NON si valida contro `opts.streams`: `generated`
                     // e' la lista dei file che il server ha trovato su disco,
@@ -534,7 +566,6 @@
                     // davvero, e l'indice deve saperlo — e' esattamente la
                     // domanda a cui `ownsStem` risponde.
                     _markStemFresh(key);
-                    const s = (opts.streams || []).find(x => x.id === streamId);
                     if (s) localFps[s.id] = fingerprintStream(s, opts.outputFormat);
                     onEvent && onEvent({ type: "stream-done", streamId, cached: false });
                   }
@@ -948,6 +979,7 @@
   window.PGEBackend = {
     fingerprintStream,
     rendererName,
+    streamsEngineBuilds,
     // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.
     create(opts) {
       return createLocalBackend(opts);
