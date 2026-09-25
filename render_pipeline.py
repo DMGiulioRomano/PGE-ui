@@ -520,9 +520,19 @@ def _supercollider_row(root: Path, which, synthdef):
                        f"engine, and nothing compiled in {synthdef['dir']}/")
     sclang = which(SC_COMPILER)
     if not sclang:
-        return False, ("sclang not on PATH, and the SynthDef isn't compiled "
-                       "yet — run `make sc-synthdef` in the engine once, or "
-                       "install sclang")
+        # Il rimedio compare proprio quando sclang manca, quindi non puo'
+        # essere `make sc-synthdef`: quel target controlla sclang per prima
+        # cosa e si ferma. Restano due strade, installarlo o portare nel
+        # motore un compilato fatto altrove, nella cartella dove il
+        # sottoprocesso lo cerca. E un compilato piu' vecchio del sorgente
+        # non e' "da compilare": c'e', e il motore lo cancella per rifarlo.
+        target = f"{synthdef['dir']}/{synthdef['name']}.scsyndef"
+        state = (f"{target} is older than {synthdef['source']}"
+                 if compiled.exists() else f"{target} isn't compiled yet")
+        return False, (f"sclang not on PATH, and {state} — install sclang "
+                       "(it ships with SuperCollider), or copy a "
+                       f"{synthdef['name']}.scsyndef compiled from the current "
+                       f"source into the engine's {synthdef['dir']}/")
     return True, (f"scsynth: {scsynth} · SynthDef compiled on the first "
                   f"render (sclang: {sclang})")
 

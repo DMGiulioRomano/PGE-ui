@@ -320,6 +320,39 @@ def test_supercollider_first_render_needs_sclang(tmp_path):
     assert b["supercollider"]["available"] is True, b
 
 
+def test_supercollider_without_sclang_names_a_remedy_that_works(tmp_path):
+    """Il testo e' il rimedio che il popover mostra sul bottone spento, e
+    compare proprio quando sclang NON c'e': non puo' mandare a lanciare
+    `make sc-synthdef`, che nel motore controlla sclang per prima cosa e si
+    ferma. I due rimedi veri sono installare sclang o portare nel motore un
+    `.scsyndef` compilato altrove — nella cartella dove il sottoprocesso lo
+    cerchera', che e' quella che il testo deve nominare."""
+    sc = tmp_path / "supercollider"
+    sc.mkdir()
+    (sc / "pge_grain.scd").write_text("// sorgente\n")
+    detail = _avail(tmp_path, ["supercollider"],
+                    _fake_bin(tmp_path / "bin", "scsynth"))["supercollider"]["detail"]
+    assert "make sc-synthdef" not in detail, detail
+    assert "install sclang" in detail, detail
+    assert "pgeGrain.scsyndef" in detail and "supercollider/" in detail, detail
+
+
+def test_supercollider_stale_synthdef_says_it_is_stale(tmp_path):
+    """Un `.scsyndef` piu' vecchio del sorgente non e' "non ancora compilato":
+    c'e', e il motore lo cancella per ricompilarlo. Il testo deve dire quale
+    dei due casi e', o manda a cercare un file che sta li'."""
+    sc = tmp_path / "supercollider"
+    sc.mkdir()
+    (sc / "pgeGrain.scsyndef").write_bytes(b"SCgf")
+    (sc / "pge_grain.scd").write_text("// sorgente\n")
+    _bump_mtime(sc / "pge_grain.scd")
+    detail = _avail(tmp_path, ["supercollider"],
+                    _fake_bin(tmp_path / "bin", "scsynth"))["supercollider"]["detail"]
+    assert "older than" in detail, detail
+    assert "isn't compiled" not in detail, detail
+    assert "make sc-synthdef" not in detail, detail
+
+
 def test_supercollider_stale_synthdef_needs_sclang_too(tmp_path):
     """Un `.scsyndef` piu' vecchio del sorgente il motore lo ricompila (la regola
     di un Makefile, `_needs_compile`): non conta come compilato."""
