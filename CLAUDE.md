@@ -34,8 +34,9 @@ exists, the fourth only when a browser is installed):
   the graphies the time walk used to miss, each asked by comparison against its
   own nested or array twin), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary, incl. the engine-semantics axis, source
-  guards on the chain that carries the version from the engine to the dot, and
+  classification + render summary, incl. the engine-semantics and renderer
+  axes, source guards on the chain that carries the version from the engine to
+  the dot and on the single `RENDERER` declaration its readers share, and
   a live two-overlapping-renders check that `run()` refuses re-entry),
   `test-history-core.js` (undo/redo stack
   mechanics: 200-cap, gesture collapse, redo-clearing), and `test-tweaks-store.js`
@@ -1429,12 +1430,16 @@ previous folder's names would keep its stems green until a reload.
 
 **The name goes out from one declaration.** `RENDERER` in `app.jsx` is read by
 `rendererOfThisRun` (the POST body *and* the `stream-done` handler, the same
-"fix the value for this run" rule as the semantics version) and by `rendererCtx`
-(the live side of the axis). Two literals would be two declarations, and the
-disagreement between the name that reaches argv and the name that reaches the
-record is invisible — it shows up as a green dot. `server.py` defaults to the
-same string, and a source guard in `test-render-status.js` pins both the single
-declaration and the bridge's default; a parity case pins the two halves of the
+"fix the value for this run" rule as the semantics version), by `rendererCtx`
+(the live side of the axis) and by `renderOptions.renderer`, which is what the
+render popover's command preview prints (`buildCommand` in `RenderButton.jsx`
+used to hold a `"numpy"` of its own — a declaration in another file, invisible to
+a guard that counts the literals of `app.jsx` alone). Two literals would be two
+declarations, and the disagreement between the name that reaches argv and the
+name that reaches the record is invisible — it shows up as a green dot.
+`server.py` defaults to the same string, and a source guard in
+`test-render-status.js` pins the single declaration, the preview reading it and
+the bridge's default; a parity case pins the two halves of the
 pact — three backends give the engine three hashes, and the UI's axis
 discriminates the same pairs while its hash stays blind to them. What is still
 hardcoded is the **choice**, which is #150; the *knowledge* of who wrote the

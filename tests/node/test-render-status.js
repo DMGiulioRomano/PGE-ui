@@ -566,6 +566,22 @@ console.log("\n── la catena dal motore al pallino ──");
       /opts\.get\("renderer",\s*"numpy"\)/.test(srvSrc),
       "i due lati devono concordare: chi rende e chi hasha sono lo stesso giro");
   }
+  /* ...e l'anteprima del comando nel popover di render la legge dalla stessa
+     dichiarazione. `buildCommand` teneva un `"--renderer", "numpy"` suo: una
+     seconda dichiarazione del backend fuori da app.jsx, che la guardia qui
+     sopra non vedeva perche' conta i letterali di un file solo. L'anteprima
+     promette di essere argv "byte per byte" (vedi `sendable` in
+     magnify-spec.js); il giorno del selettore (#150) avrebbe detto numpy sotto
+     qualunque scelta. */
+  {
+    const rbSrc = SG.codeOf(path.join(__dirname, "../../src/components/RenderButton.jsx"));
+    assert("...e l'anteprima del comando legge il backend dalla stessa dichiarazione",
+      /renderer:\s*RENDERER\b/.test(appSrc) &&
+      /"--renderer",\s*o\.renderer\b/.test(rbSrc) &&
+      !/"numpy"/.test(rbSrc),
+      "renderOptions.renderer = RENDERER in app.jsx, e buildCommand stampa " +
+      "o.renderer: un letterale in RenderButton.jsx e' una seconda sorgente");
+  }
   /* I tre anelli che nessuna esecuzione in node tocca. Ognuno, saltando,
      spegne l'asse in silenzio: il pallino torna verde e la suite resta verde
      con lui — che e' esattamente come il debito e' rimasto aperto finora. */

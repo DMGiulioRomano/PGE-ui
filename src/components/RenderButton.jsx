@@ -219,7 +219,11 @@ function buildCommand(o) {
     "src/main.py",
     `configs/${o.projectBasename || "PGE_test"}.yml`,
     `${o.outputDir || "output"}/${o.projectBasename || "PGE_test"}.aif`,
-    "--renderer", "numpy",
+    // Il nome arriva da app.jsx (`renderOptions.renderer` = `RENDERER`, #151),
+    // come il resto delle opzioni: un letterale qui era una seconda
+    // dichiarazione del backend, che il giorno del selettore (#150) avrebbe
+    // continuato a dire numpy sotto qualunque scelta.
+    "--renderer", o.renderer,
     "--per-stream",
   ];
   // grain data forced on while the grain view is open (matches onRender payload)

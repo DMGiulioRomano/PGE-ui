@@ -78,11 +78,13 @@ const EMPTY_PROJECT = { project: "", title: "", duration: 10, bpm: 120, streams:
  * Quello che va costruito prima del selettore e' l'ASSE: il motore mette
  * `renderer_type` nel proprio fingerprint accanto alla semantica (PGE #228),
  * quindi uno stem dipende anche da chi l'ha scritto. `rendererOfThisRun` in
- * `runRender` e `rendererCtx` qui sotto leggono entrambi questa costante, e non due
- * letterali: due copie sono il modo in cui il nome che va in argv e quello che
- * finisce nel record smettono di concordare — un disaccordo che non si vede,
- * perche' produce un pallino verde. Il giorno del selettore, questa riga
- * diventa una preferenza e i due lettori la seguono senza toccarli.
+ * `runRender`, `rendererCtx` e `renderOptions.renderer` qui sotto leggono tutti
+ * questa costante, e non tre letterali: tre copie sono il modo in cui il nome
+ * che va in argv, quello che l'anteprima del comando dice che ci va
+ * (`buildCommand` in RenderButton.jsx) e quello che finisce nel record smettono
+ * di concordare — un disaccordo che non si vede, perche' produce un pallino
+ * verde. Il giorno del selettore, questa riga diventa una preferenza e i tre
+ * lettori la seguono senza toccarli.
  */
 const RENDERER = "numpy";
 
@@ -1640,6 +1642,11 @@ function App() {
     preclean: !!tweaks.renderPreclean,
     outputDir: tweaks.outputPath || "output",
     projectBasename: activeProject.replace(/\.yml$/, ""),
+    // Il backend che l'anteprima del comando stampa (#151). Solo in lettura —
+    // `setRenderOptions` non lo salva, la scelta e' #150 — ma dalla stessa
+    // dichiarazione del POST: `buildCommand` ne teneva un letterale suo, cioe'
+    // un'anteprima "byte per byte" libera di dire numpy sopra un render csound.
+    renderer: RENDERER,
     // surfaced so the render popover can warn when grain data is off but the
     // grain view (in-clip or score panel) is open — see onRender forcing below.
     showGrains: !!tweaks.showGrains,
