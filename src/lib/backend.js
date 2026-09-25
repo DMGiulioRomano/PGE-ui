@@ -28,7 +28,7 @@
  *   fs.writeFile(kind, name, str) → Promise<void>
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
- *     onEvent({type, line?, streamId?, progress?})
+ *     onEvent({type, line?, streamId?})
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`

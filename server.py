@@ -1242,8 +1242,9 @@ def make_app(root: Path, render_timeout: float = 600.0,
                 try:
                     proc = rs.start(cmd, root)
                     # Hard cap: kill a stuck main.py so it can't hold a worker
-                    # thread forever (workers=1, threads=4). The kill closes the
-                    # pipe → readline hits EOF → this loop ends normally. #43
+                    # thread forever (workers=1, threads=4). The kill closes
+                    # both pipes → both pumps of merged_output hit EOF → this
+                    # loop ends normally. #43
                     watchdog = start_watchdog(proc, render_timeout)
                     # Gli id dichiarati dalla richiesta: e' l'unica cosa che
                     # distingue `[CACHE] stream1: clean` da `[CACHE] Manifest: …`,
