@@ -179,10 +179,16 @@ parity({
            e' la regola gia' scritta in CLAUDE.md ("se aggiungi un clamp, aggiungi
            il fallback in yaml-bridge.js E la mappatura in bounds.js"): ogni
            chiave di PGE_BOUNDS o e' mappata, o e' `pitch`, che segue una strada
-           sua (il motore lo consegna gia' calcolato per unita'). */
+           sua (il motore lo consegna gia' calcolato per unita').
+           `relativeRange` (PGE #267) e' la seconda strada sua: e' il dominio
+           della banda relativa, una costante della MODALITA' che
+           GRANULAR_PARAMETERS non puo' esprimere, e arriva su /bounds come
+           `relative_range`. Che quella strada funzioni lo prova il caso di
+           RELATIVE_RANGE_BOUNDS qui sotto, da una base sbagliata. */
+        const OWN_ROUTE = new Set(["pitch", "relativeRange"]);
         const unmapped = Object.keys(STATIC)
-          .filter(k => k !== "pitch" && !(k in B.ENGINE_PARAM_MAP));
-        assert("ogni clamp di PGE_BOUNDS ha la sua mappatura (pitch a parte)",
+          .filter(k => !OWN_ROUTE.has(k) && !(k in B.ENGINE_PARAM_MAP));
+        assert("ogni clamp di PGE_BOUNDS ha la sua mappatura (pitch e relativeRange a parte)",
           unmapped.length === 0,
           unmapped.join(", ") + " — senza mappatura restano al fallback statico " +
           "anche col bridge acceso");
@@ -538,6 +544,87 @@ parity({
 
         ctx.note(`vocabolario di loop_unit: ${fromEngine.join(", ")}`,
           `canonica «${fromEngine[0]}», default della chiave assente`);
+      },
+    },
+    {
+      label: "la banda relativa di duration_range: vocabolario e dominio (PGE #267)",
+      run: async (ask, assert, ctx) => {
+        /* PGE #267 / PGE-ui #163. `grain.duration_range_unit: relative` fa di
+         * duration_range una FRAZIONE della base. La UI ne tiene due cose:
+         *
+         *   - il vocabolario (`RANGE_UNITS` in envelope-utils.js), perche'
+         *     `grainRangeUnitError` nomini un refuso mentre si scrive — una
+         *     grafia fuori lista e' InvalidFieldValueError e il render muore;
+         *   - il dominio della frazione (`RELATIVE_RANGE_BOUNDS`), letto
+         *     dall'AST e servito su /bounds come `relative_range`, con il
+         *     letterale di yaml-bridge.js come fallback statico.
+         *
+         * Una copia e un fallback: le due cose che CLAUDE.md vieta senza una
+         * parita' che le tenga oneste. Questa e' quella parita'. */
+        const c = (await ask("constants", {})).value;
+        const EU = window.PGEEnvUtils;
+
+        assert("il motore dichiara RANGE_UNITS",
+          Array.isArray(c.range_units) && c.range_units.length > 0,
+          c.range_units_error || JSON.stringify(c.range_units));
+        /* Il motore scrive la tupla per NOME (RANGE_UNIT_ABSOLUTE, …): una
+         * lettura AST ferma ai letterali tornerebbe [] sul checkout vero, e
+         * gli assert qui sotto confronterebbero la copia della UI col vuoto. */
+        assert("la lettura AST del bridge da' lo stesso vocabolario, nello stesso ordine",
+          JSON.stringify(c.range_units_ast) === JSON.stringify(c.range_units),
+          `ast=${JSON.stringify(c.range_units_ast)} import=${JSON.stringify(c.range_units)}`);
+        assert("la UI ne ha la stessa copia, nello stesso ordine",
+          JSON.stringify(EU.RANGE_UNITS) === JSON.stringify(c.range_units),
+          `ui=${JSON.stringify(EU.RANGE_UNITS)} motore=${JSON.stringify(c.range_units)}`);
+        /* Il default e' la grafia che il selettore dell'Inspector scrive
+         * CANCELLANDO la chiave, e la relativa e' quella che esclude la banda
+         * dalla conversione di duration_unit: sbagliarne una e' riscrivere il
+         * file in silenzio. */
+        assert("il default della UI e' quello del motore, e la prima grafia",
+          EU.RANGE_UNIT_DEFAULT === c.range_unit_default && EU.RANGE_UNITS[0] === c.range_unit_default,
+          `ui=${EU.RANGE_UNIT_DEFAULT} motore=${c.range_unit_default}`);
+        assert("la grafia relativa della UI e' quella del motore",
+          EU.RANGE_UNIT_RELATIVE === c.range_unit_relative,
+          `ui=${EU.RANGE_UNIT_RELATIVE} motore=${c.range_unit_relative}`);
+        assert("grainRangeUnitError accetta ogni grafia del motore (con la banda scritta)",
+          c.range_units.every(u => EU.grainRangeUnitError({ durationRange: 0.1, durationRangeUnit: u }) === null));
+        assert("…e rifiuta quel che il motore non dichiara",
+          EU.grainRangeUnitError({ durationRange: 0.1, durationRangeUnit: c.range_units[0] + "_" }) !== null);
+
+        const imp = c.relative_range_bounds;
+        assert("il motore dichiara RELATIVE_RANGE_BOUNDS",
+          Array.isArray(imp) && imp.length === 2, JSON.stringify(imp));
+        const ast = c.relative_range_bounds_ast;
+        assert("la lettura AST del bridge da' lo stesso dominio",
+          ast && ast.min === imp[0] && ast.max === imp[1],
+          `ast=${JSON.stringify(ast)} import=${JSON.stringify(imp)}`);
+        assert("il fallback statico di yaml-bridge.js e' il dominio del motore",
+          STATIC.relativeRange.min === imp[0] && STATIC.relativeRange.max === imp[1],
+          `statico=${JSON.stringify(STATIC.relativeRange)} motore=${JSON.stringify(imp)}`);
+        /* E la strada fino al clamp: da una base sbagliata il merge deve
+         * portare il dominio del motore, o un merge che ignora il campo
+         * starebbe verde accanto a un fallback che per ora coincide. */
+        const SENT = imp[1] + 1;
+        const wrong = Object.assign({}, STATIC, { relativeRange: { min: SENT, max: SENT } });
+        const merged = B.mergeEngineBounds(wrong, { relative_range: ast });
+        assert("da una base sbagliata il merge porta il dominio del motore",
+          merged.relativeRange.min === imp[0] && merged.relativeRange.max === imp[1],
+          JSON.stringify(merged.relativeRange));
+        /* Il dominio relativo e' della MODALITA', non del parametro: il merge
+         * non deve toccare il max_range assoluto di duration_range, anche se
+         * oggi i due valgono uguale — la coincidenza che il motore dichiara. */
+        assert("…e non tocca il dominio assoluto di durationRange",
+          JSON.stringify(merged.durationRange) === JSON.stringify(wrong.durationRange));
+        // Il clamp della riga in relativo e' quel dominio, in ogni unita'.
+        for (const u of ["seconds", "milliseconds", "samples"]) {
+          const b = EU.grainRangeBounds({ durationUnit: u, durationRangeUnit: c.range_unit_relative },
+                                        { relativeRange: { min: imp[0], max: imp[1] } });
+          assert(`in relativo (${u}) il dominio della banda e' quello del motore, non convertito`,
+            b.min === imp[0] && b.max === imp[1], JSON.stringify(b));
+        }
+
+        ctx.note(`vocabolario di duration_range_unit: ${c.range_units.join(", ")}`,
+          `default «${c.range_unit_default}», dominio relativo [${imp.join(", ")}]`);
       },
     },
   ],

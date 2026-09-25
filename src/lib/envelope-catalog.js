@@ -20,7 +20,8 @@
  *   - il cap del loop e il suffisso della sua unita' → PGEEnvUtils.loopEnvMax /
  *     loopUnitSuffix, gli stessi che legge l'Inspector (#126, #149);
  *   - i bound della durata del grano nell'unita' dichiarata →
- *     PGEEnvUtils.grainUnitBounds / grainUnitSuffix (PGE #158, #171);
+ *     PGEEnvUtils.grainUnitBounds / grainUnitSuffix (PGE #158, #171), e quelli
+ *     della sua banda → grainRangeBounds / grainRangeSuffix (PGE #267);
  *   - perche' una chiave di deviation_probability e' inerte su questo stream →
  *     PGEDeviationProb.inertReason, la stessa funzione che marca le righe
  *     dell'Inspector: due copie della stessa prosa divergerebbero al primo
@@ -72,11 +73,23 @@
     const grainUnit = (stream.grain && stream.grain.durationUnit) || "seconds";
     const grainUnitSuffix = window.PGEEnvUtils.grainUnitSuffix(grainUnit);
     const grainDurBounds = window.PGEEnvUtils.grainUnitBounds(PB.grainDur, grainUnit);
-    const grainRangeBounds = window.PGEEnvUtils.grainUnitBounds(PB.durationRange, grainUnit);
+    // La banda ha un'unita' sua (PGE #267): con `duration_range_unit: relative`
+    // e' una FRAZIONE della base, dominio [0, 1] in ogni unita' della base e
+    // nessun suffisso. Convertita come una durata, in millisecondi il cap
+    // diventava 1000 e clampY lasciava trascinare un punto che il motore
+    // rifiuta. Lo decidono grainRangeBounds / grainRangeSuffix, gli stessi che
+    // legge l'Inspector.
+    const grainRangeRelative = window.PGEEnvUtils.grainRangeIsRelative(stream.grain);
+    const grainRangeBounds = window.PGEEnvUtils.grainRangeBounds(stream.grain, PB);
+    const grainRangeSuffix = window.PGEEnvUtils.grainRangeSuffix(stream.grain);
     // Anche la finestra di partenza era scritta in secondi (1-100 ms di grana,
     // 0-500 ms di range): va detta nell'unità in vigore o si apre già fuori scala.
+    // In relativo la finestra e' il dominio intero: una frazione non ha una
+    // scala tipica da cui partire piu' stretta.
     const grainDurVis = window.PGEEnvUtils.grainUnitBounds({ min: 0.001, max: 0.1 }, grainUnit);
-    const grainRangeVis = window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.5 }, grainUnit);
+    const grainRangeVis = grainRangeRelative
+      ? { min: 0, max: grainRangeBounds.max }
+      : window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.5 }, grainUnit);
     const list = [];
     if (stream.densityEnv) {
       list.push({ key: "density", label: "density", group: "Overall density",
@@ -129,7 +142,7 @@
     }
     if (stream.grain && stream.grain.durationRangeEnv) {
       list.push({ key: "durationRange", label: "duration_range", group: "Grain",
-        path: ["grain", "durationRangeEnv"], unit: grainUnitSuffix, fine: true,
+        path: ["grain", "durationRangeEnv"], unit: grainRangeSuffix, fine: true,
         visMin: grainRangeVis.min, visMax: grainRangeVis.max,
         hardMin: grainRangeBounds.min, hardMax: grainRangeBounds.max });
     }
