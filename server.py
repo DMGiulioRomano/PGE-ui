@@ -25,8 +25,9 @@ engine/ found walking up from here. See "Risoluzione" below. #165
 
 The bridge serves the editor itself (GET / → PGE Editor.html) and, once the
 port is listening, opens the browser on it; --no-open to skip that. Without
---port it takes the first free port from 7878 up — or, when a bridge already
-serves this workspace, opens that one instead of starting a second. The page
+--port it takes the first free port from 7878 up; with --port, a busy one is an
+error. Either way, when a bridge already serves this workspace it opens that
+one instead of starting a second. The page
 talks to the origin it came from, so there is nothing to configure: hit
 Render, and the browser POSTs to /render and streams the log back. See
 "Avvio" below. #166
@@ -1748,9 +1749,11 @@ def main():
     )
     ap.add_argument("--port", type=port_arg, default=None,
                     help=f"port to listen on. Without it: the first free one "
-                         f"from {DEFAULT_PORT} up — or, when a bridge already "
-                         f"serves this workspace, that one. Given and busy, "
-                         f"it's an error")
+                         f"from {DEFAULT_PORT} up. Given and busy, it's an "
+                         f"error. Either way, a bridge that already serves "
+                         f"this workspace (on {DEFAULT_PORT}–"
+                         f"{DEFAULT_PORT + PORT_SPAN - 1}, or on the given "
+                         f"port) is reused instead of starting a second")
     # Due flag dichiarati per esteso, non un BooleanOptionalAction: la guardia
     # su bin/pge-ui (test-suite-harness.js) legge i nomi dagli add_argument di
     # questo file, e `--no-open` scritto nel lanciatore deve trovarla. #164
