@@ -2842,6 +2842,12 @@ def test_engine_relative_range_bounds_missing_is_none(tmp_path):
     "RELATIVE_RANGE_BOUNDS = (True, 1.0)\n",        # bool e' un int in Python
     "RELATIVE_RANGE_BOUNDS = (1.0, 0.0)\n",         # rovesciato
     "RELATIVE_RANGE_BOUNDS = (0.0, float('inf'))\n",  # non letterale
+    # Letterali, e infiniti lo stesso: `literal_eval` valuta 1e999 a inf. Un
+    # inf passava ogni filtro qui sotto e jsonify lo scriveva `Infinity`, che
+    # non e' JSON: il browser rifiutava l'intero /bounds, e con lui i bound
+    # di ogni parametro e output_sr, non solo questo dominio.
+    "RELATIVE_RANGE_BOUNDS = (0.0, 1e999)\n",
+    "RELATIVE_RANGE_BOUNDS = (-1e999, 1.0)\n",
     "RELATIVE_RANGE_BOUNDS = make_bounds()\n",
 ])
 def test_engine_relative_range_bounds_rejects_nonsense(tmp_path, body):
@@ -2894,4 +2900,26 @@ def test_bounds_endpoint_omits_unknown_relative_range(tmp_path):
 
     body = server.make_app(tmp_path, render_timeout=600.0).test_client() \
         .get("/bounds").get_json()
+    assert "relative_range" not in body["bounds"]
+
+
+def test_bounds_endpoint_stays_json_with_an_infinite_relative_range(tmp_path):
+    """La risposta di /bounds la legge `JSON.parse`, che non conosce
+    `Infinity`. Un dominio relativo infinito deve restare fuori dal payload,
+    non renderlo illeggibile: il browser scarterebbe TUTTO /bounds, e con lui
+    `output_sr` — il numero che la conversione in campioni scrive nello YAML."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_parameter_definitions(tmp_path, "RELATIVE_RANGE_BOUNDS = (0.0, 1e999)\n")
+
+    raw = server.make_app(tmp_path, render_timeout=600.0).test_client() \
+        .get("/bounds").get_data(as_text=True)
+
+    def _reject(const):
+        raise ValueError(f"non e' JSON: {const}")
+
+    body = json.loads(raw, parse_constant=_reject)
     assert "relative_range" not in body["bounds"]

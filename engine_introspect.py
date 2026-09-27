@@ -21,6 +21,7 @@ walks its AST.
 """
 
 import ast
+import math
 from pathlib import Path
 
 
@@ -684,9 +685,15 @@ def engine_relative_range_bounds(root: Path):
     lo riceve su `/bounds` con una chiave sua (`relative_range`).
 
     Un dominio che non e' un dominio vale None, come un sample rate assurdo in
-    `engine_output_sr`: due numeri (non bool, finiti perche' letterali) con
-    `min <= max`, altrimenti il clamp della UI si spegnerebbe in silenzio
-    invece di tenere il fallback statico di yaml-bridge.js."""
+    `engine_output_sr`: due numeri (non bool) finiti con `min <= max`,
+    altrimenti il clamp della UI si spegnerebbe in silenzio invece di tenere il
+    fallback statico di yaml-bridge.js.
+
+    "Finiti" va controllato, non dedotto dall'essere letterali: `1e999` e' un
+    letterale e `literal_eval` lo valuta a `inf`. Un inf qui non spegneva solo
+    questo clamp — jsonify lo scrive `Infinity`, che non e' JSON, e il browser
+    rifiutava l'intero /bounds, cioe' anche i bound per parametro e
+    `output_sr`."""
     candidates = _parameter_definitions_candidates(root)
     key = str(root)
     stamp = _source_stamp(candidates)
@@ -697,7 +704,7 @@ def engine_relative_range_bounds(root: Path):
     out = None
     if (isinstance(value, tuple) and len(value) == 2
             and all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                    for v in value)
+                    and math.isfinite(v) for v in value)
             and value[0] <= value[1]):
         out = {"min": value[0], "max": value[1]}
     _RELATIVE_RANGE_CACHE[key] = (stamp, out)
