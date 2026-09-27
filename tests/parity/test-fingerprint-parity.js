@@ -70,6 +70,15 @@ const MUTATIONS = [
   { label: "rangeAnchor (PGE #173)", side: "both", mut: s => { s.rangeAnchor = "min"; } },
   { label: "grain.readDirection (PGE #207)", side: "both",
     mut: s => { s.grain.readDirection = -1; } },
+  // Promossa da `grain._extra` a chiave nota da PGE-ui #163: la voce di
+  // `_extra` qui sotto non la copre piu'. La vuota ha una riga sua perche' e'
+  // la regola che la separa dalle gemelle (`duration_unit`, `loop_unit`): il
+  // bridge la riemette invece di scartarla, e il motore la vede — scartata,
+  // il motore resterebbe fermo e la UI si muoverebbe.
+  { label: "grain.durationRangeUnit relative (PGE #267)", side: "both",
+    mut: s => { s.grain.durationRangeUnit = "relative"; } },
+  { label: "grain.durationRangeUnit vuota (PGE #267)", side: "both",
+    mut: s => { s.grain.durationRangeUnit = null; } },
   { label: "deviationProbability", side: "both", mut: s => { s.deviationProbability = 50; } },
   { label: "una chiave sconosciuta in _extra (PGE-ui #115)", side: "both",
     mut: s => { s._extra = { chiave_futura: "a" }; } },
