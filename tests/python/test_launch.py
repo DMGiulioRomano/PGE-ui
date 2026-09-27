@@ -26,6 +26,8 @@ import errno
 import http.server
 import json
 import os
+import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -591,3 +593,49 @@ def test_the_serving_path_opens_only_from_when_ready():
     assert calls, "main() non apre piu' il browser da nessuna parte"
     bad = [ast.unparse(c) for c in calls if not allowed(c)]
     assert not bad, f"open_browser fuori da when_ready e dal riuso: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# make serve: le stesse due scelte, dette dal Makefile
+# ---------------------------------------------------------------------------
+
+def _serve_line(*args, env_extra=None):
+    """La riga di `make -n serve` che lancia server.py, in token. Senza i
+    MAKEFLAGS di chi ci lancia (vedi `_make_serve` in test_cli_resolve.py)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("MAKEFLAGS", "MFLAGS", "PORT", "OPEN")}
+    env.update(env_extra or {})
+    out = subprocess.run(["make", "--no-print-directory", "-n", "serve", *args],
+                         cwd=REPO, env=env, capture_output=True, text=True,
+                         timeout=120).stdout
+    for line in out.splitlines():
+        if "server.py" in line:
+            return shlex.split(line)
+    raise AssertionError(f"nessuna riga server.py in:\n{out}")
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
+def test_make_serve_leaves_the_port_to_the_bridge():
+    """Con `--port $(PORT)` sempre sulla riga `make serve` sarebbe sempre un
+    --port esplicito: niente porta libera, e un secondo `make serve` di nuovo
+    fermo sulla 7878. `--port` passa solo quando PORT lo dice qualcuno."""
+    assert "--port" not in _serve_line()
+    toks = _serve_line("PORT=9000")
+    assert toks[toks.index("--port") + 1] == "9000"
+    toks = _serve_line(env_extra={"PORT": "9001"})
+    assert toks[toks.index("--port") + 1] == "9001", \
+        "PORT dall'ambiente valeva gia' con `?=`: resta valido"
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
+@pytest.mark.parametrize("value", ["0", "no", "false", "off"])
+def test_make_serve_open_zero_is_no_open(value):
+    assert "--no-open" in _serve_line(f"OPEN={value}")
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
+def test_make_serve_opens_by_default():
+    toks = _serve_line()
+    assert "--no-open" not in toks and "--open" not in toks, \
+        "il default e' del bridge: il Makefile non ne scrive una seconda copia"
+    assert "--no-open" not in _serve_line("OPEN=1")
