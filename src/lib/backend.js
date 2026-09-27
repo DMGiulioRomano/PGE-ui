@@ -229,6 +229,28 @@
     return new Set(list.filter(s => (soloMode ? s.solo : !s.mute)).map(s => s.id));
   }
 
+  /* Con quale bridge parla l'editor quando `serverUrl` non e' impostato — cioe'
+     sempre, al boot: TWEAK_DEFAULTS non ha la chiave e le preferenze non si
+     salvano (#166).
+     Servita via http(s) la pagina viene DAL bridge (`GET /` di server.py, la
+     strada che `pge-ui` apre), e quel bridge e' il suo origin. Era la costante
+     `http://localhost:7878` in cinque punti: la pagina servita dalla 7879 — il
+     secondo brano, il bridge che prende la prima porta libera — faceva le sue
+     fetch alla 7878, cioe' all'ALTRO bridge, sull'altro workspace, dove avrebbe
+     salvato e renderizzato. E anche sulla 7878 `127.0.0.1` e `localhost` sono
+     due origin: ogni richiesta era cross-origin, e passava dal CORS.
+     Su file:// un origin non c'e' (`location.origin` e' la stringa "null"), e
+     li' resta il ripiego: la porta di default del bridge. Questo literal e'
+     l'unico nei sorgenti, e tests/node/test-server-url.js lo tiene tale. */
+  const FILE_FALLBACK_SERVER = "http://localhost:7878";
+  function defaultServerUrl() {
+    const loc = (typeof window !== "undefined" && window.location) || null;
+    if (loc && /^https?:$/.test(loc.protocol || "") && loc.origin && loc.origin !== "null") {
+      return loc.origin;
+    }
+    return FILE_FALLBACK_SERVER;
+  }
+
   // fetch with an AbortController timeout so a hung server.py can't leave a
   // promise pending forever (the boot probe in app.jsx uses the same pattern at
   // a tighter 1.5s). Data ops default to 10s. #45
@@ -251,7 +273,7 @@
    * has the disk access; the browser only does fetch().
    * ======================================================================= */
   function createLocalBackend(opts = {}) {
-    const baseUrl = (opts.baseUrl || "http://localhost:7878").replace(/\/$/, "");
+    const baseUrl = (opts.baseUrl || defaultServerUrl()).replace(/\/$/, "");
     let cachedConfig = null;
     let cancelAbort = null;
     /* `cancelAbort` e' UNA variabile di chiusura: due `run()` in volo se la
@@ -1088,6 +1110,7 @@
   window.PGEBackend = {
     fingerprintStream,
     rendererName,
+    defaultServerUrl,
     streamsEngineBuilds,
     // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.
     create(opts) {

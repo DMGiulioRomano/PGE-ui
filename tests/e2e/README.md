@@ -53,8 +53,14 @@ non c'e'.
   `node_modules/`, cioe' dai pacchetti npm da cui la CDN pubblica quegli stessi
   byte;
 - i tre `@font-face` remoti di `styles/` → bloccati (sono decorazione);
-- `http://localhost:7878`, la costante dell'app → riscritta sulla porta del
-  bridge, cosi' il test non deve occupare la porta di `make serve`;
+- l'editor si apre **dal bridge** (`http://127.0.0.1:<porta>/`), che e' la
+  strada che `pge-ui` apre (#166), e parla con il proprio origin: il bridge
+  gira su una porta del kernel, cosi' il test non occupa quella di `make
+  serve`. `http://localhost:7878` — il ripiego che l'app usa su `file://`,
+  letto da `backend.js` — e' **bloccato e contato a parte**: una pagina servita
+  dal bridge che lo chiede sta parlando con un altro bridge. Fino a #166 il
+  test riscriveva quelle richieste sulla porta del bridge, e cosi' nascondeva
+  proprio quel difetto;
 - **qualunque altra cosa → il test fallisce nominandola.**
 
 Le prime due liste sono **lette dai sorgenti** (i tag `<script>` dell'HTML, i
@@ -73,7 +79,8 @@ suo nome, invece di un boot che muore su uno script bloccato.
 | `i quattro vendor coincidono…` FAIL | versione o hash divergenti fra `PGE Editor.html` e `package.json`. Allinea i due, non silenziare il confronto. |
 | `nessuna eccezione non gestita` FAIL | e' il caso per cui questo file esiste: un componente esplode. Lo stack e' nel messaggio. |
 | `nessuna richiesta verso l'esterno oltre a quelle dichiarate` FAIL | qualcuno ha aggiunto un asset remoto. Dichiaralo in `browser.js` (o togli la dipendenza). |
-| `l'URL di default del bridge in app.jsx…` FAIL | `app.jsx` non usa piu' `http://localhost:7878`. Aggiorna `APP_DEFAULT_SERVER`: senza, l'app andrebbe in `serverDown` e il test resterebbe verde su meta' applicazione. |
+| `il ripiego di file:// si legge da backend.js` FAIL | `backend.js` non dichiara piu' `FILE_FALLBACK_SERVER` nella forma che `browser.js` legge. Aggiorna la lettura: senza, la richiesta al ripiego non si riconosce e l'assert che segue diventa cieco. |
+| `l'editor servito dal bridge parla con il proprio origin` FAIL | la pagina servita dal bridge ha chiesto il ripiego di `file://`: `PGEBackend.defaultServerUrl` (o un chiamante che non ci passa) ha smesso di usare `location.origin`. Con `pge-ui` su una porta diversa dalla 7878 l'editor parlerebbe con un altro bridge. |
 | `il progetto arriva in timeline` FAIL | il boot non e' arrivato in fondo. Guarda l'errore riportato subito sotto, e il log del bridge su stderr. |
 
 ## Skip

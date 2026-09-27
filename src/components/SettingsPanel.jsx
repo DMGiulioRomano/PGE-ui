@@ -12,8 +12,9 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
   const [setupLog, setSetupLog] = useStateSP([]);
   const [setupRunning, setSetupRunning] = useStateSP(false);
   const setupLogRef = useRefSP(null);
-  // Workspace (#147). Il campo e' libero — l'editor gira su file://, non c'e'
-  // file picker nativo — e l'autorita' e' il server: il valore mostrato viene
+  // Workspace (#147). Il campo e' libero — una pagina nel browser non ha un
+  // file picker di cartelle, servita dal bridge come su file:// — e
+  // l'autorita' e' il server: il valore mostrato viene
   // da GET /workspace all'apertura, non da una preferenza salvata qui, cosi'
   // una sola verita' invece di due che possono divergere.
   const [wsPath, setWsPath] = useStateSP("");
@@ -96,7 +97,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
   async function pingServer() {
     setServerStatus({ state: "testing", message: "pinging…" });
     try {
-      const url = (tweaks.serverUrl || "http://localhost:7878") + "/health";
+      const url = (tweaks.serverUrl || window.PGEBackend.defaultServerUrl()) + "/health";
       const res = await fetch(url, { method: "GET" });
       if (res.ok) {
         const txt = await res.text();
@@ -121,7 +122,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
           <div className="sp-sec-head">Server</div>
           {serverDown ? (
             <div className="sp-status sp-status-err">
-              <span className="sp-dot" /> <span className="mono">server non raggiungibile — avvia server.py (make serve)</span>
+              <span className="sp-dot" /> <span className="mono">server non raggiungibile — avvia il bridge (pge-ui, o make serve)</span>
             </div>
           ) : null}
           <div className="sp-hint">
@@ -134,7 +135,7 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
             <>
               <div className="sp-row">
                 <span className="sp-k">server URL</span>
-                <input className="sp-input mono" value={tweaks.serverUrl || "http://localhost:7878"}
+                <input className="sp-input mono" value={tweaks.serverUrl || window.PGEBackend.defaultServerUrl()}
                        onChange={(e) => setTweak("serverUrl", e.target.value)} />
               </div>
               <div className="sp-row">
@@ -147,8 +148,12 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
                 </div>
               ) : null}
               <div className="sp-hint">
-                Requires running <span className="mono">python server.py</span> in your
-                PGE-ui folder. See <span className="mono">README-PGE-EDITOR.md</span>.
+                Requires the bridge: <span className="mono">pge-ui</span> from your
+                piece's folder (or <span className="mono">make serve</span> in PGE-ui).
+                It also serves this editor, at the address it prints and opens:
+                by default the URL above is the bridge this page came from
+                (opened as <span className="mono">file://</span>, port 7878). See
+                <span className="mono">README-PGE-EDITOR.md</span>.
               </div>
             </>
           ) : null}

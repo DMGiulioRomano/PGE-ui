@@ -469,7 +469,7 @@ function App() {
   // server.py (local is the only backend).
   useEffectApp(() => {
     (async () => {
-      const baseUrl = tweaks.serverUrl || "http://localhost:7878";
+      const baseUrl = tweaks.serverUrl || window.PGEBackend.defaultServerUrl();
       window.PGEBackend.current = window.PGEBackend.create({ baseUrl });
       try {
         const ctrl = new AbortController();
@@ -521,10 +521,10 @@ function App() {
         }, 100);
       } catch {
         setServerDown(true);
-        logToTerminal(`[boot] server non raggiungibile su ${baseUrl} — avvia server.py (make serve)`, "err");
+        logToTerminal(`[boot] server non raggiungibile su ${baseUrl} — avvia il bridge (pge-ui, o make serve)`, "err");
         pushToast({
           kind: "warn", title: "Server non raggiungibile",
-          message: `avvia server.py su ${baseUrl} (make serve)`,
+          message: `avvia il bridge su ${baseUrl} (pge-ui, o make serve)`,
           persistent: true,
         });
       }
@@ -2362,7 +2362,7 @@ function App() {
 
       {previewSample && MediaPreview ? (
         <MediaPreview sample={previewSample}
-                      baseUrl={tweaks.serverUrl || "http://localhost:7878"}
+                      baseUrl={tweaks.serverUrl || window.PGEBackend.defaultServerUrl()}
                       onClose={() => setPreviewSample(null)} />
       ) : null}
 
