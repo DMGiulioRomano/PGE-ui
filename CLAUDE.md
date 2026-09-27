@@ -478,7 +478,9 @@ The browser opens by default (`--open`/`--no-open`, declared as two
 `--no-open`; `bin/pge-ui` still writes no flag, so the default lives here and
 `make serve` inherits it — `OPEN=0` is the Makefile's spelling of `--no-open`,
 and `--port` goes out only when `PORT` was given, or every `make serve` would
-be an explicit, non-searching port). Three details hold it up:
+be an explicit, non-searching port; an empty `PORT=` is not given, the
+`_declared` rule, or it went out as a bare `--port` that argparse refuses).
+Three details hold it up:
 
 - **After the bind, not after the launch.** It runs from gunicorn's
   `when_ready`, which `Arbiter.start` calls after creating the sockets and

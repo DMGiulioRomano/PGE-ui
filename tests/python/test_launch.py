@@ -702,6 +702,19 @@ def test_make_serve_open_zero_is_no_open(value):
 
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
+def test_make_serve_empty_port_is_no_port():
+    """Vuoto e' assente, come `PGE_ENGINE_ROOT=` (`_declared`, #165): `PORT=`
+    e' il modo di cancellare un PORT ereditato dall'ambiente — una variabile
+    che molti strumenti esportano. Con l'origin da solo usciva `--port` senza
+    valore, cioe' un errore di argparse; e con `OPEN=0` accanto `--no-open`
+    diventava il valore della porta."""
+    assert "--port" not in _serve_line("PORT=")
+    assert "--port" not in _serve_line(env_extra={"PORT": ""})
+    toks = _serve_line("PORT=", "OPEN=0")
+    assert "--port" not in toks and "--no-open" in toks
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make assente")
 def test_make_serve_opens_by_default():
     toks = _serve_line()
     assert "--no-open" not in toks and "--open" not in toks, \

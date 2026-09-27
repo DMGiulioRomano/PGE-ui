@@ -96,7 +96,10 @@ WS_FLAG  := --workspace $(if $(WORKSPACE),$(WORKSPACE),$(ENGINE_ROOT))
 # errore sulla porta occupata invece della ricerca. Passa quindi solo quando
 # PORT lo dice qualcuno: riga di comando o ambiente (come valeva gia' con
 # `?=`); `$(origin PORT)` e' `file` quando a dirlo e' il default qui sopra.
-PORT_FLAG := $(if $(filter file,$(origin PORT)),,--port $(PORT))
+# Vuoto e' assente, come `PGE_ENGINE_ROOT=` (#165): `PORT=` e' il modo di
+# cancellare un PORT ereditato, e con l'origin da solo usciva `--port` senza
+# valore — con `OPEN=0` accanto, `--port --no-open`: argparse rifiuta tutti e due.
+PORT_FLAG := $(if $(filter file,$(origin PORT)),,$(if $(strip $(PORT)),--port $(PORT)))
 # Il browser si apre di default, ed e' il default del BRIDGE: qui non se ne
 # scrive una seconda copia. OPEN=0 (o no/false/off) lo spegne.
 OPEN_FLAG := $(if $(filter 0 no false off,$(OPEN)),--no-open,)
