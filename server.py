@@ -742,14 +742,25 @@ def port_message(plan, host, workspace, root,
 # master con `waitpid(-1)`, e fino a gunicorn 25 un figlio sconosciuto veniva
 # letto come un worker: exit 3 o 4 = "il worker non parte", HaltServer, e il
 # bridge si spegneva per un browser che non si e' aperto. requirements.txt
-# chiede gunicorn>=22.
+# chiede gunicorn>=22. `BaseException`, non `Exception`: un `SystemExit`
+# alzato dentro l'import usciva col codice che sceglieva lui.
+#
+# E non importa dal workspace. `python -c` mette la cartella corrente in testa
+# a sys.path, e la cartella corrente del bridge e' quella del brano (#165): il
+# `signal.py` o lo `shlex.py` di un brano veniva importato — eseguito — al
+# posto di quello della stdlib, sulla strada di `webbrowser`. `-I` toglierebbe
+# anche PYTHONPATH, `-P` c'e' solo da Python 3.11: la voce vuota si toglie a
+# mano, prima di qualunque import (`sys` e' builtin, non si puo' mettere in
+# ombra).
 BROWSER_CHILD = """\
 import sys
+if sys.path and sys.path[0] == "":
+    del sys.path[0]
 url = sys.argv[1]
 try:
     import webbrowser
     ok = webbrowser.open(url)
-except Exception:
+except BaseException:
     ok = False
 if not ok:
     sys.stderr.write("pge-ui: nessun browser da aprire; l'editor e' su %s\\n" % url)

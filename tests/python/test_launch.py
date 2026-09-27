@@ -444,6 +444,9 @@ def test_open_browser_detaches_a_child():
 @pytest.mark.parametrize("body", [
     "def open(url, *a, **k):\n    return False\n",
     "def open(url, *a, **k):\n    raise RuntimeError('rotto')\n",
+    # Non un `Exception`: `except Exception` la lasciava passare, e il figlio
+    # usciva con il codice che il modulo sceglieva — 3 e' WORKER_BOOT_ERROR.
+    "raise SystemExit(3)\n",
 ])
 def test_the_child_exits_zero_even_without_a_browser(tmp_path, body):
     """Il figlio lo raccoglie il master di gunicorn con `waitpid(-1)`, e fino a
@@ -463,6 +466,47 @@ def test_the_child_exits_zero_even_without_a_browser(tmp_path, body):
         env=env, capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert "http://127.0.0.1:7878/" in proc.stderr
+
+
+def test_the_child_does_not_import_from_the_workspace(tmp_path, monkeypatch):
+    """`python -c` mette la cartella corrente in testa a `sys.path`, e la
+    cartella corrente del bridge e' il workspace: la cartella del brano (#165).
+    Il figlio importava percio' da li' prima che dalla stdlib — `webbrowser` e
+    quello che si porta dietro, `shlex`, `subprocess`, `signal`… —, cioe'
+    eseguiva a ogni avvio il `signal.py` che un brano audio puo' benissimo
+    avere, e usciva con il codice che quel modulo sceglieva. Nessun'altra
+    parte del bridge mette il workspace su `sys.path`: `server.py` gira come
+    script, il motore da `root/src`.
+
+    Qui il modulo del brano ha il nome che il figlio importa per primo, e si
+    fa vedere due volte: un marcatore scritto, e un'uscita con 3 — il
+    WORKER_BOOT_ERROR di gunicorn. Il lancio e' quello vero (`open_browser`,
+    che eredita la cwd), con uno stub in PYTHONPATH al posto del browser."""
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    opened = tmp_path / "opened.txt"
+    (stub / "webbrowser.py").write_text(
+        "import builtins\n"
+        "def open(url, *a, **k):\n"
+        f"    builtins.open({str(opened)!r}, 'w').write(url)\n"
+        "    return True\n")
+    ws = tmp_path / "brano"
+    ws.mkdir()
+    marker = tmp_path / "importato-dal-brano"
+    (ws / "webbrowser.py").write_text(
+        f"open({str(marker)!r}, 'w').write('x')\n"
+        "raise SystemExit(3)\n")
+    monkeypatch.chdir(ws)
+    monkeypatch.setenv("PYTHONPATH", str(stub))
+    # Con PYTHONSAFEPATH la cwd non entra in sys.path, e il test sarebbe verde
+    # per la ragione sbagliata.
+    monkeypatch.delenv("PYTHONSAFEPATH", raising=False)
+    monkeypatch.delenv("BROWSER", raising=False)
+
+    proc = server.open_browser("http://127.0.0.1:7878/")
+    assert proc.wait(timeout=60) == 0
+    assert not marker.exists(), "il figlio ha importato un modulo del brano"
+    assert opened.read_text() == "http://127.0.0.1:7878/"
 
 
 # ---------------------------------------------------------------------------
