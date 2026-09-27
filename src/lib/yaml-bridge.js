@@ -78,7 +78,15 @@
     panRange:    { min: 0, max: 360 },
     fillFactor:  { min: 0.001, max: 50 },
     offsetRange: { min: 0, max: 1 },
-    density:     { min: 0.01, max: 4000 },
+    // Nessun tetto: `density.max_val` e' None da PGE #272 (#170). Il 4000 che
+    // c'era era il tetto del motore di prima, e qui non era prudenza: il
+    // motore di adesso lo supera senza protestare, quindi una manopola ferma a
+    // 4000 rifiuta un valore che il render accetta — il verso che
+    // test-bounds-parity.js non guardava finche' ogni parametro un tetto ce
+    // l'aveva, e che adesso pretende. Su file:// il render non c'e', e col
+    // bridge acceso un motore che il tetto ce l'ha ancora lo manda da /bounds.
+    // Infinity e non null: ogni lettore fa `Math.min(max, v)`.
+    density:     { min: 0.01, max: Infinity },
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
@@ -107,7 +115,8 @@
     // vive nei controlli (PGEEnvUtils.snapDirection).
     readDirection:{ min: -1, max: 1 },
     // loop_* upper bound is sample-driven in the engine (max_val=None); these
-    // are the editor's permissive fallback caps.
+    // are the editor's permissive fallback caps. Same None as density's, other
+    // meaning: bounds.js tells the two apart (`ceiling: "sample"`, #170).
     loopStart:   { min: 0, max: 3600 },
     loopDur:     { min: 0.005, max: 3600 },
     loopEnd:     { min: 0, max: 3600 },

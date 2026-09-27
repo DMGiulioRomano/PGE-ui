@@ -39,7 +39,12 @@ const window = loadUiLibs([
   "envelope-loops.js", "deviation-probability.js", "envelope-utils.js",
 ]);
 const B = window.PGEBounds;
-const STATIC = JSON.parse(JSON.stringify(window.PGE_BOUNDS));
+/* `structuredClone` e non un giro in JSON: da #170 il fallback statico ha un
+ * tetto `Infinity` (density, senza tetto nel motore da PGE #272), e
+ * `JSON.stringify` lo scrive `null` — cioe' esattamente il valore che il merge
+ * legge come «il motore non ha detto niente». Il confronto sarebbe diventato
+ * `null === null`, la stessa trappola che `_json_safe` evita sull'oracolo. */
+const STATIC = structuredClone(window.PGE_BOUNDS);
 
 /* Una base deliberatamente sbagliata, e non e' un vezzo.
  *
@@ -75,7 +80,7 @@ function sentinelFor(payload) {
   return max + 1;
 }
 function wrongBase(sentinel) {
-  const w = JSON.parse(JSON.stringify(STATIC));
+  const w = structuredClone(STATIC);
   for (const k of Object.keys(B.ENGINE_PARAM_MAP)) {
     if (w[k]) w[k] = { min: sentinel, max: sentinel };
   }
@@ -100,6 +105,18 @@ const MAX_EXCEPTIONS = {
   loopDur:   "max_val e' null: il tetto vero e' la durata del sample scelto",
   loopEnd:   "max_val e' null: il tetto vero e' la durata del sample scelto",
 };
+
+/* Le chiavi il cui `max_val` il motore dichiara null e che NON sono eccezioni:
+ * li' il null vuol dire quello che `ParameterBounds.clamp` gli fa dire, «nessun
+ * tetto» (density da PGE #272, #170). Derivate dal registro, mai elencate: il
+ * prossimo parametro senza tetto entra da solo sotto le stesse domande. */
+function openCeilingKeys(raw) {
+  return Object.keys(B.ENGINE_PARAM_MAP).filter(uiKey => {
+    const e = engineBound(raw, uiKey);
+    return e && B.ENGINE_PARAM_MAP[uiKey].field === "value"
+      && e.max === null && !(uiKey in MAX_EXCEPTIONS);
+  });
+}
 
 function sortDeep(v) {
   if (Array.isArray(v)) return v.map(sortDeep);
@@ -243,6 +260,38 @@ parity({
         assert("loop_*: il tetto statico sopravvive al merge (max_val null)",
           kept.length === 0, kept.join("\n      "));
 
+        /* E l'altro significato dello stesso null (#170, PGE #272). Dove il
+           motore non ha tetto e nessuno ne fornisce uno dinamico, la UI non ne
+           ha: `ParameterBounds.clamp` legge `max_val=None` come «lascia
+           passare», e un tetto tenuto qui sarebbe la manopola che rifiuta un
+           valore che il render accetta. Si chiede da una base sbagliata E dal
+           fallback statico — il secondo e' il caso di #170 alla lettera: la
+           guardia `typeof hi === "number"` lasciava in piedi il 4000 di
+           yaml-bridge.js perche' era scritta pensando ai soli loop_*. */
+        const open = openCeilingKeys(raw.value);
+        const capped = [];
+        for (const uiKey of open) {
+          if (fromWrong[uiKey].max !== Infinity) {
+            capped.push(`${uiKey}.max = ${fromWrong[uiKey].max} da una base sbagliata`);
+          }
+          if (merged[uiKey].max !== Infinity) {
+            capped.push(`${uiKey}.max = ${merged[uiKey].max} dal fallback statico`);
+          }
+        }
+        assert(`max_val null senza tetto dinamico → nessun tetto nella UI (${open.join(", ") || "—"})`,
+          capped.length === 0, capped.join("\n      "));
+
+        /* Quale dei due significati vale per quale chiave lo dichiara bounds.js
+           (`ceiling: "sample"` in ENGINE_PARAM_MAP), e questa suite lo tiene in
+           MAX_EXCEPTIONS con la ragione accanto. Due dichiarazioni della stessa
+           cosa: si pretende che coincidano, o una delle due smette di valere
+           senza che l'altra se ne accorga. */
+        const declared = Object.keys(B.ENGINE_PARAM_MAP)
+          .filter(k => B.ENGINE_PARAM_MAP[k].ceiling === "sample").sort();
+        assert("bounds.js dichiara il tetto dal sample esattamente sulle eccezioni di questa suite",
+          same(declared, Object.keys(MAX_EXCEPTIONS).sort()),
+          `bounds.js=[${declared}] suite=[${Object.keys(MAX_EXCEPTIONS).sort()}]`);
+
         const diffs = [];
         for (const uiKey of Object.keys(B.ENGINE_PARAM_MAP)) {
           const e = engineBound(raw.value, uiKey);
@@ -303,6 +352,21 @@ parity({
         }
         assert("nessun clamp statico piu' largo del motore",
           wider.length === 0, wider.join("\n      "));
+
+        /* E il verso opposto, che fino a #170 non poteva servire: un fallback
+           statico con un tetto dove il motore non ne ha uno RIFIUTA cio' che
+           il motore accetta. Finche' ogni parametro aveva un tetto il fallback
+           poteva solo essere troppo largo; PGE #272 ha tolto quello di density,
+           e il suo 4000 in yaml-bridge.js e' diventato una manopola che si
+           ferma dove il render non si ferma piu'. Vale per i parametri senza
+           tetto dichiarato e senza un tetto dinamico (i loop_* ne hanno uno,
+           la durata del sample, e il loro fallback e' il segnaposto per quando
+           la durata non si sa). */
+        const narrower = openCeilingKeys(raw.value)
+          .filter(uiKey => STATIC[uiKey] && STATIC[uiKey].max !== Infinity)
+          .map(uiKey => `${uiKey}.max: statico=${STATIC[uiKey].max}, motore senza tetto`);
+        assert("nessun tetto statico dove il motore non ne ha",
+          narrower.length === 0, narrower.join("\n      "));
 
         const pitchDiffs = [];
         for (const unit of ["semitones", "cents", "quarter_tone", "eighth_tone", "ratio"]) {

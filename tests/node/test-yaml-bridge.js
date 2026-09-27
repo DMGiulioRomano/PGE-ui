@@ -1538,6 +1538,25 @@ assert("#42 presentation helpers loaded",
 }
 
 {
+  /* ── density sopra il vecchio tetto (#170, PGE #272) ─────────────────────
+     Il motore non ha piu' un tetto su density: 6000 g/s scritti a mano nel tab
+     Raw sono YAML valido. Ne' la tab li segna, ne' il giro parse → serialize
+     li riporta a 4000 — scalare o curva che sia. */
+  for (const [label, line] of [["scalare", "density: 6000"],
+                               ["envelope", "density: [[0, 8], [2.5, 6000], [5, 12000]]"]]) {
+    const s = streamOf(topLevelYaml([line]));
+    const a = computeAnnotations(s, { name: "test.wav", duration: 5 });
+    assert(`#170 density ${label} oltre 4000: nessuna annotazione`, !a.byKey.has("density"),
+      JSON.stringify([...a.byKey]));
+    const back = parseStream(serializeStream(s));
+    assert(`#170 density ${label} oltre 4000: il giro non la clampa`,
+      eq(stripColor(s), stripColor(back)) &&
+      JSON.stringify(serializeStream(s)).indexOf("4000") === -1,
+      serializeStream(s));
+  }
+}
+
+{
   /* ── e il controllo del loop parla l'unità in vigore (#149, PGE #222) ─────
      Le due righe qui sopra misurano in secondi perché la chiave è assente, cioè
      `loop_unit: seconds`. Sotto `normalized` le stesse coordinate vivono in

@@ -538,6 +538,40 @@
     return { ymin: lo, ymax: hi };
   }
 
+  // Il paste dell'EnvelopeEditor fra due parametri: riporta le y della curva
+  // dal dominio [srcMin, srcMax] della sorgente a quello della destinazione,
+  // in proporzione, e le richiude li' dentro. I bound sono gli hardMin/hardMax
+  // delle due voci del catalogo (handleCopyEnv salva quelli della sorgente).
+  //
+  // Stava dentro EnvelopeEditor.jsx, e la proporzione suppone due domini
+  // finiti. Da PGE #272 density non ha tetto (#170), e con un Infinity da una
+  // delle due parti la proporzione non esiste: t = (y - min) / Infinity e' 0
+  // per ogni punto — density su density appiattiva la curva sul pavimento — e
+  // dall'altra parte 0 * Infinity e' NaN, che lo YAML scrive `.nan`. Dove la
+  // proporzione non c'e' il numero passa com'e' e si richiude nella
+  // destinazione: su due domini uguali e' l'identita', che e' la risposta
+  // giusta per il caso di gran lunga piu' comune (copia e incolla sullo stesso
+  // parametro di un altro stream). Il caso finito resta quello di prima.
+  // Pura: non muta `items`.
+  function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
+    const range = srcMax - srcMin;
+    const proportional = Number.isFinite(range) && Number.isFinite(dstMax - dstMin);
+    function remap(y) {
+      let v = y;
+      if (proportional) {
+        const t = range === 0 ? 0.5 : (y - srcMin) / range;
+        v = dstMin + t * (dstMax - dstMin);
+      }
+      return Math.max(dstMin, Math.min(dstMax, v));
+    }
+    return items.map(it => {
+      if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
+      if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
+      if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
+      return it;
+    });
+  }
+
   // Dynamic upper bound for the loop-window envelopes (loop_start / loop_end /
   // loop_dur), driven by the chosen sample's duration. The engine declares
   // their max_val as None precisely because the real cap is sample_dur_sec,
@@ -1179,6 +1213,7 @@
     sliceStreamEnvelopes,
     nudgeBreakpoint,
     computeYFit,
+    remapEnvY,
     loopEnvMax,
     loopUnitInfo,
     loopUnitError,

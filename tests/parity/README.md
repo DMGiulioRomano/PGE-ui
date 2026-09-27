@@ -287,8 +287,15 @@ commento.
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
-| bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
+| bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |
+
+Lo stesso `max_val: null` sui parametri che **non** sono in quell'elenco non è
+una divergenza: è `density` da PGE #272 (#170), e li' la UI non ha tetto, né
+nel merge né nel fallback statico (`Infinity`). La suite lo chiede nel verso
+che prima non si guardava — un fallback statico che *rifiuta* ciò che il
+motore accetta — e quei parametri li deriva dal registro invece di elencarli,
+così il prossimo senza tetto entra da solo sotto la stessa domanda.
 
 ## La semantica del motore, e perché non è più un numero scritto qui
 

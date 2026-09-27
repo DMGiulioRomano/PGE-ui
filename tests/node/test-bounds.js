@@ -307,6 +307,63 @@ console.log("\n── relative_range: il dominio della banda relativa (PGE #267)
   }
 }
 
+console.log("\n── max_val null: nessun tetto, tranne dove il tetto e' il sample (#170) ──");
+{
+  // PGE #272: density.max_val passa a None. Nel motore `ParameterBounds.clamp`
+  // legge un tetto assente come «lascia passare» — e' l'unico significato che
+  // il registro da' al null. I loop_* hanno lo stesso null per un'altra
+  // ragione: il tetto vero e' la durata del sample (loopEnvMax), e la base
+  // tiene il segnaposto per quando la durata non si sa.
+  const open = { params: {
+    density:    { min_val: 0.01,  max_val: null, min_range: 0, max_range: 0 },
+    loop_start: { min_val: 0,     max_val: null, min_range: 0, max_range: 0 },
+    loop_dur:   { min_val: 0.005, max_val: null, min_range: 0, max_range: 0 },
+    loop_end:   { min_val: 0,     max_val: null, min_range: 0, max_range: 0 },
+  } };
+  const base = { density: { min: 0.01, max: 4000 },
+                 loopStart: { min: 0, max: 3600 }, loopDur: { min: 0.005, max: 3600 },
+                 loopEnd: { min: 0, max: 3600 } };
+  const m = B.mergeEngineBounds(base, open);
+  assert("density: max_val null → nessun tetto (Infinity)",
+    m.density.max === Infinity, JSON.stringify(m.density));
+  assert("density: il pavimento resta quello del motore", m.density.min === 0.01);
+  // E' il caso di #170 alla lettera: la base conteneva ancora il 4000 — il
+  // fallback statico, o il merge precedente, perche' apply() fonde sopra
+  // window.PGE_BOUNDS a ogni refresh — e il null lo lasciava in piedi.
+  assert("il tetto di prima non sopravvive al motore che l'ha tolto",
+    base.density.max === 4000 && m.density.max === Infinity);
+  for (const k of ["loopStart", "loopDur", "loopEnd"]) {
+    assert(`${k}: max_val null tiene il segnaposto della base (tetto = sample)`,
+      m[k].max === 3600, JSON.stringify(m[k]));
+  }
+  // Un tetto infinito e' ancora un numero: ogni `Math.min(max, v)` a valle
+  // lascia passare v. Un null invece darebbe 0 (Math.min(null, 6000) === 0).
+  assert("un tetto assente clampa come un numero, non come uno zero",
+    typeof m.density.max === "number" && Math.min(m.density.max, 6000) === 6000);
+
+  // Campo assente non e' null: il motore non ha detto niente, e «non lo so»
+  // tiene la base — lo stesso ripiego di ogni altro dato mancante.
+  const absent = B.mergeEngineBounds({ density: { min: 0.01, max: 123 } },
+                                     { params: { density: { min_val: 0.01 } } });
+  assert("max_val assente (non null) → resta la base", absent.density.max === 123,
+    JSON.stringify(absent.density));
+  // Il null vale solo sul tetto del VALORE: e' li' che il motore lo legge.
+  // max_range non e' mai None nel registro, e inventargli un significato
+  // sarebbe una lettura che nessuno ha scritto.
+  const rng = B.mergeEngineBounds({ volumeRange: { min: 0, max: 24 } },
+    { params: { volume: { min_val: -120, max_val: 12, min_range: 0, max_range: null } } });
+  assert("max_range null → resta la base", rng.volumeRange.max === 24,
+    JSON.stringify(rng.volumeRange));
+}
+
+console.log("\n── il fallback statico di density non ha tetto (#170) ──");
+// Su file:// o col bridge giu' e' l'unico bound che la UI ha. Un 4000 li'
+// rifiuterebbe cio' che il motore accetta: test-bounds-parity.js lo pretende
+// contro il motore vero, qui si fissa il valore.
+assert("PGE_BOUNDS.density statico: pavimento 0.01, nessun tetto",
+  window.PGE_BOUNDS.density.min === 0.01 && window.PGE_BOUNDS.density.max === Infinity,
+  String(window.PGE_BOUNDS.density.max));
+
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");
 B.apply(raw);
 assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max === 2000);
