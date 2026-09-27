@@ -463,7 +463,12 @@ that one; other `root` → `conflict`; with `--port` too, since the "one render
 at a time" guard is per process); **an explicit `--port` that is busy is an
 error**, not a search (`--root`'s rule, #165); **otherwise the first free
 port**, and `passed` tells the banner who held the skipped ones. A bind that
-fails for another reason than `EADDRINUSE` is `unbindable`, never "busy".
+fails for another reason than `EADDRINUSE` is `unbindable`, never "busy". A
+`--port` that isn't a port never gets that far: `port_arg` (its argparse
+`type=`) takes 1–65535 only, because outside 0–65535 `socket.bind` raises
+`OverflowError` — not an `OSError`, so `bind_error` let it out as a traceback —
+and `0` is a port the kernel picks after the bind, with the banner and the
+browser left on `:0`.
 `probe_bridge` recognizes a bridge by the shape of `/health` (`ok`,
 `workspace`, `root` — older bridges have it too) and goes **around any HTTP
 proxy**: urllib honours `HTTP_PROXY` towards `127.0.0.1`.

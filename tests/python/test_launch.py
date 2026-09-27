@@ -534,6 +534,33 @@ def test_explicit_busy_port_explains_and_creates_nothing(tmp_path):
         "un avvio che non parte non fabbrica le cartelle di lavoro"
 
 
+@pytest.mark.parametrize("value", ["70000", "65536", "-1", "0"])
+def test_an_impossible_port_is_refused_by_name(tmp_path, value):
+    """Un numero che non e' una porta si ferma su argparse, nominato.
+
+    Fuori da 0–65535 arrivava a `bind_error` e ne usciva un `OverflowError`
+    — non un `OSError`, quindi nessun ramo lo leggeva: il traceback che #166
+    toglie al secondo avvio, rientrato dal primo argomento. Lo `0` il socket
+    lo accetta, ed e' peggio: il kernel sceglie una porta, e banner e browser
+    puntano a `:0`, cioe' a niente. `--port=` attaccato perche' `-1` staccato
+    argparse potrebbe leggerlo come un'opzione."""
+    proc, ws, _ = _launch(tmp_path, f"--port={value}", "--no-open")
+    try:
+        out = proc.communicate(timeout=30)[0]
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"il bridge e' partito con --port={value}\n{_stop(proc)}")
+    assert proc.returncode != 0, out
+    assert "Traceback" not in out, out
+    assert "--port" in out and "65535" in out, out
+    assert not (ws / "configs").exists()
+
+
+@pytest.mark.parametrize("text, port", [("1", 1), ("7878", 7878),
+                                        ("65535", 65535)])
+def test_the_whole_port_range_is_accepted(text, port):
+    assert server.port_arg(text) == port
+
+
 def test_a_bridge_on_this_workspace_is_reused_not_doubled(tmp_path, fake_bridge):
     script, rec = _recorder(tmp_path)
     engine = _engine(tmp_path / "engine")

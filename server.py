@@ -480,6 +480,24 @@ PortPlan = namedtuple("PortPlan", "action port other error passed",
                       defaults=(None, None, ()))
 
 
+def port_arg(text) -> int:
+    """Il `type=` di `--port`: un intero fra 1 e 65535, o un errore di argparse
+    che lo dice.
+
+    Fuori da 0–65535 `socket.bind` alza `OverflowError`, che non e' un
+    `OSError`: `bind_error` non lo leggeva, e ne usciva un traceback. Lo `0`
+    il socket lo accetta, ed e' una porta che nessuno ha scelto — la sceglie
+    il kernel dopo il bind, mentre banner e browser dicono `:0`."""
+    try:
+        port = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} non e' un numero di porta")
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(
+            f"{port} non e' una porta: dev'essere fra 1 e 65535")
+    return port
+
+
 def connect_host(host) -> str:
     """L'indirizzo a cui CONNETTERSI per raggiungere un bind su `host`.
 
@@ -1689,7 +1707,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Local HTTP bridge for the PGE browser editor.",
     )
-    ap.add_argument("--port", type=int, default=None,
+    ap.add_argument("--port", type=port_arg, default=None,
                     help=f"port to listen on. Without it: the first free one "
                          f"from {DEFAULT_PORT} up — or, when a bridge already "
                          f"serves this workspace, that one. Given and busy, "
