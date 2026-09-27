@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Browser-based visual editor for `PythonGranularEngine` (sibling repo) YAML compositions. **No build step, no bundler, no package.json** — React + Babel are loaded from CDN inside `PGE Editor.html`, and `.jsx` files are transpiled in-browser. Open `PGE Editor.html` as a `file://` URL.
+Browser-based visual editor for `PythonGranularEngine` (sibling repo) YAML compositions. **No build step, no bundler, no package.json** — React + Babel are loaded from CDN inside `PGE Editor.html`, and `.jsx` files are transpiled in-browser. The bridge serves the editor itself (`GET /`) and opens the browser on it: `pge-ui` or `make serve`, then `http://127.0.0.1:7878/` (#166). Opening `PGE Editor.html` as a `file://` URL still works, as a fallback.
 
 The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo only contains the UI plus a thin Flask bridge (`server.py`) that shells out to `python src/main.py …` in that other repo.
 
@@ -12,13 +12,16 @@ The renderer itself lives in a separate repo (`PythonGranularEngine`). This repo
 
 ```bash
 make install          # pip install -r requirements.txt  (flask, flask-cors, gunicorn, numpy, soundfile)
-make serve            # python server.py --root $(ENGINE_ROOT) --workspace $(ENGINE_ROOT) --port 7878
+make serve            # python server.py --root $(ENGINE_ROOT) --workspace $(ENGINE_ROOT)
+                      # — opens the browser on the editor; OPEN=0 → --no-open,
+                      # PORT=N → --port N (without it: first free port from 7878)
 python server.py --root /path/to/PythonGranularEngine    # explicit root
 make serve WORKSPACE=~/brani                             # projects outside the engine repo
 make install-cli      # symlinks bin/pge-ui into ~/.local/bin (BINDIR= to choose)
 cd ~/un-brano && python /path/to/PGE-ui/server.py        # #165: workspace = $PWD,
                                                          # engine from $PGE_ENGINE_ROOT
 cd ~/un-brano && pge-ui                                  # the same, after install-cli
+pge-ui --no-open                                         # #166: no browser window (background, CI, ssh)
 make tests            # full suite: tests-node + tests-python + tests-parity (if the engine is there) + tests-e2e
 make tests-parity     # only the JS↔engine parity suites
 make tests-e2e        # headless boot of the editor (needs a playwright browser)
@@ -128,7 +131,12 @@ exists, the fourth only when a browser is installed):
   between `PGE Editor.html` and the filesystem closes in both directions, the
   load order has the documented shape, and no file reads a `window.*` global at
   load time that a *later* script defines — the last one derived from the
-  sources, not from a table of declared dependencies).
+  sources, not from a table of declared dependencies), and
+  `test-server-url.js` (#166: `PGEBackend.defaultServerUrl` — the page's
+  origin when served over http, the `:7878` fallback only on `file://` — run
+  on the backend created at load, plus a census that the fallback literal
+  exists once in `src/` and every `tweaks.serverUrl ||` falls back on the
+  rule).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -152,7 +160,13 @@ exists, the fourth only when a browser is installed):
   engine" and "not a directory", and the one the `$PWD` default made easy to
   meet: `main()` catches the `OSError` from `_set_workspace`'s `mkdir` and names
   the folder, the same translation `POST /workspace` has always done with a
-  400), `test_audio_pipeline.py`
+  400), `test_launch.py` (#166: `plan_port` with injected probes — reuse,
+  conflict, busy, next free port, the whole-window scan —, the real
+  `bind_error` / `probe_bridge`, the proxy bypass, the browser child that
+  always exits 0, and the command itself: a `$BROWSER` recorder that does the
+  GET a browser would, so "opened after the bind" is measured as a 200, plus an
+  AST guard that `main()` calls `open_browser` only from `when_ready` or the
+  reuse branch, and `make -n serve` for `PORT`/`OPEN`), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), `test_renderers.py` (#150: the AST reads of the
@@ -379,9 +393,13 @@ been green while proving nothing:
 - **The network is the test's, not the internet's.** `tests/e2e/browser.js`
   routes every request: the four CDN vendor scripts are served from
   `tests/e2e/node_modules` (the npm packages the CDNs publish), the CSS's three
-  remote `@font-face` files are blocked, the app's own `http://localhost:7878`
-  is rewritten onto the bridge's ephemeral port, and **anything else fails the
-  test by name**. So CI does not depend on unpkg/cdnjs being up, and a new
+  remote `@font-face` files are blocked, the page is opened **from the bridge**
+  (`http://127.0.0.1:<ephemeral>/`, the path `pge-ui` opens) and talks to its
+  own origin, and **anything else fails the test by name**. `http://localhost:7878`
+  — the `file://` fallback, read out of `backend.js` — is blocked and counted
+  apart (`net.fallback`): a page served by the bridge that asks for it is
+  talking to another bridge. Until #166 this file *rewrote* those requests onto
+  the ephemeral port, i.e. it hid exactly that defect. So CI does not depend on unpkg/cdnjs being up, and a new
   remote asset can't slip in unnoticed. Both lists are *read from the sources* —
   the `<script>` tags of the HTML, the `@font-face` blocks of `styles/*.css` —
   never transcribed, for the usual reason: a hand-written copy goes mute exactly
@@ -392,12 +410,11 @@ been green while proving nothing:
   instead of a boot that dies on a blocked script — and, incidentally, it is the
   only check in the repo that the published SRI hashes are right.
 
-Two consequences worth keeping in mind. The `http://localhost:7878` rewrite
-rests on that literal still being app.jsx's default (`tweaks.serverUrl` has no
-entry in `TWEAK_DEFAULTS`, and preferences don't live in localStorage, so
-there is no way to tell the app otherwise from outside) — a source guard pins
-the pair, because without it the app would silently go `serverDown` and the
-test would keep passing on half an application. And the console-error count
+Two consequences worth keeping in mind. The `net.fallback` check rests on
+reading `FILE_FALLBACK_SERVER` out of `backend.js`, and that reading has its own
+assert — without it the fallback request wouldn't be recognized and the check
+would be green by blindness; beside it the suite asks the page which
+`baseUrl` its boot backend took, which must be the bridge's origin. And the console-error count
 attributes an error to the *test* only when the console message's own
 `location().url` is one of the blocked fonts: "Failed to load resource" is also
 what a broken app fetch prints, which is precisely the case this suite exists
@@ -422,6 +439,61 @@ of what didn't run.
 ### Two-repo split (deliberate)
 
 `PythonGranularEngine` stays a pure CLI (no Flask, no UI). `PGE-ui` (this repo) holds the editor + bridge. The bridge talks to the engine repo via `--root` and never mutates engine source — it works inside `configs/`, `output/`, `cache/` and `refs/`, all four of which can live in a workspace of their own (#147, and #148 for `refs/`; see below).
+
+### Launching: the port and the browser (#166)
+
+The bridge serves the editor (`GET /` → `PGE Editor.html`), so its address *is*
+the editor's, and opening it is the bridge's job. `main()` settles the port
+**before** the banner and before `make_app` creates `configs/ output/ cache/`:
+the second launch used to print `Open in browser` on the *first* bridge's
+editor, create the folders, and only then hit gunicorn's five seconds of
+`Connection in use`.
+
+`plan_port` (pure, probes injected — `bind_error`, `probe_bridge`) applies
+three rules in order: **one workspace, one bridge** (the whole window
+`DEFAULT_PORT`..+`PORT_SPAN` is scanned for a `/health` whose `workspace` is
+this folder by realpath: same `root` → `reuse`, exit 0 and the browser opens on
+that one; other `root` → `conflict`; with `--port` too, since the "one render
+at a time" guard is per process); **an explicit `--port` that is busy is an
+error**, not a search (`--root`'s rule, #165); **otherwise the first free
+port**, and `passed` tells the banner who held the skipped ones. A bind that
+fails for another reason than `EADDRINUSE` is `unbindable`, never "busy".
+`probe_bridge` recognizes a bridge by the shape of `/health` (`ok`,
+`workspace`, `root` — older bridges have it too) and goes **around any HTTP
+proxy**: urllib honours `HTTP_PROXY` towards `127.0.0.1`.
+
+The browser opens by default (`--open`/`--no-open`, declared as two
+`add_argument`s so the launcher guard in `test-suite-harness.js` sees
+`--no-open`; `bin/pge-ui` still writes no flag, so the default lives here and
+`make serve` inherits it — `OPEN=0` is the Makefile's spelling of `--no-open`,
+and `--port` goes out only when `PORT` was given, or every `make serve` would
+be an explicit, non-searching port). Three details hold it up:
+
+- **After the bind, not after the launch.** It runs from gunicorn's
+  `when_ready`, which `Arbiter.start` calls after creating the sockets and
+  before spawning the worker: an early browser waits in the socket queue
+  instead of hitting "connection refused". A race test can't tell "before
+  `.run()`" from "in `when_ready`" (the former usually wins anyway), so
+  `test_launch.py` also pins the call site by AST.
+- **A child process that always exits 0** (`BROWSER_CHILD`), started with
+  `start_new_session` so the Ctrl-C that stops the bridge doesn't take the
+  browser with it. Not a thread: the master forks its worker right after
+  `when_ready`. And the exit code matters: the master reaps with
+  `waitpid(-1)`, and up to gunicorn 25 an unknown child exiting 3 or 4 read as
+  "worker failed to boot" — `HaltServer`, the bridge down over a browser that
+  didn't open. `requirements.txt` allows gunicorn ≥ 22.
+- **No window where there is no session.** Linux without `DISPLAY` /
+  `WAYLAND_DISPLAY` and without `$BROWSER` doesn't try: `webbrowser` would fall
+  back to lynx/w3m on the bridge's own terminal. `$BROWSER` always wins — that
+  is also how the tests drive it.
+
+On the page side, `PGEBackend.defaultServerUrl()` is the bridge the editor uses
+when `tweaks.serverUrl` is unset (always, at boot: no default, not persisted):
+`location.origin` over http(s), `FILE_FALLBACK_SERVER` (`http://localhost:7878`)
+only on `file://`, where the origin is the string `"null"`. It was that literal
+in five places, so a page served from 7879 talked to the bridge on 7878 — the
+other workspace — and even on 7878 `127.0.0.1` vs `localhost` made every call
+cross-origin. The literal now exists once (`test-server-url.js`).
 
 ### Workspace: the project folder is not the engine checkout (#147, #148, #165)
 
@@ -2222,7 +2294,7 @@ nowhere else.
 
 ## Security stance of `server.py`
 
-Binds `127.0.0.1` by default. CORS wide-open (editor runs on `file://`). No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
+Binds `127.0.0.1` by default. CORS wide-open — the editor is served by the bridge on its own origin (#166), but opening the HTML as `file://` stays possible and needs it. No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check
@@ -2237,5 +2309,5 @@ used to leave the suite green.
 
 - Stem filenames: `<basename>__<streamId>.<ext>` (double underscore separator); `<ext>` follows the Settings output format (`tweaks.outputFormat`, default `wav` → `.wav`; `aiff` → `.aif`, `flac` → `.flac`).
 - Cache manifests: `cache/<basename>.json`, one file per project. Keyed by the YAML basename — `/render` writes the editor state to the stable `configs/<basename>.yml` (never a temp file) so the manifest persists across renders and incremental caching works.
-- Editor opened via `file://` — there is no dev server for the frontend.
+- Editor served by the bridge (`GET /`), which opens the browser on it — there is no separate dev server for the frontend. `file://` works as a fallback that only finds a bridge on `:7878`.
 - `requirements.txt` is for the bridge only. The engine has its own (and its own venv).

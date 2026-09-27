@@ -23,13 +23,13 @@ engine/ found walking up from here. See "Risoluzione" below. #165
 
     python server.py --root /path/to/PythonGranularEngine --port 7878
 
-Then in the browser:
-    1) open PGE Editor.html
-    2) click the gear icon (top-right)
-    3) Backend → switch to "local"
-    4) Backend → server URL → http://localhost:7878  (default)
-    5) click "test connection" — should turn green
-    6) hit Render — the browser POSTs to /render and streams the log back
+The bridge serves the editor itself (GET / → PGE Editor.html) and, once the
+port is listening, opens the browser on it; --no-open to skip that. Without
+--port it takes the first free port from 7878 up — or, when a bridge already
+serves this workspace, opens that one instead of starting a second. The page
+talks to the origin it came from, so there is nothing to configure: hit
+Render, and the browser POSTs to /render and streams the log back. See
+"Avvio" below. #166
 
 The server speaks JSON-lines (NDJSON) for the /render endpoint so the browser
 can read events incrementally. All other endpoints are plain JSON.
@@ -43,6 +43,7 @@ checkout). The samples folder is refs/, or samples/ when that's the one the
 workspace already has. See #147/#148/#165.
 
 Endpoints:
+    GET  /                      — the editor (PGE Editor.html), and its assets
     GET  /health                — sanity check + resolved paths
     GET  /config                — same payload as /health
     GET  /workspace             — current workspace + its projects
