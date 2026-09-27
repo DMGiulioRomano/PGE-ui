@@ -2120,6 +2120,259 @@ console.log("\n── convertGrainDurationUnit ──");
     C({ duration: 0.05, envelope: "hanning", reverse: null }, "milliseconds").envelope === "hanning");
 }
 
+/* ===========================================================================
+ * grain.duration_range_unit — la banda come frazione della base (PGE #267,
+ * PGE-ui #163)
+ * ===========================================================================
+ * Con `relative` il numero di duration_range smette di essere una durata e
+ * diventa una frazione della durata del grano, letta istante per istante.
+ * Una frazione non ha unita': convertirla al cambio di duration_unit la
+ * cancellerebbe (0.5 verso samples → 0.5/48000) senza lasciare niente da
+ * leggere nel file — e qui l'editor il file lo RISCRIVE. Il motore esclude il
+ * range relativo dalla stessa conversione (`_pre_normalize_grain_params`).
+ */
+console.log("\n── duration_range_unit: vocabolario e lettura ──");
+{
+  assert("espone il vocabolario della banda e il suo default",
+    eq(U.RANGE_UNITS, ["absolute", "relative"]) && U.RANGE_UNIT_DEFAULT === "absolute",
+    JSON.stringify([U.RANGE_UNITS, U.RANGE_UNIT_DEFAULT]));
+  const R = U.grainRangeIsRelative;
+  assert("relative → true", R({ durationRangeUnit: "relative" }) === true);
+  assert("absolute, assente, grain assente → false",
+    R({ durationRangeUnit: "absolute" }) === false && R({}) === false && R(null) === false);
+  // Lettura PURA, come `range_unit_is_relative`: una grafia sbagliata legge
+  // come non-relativa, e a dirlo e' grainRangeUnitError.
+  assert("un refuso non e' relativo (lo dice l'errore, non la lettura)",
+    R({ durationRangeUnit: "Relative" }) === false && R({ durationRangeUnit: null }) === false);
+}
+
+console.log("\n── grainRangeUnitError ──");
+{
+  const E = U.grainRangeUnitError;
+  assert("chiave assente → null", E({ durationRange: 0.01 }) === null);
+  assert("grain assente → null", E(null) === null && E(undefined) === null);
+  assert("absolute esplicito → null", E({ durationRange: 0.01, durationRangeUnit: "absolute" }) === null);
+  assert("absolute senza range → null (lo vincolo e' della sola relative)",
+    E({ durationRangeUnit: "absolute" }) === null);
+  assert("relative con range scalare → null",
+    E({ durationRange: 0.5, durationRangeUnit: "relative" }) === null);
+  assert("relative con range envelope → null",
+    E({ durationRangeEnv: [[0, 0.1], [1, 0.5]], durationRangeUnit: "relative" }) === null);
+  // MissingFieldError: senza banda scatta il jitter implicito, che e'
+  // assoluto — la patologia che relative esiste per evitare.
+  const miss = E({ duration: 0.05, durationRangeUnit: "relative" });
+  assert("relative senza duration_range → missing-range",
+    miss && miss.kind === "missing-range", JSON.stringify(miss));
+  assert("…e anche con duration_range: null esplicito",
+    (E({ durationRange: null, durationRangeEnv: null, durationRangeUnit: "relative" }) || {}).kind
+      === "missing-range");
+  // InvalidFieldValueError. La chiave VUOTA e' fra queste: il motore distingue
+  // assente da vuota apposta, e la vuota la rifiuta.
+  for (const bad of ["relativ", "Relative", "", null, 0, false, "seconds"]) {
+    const e = E({ durationRange: 0.01, durationRangeUnit: bad });
+    assert(`grafia ${JSON.stringify(bad)} → unknown, col vocabolario`,
+      e && e.kind === "unknown" && e.value === bad && eq(e.units, ["absolute", "relative"]),
+      JSON.stringify(e));
+  }
+  // L'ordine del motore: il vocabolario si valida prima del range mancante.
+  assert("refuso senza range → unknown, non missing-range",
+    (E({ durationRangeUnit: "relativ" }) || {}).kind === "unknown");
+  assert("il vocabolario dell'errore e' una copia (non la lista del modulo)",
+    (() => { const e = E({ durationRangeUnit: "x" }); e.units.push("z");
+             return eq(U.RANGE_UNITS, ["absolute", "relative"]); })());
+}
+
+console.log("\n── grainRangeBounds / grainRangeSuffix ──");
+{
+  const PB = { durationRange: { min: 0, max: 1 }, relativeRange: { min: 0, max: 1 } };
+  const B = U.grainRangeBounds, S = U.grainRangeSuffix;
+  // Assoluto: il dominio del parametro, nell'unita' della base.
+  assert("assoluto in secondi: [0, 1]", eq(B({}, PB), { min: 0, max: 1 }));
+  assert("assoluto in millisecondi: [0, 1000]",
+    eq(B({ durationUnit: "milliseconds" }, PB), { min: 0, max: 1000 }));
+  assert("assoluto in campioni: [0, 48000]",
+    eq(B({ durationUnit: "samples" }, PB), { min: 0, max: 48000 }));
+  // Relativo: il dominio della modalita', in ogni unita' della base — il
+  // difetto era proprio grainUnitBounds applicato a una frazione.
+  for (const u of [undefined, "seconds", "milliseconds", "samples"]) {
+    assert(`relativo (base in ${u || "assente"}): [0, 1], non convertito`,
+      eq(B({ durationUnit: u, durationRangeUnit: "relative" }, PB), { min: 0, max: 1 }),
+      JSON.stringify(B({ durationUnit: u, durationRangeUnit: "relative" }, PB)));
+  }
+  assert("il dominio relativo e' quello del payload, non un letterale",
+    eq(B({ durationRangeUnit: "relative" }, { durationRange: { min: 0, max: 1 },
+                                             relativeRange: { min: 0, max: 2 } }),
+       { min: 0, max: 2 }));
+  assert("senza bound → oggetto vuoto", eq(B({ durationRangeUnit: "relative" }, null), {}));
+  assert("…anche in assoluto", eq(B({}, null), {}));
+
+  assert("suffisso assoluto = quello della base",
+    S({}) === "s" && S({ durationUnit: "milliseconds" }) === "ms"
+    && S({ durationUnit: "samples" }) === "smp");
+  assert("suffisso relativo: tace (una frazione non ha unita')",
+    S({ durationUnit: "milliseconds", durationRangeUnit: "relative" }) === "");
+  // Come grainUnitSuffix e loopUnitSuffix: accanto alla riga d'errore che
+  // dichiara l'unita' non riconosciuta, un «ms» sarebbe un'affermazione opposta.
+  assert("suffisso su una grafia rifiutata: tace",
+    S({ durationUnit: "milliseconds", durationRangeUnit: "relativ" }) === ""
+    && S({ durationUnit: "milliseconds", durationRangeUnit: null }) === "");
+  assert("con la base in un'unita' ignota tace come prima",
+    S({ durationUnit: "ms" }) === "");
+}
+
+console.log("\n── clampGrainRange ──");
+{
+  const PB = { durationRange: { min: 0, max: 1 }, relativeRange: { min: 0, max: 1 } };
+  const C = U.clampGrainRange;
+  assert("relativo: 3 → 1", C({ durationRangeUnit: "relative" }, 3, PB) === 1);
+  assert("relativo: -0.2 → 0", C({ durationRangeUnit: "relative" }, -0.2, PB) === 0);
+  assert("relativo: dentro il dominio resta", C({ durationRangeUnit: "relative" }, 0.5, PB) === 0.5);
+  assert("assoluto in ms: 3 resta 3 (il cap e' 1000)", C({ durationUnit: "milliseconds" }, 3, PB) === 3);
+  assert("assoluto in ms: 5000 → 1000", C({ durationUnit: "milliseconds" }, 5000, PB) === 1000);
+  assert("senza bound non si clampa", C({ durationRangeUnit: "relative" }, 3, null) === 3);
+  assert("non numerico → invariato", C({ durationRangeUnit: "relative" }, null, PB) === null);
+}
+
+console.log("\n── convertGrainDurationUnit lascia stare la frazione ──");
+{
+  const C = U.convertGrainDurationUnit;
+  const BOUNDS = { grainDur: { min: 1 / 48000, max: 10 }, durationRange: { min: 0, max: 1 },
+                   relativeRange: { min: 0, max: 1 } };
+  for (const [from, to] of [["seconds", "samples"], ["seconds", "milliseconds"],
+                            ["milliseconds", "samples"], ["samples", "seconds"],
+                            ["milliseconds", "seconds"]]) {
+    const base = { seconds: 0.05, milliseconds: 50, samples: 2400 }[from];
+    const g = { duration: base, durationRange: 0.5, durationRangeUnit: "relative",
+                ...(from === "seconds" ? {} : { durationUnit: from }) };
+    const out = C(g, to, { bounds: BOUNDS });
+    const want = { seconds: 0.05, milliseconds: 50, samples: 2400 }[to];
+    assert(`${from} → ${to}: la base si converte (${base} → ${want})`,
+      out.duration === want, JSON.stringify(out));
+    assert(`${from} → ${to}: la frazione resta 0.5, niente conversione ne' clamp`,
+      out.durationRange === 0.5 && out.durationRangeUnit === "relative", JSON.stringify(out));
+  }
+  const env = C({ duration: 0.05, durationRangeEnv: [[0, 0.1], [1, 0.9]],
+                  durationRangeUnit: "relative" }, "samples", { bounds: BOUNDS });
+  assert("anche l'envelope della frazione resta com'e'",
+    eq(env.durationRangeEnv, [[0, 0.1], [1, 0.9]]), JSON.stringify(env.durationRangeEnv));
+  const envBase = C({ durationEnv: [[0, 0.021], [1, 0.5]], durationRange: 0.5,
+                      durationRangeUnit: "relative" }, "milliseconds");
+  assert("…mentre l'envelope della base si converte",
+    eq(envBase.durationEnv, [[0, 21], [1, 500]]) && envBase.durationRange === 0.5,
+    JSON.stringify(envBase));
+  // Il ramo assoluto non cambia: e' la conversione di #158, e deve restarlo.
+  const abs = C({ duration: 0.05, durationRange: 0.01, durationRangeUnit: "absolute" },
+                "milliseconds");
+  assert("assoluto esplicito: la banda si converte come prima",
+    abs.durationRange === 10 && abs.durationRangeUnit === "absolute", JSON.stringify(abs));
+  // Il motore legge l'unita' in modo puro (range_unit_is_relative): una
+  // grafia sbagliata e' non-relativa anche per la sua conversione.
+  const typo = C({ duration: 0.05, durationRange: 0.01, durationRangeUnit: "relativ" },
+                 "milliseconds");
+  assert("su un refuso si converte come assoluto (la lettura del motore)",
+    typo.durationRange === 10, JSON.stringify(typo));
+}
+
+console.log("\n── convertGrainRangeUnit: il numero resta, clampato ──");
+{
+  /* Scelta di design (#163): absolute ↔ relative NON converte. Sono grandezze
+   * diverse — una durata e una frazione della durata — e convertire l'una
+   * nell'altra passa per la base, che nel caso che motiva #267 e' un envelope.
+   * Stesso precedente di density ↔ fill_factor. Il numero resta e cambia
+   * lettura; va solo riportato dentro il dominio di arrivo, o il render muore
+   * (validazione strict del motore). */
+  const K = U.convertGrainRangeUnit;
+  const BOUNDS = { grainDur: { min: 1 / 48000, max: 10 }, durationRange: { min: 0, max: 1 },
+                   relativeRange: { min: 0, max: 1 } };
+  const toRel = K({ duration: 50, durationRange: 10, durationUnit: "milliseconds" },
+                  "relative", { bounds: BOUNDS });
+  assert("absolute → relative: scrive la chiave",
+    toRel.durationRangeUnit === "relative", JSON.stringify(toRel));
+  assert("…e 10 ms diventa 1, il tetto della frazione (non 0.2)",
+    toRel.durationRange === 1, JSON.stringify(toRel));
+  assert("…la base non si tocca", toRel.duration === 50 && toRel.durationUnit === "milliseconds");
+  const keep = K({ duration: 0.05, durationRange: 0.01 }, "relative", { bounds: BOUNDS });
+  assert("un numero gia' nel dominio resta quello", keep.durationRange === 0.01);
+
+  const toAbs = K({ duration: 50, durationRange: 0.5, durationUnit: "milliseconds",
+                    durationRangeUnit: "relative" }, "absolute", { bounds: BOUNDS });
+  assert("relative → absolute: la chiave del default si cancella",
+    !("durationRangeUnit" in toAbs), JSON.stringify(toAbs));
+  assert("…e 0.5 resta 0.5, ora in millisecondi", toAbs.durationRange === 0.5);
+
+  const env = K({ duration: 0.05, durationRangeEnv: [[0, 0.2], [0.5, 3], [1, 0.9]] },
+                "relative", { bounds: BOUNDS });
+  // Qui i bound NON scalano coi valori (a differenza di duration_unit), quindi
+  // anche i punti dell'envelope vanno riportati nel dominio.
+  assert("anche i punti dell'envelope si clampano nel dominio d'arrivo",
+    eq(env.durationRangeEnv, [[0, 0.2], [0.5, 1], [1, 0.9]]), JSON.stringify(env.durationRangeEnv));
+  const envTyped = K({ durationRangeEnv: { type: "cubic", points: [[0, 5], [1, 0.5, "step"]] } },
+                     "relative", { bounds: BOUNDS });
+  assert("…in ogni grafia, interp compreso",
+    eq(envTyped.durationRangeEnv, { type: "cubic", points: [[0, 1], [1, 0.5, "step"]] }),
+    JSON.stringify(envTyped.durationRangeEnv));
+
+  assert("senza bound non si clampa",
+    K({ durationRange: 10 }, "relative").durationRange === 10);
+  // Il rimedio a una grafia rifiutata e' un click qualunque: la chiave
+  // sbagliata sparisce (absolute) o viene riscritta (relative).
+  const fixA = K({ durationRange: 0.01, durationRangeUnit: null }, "absolute", { bounds: BOUNDS });
+  assert("dalla chiave vuota, absolute la toglie", !("durationRangeUnit" in fixA));
+  const fixR = K({ durationRange: 0.01, durationRangeUnit: "relativ" }, "relative", { bounds: BOUNDS });
+  assert("dal refuso, relative la riscrive", fixR.durationRangeUnit === "relative");
+  // Da un relative senza banda (MissingFieldError) absolute e' il rimedio.
+  const fixM = K({ durationRangeUnit: "relative" }, "absolute", { bounds: BOUNDS });
+  assert("relative senza banda → absolute: nessun range inventato",
+    !("durationRangeUnit" in fixM) && fixM.durationRange === undefined, JSON.stringify(fixM));
+  const src = { durationRange: 10, durationRangeEnv: [[0, 3]] };
+  K(src, "relative", { bounds: BOUNDS });
+  assert("il grain di partenza non viene mutato",
+    src.durationRange === 10 && eq(src.durationRangeEnv, [[0, 3]]) && !("durationRangeUnit" in src));
+  assert("le altre chiavi sopravvivono",
+    K({ envelope: "hanning", reverse: null, durationRange: 0.1 }, "relative").envelope === "hanning");
+}
+
+console.log("\n── grainRangeSeed ──");
+{
+  // Il seme che l'AddParamMenu scrive per una duration_range nuova. In assoluto
+  // e' 0.01 s nell'unita' della base (#114); in relativo e' la frazione che da'
+  // la stessa banda sul default del motore: 0.01 / 0.05 = 0.2.
+  const S = U.grainRangeSeed;
+  assert("assoluto: 0.01 s", S({}) === 0.01);
+  assert("assoluto in ms: 10", S({ durationUnit: "milliseconds" }) === 10);
+  assert("assoluto in campioni: 480", S({ durationUnit: "samples" }) === 480);
+  for (const u of [undefined, "milliseconds", "samples"]) {
+    assert(`relativo (base in ${u || "secondi"}): 0.2, una frazione`,
+      S({ durationUnit: u, durationRangeUnit: "relative" }) === 0.2);
+  }
+}
+
+console.log("\n── grainRangeBadge ──");
+{
+  /* Il `±` accanto al valore di grain.duration. ParamRow scrive `±{range/2}`
+   * per un numero e `±{range}` per una stringa: in assoluto la banda e' una
+   * durata e si passa il numero, come prima; in relativo e' una frazione, e
+   * `±0.25` accanto a `50 ms` direbbe un quarto di millisecondo. La frazione f
+   * sotto l'ancora center e' ±f/2 della base, cioe' `±25%` per f = 0.5. */
+  const G = U.grainRangeBadge;
+  assert("assoluto: il numero, come prima", G({ durationRange: 10 }) === 10);
+  assert("relativo: la percentuale della meta' banda",
+    G({ durationRange: 0.5, durationRangeUnit: "relative" }) === "25%");
+  assert("relativo: niente strascichi binari",
+    G({ durationRange: 0.3, durationRangeUnit: "relative" }) === "15%"
+    && G({ durationRange: 0.07, durationRangeUnit: "relative" }) === "3.5%",
+    G({ durationRange: 0.07, durationRangeUnit: "relative" }));
+  assert("banda envelope → niente badge (come prima)",
+    G({ durationRange: null, durationRangeEnv: [[0, 0.1]] }) === undefined
+    && G({ durationRange: 0.1, durationRangeEnv: [[0, 0.1]] }) === undefined);
+  assert("banda assente → niente badge", G({}) === undefined && G(null) === undefined);
+  // Zero e' una banda (disattiva il jitter implicito): prima `range={0}` non
+  // disegnava niente perche' ParamRow testa la verita'; resta cosi'.
+  assert("zero assoluto resta 0", G({ durationRange: 0 }) === 0);
+  assert("…e zero relativo pure: niente `±0%` dove l'assoluto non mostra niente",
+    G({ durationRange: 0, durationRangeUnit: "relative" }) === 0);
+}
+
 console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
 {
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
@@ -2141,9 +2394,14 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   assert("l'unità in vigore è calcolata una volta sola",
     /const grainUnit = \(stream\.grain && stream\.grain\.durationUnit\) \|\| "seconds"/.test(inspSrc));
   // "s" su valori scritti in campioni o millisecondi direbbe il falso.
+  // duration porta il suffisso della base; duration_range quello della banda,
+  // che coincide finche' la banda e' assoluta e tace quando e' una frazione
+  // (PGE #267) — lo decide grainRangeSuffix, sullo stesso grainUnitSuffix.
   assert("duration e duration_range portano il suffisso dell'unità dichiarata",
     /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(inspSrc)
-    && (inspSrc.match(/Env \? "" : grainUnitSuffix\}/g) || []).length === 2
+    && (inspSrc.match(/durationEnv \? "" : grainUnitSuffix\}/g) || []).length === 1
+    && /const grainRangeSuffix = window\.PGEEnvUtils\.grainRangeSuffix\(stream\.grain\)/.test(inspSrc)
+    && (inspSrc.match(/durationRangeEnv \? "" : grainRangeSuffix\}/g) || []).length === 1
     && !/unit=\{stream\.grain\.durationEnv \? "" : "s"\}/.test(inspSrc));
   assert("il messaggio d'errore nomina l'unità scelta invece di dire 'samples'",
     /grainUnitError\.unit\} richiede una grain\.duration esplicita/.test(inspSrc)
@@ -2181,21 +2439,126 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   // numero in secondi, e scritto tale e quale con milliseconds in vigore vale
   // 1e-5 s — mille volte meno di quel che l'etichetta promette, e in silenzio
   // (duration esplicita → validazione muta, bound larghi → passa).
+  // Il seme sta in grainRangeSeed (testata sopra: 10 ms, 480 campioni, e in
+  // relativo la frazione 0.2), che per la banda assoluta e' esattamente
+  // grainSecondsToUnit(0.01, unita').
   assert("anche il seme di duration_range è convertito nell'unità in vigore",
-    /def: window\.PGEEnvUtils\.grainSecondsToUnit\(0\.01, grainUnit\)/.test(inspSrc)
-    && !/exists: stream\.grain\.durationRange[^}]*def: 0\.01/.test(inspSrc));
+    /def: window\.PGEEnvUtils\.grainRangeSeed\(stream\.grain\)/.test(inspSrc)
+    && !/exists: stream\.grain\.durationRange[^}]*def: 0\.01/.test(inspSrc)
+    && !/exists: stream\.grain\.durationRange[^}]*def: window\.PGEEnvUtils\.grainSecondsToUnit/.test(inspSrc));
   assert("nessun 0.05 nudo rimasto nei rami di grain.duration",
     !/durationEnv: \[\[0, v\], \[1, v\]\][\s\S]{0,80}0\.05/.test(inspSrc)
     && !/grainDur: 0\.05/.test(inspSrc)
     && !/cur\.durationEnv\[0\]\[1\]\) \|\| 0\.05/.test(inspSrc));
   // La scala di step è in unità del parametro: quella di default è scritta per
   // i secondi e in campioni (valore tipico 2400) il gradino più grosso vale 10.
+  // La banda usa gli step della base finche' e' una durata; da frazione
+  // (PGE #267) il gradino piu' piccolo della base in campioni sarebbe 1, cioe'
+  // l'intero dominio.
   assert("le manopole di durata hanno step nell'unità in vigore",
     /const grainSteps = GRAIN_STEPS\[grainUnit\] \|\| GRAIN_STEPS\.seconds/.test(inspSrc)
-    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 2
+    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 1
+    && /const grainRangeSteps = grainRangeRelative \? \[[^\]]+\] : grainSteps;/.test(inspSrc)
+    && (inspSrc.match(/steps=\{grainRangeSteps\}/g) || []).length === 1
     && /samples: \[1, 100, 1000, 10000\]/.test(inspSrc));
   assert("il tooltip della chiave elenca le tre unità",
     /title=\{`unità di grain\.duration e duration_range[^`]*milliseconds/.test(inspSrc));
+}
+
+console.log("\n── cablaggio grain.duration_range_unit nell'Inspector (#163) ──");
+{
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  const NIENTE = Symbol("mai chiamato");
+  // L'handler del Seg, eseguito col convertitore VERO e con i bound veri
+  // (`window.PGE_BOUNDS`, il fallback statico), come quello di duration_unit.
+  const segHandler = (valueMarker) => {
+    const at = inspSrc.indexOf(valueMarker);
+    if (at < 0) return "";
+    const on = inspSrc.indexOf("onChange={", at);
+    if (on < 0) return "";
+    const arrow = inspSrc.indexOf("=>", on);
+    const open = inspSrc.indexOf("{", arrow);
+    let d = 0;
+    for (let j = open; j < inspSrc.length; j++) {
+      if (inspSrc[j] === "{") d++;
+      else if (inspSrc[j] === "}" && --d === 0) return inspSrc.slice(open, j + 1);
+    }
+    return "";
+  };
+  // `rangeUnitSel` e' il `value` del Seg: la sua dichiarazione si esegue, non
+  // si riscrive qui — una seconda copia e' come una guardia smette di valere.
+  const selDecl = (() => {
+    const m = /const rangeUnitSel = [^;]+;/.exec(inspSrc);
+    return m ? m[0] : "";
+  })();
+  assert("la selezione del Seg è una dichiarazione sola, estraibile",
+    selDecl.length > 0 && /grainRangeUnitErr/.test(selDecl), selDecl);
+  const selOf = (grain) => new Function("grainRangeUnitErr", "grainRangeRelative",
+    selDecl + "\nreturn rangeUnitSel;")(
+    U.grainRangeUnitError(grain), U.grainRangeIsRelative(grain));
+  assert("chiave assente → acceso absolute", selOf({ durationRange: 0.01 }) === "absolute");
+  assert("relative → acceso relative",
+    selOf({ durationRange: 0.5, durationRangeUnit: "relative" }) === "relative");
+  assert("relative senza banda → acceso relative (la grafia e' valida)",
+    selOf({ durationRangeUnit: "relative" }) === "relative");
+  // Su una grafia rifiutata nessun bottone e' acceso, come loop_unit: ogni
+  // click e' il rimedio, e nessuna guardia puo' fermarlo.
+  assert("grafia rifiutata → nessun bottone acceso",
+    selOf({ durationRange: 0.01, durationRangeUnit: "relativ" }) === null
+    && selOf({ durationRange: 0.01, durationRangeUnit: null }) === null);
+
+  const body = segHandler("value={rangeUnitSel}");
+  assert("l'handler di duration_range_unit è estraibile dal sorgente", body.length > 0);
+  const fire = (grain, v) => {
+    let out = NIENTE;
+    new Function("stream", "rangeUnitSel", "onChange", "window", "v",
+      "((v) => " + body + ")(v);")(
+      { grain }, selOf(grain), (p) => { out = p; }, window, v);
+    return out;
+  };
+  /* Qui una scrittura spuria non cambierebbe un'etichetta: farebbe rileggere
+     lo stesso numero come una grandezza diversa, o cancellerebbe un
+     `absolute` esplicito — fingerprint mossa, stem giallo, nessun campione
+     cambiato. */
+  assert("click sul bottone acceso (assente/absolute): niente",
+    fire({ duration: 0.05, durationRange: 0.01 }, "absolute") === NIENTE);
+  assert("…un `absolute` esplicito non viene cancellato",
+    fire({ duration: 0.05, durationRange: 0.01, durationRangeUnit: "absolute" }, "absolute") === NIENTE);
+  assert("…né un `relative` riscritto",
+    fire({ duration: 0.05, durationRange: 0.5, durationRangeUnit: "relative" }, "relative") === NIENTE);
+  const real = fire({ duration: 50, durationRange: 10, durationUnit: "milliseconds" }, "relative");
+  assert("il cambio vero scrive la chiave e clampa nel dominio della frazione",
+    real !== NIENTE && real.grain.durationRangeUnit === "relative" && real.grain.durationRange === 1,
+    JSON.stringify(real && real.grain));
+  const back = fire({ duration: 50, durationRange: 0.5, durationUnit: "milliseconds",
+                      durationRangeUnit: "relative" }, "absolute");
+  assert("…e verso absolute cancella la chiave, il numero resta",
+    back !== NIENTE && !("durationRangeUnit" in back.grain) && back.grain.durationRange === 0.5,
+    JSON.stringify(back && back.grain));
+  const fix = fire({ duration: 0.05, durationRange: 0.01, durationRangeUnit: null }, "absolute");
+  assert("sulla chiave vuota il click su absolute è il rimedio",
+    fix !== NIENTE && !("durationRangeUnit" in fix.grain), JSON.stringify(fix && fix.grain));
+  assert("il Seg elenca il vocabolario del modulo, non una coppia scritta a mano",
+    /options=\{window\.PGEEnvUtils\.RANGE_UNITS\.map\(/.test(inspSrc));
+
+  // Il resto del cablaggio: tutto passa dal modulo, niente condizioni ricopiate.
+  assert("la lettura, l'errore e il suffisso vengono dal modulo, una volta",
+    /const grainRangeRelative = window\.PGEEnvUtils\.grainRangeIsRelative\(stream\.grain\)/.test(inspSrc)
+    && /const grainRangeUnitErr = window\.PGEEnvUtils\.grainRangeUnitError\(stream\.grain\)/.test(inspSrc)
+    && (inspSrc.match(/durationRangeUnit === "relative"/g) || []).length === 0);
+  assert("la riga duration_range clampa nel dominio della banda",
+    /durationRange: window\.PGEEnvUtils\.clampGrainRange\(stream\.grain, v, window\.PGE_BOUNDS\)/.test(inspSrc));
+  assert("il ± sulla riga duration viene da grainRangeBadge",
+    /range=\{window\.PGEEnvUtils\.grainRangeBadge\(stream\.grain\)\}/.test(inspSrc));
+  assert("le due righe d'errore nominano i due rifiuti del motore",
+    /grainRangeUnitErr\.kind === "missing-range"/.test(inspSrc)
+    && /grainRangeUnitErr\.units\.join\(/.test(inspSrc));
+  // Il controllo c'e' se la banda c'e' o se la chiave e' scritta: un relative
+  // senza banda scritto a mano deve mostrare controllo ed errore, o l'unico
+  // modo di ripararlo e' il tab Raw.
+  assert("il controllo appare con la banda o con la chiave scritta",
+    /const grainRangeUnitShown = [^;]*durationRange != null[^;]*durationRangeEnv != null[^;]*durationRangeUnit !== undefined[^;]*;/.test(inspSrc)
+    && /\{grainRangeUnitShown \? \(/.test(inspSrc));
 }
 
 console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (issue #114) ──");
@@ -2208,9 +2571,12 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
   // envelope sono nell'unità dichiarata. Presi come sono, un envelope in
   // millisecondi finisce tappato a 10 ms invece che a 10 s — e clampY riscrive
   // il punto al primo drag, che è perdita di dati, non solo una vista storta.
+  // La banda ha un'unita' sua da PGE #267: il dominio lo decide
+  // grainRangeBounds (assoluto → grainUnitBounds come prima, relativo → la
+  // frazione), cioe' lo stesso modulo e non un secondo ramo nel catalogo.
   assert("i bound delle curve di durata seguono l'unità dichiarata",
     /const grainDurBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.grainDur, grainUnit\)/.test(catSrc)
-    && /const grainRangeBounds = window\.PGEEnvUtils\.grainUnitBounds\(PB\.durationRange, grainUnit\)/.test(catSrc)
+    && /const grainRangeBounds = window\.PGEEnvUtils\.grainRangeBounds\(stream\.grain, PB\)/.test(catSrc)
     && !/hardMin: PB\.grainDur\.min, hardMax: PB\.grainDur\.max/.test(catSrc)
     && !/hardMin: PB\.durationRange\.min, hardMax: PB\.durationRange\.max/.test(catSrc));
   assert("anche la finestra di partenza è espressa nell'unità",
@@ -2219,7 +2585,9 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
     && /grainDurVis/.test(catSrc) && /grainRangeVis/.test(catSrc));
   assert("il suffisso è quello condiviso con l'Inspector",
     /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(catSrc)
-    && (catSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2);
+    && (catSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 1
+    && /const grainRangeSuffix = window\.PGEEnvUtils\.grainRangeSuffix\(stream\.grain\)/.test(catSrc)
+    && (catSrc.match(/unit: grainRangeSuffix, fine: true,/g) || []).length === 1);
 }
 
 
@@ -2617,7 +2985,8 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
     /if \(v === \(stream\.distributionMode \|\| "uniform"\)\) return;/.test(inspSrc)
     && /if \(v === \(stream\.clipStrategy \|\| "overflow_margin"\)\) return;/.test(inspSrc)
     && /if \(v === \(stream\.rangeAnchor \|\| "center"\)\) return;/.test(inspSrc)
-    && /if \(v === grainUnit\) return;/.test(inspSrc));
+    && /if \(v === grainUnit\) return;/.test(inspSrc)
+    && /if \(v === rangeUnitSel\) return;/.test(inspSrc));
   /* …e i due handler che un nome ce l'hanno: li' la guardia non puo' stare
      dentro l'elemento <Seg>, quindi il censimento qui sotto non la vedrebbe e
      li lasciava passare senza. Sta nella dichiarazione, sulla condizione che

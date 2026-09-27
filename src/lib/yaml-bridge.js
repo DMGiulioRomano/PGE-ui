@@ -93,6 +93,14 @@
     // max_range, non max_val»), non da questo commento: chi lo cambia deve
     // partire di li'.
     durationRange:{ min: 0, max: 1 },
+    // Il dominio di duration_range quando `duration_range_unit: relative`
+    // (PGE #267): una FRAZIONE della base, non una durata. E' un dominio della
+    // modalita', non del parametro — il motore lo tiene in RELATIVE_RANGE_BOUNDS,
+    // separato dal max_range qui sopra, e dice che i due valgono 1 per
+    // coincidenza. Col bridge acceso arriva da /bounds (`relative_range`);
+    // tests/parity/test-bounds-parity.js pretende che questo letterale sia il
+    // numero del motore.
+    relativeRange: { min: 0, max: 1 },
     // read_direction (PGE #207): i bound sono gli estremi, ma il dominio è
     // l'insieme {-1, +1} e NON l'intervallo — `0` e `0.5` sono rifiutati dal
     // motore al parse. Il vincolo "solo i due estremi" non è esprimibile qui e
@@ -174,7 +182,7 @@
    * keys the editor doesn't model yet survive the round trip instead of
    * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
   const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
-  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "envelope", "reverse", "read_direction"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "duration_range_unit", "envelope", "reverse", "read_direction"]);
   const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
   const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
 
@@ -468,6 +476,13 @@
       // Meta-chiave (PGE #158): unità di duration/duration_range. Emessa solo
       // se impostata; assente = default engine (seconds).
       duration_unit:  grain.durationUnit || undefined,
+      // Meta-chiave (PGE #267): absolute | relative, l'unita' della BANDA.
+      // Riemessa com'e' ogni volta che e' nello stato, vuota compresa (`null`
+      // sopravvive a stripUndef): a differenza di duration_unit qui il motore
+      // distingue assente da vuota e rifiuta la seconda, e scartarla sarebbe
+      // la lettura muta che ha voluto evitare. Il default si ottiene
+      // CANCELLANDO la chiave dallo stato, che e' cosa del selettore.
+      duration_range_unit: grain.durationRangeUnit,
       envelope:       serializeGrainEnvelope(grain.envelope) || undefined,
     };
     // reverse is presence-keyed engine-side (`reverse:` bare = forced, absent
@@ -816,6 +831,12 @@
         // Meta-chiave (PGE #158): unità di duration/duration_range. Assente =
         // default engine (seconds); non iniettata per non sporcare la cache.
         ...("duration_unit" in grain ? { durationUnit: grain.duration_unit ?? null } : {}),
+        // Meta-chiave (PGE #267): l'unita' di duration_range. Presence-keyed
+        // come `reverse`: assente = absolute (default del motore), e la chiave
+        // vuota resta `null` a chiave presente — il motore la rifiuta, e
+        // l'Inspector lo dice invece di vederla sparire al primo salvataggio.
+        ...("duration_range_unit" in grain
+          ? { durationRangeUnit: grain.duration_range_unit ?? null } : {}),
         // Preserve absence (engine default is 'hanning') — injecting it would
         // write `envelope: hanning` on save and bust the engine cache. The
         // EnvelopeSelector renders an unset value as 'hanning'.

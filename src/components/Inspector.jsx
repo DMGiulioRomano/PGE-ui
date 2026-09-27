@@ -854,6 +854,28 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
     samples: [1, 100, 1000, 10000],
   };
   const grainSteps = GRAIN_STEPS[grainUnit] || GRAIN_STEPS.seconds;
+  // grain.duration_range_unit (PGE #267): absolute (default, chiave assente) |
+  // relative. È l'unità della BANDA, non della base: in relativo
+  // duration_range è una frazione della durata del grano, letta istante per
+  // istante, e una frazione non ha unità — niente suffisso, dominio [0, 1] in
+  // ogni duration_unit, niente conversione quando la duration_unit cambia.
+  // Lettura, errore e suffisso vengono dal modulo, una volta sola.
+  const grainRangeRelative = window.PGEEnvUtils.grainRangeIsRelative(stream.grain);
+  const grainRangeUnitErr = window.PGEEnvUtils.grainRangeUnitError(stream.grain);
+  const grainRangeSuffix = window.PGEEnvUtils.grainRangeSuffix(stream.grain);
+  // In campioni il gradino più piccolo della base è 1, cioè l'intero dominio
+  // di una frazione: la banda relativa ha la sua scala.
+  const grainRangeSteps = grainRangeRelative ? [0.001, 0.01, 0.1] : grainSteps;
+  // Il `value` del Seg. Su una grafia che il motore rifiuta (un refuso, la
+  // chiave vuota) nessun bottone è acceso, come per loop_unit: ogni click è
+  // il rimedio, e la guardia del Seg non può fermarne nessuno.
+  const rangeUnitSel = grainRangeUnitErr && grainRangeUnitErr.kind === "unknown" ? null
+    : (grainRangeRelative ? window.PGEEnvUtils.RANGE_UNIT_RELATIVE : window.PGEEnvUtils.RANGE_UNIT_DEFAULT);
+  // Il controllo c'è se c'è la banda, o se la chiave è scritta: un relative
+  // senza banda scritto a mano (MissingFieldError) deve mostrare controllo ed
+  // errore insieme, o l'unico modo di ripararlo è il tab Raw.
+  const grainRangeUnitShown = !!(stream.grain && (stream.grain.durationRange != null
+    || stream.grain.durationRangeEnv != null || stream.grain.durationRangeUnit !== undefined));
   // Le righe della finestra di loop: ci sono solo se una chiave di loop esiste.
   const loopWindowShown = !!(stream.pointer && (
     stream.pointer.loopStart != null || stream.pointer.loopStartEnv != null ||
@@ -1499,7 +1521,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                         mode={getMode("grainDur")} onMode={(m) => toggleMode("grainDur", m)}
                         value={stream.grain.duration != null ? stream.grain.duration : "—"}
                         unit={stream.grain.durationEnv ? "" : grainUnitSuffix} steps={grainSteps}
-                        range={stream.grain.durationRange != null && !stream.grain.durationRangeEnv ? stream.grain.durationRange : undefined}
+                        range={window.PGEEnvUtils.grainRangeBadge(stream.grain)}
                         accent={stream.grain.durationEnv != null}
                         envValue={stream.grain.durationEnv}
                         onEditEnv={focusEnv("grainDur")}
@@ -1508,11 +1530,65 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
               {(stream.grain.durationRange != null || stream.grain.durationRangeEnv != null) ? (
                 <ParamRow name="duration_range"
                           mode={getMode("durationRange")} onMode={(m) => toggleMode("durationRange", m)}
-                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : grainUnitSuffix} steps={grainSteps}
+                          value={stream.grain.durationRange != null ? stream.grain.durationRange : 0} unit={stream.grain.durationRangeEnv ? "" : grainRangeSuffix} steps={grainRangeSteps}
                           accent={stream.grain.durationRangeEnv != null}
                           envValue={stream.grain.durationRangeEnv}
                           onEditEnv={focusEnv("durationRange")}
-                          onValue={(v) => onChange({grain: {...stream.grain, durationRange: v}})} />
+                          onValue={(v) => onChange({grain: {...stream.grain, durationRange: window.PGEEnvUtils.clampGrainRange(stream.grain, v, window.PGE_BOUNDS)}})} />
+              ) : null}
+              {grainRangeUnitShown ? (
+                <>
+                  <div className="pge-prow">
+                    <span className="k" title="unità di grain.duration_range (PGE #267) · absolute (default): una durata, nell'unità di duration_unit · relative: una frazione della durata del grano, letta istante per istante — non si converte quando cambia duration_unit · relative richiede una duration_range esplicita">duration_range_unit</span>
+                    <span />
+                    <span className="v">
+                      <Seg size="xs" value={rangeUnitSel}
+                           onChange={(v) => {
+                             // Seg chiama onChange anche sul bottone già
+                             // acceso, e qui una scrittura spuria non cambia
+                             // un'etichetta: cancellerebbe un `absolute`
+                             // esplicito (fingerprint mossa, stem giallo senza
+                             // che un campione cambi) o rileggerebbe lo stesso
+                             // numero come un'altra grandezza. `rangeUnitSel` è
+                             // il `value` del Seg: la condizione è quella che
+                             // accende il bottone.
+                             if (v === rangeUnitSel) return;
+                             // Il numero NON si converte (#163): durata e
+                             // frazione della durata sono grandezze diverse, e
+                             // la conversione passerebbe per la base, che nel
+                             // caso che motiva PGE #267 è un envelope. Resta e
+                             // cambia lettura, riportato nel dominio d'arrivo.
+                             onChange({ grain: window.PGEEnvUtils.convertGrainRangeUnit(
+                               stream.grain, v, { bounds: window.PGE_BOUNDS }) });
+                           }}
+                           options={window.PGEEnvUtils.RANGE_UNITS.map(
+                             (u) => ({ label: u, value: u }))} />
+                      {stream.grain.durationRangeUnit === undefined ? <span className="hint" style={{fontSize:9, marginLeft:4}}>default</span> : null}
+                    </span>
+                    <span />
+                  </div>
+                  {grainRangeUnitErr ? (
+                    <div className="pge-prow" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
+                        {grainRangeUnitErr.kind === "missing-range"
+                          ? "duration_range_unit: relative richiede una grain.duration_range esplicita — senza, varrebbe il jitter implicito, che è assoluto."
+                          : grainRangeUnitErr.value === null
+                            ? `duration_range_unit è vuota: il motore la rifiuta invece di leggerla come absolute (${grainRangeUnitErr.units.join(" · ")}).`
+                            : `duration_range_unit: ${JSON.stringify(grainRangeUnitErr.value)} non è un'unità del motore (${grainRangeUnitErr.units.join(" · ")}).`}
+                      </span>
+                      <span />
+                    </div>
+                  ) : grainRangeRelative ? (
+                    <div className="pge-prow hint" style={{paddingTop:0}}>
+                      <span className="k" /><span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                        {`frazione della durata del grano · dominio [${window.PGE_BOUNDS.relativeRange.min}, ${window.PGE_BOUNDS.relativeRange.max}] · non si converte quando cambia duration_unit`}
+                      </span>
+                      <span />
+                    </div>
+                  ) : null}
+                </>
               ) : null}
               {/* duration_unit meta-key (PGE #158): seconds (default, chiave
                   assente) | samples | milliseconds — la terza da PGE v5.2.0
@@ -1525,7 +1601,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   samples», un progetto aperto con milliseconds mostrava un
                   controllo senza selezione e il primo click la cancellava. */}
               <div className="pge-prow">
-                <span className="k" title={`unità di grain.duration e duration_range · samples: campioni a ${window.PGE_OUTPUT_SR} Hz (min 1 campione) · milliseconds: fattore fisso 1e-3 · ogni unità non-secondi richiede una duration esplicita`}>duration_unit</span>
+                <span className="k" title={`unità di grain.duration e duration_range · samples: campioni a ${window.PGE_OUTPUT_SR} Hz (min 1 campione) · milliseconds: fattore fisso 1e-3 · ogni unità non-secondi richiede una duration esplicita · con duration_range_unit: relative la banda è una frazione e non si converte`}>duration_unit</span>
                 <span />
                 <span className="v">
                   <Seg size="xs" value={grainUnit}
@@ -1726,8 +1802,10 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                   // e in silenzio — la duration è esplicita, quindi la
                   // validazione tace, e i bound in millisecondi arrivano a
                   // 10000, quindi passa. Stesso trattamento del seme di
-                  // grain.duration (grainDefaultDuration).
-                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: window.PGEEnvUtils.grainSecondsToUnit(0.01, grainUnit) },
+                  // grain.duration (grainDefaultDuration). Con la banda
+                  // relativa (PGE #267) è invece una frazione, 0.2: la stessa
+                  // banda sul default del motore. Lo decide grainRangeSeed.
+                  { key: "durationRange", label: "duration_range", desc: "randomization band width on grain duration (see range_anchor)", exists: stream.grain.durationRange != null || stream.grain.durationRangeEnv != null, def: window.PGEEnvUtils.grainRangeSeed(stream.grain) },
                 ]}
                 onAdd={(o) => onChange({ grain: { ...stream.grain, [o.key]: o.def } })} />
             </Section>

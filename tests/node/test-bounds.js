@@ -273,6 +273,40 @@ console.log("\n── la catena che porta il sample rate dal motore alla UI ─�
           /window\.PGE_OUTPUT_SR = OUTPUT_SR/, ""))));
 }
 
+console.log("\n── relative_range: il dominio della banda relativa (PGE #267) ──");
+{
+  // Un dominio della MODALITA', non del parametro: GRANULAR_PARAMETERS non
+  // puo' esprimerlo, quindi arriva su /bounds con un campo suo. Il merge lo
+  // porta su `relativeRange` e lascia stare `durationRange`, che resta il
+  // dominio assoluto — che i due valgano 1 oggi e' la coincidenza che il
+  // motore dichiara.
+  const base = window.PGE_BOUNDS;
+  const m = B.mergeEngineBounds(base, { relative_range: { min: 0, max: 2 } });
+  assert("relative_range → relativeRange",
+    m.relativeRange && m.relativeRange.min === 0 && m.relativeRange.max === 2,
+    JSON.stringify(m.relativeRange));
+  assert("…e durationRange non si muove",
+    JSON.stringify(m.durationRange) === JSON.stringify(base.durationRange),
+    JSON.stringify(m.durationRange));
+  assert("base non mutata", base.relativeRange.max === 1, JSON.stringify(base.relativeRange));
+
+  const none = B.mergeEngineBounds(base, { params: {} });
+  assert("senza relative_range resta il fallback statico",
+    JSON.stringify(none.relativeRange) === JSON.stringify(base.relativeRange),
+    JSON.stringify(none.relativeRange));
+
+  // Un dominio che non e' un dominio non si installa: un NaN o un min sopra il
+  // max spegnerebbe il clamp in silenzio. Il bridge li scarta gia'; il merge
+  // non si fida del payload come mergeEngineBounds non si fida di output_sr.
+  for (const bad of [{ min: 0, max: "1" }, { min: 1, max: 0 }, { min: NaN, max: 1 },
+                     { min: 0 }, null, 3]) {
+    const r = B.mergeEngineBounds(base, { relative_range: bad });
+    assert(`relative_range ${JSON.stringify(bad)} → fallback statico`,
+      JSON.stringify(r.relativeRange) === JSON.stringify(base.relativeRange),
+      JSON.stringify(r.relativeRange));
+  }
+}
+
 console.log("\n── apply() installs onto window.PGE_BOUNDS ──");
 B.apply(raw);
 assert("apply mutates window.PGE_BOUNDS.density", window.PGE_BOUNDS.density.max === 2000);

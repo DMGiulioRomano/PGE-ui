@@ -8,7 +8,8 @@
  *                                default_jitter, variation_mode } },
  *     pitch:  { semitones|cents|quarter_tone|eighth_tone|ratio: { min, max, rangeMax },
  *               edoFactor: <number> },
- *     output_sr: <number> }        // DEFAULT_OUTPUT_SR, shared/constants.py
+ *     output_sr: <number>,         // DEFAULT_OUTPUT_SR, shared/constants.py
+ *     relative_range: { min, max } } // RELATIVE_RANGE_BOUNDS (PGE #267)
  *
  * The UI clamps live under UI-specific keys (density, durationRange, …) in
  * window.PGE_BOUNDS (yaml-bridge.js, static fallback). ENGINE_PARAM_MAP says
@@ -147,6 +148,22 @@
     const sr = resolveOutputSr(raw);
     if (out.grainDur && sr !== null) {
       out.grainDur = Object.assign({}, out.grainDur, { min: 1 / sr });
+    }
+
+    // Il dominio della banda relativa (PGE #267, `grain.duration_range_unit:
+    // relative`): una frazione della base. E' un dominio della MODALITA' —
+    // `min_range`/`max_range` del parametro restano il dominio assoluto, e
+    // `durationRange` qui sopra non si tocca — quindi arriva con un campo suo
+    // e va su una chiave sua. Si installa solo se e' un dominio: due numeri
+    // finiti con min <= max. Un NaN o un min sopra il max non farebbero mai
+    // scattare il clamp, e spegnerlo in silenzio e' peggio che tenere il
+    // fallback statico — la stessa regola di resolveOutputSr.
+    const rr = raw.relative_range;
+    if (rr && typeof rr === "object"
+        && typeof rr.min === "number" && isFinite(rr.min)
+        && typeof rr.max === "number" && isFinite(rr.max)
+        && rr.min <= rr.max) {
+      out.relativeRange = { min: rr.min, max: rr.max };
     }
 
     if (raw.pitch && typeof raw.pitch === "object") {

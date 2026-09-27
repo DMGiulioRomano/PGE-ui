@@ -348,6 +348,50 @@ assert("chiave assente = secondi", eq(grainRows(undefined).map(r => [r.unit, r.h
 assert("unita' sconosciuta → nessuna conversione e nessun suffisso",
   grainRows("furlongs")[0].unit === "" &&
   grainRows("furlongs")[0].hardMax === PB.grainDur.max);
+
+/* ── grain.duration_range_unit: relative (PGE #267, PGE-ui #163) ────────────
+   Con la banda relativa la curva di duration_range e' una FRAZIONE della
+   base: il suo asse e' [0, 1] in ogni unita' della base, senza suffisso.
+   Convertito come una durata, in millisecondi il cap diventava 1000 — e
+   clampY lasciava trascinare un punto a 500, che il motore rifiuta. */
+console.log("\n── listEnvelopes: grain.duration_range_unit ──");
+const relRows = (unit, rangeUnit) => {
+  const s = { id: "s", grain: { durationEnv: BP, durationRangeEnv: BP,
+                                ...(unit === undefined ? {} : { durationUnit: unit }),
+                                ...(rangeUnit === undefined ? {} : { durationRangeUnit: rangeUnit }) } };
+  const l = C.listEnvelopes(s, 8);
+  return [byKey(l, "grainDur"), byKey(l, "durationRange")];
+};
+for (const u of EU.GRAIN_DURATION_UNITS) {
+  const [dur, rng] = relRows(u, "relative");
+  assert("`" + u + "` + relative: la banda ha il dominio della frazione",
+    rng.hardMin === PB.relativeRange.min && rng.hardMax === PB.relativeRange.max,
+    JSON.stringify([rng.hardMin, rng.hardMax]));
+  assert("`" + u + "` + relative: la finestra di partenza sta nel dominio",
+    rng.visMin === 0 && rng.visMax === PB.relativeRange.max, JSON.stringify([rng.visMin, rng.visMax]));
+  assert("`" + u + "` + relative: nessun suffisso sulla banda",
+    rng.unit === "", JSON.stringify(rng.unit));
+  // La base non cambia lettura: la durata resta nell'unita' dichiarata.
+  const expDur = EU.grainUnitBounds(PB.grainDur, u);
+  assert("`" + u + "` + relative: la base resta convertita e col suo suffisso",
+    dur.hardMax === expDur.max && dur.unit === EU.grainUnitSuffix(u));
+}
+/* Il ramo assoluto e' quello di prima, riga per riga: absolute esplicito
+   come la chiave assente. */
+for (const u of EU.GRAIN_DURATION_UNITS) {
+  assert("`" + u + "` + absolute esplicito = chiave assente",
+    eq(relRows(u, "absolute").map(r => [r.unit, r.hardMin, r.hardMax, r.visMin, r.visMax]),
+       relRows(u, undefined).map(r => [r.unit, r.hardMin, r.hardMax, r.visMin, r.visMax])));
+}
+assert("il dominio della banda viene dal modulo (grainRangeBounds), non da una copia",
+  (() => {
+    const [, rng] = relRows("milliseconds", "relative");
+    const exp = EU.grainRangeBounds({ durationUnit: "milliseconds", durationRangeUnit: "relative" }, PB);
+    return rng.hardMin === exp.min && rng.hardMax === exp.max;
+  })());
+/* Grafia rifiutata: il suffisso tace, come su duration_unit sconosciuta. */
+assert("grafia rifiutata → la banda non porta il suffisso della base",
+  relRows("milliseconds", "relativ")[1].unit === "");
 /* La finestra VISIBILE segue l'unita' come i bound: in millisecondi una
    finestra 0.001–0.1 si aprirebbe schiacciata contro lo zero. */
 assert("anche la finestra visibile e' nell'unita' in vigore",

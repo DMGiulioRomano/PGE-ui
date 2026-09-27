@@ -2067,6 +2067,109 @@ console.log("\n── grain.duration_unit (#158) ──");
 }
 
 /* ============================================================
+ * SECTION — grain.duration_range_unit modelled (PGE #267, PGE-ui #163)
+ *
+ * Finche' stava in `grain._extra` sopravviveva al round-trip ma nessun
+ * componente la vedeva: `convertGrainDurationUnit` convertiva la frazione come
+ * una durata. Promossa a chiave nota, con una regola che le sue gemelle non
+ * hanno: la chiave VUOTA non si scarta. `duration_unit:` e `loop_unit:` vuote
+ * sono assenti per il serializzatore (`|| undefined`); qui il motore distingue
+ * apposta assente da vuota e rifiuta la seconda, e cancellarla in silenzio
+ * sarebbe l'editor a fare la lettura muta che il motore ha voluto evitare.
+ * ============================================================ */
+
+console.log("\n── grain.duration_range_unit (PGE #267) ──");
+
+{
+  const yamlRel =
+    "streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n    sample: test.wav\n" +
+    "    grain:\n      duration: 50\n      duration_range: 0.5\n" +
+    "      duration_unit: milliseconds\n      duration_range_unit: relative\n";
+  const d = parse(yamlRel);
+  const g = d.streams[0].grain;
+  assert("parse grain.duration_range_unit → durationRangeUnit",
+    g.durationRangeUnit === "relative", JSON.stringify(g));
+  assert("duration_range_unit NOT captured under grain._extra",
+    !(g._extra && "duration_range_unit" in g._extra), JSON.stringify(g._extra));
+  const y = serialize(d);
+  assert("serialize grain.duration_range_unit",
+    /duration_range_unit:\s*relative/.test(y), y.slice(0, 400));
+  assert("duration_range_unit emitted exactly once (no _extra dup)",
+    (y.match(/duration_range_unit:/g) || []).length === 1, y.slice(0, 400));
+  assert("durationRangeUnit survives full round-trip",
+    parse(y).streams[0].grain.durationRangeUnit === "relative");
+  assert("roundTripDiff vuoto", roundTripDiff(d).length === 0,
+    JSON.stringify(roundTripDiff(d)));
+  // Anche la frazione resta com'e': il bridge non la tocca, e 0.5 sotto
+  // `milliseconds` non e' mezzo millisecondo.
+  assert("la frazione esce intatta accanto all'unita' della base",
+    /duration_range:\s*0\.5\b/.test(y), y.slice(0, 400));
+}
+
+{
+  // `absolute` esplicito e' la grafia del default, ma e' scritto: il bridge non
+  // lo toglie. A cancellarlo, se mai, e' il selettore dell'Inspector, su una
+  // scelta — come `duration_unit: seconds`.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    grain:\n      duration: 0.05\n      duration_range: 0.01\n" +
+    "      duration_range_unit: absolute\n");
+  assert("absolute esplicito → durationRangeUnit 'absolute'",
+    d.streams[0].grain.durationRangeUnit === "absolute", JSON.stringify(d.streams[0].grain));
+  assert("…e riemesso",
+    /duration_range_unit:\s*absolute/.test(serialize(d)), serialize(d).slice(0, 400));
+}
+
+{
+  // La chiave vuota: il motore la rifiuta (InvalidFieldValueError), non la
+  // legge come assente. Stato `null` a chiave presente, riemessa com'e'.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    grain:\n      duration: 0.05\n      duration_range: 0.01\n" +
+    "      duration_range_unit:\n");
+  const g = d.streams[0].grain;
+  assert("chiave vuota → durationRangeUnit null, chiave presente",
+    "durationRangeUnit" in g && g.durationRangeUnit === null, JSON.stringify(g));
+  const y = serialize(d);
+  assert("chiave vuota riemessa, non scartata",
+    /duration_range_unit:\s*null/.test(y), y.slice(0, 400));
+  const back = parse(y).streams[0].grain;
+  assert("…e al giro dopo e' ancora vuota, non assente",
+    "durationRangeUnit" in back && back.durationRangeUnit === null, JSON.stringify(back));
+  assert("roundTripDiff vuoto sulla chiave vuota", roundTripDiff(d).length === 0,
+    JSON.stringify(roundTripDiff(d)));
+}
+
+{
+  // Un refuso sopravvive verbatim: l'errore lo dice l'Inspector, non il
+  // bridge cancellandolo.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    grain:\n      duration: 0.05\n      duration_range: 0.01\n" +
+    "      duration_range_unit: relativ\n");
+  assert("refuso → durationRangeUnit verbatim",
+    d.streams[0].grain.durationRangeUnit === "relativ");
+  assert("…e riemesso verbatim",
+    /duration_range_unit:\s*relativ\b/.test(serialize(d)), serialize(d).slice(0, 400));
+}
+
+{
+  // Assente: niente chiave nello stato, niente chiave nello YAML.
+  const d = parse("streams:\n  - stream_id: s1\n    onset: 0\n    duration: 5\n" +
+    "    sample: test.wav\n    grain:\n      duration: 0.05\n      duration_range: 0.01\n");
+  assert("assente → nessun durationRangeUnit nello stato",
+    !("durationRangeUnit" in d.streams[0].grain), JSON.stringify(d.streams[0].grain));
+  assert("assente → nessuna duration_range_unit emessa",
+    !/duration_range_unit/.test(serialize(d)), serialize(d).slice(0, 400));
+}
+
+{
+  // Il fallback statico del dominio relativo (RELATIVE_RANGE_BOUNDS): quello di
+  // file:// e del bridge spento. La parita' pretende che sia il numero del
+  // motore; qui basta che esista con la forma che i lettori si aspettano.
+  const rr = window.PGE_BOUNDS.relativeRange;
+  assert("PGE_BOUNDS.relativeRange è il fallback statico [0, 1]",
+    rr && rr.min === 0 && rr.max === 1, JSON.stringify(rr));
+}
+
+/* ============================================================
  * rng_group (engine #169) — identità RNG condivisa fra stream
  * ============================================================ */
 

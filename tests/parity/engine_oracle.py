@@ -887,6 +887,33 @@ def _op_constants(args):
         out["loop_units_ast"] = None
         out["loop_units_ast_error"] = str(exc)
 
+    # La banda relativa di `grain.duration_range` (PGE #267, PGE-ui #163): il
+    # vocabolario di `<param>_range_unit` e il dominio della frazione. Stanno in
+    # `parameter_definitions.py`, lo stesso modulo che l'op `parameter_bounds`
+    # importa gia' senza numpy, quindi qui si leggono DUE volte: importati (i
+    # valori che il motore usa) e dall'AST del bridge (quelli che la UI riceve),
+    # perche' la parita' pretenda che coincidano — il motore scrive la tupla del
+    # vocabolario per NOME, e una lettura che si fermasse ai letterali sarebbe
+    # muta sul checkout vero.
+    try:
+        pd = ENGINE.module("pge.parameters.parameter_definitions")
+        out["range_units"] = list(pd.RANGE_UNITS)
+        out["range_unit_default"] = pd.RANGE_UNIT_DEFAULT
+        out["range_unit_relative"] = pd.RANGE_UNIT_RELATIVE
+        out["relative_range_bounds"] = list(pd.RELATIVE_RANGE_BOUNDS)
+    except (OracleError, AttributeError) as exc:
+        out["range_units"] = None
+        out["relative_range_bounds"] = None
+        out["range_units_error"] = str(exc)
+    try:
+        intro = _introspect("constants")
+        out["range_units_ast"] = intro.engine_range_units(ENGINE.root)
+        out["relative_range_bounds_ast"] = intro.engine_relative_range_bounds(ENGINE.root)
+    except OracleError as exc:
+        out["range_units_ast"] = None
+        out["relative_range_bounds_ast"] = None
+        out["range_units_ast_error"] = str(exc)
+
     # I backend audio (PGE-ui #150): l'elenco che `pge.api.renderer_types()`
     # restituisce — e' l'API che il motore ha messo li' apposta perche' un
     # selettore lo chieda invece di tenerne una copia — e lo stesso letto come

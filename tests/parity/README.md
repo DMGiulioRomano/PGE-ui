@@ -65,7 +65,7 @@ Le operazioni dell'oracolo:
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `filter_solo_mute` | gli `stream_id` che `Generator._filter_solo_mute` tiene — estratto dall'AST di `generator.py` ed eseguito, perché il modulo tira dentro numpy | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
-| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150) | tutti |
+| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
 
 ## Come si lancia
 
@@ -116,8 +116,8 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`e57ccecc5453549aa9f507b7079337fb63a099f1`
-(«fix(build): allinea la versione del pacchetto al tag (v9.0.2)»)
+`9071a37f3623c328c2a7bcbb71a4e7d60d828fc3`
+(«Merge pull request #279 from DMGiulioRomano/claude/wizardly-brahmagupta-vqf5uv»)
 
 Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
 che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
@@ -129,11 +129,15 @@ o è cambiato il motore?» era sempre la seconda.
 La cartella è nata contro `2b4cbf9fdfd49166314aa7113bcc41dcb6106ed8`
 (PythonGranularEngine v7.2.0); fra quello e `cce3234` il motore ha portato
 `VARIATION_SEMANTICS_VERSION` da 2 a 3 — il primo cambiamento che questi test
-hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` e il
-commit qui sopra è entrato `renderer_type` nel fingerprint del motore (`bcc2c84`):
+hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` ed
+`e57ccec` (v9.0.2) è entrato `renderer_type` nel fingerprint del motore (`bcc2c84`):
 un terzo asse, che la UI ha poi costruito accanto al proprio hash (#151) invece
 di infilarlo dentro — e su cui la scelta del backend nel popover (#150) poggia:
-la *conoscenza* di chi ha scritto lo stem c'era prima della scelta.
+la *conoscenza* di chi ha scritto lo stem c'era prima della scelta. Fra
+`e57ccec` e il commit qui sopra è entrata la banda relativa di PGE #267
+(`0234b12`, fusa con PGE #268): `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS`, che la
+UI rispecchia da #163 — il primo patto che contro `e57ccec` non si potrebbe
+nemmeno porre, perché lì le due costanti non esistono.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del

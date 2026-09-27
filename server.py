@@ -106,7 +106,9 @@ from render_pipeline import (
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
 from engine_introspect import (engine_envelope_keys, engine_output_sr,
-                              engine_parameter_bounds, engine_renderer_types,
+                              engine_parameter_bounds,
+                              engine_relative_range_bounds,
+                              engine_renderer_types,
                               engine_sc_synthdef, engine_semantics_version,
                               engine_supports_samples_dir)
 
@@ -808,11 +810,22 @@ def make_app(root: Path, render_timeout: float = 600.0,
         letterale trascritto in yaml-bridge.js — cioe' proprio la cosa che
         questa lettura toglie di mezzo. La composizione sta qui e non dentro
         `engine_parameter_bounds` perche' le due letture hanno cache diverse:
-        i bound a vita, il sample rate invalidato sull'mtime."""
+        i bound a vita, il sample rate invalidato sull'mtime.
+
+        Porta anche `relative_range` (`RELATIVE_RANGE_BOUNDS`, PGE #267): il
+        dominio di `grain.duration_range` quando `duration_range_unit` e'
+        `relative`, cioe' una frazione della base. E' un bound come gli altri,
+        ma della MODALITA' e non del parametro — `min_range`/`max_range` di
+        `GRANULAR_PARAMETERS` restano il dominio assoluto — quindi viaggia con
+        un campo suo, e solo quando la lettura riesce: assente, la UI tiene il
+        fallback statico di yaml-bridge.js."""
         payload = dict(engine_parameter_bounds(root))
         sr = engine_output_sr(root)
         if sr is not None:
             payload["output_sr"] = sr
+        rel = engine_relative_range_bounds(root)
+        if rel is not None:
+            payload["relative_range"] = rel
         return jsonify({"ok": True, "bounds": payload})
 
     @app.get("/semantics-version")

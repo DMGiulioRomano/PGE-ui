@@ -756,6 +756,24 @@
   // seminare un default che il motore non ha più.
   const GRAIN_DEFAULT_DURATION_SEC = 0.05;
 
+  // Il vocabolario di `grain.duration_range_unit` (PGE #267): l'unita' della
+  // BANDA, non della base. `absolute` (default, la semantica storica) vuol dire
+  // che duration_range e' una durata nell'unita' di duration_unit; `relative`
+  // che e' una FRAZIONE della durata del grano, letta istante per istante — e
+  // una frazione non ha unita'.
+  //
+  // Copia del motore (`RANGE_UNITS` in parameter_definitions.py), nell'ordine
+  // in cui la dichiara: la prima grafia e' il default, cioe' quella che il
+  // selettore dell'Inspector scrive CANCELLANDO la chiave. Come LOOP_UNITS,
+  // e' onesta perche' tests/parity/test-bounds-parity.js la confronta col
+  // motore (AST e import) a ogni run.
+  const RANGE_UNIT_DEFAULT = "absolute";
+  const RANGE_UNIT_RELATIVE = "relative";
+  const RANGE_UNITS = [RANGE_UNIT_DEFAULT, RANGE_UNIT_RELATIVE];
+
+  // Il seme di una duration_range nuova, in secondi (#114): 10 ms di banda.
+  const GRAIN_RANGE_SEED_SEC = 0.01;
+
   // Fattore unità→secondi, come Stream._pre_normalize_grain_params: 1/output_sr
   // per 'samples', 1e-3 per 'milliseconds' (fisso, indipendente dal sample
   // rate), 1 per 'seconds' e per la chiave assente. Un'unità che il motore non
@@ -889,8 +907,18 @@
       const allBounds = (opts && opts.bounds) || null;
       const fields = [
         ["duration", "durationEnv", allBounds && allBounds.grainDur],
-        ["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange],
       ];
+      // Con la banda relativa (PGE #267) duration_range non e' una durata ma
+      // una frazione della durata: non ha unita', quindi non si converte — e
+      // non si ri-clampa, perche' grainUnitBounds darebbe il dominio ASSOLUTO
+      // nell'unita' della base, sbagliato due volte per una frazione. Senza
+      // questa esclusione `0.5` verso samples diventava 0.5/48000: la
+      // variazione spariva, e nel file non restava niente da cui accorgersene.
+      // E' la stessa esclusione di Stream._pre_normalize_grain_params, e con
+      // la stessa lettura pura dell'unita' (`range_unit_is_relative`).
+      if (!grainRangeIsRelative(ng)) {
+        fields.push(["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange]);
+      }
       for (const [scalarKey, envKey, secBounds] of fields) {
         if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
           ng[scalarKey] = _clampGrain(
@@ -938,6 +966,144 @@
     const hasScalar = grain.duration != null;
     const hasEnv = grain.durationEnv != null;
     return (hasScalar || hasEnv) ? null : { kind: "missing-duration", unit };
+  }
+
+  // Lettura PURA dell'unita' della banda, come `range_unit_is_relative` nel
+  // motore: vero solo per la grafia relativa. Una grafia sbagliata legge come
+  // non-relativa (cioe' assoluta, il default); a dire che e' sbagliata e'
+  // grainRangeUnitError, che e' anche quello che il motore fa — valida in un
+  // punto, legge in modo puro negli altri.
+  function grainRangeIsRelative(grain) {
+    return !!grain && grain.durationRangeUnit === RANGE_UNIT_RELATIVE;
+  }
+
+  // Mirror dei due rifiuti del motore su grain.duration_range_unit
+  // (ParameterOrchestrator._range_unit_from_spec), nel suo ordine:
+  //
+  //   "unknown"       → una grafia fuori da RANGE_UNITS (InvalidFieldValueError).
+  //                     La chiave VUOTA e' fra queste, a differenza di
+  //                     duration_unit e loop_unit: il motore distingue assente
+  //                     da vuota apposta — leggere `duration_range_unit:` come
+  //                     absolute sarebbe il default piu' muto possibile — e il
+  //                     bridge la conserva (`null` a chiave presente) invece
+  //                     di scartarla, quindi il motore la vede davvero.
+  //   "missing-range" → `relative` senza una duration_range esplicita
+  //                     (MissingFieldError): senza banda scatterebbe il jitter
+  //                     implicito, che e' ASSOLUTO — la patologia che relative
+  //                     esiste per evitare.
+  //
+  // La chiave assente (`undefined` nello stato) e' il default e va bene.
+  // Ritorna null se valido, altrimenti { kind, ... } per il messaggio. Puro.
+  function grainRangeUnitError(grain) {
+    if (!grain || grain.durationRangeUnit === undefined) return null;
+    const u = grain.durationRangeUnit;
+    if (RANGE_UNITS.indexOf(u) === -1) {
+      return { kind: "unknown", value: u, units: RANGE_UNITS.slice() };
+    }
+    if (u === RANGE_UNIT_RELATIVE
+        && grain.durationRange == null && grain.durationRangeEnv == null) {
+      return { kind: "missing-range", unit: u };
+    }
+    return null;
+  }
+
+  // Il dominio di duration_range nell'unita' in cui e' scritta. Assoluta: il
+  // max_range del parametro (in secondi nei bound) espresso nell'unita' della
+  // base, come prima — grainUnitBounds. Relativa: il dominio della MODALITA'
+  // (`bounds.relativeRange`, RELATIVE_RANGE_BOUNDS del motore), che non si
+  // converte perche' una frazione non ha unita'. Oggi i due massimi valgono 1
+  // tutti e due, ed e' proprio per questo che il clamp in relativo sembrava
+  // giusto: in secondi lo era per caso, in millisecondi diventava [0, 1000].
+  // `bounds` ha la forma di window.PGE_BOUNDS.
+  function grainRangeBounds(grain, bounds) {
+    const b = bounds || {};
+    if (grainRangeIsRelative(grain)) {
+      const r = b.relativeRange || {};
+      const out = {};
+      if (typeof r.min === "number") out.min = r.min;
+      if (typeof r.max === "number") out.max = r.max;
+      return out;
+    }
+    return grainUnitBounds(b.durationRange, (grain && grain.durationUnit) || "seconds");
+  }
+
+  // Il suffisso della riga duration_range. In relativo tace: il numero e' una
+  // frazione, e «ms» accanto a 0.5 direbbe mezzo millisecondo. Tace anche su
+  // una grafia rifiutata, per la regola di grainUnitSuffix e loopUnitSuffix: un
+  // suffisso accanto alla riga d'errore che dichiara l'unita' non riconosciuta
+  // sarebbero due affermazioni opposte.
+  function grainRangeSuffix(grain) {
+    const err = grainRangeUnitError(grain);
+    if ((err && err.kind === "unknown") || grainRangeIsRelative(grain)) return "";
+    return grainUnitSuffix((grain && grain.durationUnit) || "seconds");
+  }
+
+  // Un valore di duration_range riportato dentro il suo dominio (vedi
+  // grainRangeBounds). Serve alla riga dell'Inspector, dove un numero fuori
+  // dominio non e' un clip silenzioso: la validazione del motore e' strict, e
+  // uno `0.5` diventato `3` in relativo e' un render che muore.
+  function clampGrainRange(grain, v, bounds) {
+    return _clampGrain(v, bounds ? grainRangeBounds(grain, bounds) : null);
+  }
+
+  // Cambia l'unita' della banda (absolute ↔ relative). Il numero NON si
+  // converte (scelta di #163): una durata e una frazione della durata sono
+  // grandezze diverse, e passare dall'una all'altra richiede la base — che nel
+  // caso che motiva PGE #267 e' un envelope, dove una conversione non esiste.
+  // Stesso precedente di density ↔ fill_factor. Il numero resta e cambia
+  // lettura; va solo riportato nel dominio d'arrivo, o la validazione strict
+  // del motore uccide il render (10 ms → frazione 1).
+  //
+  // Qui anche i punti degli envelope si clampano, a differenza di
+  // convertGrainDurationUnit: la' i bound scalano con lo stesso fattore dei
+  // valori, qui il dominio cambia e i valori no.
+  //
+  // `absolute` e' il default: la chiave si cancella. Qualunque altra grafia si
+  // scrive, e da una grafia rifiutata ogni scelta e' il rimedio. Ritorna un
+  // grain nuovo; l'originale non viene mutato. `opts.bounds` nella forma di
+  // window.PGE_BOUNDS; senza, non si clampa.
+  function convertGrainRangeUnit(grain, toUnit, opts) {
+    const ng = Object.assign({}, grain || {});
+    if (toUnit === RANGE_UNIT_DEFAULT) delete ng.durationRangeUnit;
+    else ng.durationRangeUnit = toUnit;
+    const bounds = opts && opts.bounds;
+    if (bounds && RANGE_UNITS.indexOf(toUnit) !== -1) {
+      const dom = grainRangeBounds(ng, bounds);
+      if (typeof ng.durationRange === "number") {
+        ng.durationRange = _clampGrain(ng.durationRange, dom);
+      }
+      if (ng.durationRangeEnv != null) {
+        ng.durationRangeEnv = _mapGrainEnvY(ng.durationRangeEnv, (y) => _clampGrain(y, dom));
+      }
+    }
+    return ng;
+  }
+
+  // Il seme di una duration_range nuova (AddParamMenu). Assoluta: 10 ms
+  // nell'unita' della base (#114). Relativa: la frazione che da' la stessa
+  // banda sul default del motore, 0.01 / 0.05 = 0.2 — un numero di secondi
+  // scritto come frazione sarebbe 0.01, cioe' una banda dell'1%.
+  function grainRangeSeed(grain) {
+    if (grainRangeIsRelative(grain)) {
+      return _roundGrain(GRAIN_RANGE_SEED_SEC / GRAIN_DEFAULT_DURATION_SEC);
+    }
+    return grainSecondsToUnit(GRAIN_RANGE_SEED_SEC, (grain && grain.durationUnit) || "seconds");
+  }
+
+  // Il `±` che la riga di grain.duration mostra accanto al valore, nella forma
+  // che ParamRow si aspetta: un numero (disegna `±n/2`) o una stringa (la
+  // disegna com'e'). Assoluta, la banda e' una durata e passa il numero, come
+  // prima. Relativa, e' una frazione f della base: sotto l'ancora center la
+  // banda e' ±f/2 della base, cioe' `±25%` per f = 0.5 — il numero nudo
+  // direbbe `±0.25` accanto a `50 ms`, un quarto di millisecondo. Uno zero
+  // resta zero in entrambe le letture: ParamRow non disegna una banda nulla.
+  // Una banda envelope non ha un badge (e non l'aveva). Pura.
+  function grainRangeBadge(grain) {
+    if (!grain || grain.durationRangeEnv != null) return undefined;
+    const r = grain.durationRange;
+    if (typeof r !== "number" || !isFinite(r)) return undefined;
+    if (!grainRangeIsRelative(grain) || r === 0) return r;
+    return _roundGrain(r * 50) + "%";
   }
 
   // Mirror dei due rifiuti del motore su grain.read_direction (PGE #207) che
@@ -1029,5 +1195,16 @@
     grainUnitBounds,
     grainDefaultDuration,
     convertGrainDurationUnit,
+    RANGE_UNITS,
+    RANGE_UNIT_DEFAULT,
+    RANGE_UNIT_RELATIVE,
+    grainRangeIsRelative,
+    grainRangeUnitError,
+    grainRangeBounds,
+    grainRangeSuffix,
+    clampGrainRange,
+    convertGrainRangeUnit,
+    grainRangeSeed,
+    grainRangeBadge,
   };
 })();
