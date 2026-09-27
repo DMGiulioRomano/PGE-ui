@@ -166,7 +166,11 @@ exists, the fourth only when a browser is installed):
   always exits 0, and the command itself: a `$BROWSER` recorder that does the
   GET a browser would, so "opened after the bind" is measured as a 200, plus an
   AST guard that `main()` calls `open_browser` only from `when_ready` or the
-  reuse branch, and `make -n serve` for `PORT`/`OPEN`), `test_audio_pipeline.py`
+  reuse branch, and `make -n serve` for `PORT`/`OPEN`; only the two tests
+  whose bridge reaches the point of *listening* skip without gunicorn, and a
+  guard requires the CI step that installs the pytest job's deps to read
+  `requirements.txt` — a transcribed list there had lost gunicorn, and all
+  five whole-command tests skipped green in CI), `test_audio_pipeline.py`
   (path/security helpers, `_resolve_audio`, and the `/peaks` + `/spectrogram`
   routes serving the format that was asked for), `test_yaml_structure.py` (the engine config corpus,
   gated by `engine_corpus.py`), `test_renderers.py` (#150: the AST reads of the
@@ -207,7 +211,9 @@ running it against an invented root.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`), in three jobs:
 `node`, `python` and `e2e`. The python job
-checks out the sibling engine and builds its venv. The node job checks it out
+installs the bridge from `requirements.txt` (never a list transcribed in the
+workflow: that is how `/peaks` in #153 and the launch tests of #166 went
+skipped-green), checks out the sibling engine and builds its venv. The node job checks it out
 too, for the fixture-dependent parts and for `make tests-parity` (which needs no
 engine venv at all), so both run on a PR: a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary), and

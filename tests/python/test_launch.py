@@ -468,13 +468,23 @@ def _stop(proc):
     return out
 
 
-def _flask_or_skip(out):
-    if "Missing deps" in out:
-        pytest.skip("flask assente in questo interprete")
+def _needs_gunicorn():
+    """Solo i test in cui il bridge arriva ad ASCOLTARE hanno bisogno di
+    gunicorn: e' importato in `main()` dopo il banner. Il riuso, il conflitto
+    e il `--port` occupato escono prima, e non devono saltare con lui.
+
+    Si chiede PRIMA di lanciare, all'interprete che lancera' server.py
+    (`sys.executable`): chiederlo dopo, dall'output, costava i trenta secondi
+    di `_wait_for` a ogni test, e — messo dopo `_launch` in tutti e cinque —
+    skippava anche i tre che gunicorn non lo toccano. Flask non va chiesto:
+    senza, `import server` in cima a questo file non passerebbe. In CI
+    gunicorn c'e' (il passo di install legge requirements.txt, e
+    `test_ci_installs_the_bridge_requirements` lo tiene cosi')."""
     pytest.importorskip("gunicorn")
 
 
 def test_the_browser_lands_on_a_working_editor(tmp_path):
+    _needs_gunicorn()
     script, rec = _recorder(tmp_path)
     port = _free_port()
     proc, _, _ = _launch(tmp_path, "--port", str(port),
@@ -483,7 +493,6 @@ def test_the_browser_lands_on_a_working_editor(tmp_path):
         opened = _wait_for(rec.exists)
     finally:
         out = _stop(proc)
-    _flask_or_skip(out)
     assert opened, f"nessun browser aperto\n{out}"
     got = json.loads(rec.read_text())
     assert got["url"] == f"http://127.0.0.1:{port}/"
@@ -492,6 +501,7 @@ def test_the_browser_lands_on_a_working_editor(tmp_path):
 
 
 def test_no_open_opens_nothing(tmp_path):
+    _needs_gunicorn()
     script, rec = _recorder(tmp_path)
     port = _free_port()
     proc, _, _ = _launch(tmp_path, "--port", str(port), "--no-open",
@@ -504,7 +514,6 @@ def test_no_open_opens_nothing(tmp_path):
         time.sleep(2.0)
     finally:
         out = _stop(proc)
-    _flask_or_skip(out)
     assert up, out
     assert not rec.exists(), "--no-open ha aperto il browser"
     assert "--no-open" in out
@@ -517,7 +526,6 @@ def test_explicit_busy_port_explains_and_creates_nothing(tmp_path):
         port = s.getsockname()[1]
         proc, ws, _ = _launch(tmp_path, "--port", str(port), "--no-open")
         out = proc.communicate(timeout=60)[0]
-    _flask_or_skip(out)
     assert proc.returncode != 0
     assert "Traceback" not in out, out
     assert str(port) in out and "--port" in out
@@ -535,7 +543,6 @@ def test_a_bridge_on_this_workspace_is_reused_not_doubled(tmp_path, fake_bridge)
     proc, _, _ = _launch(tmp_path, "--port", str(port),
                          env=_env(BROWSER=str(script)))
     out = proc.communicate(timeout=60)[0]
-    _flask_or_skip(out)
     assert proc.returncode == 0, out
     assert f"http://127.0.0.1:{port}/" in out
     assert not (ws / "configs").exists()
@@ -550,7 +557,6 @@ def test_same_workspace_other_engine_refuses(tmp_path, fake_bridge):
     port = fake_bridge(_health(ws.resolve(), other.resolve()))
     proc, _, engine = _launch(tmp_path, "--port", str(port), "--no-open")
     out = proc.communicate(timeout=60)[0]
-    _flask_or_skip(out)
     assert proc.returncode != 0
     assert "Traceback" not in out, out
     assert str(other.resolve()) in out and str(engine.resolve()) in out
@@ -593,6 +599,41 @@ def test_the_serving_path_opens_only_from_when_ready():
     assert calls, "main() non apre piu' il browser da nessuna parte"
     bad = [ast.unparse(c) for c in calls if not allowed(c)]
     assert not bad, f"open_browser fuori da when_ready e dal riuso: {bad}"
+
+
+def test_ci_installs_the_bridge_requirements():
+    """I test qui sopra che lanciano il bridge intero si skippano senza
+    gunicorn, e uno skip e' verde quanto un pass. Il job python della CI
+    installava una lista trascritta — `flask flask-cors pytest PyYAML numpy
+    soundfile` — che gunicorn l'aveva perso: l'apertura dopo il bind, il
+    `--no-open`, il riuso e il conflitto non sono mai girati in CI, su una PR
+    che li nominava come la sua prova. E' lo stesso modo in cui era sparita la
+    #153 (numpy e soundfile, allora), e il commento sopra quel passo lo
+    diceva gia'. La cura e' che la lista non esista: il passo che installa le
+    dipendenze del job che lancia pytest legge requirements.txt.
+
+    Nella STESSA cartella del passo pytest: lo stesso job fa anche un
+    `pip install -r requirements.txt` dentro PythonGranularEngine — il venv
+    del motore — e una guardia che guardasse il job intero si farebbe bastare
+    quello, verde sulla lista trascritta."""
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+
+    found = 0
+    for job in wf["jobs"].values():
+        steps = job.get("steps", [])
+        for step in steps:
+            if "pytest tests/python" not in str(step.get("run", "")):
+                continue
+            found += 1
+            wd = step.get("working-directory")
+            installs = [str(s.get("run", "")) for s in steps
+                        if "pip install" in str(s.get("run", ""))
+                        and s.get("working-directory") == wd]
+            assert any("-r requirements.txt" in r for r in installs), (
+                f"il job che lancia pytest (in {wd}) deve installare "
+                f"requirements.txt, non una lista trascritta: {installs}")
+    assert found, "nessun passo della CI lancia pytest su tests/python"
 
 
 # ---------------------------------------------------------------------------

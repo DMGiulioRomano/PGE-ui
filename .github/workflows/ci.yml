@@ -131,9 +131,14 @@ jobs:
       # esercitano si SKIPPANO — verdi quanto uno che passa. E' il modo in cui
       # la #153 e' rimasta invisibile alla CI: il difetto stava nella sorgente
       # che quelle due route scelgono, e in CI nessuna delle due girava mai.
+      # E la lista si legge da requirements.txt, non si trascrive: la copia
+      # che stava qui aveva perso gunicorn, e i cinque test di test_launch.py
+      # che lanciano il bridge intero (#166) — l'apertura dopo il bind, il
+      # riuso, il conflitto — si skippavano verdi. test_launch.py tiene questo
+      # passo attaccato al file.
       - name: install bridge + test deps
         working-directory: PGE-ui
-        run: pip install flask flask-cors pytest PyYAML numpy soundfile
+        run: pip install -r requirements.txt pytest PyYAML
       # Build the engine's own venv so test_engine_render runs (instead of
       # skipping on a missing .venv/main.py). numpy renderer needs numpy+soundfile.
       # Skipped implicitly when the checkout above didn't land the engine sources.
