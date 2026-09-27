@@ -166,8 +166,10 @@ exists, the fourth only when a browser is installed):
   always exits 0, and the command itself: a `$BROWSER` recorder that does the
   GET a browser would, so "opened after the bind" is measured as a 200, plus an
   AST guard that `main()` calls `open_browser` only from `when_ready` or the
-  reuse branch, and `make -n serve` for `PORT`/`OPEN`; only the two tests
-  whose bridge reaches the point of *listening* skip without gunicorn, and a
+  reuse branch, the two spellings of an IPv6 `--host` (`bind_address` against
+  gunicorn's own `parse_address`, the probe bound bare), and `make -n serve`
+  for `PORT`/`OPEN`; only the tests whose bridge reaches the point of
+  *listening* skip without gunicorn (the IPv6 one also without a `::1`), and a
   guard requires the CI step that installs the pytest job's deps to read
   `requirements.txt` — a transcribed list there had lost gunicorn, and all
   five whole-command tests skipped green in CI), `test_audio_pipeline.py`
@@ -472,6 +474,11 @@ browser left on `:0`.
 `probe_bridge` recognizes a bridge by the shape of `/health` (`ok`,
 `workspace`, `root` — older bridges have it too) and goes **around any HTTP
 proxy**: urllib honours `HTTP_PROXY` towards `127.0.0.1`.
+An IPv6 `--host` has two spellings and each reader wants its own, so they all
+start from `_bare_host`: the probe binds `::1` bare (`[::1]` handed to the
+socket is a `gaierror`, i.e. `unbindable` on a host gunicorn serves), while
+`bind_address` — gunicorn's `bind` and the banner's `listen:` — puts the
+brackets back, since gunicorn splits `::1:7878` into host `''` and port `''`.
 
 The browser opens by default (`--open`/`--no-open`, declared as two
 `add_argument`s so the launcher guard in `test-suite-harness.js` sees

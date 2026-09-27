@@ -70,9 +70,69 @@ def _free_port() -> int:
     ("::1",       "http://[::1]:7878/"),
     ("localhost", "http://localhost:7878/"),
     ("192.168.1.20", "http://192.168.1.20:7878/"),
+    # La grafia con le parentesi e' quella che gunicorn legge: vale uguale.
+    ("[::1]",     "http://[::1]:7878/"),
+    ("[::]",      "http://[::1]:7878/"),
 ])
 def test_editor_url(host, url):
     assert server.editor_url(host, 7878) == url
+
+
+# ---------------------------------------------------------------------------
+# Dove ascolta: un host IPv6 ha due grafie, e tutte e due devono arrivare
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("host, bind", [
+    ("127.0.0.1", "127.0.0.1:7878"),
+    ("0.0.0.0",   "0.0.0.0:7878"),
+    ("localhost", "localhost:7878"),
+    # `f"{host}:{port}"` dava `::1:7878`, che gunicorn spezza sui due punti:
+    # host '' e porta '' — un RuntimeError all'avvio, dopo il banner.
+    ("::1",       "[::1]:7878"),
+    ("::",        "[::]:7878"),
+    ("[::1]",     "[::1]:7878"),
+])
+def test_bind_address(host, bind):
+    assert server.bind_address(host, 7878) == bind
+
+
+@pytest.mark.parametrize("host, bare", [
+    ("127.0.0.1", "127.0.0.1"), ("::1", "::1"), ("[::1]", "::1"), ("::", "::"),
+])
+def test_bind_address_is_what_gunicorn_reads(host, bare):
+    """Il contratto vero non e' la stringa: e' che gunicorn ne ricavi l'host e
+    la porta che il piano ha sondato."""
+    gutil = pytest.importorskip("gunicorn.util")
+    assert gutil.parse_address(server.bind_address(host, 7878)) == (bare, 7878)
+
+
+def test_bind_error_reads_a_bracketed_host(monkeypatch):
+    """`--host [::1]` e' la grafia che gunicorn accetta, ma `socket.bind` no:
+    `getaddrinfo('[::1]')` e' un gaierror, errno -2 — non EADDRINUSE, quindi
+    `plan_port` diceva `unbindable` e il bridge non partiva su un host che
+    prima di #166 funzionava. La sonda deve bindare cio' che bindera' gunicorn.
+    Un socket finto, perche' molte macchine (container, CI) non hanno IPv6."""
+    seen = []
+
+    class FakeSocket:
+        def __init__(self, family, kind):
+            seen.append(family)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def setsockopt(self, *a):
+            pass
+
+        def bind(self, address):
+            seen.append(address)
+
+    monkeypatch.setattr(server.socket, "socket", FakeSocket)
+    assert server.bind_error("[::1]", 7878) is None
+    assert seen == [socket.AF_INET6, ("::1", 7878)]
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +577,35 @@ def test_no_open_opens_nothing(tmp_path):
     assert up, out
     assert not rec.exists(), "--no-open ha aperto il browser"
     assert "--no-open" in out
+
+
+def _ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+@pytest.mark.parametrize("host", ["::1", "[::1]"])
+def test_an_ipv6_host_listens_in_both_spellings(tmp_path, host):
+    """Le due grafie di `--host` IPv6 arrivano ad ascoltare. `[::1]` si
+    fermava sulla sonda di #166 (`unbindable`, un gaierror letto come un bind
+    impossibile); `::1` passava la sonda e moriva in gunicorn, che legge
+    `::1:7878` come host '' e porta ''."""
+    _needs_gunicorn()
+    if not _ipv6_loopback():
+        pytest.skip("niente loopback IPv6 su questa macchina")
+    port = _free_port()
+    proc, _, _ = _launch(tmp_path, "--host", host, "--port", str(port),
+                         "--no-open")
+    try:
+        up = _wait_for(lambda: server.probe_bridge("::1", port) is not None)
+    finally:
+        out = _stop(proc)
+    assert up, out
+    assert f"[::1]:{port}" in out, "il banner dice l'indirizzo come si scrive"
 
 
 def test_explicit_busy_port_explains_and_creates_nothing(tmp_path):

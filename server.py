@@ -498,16 +498,39 @@ def port_arg(text) -> int:
     return port
 
 
+def _bare_host(host) -> str:
+    """`host` senza le parentesi di un IPv6 letterale: `[::1]` → `::1`.
+
+    `--host` ha due grafie per un IPv6, e ogni lettore ne vuole una sua: il
+    socket la nuda (`getaddrinfo('[::1]')` e' un gaierror), gunicorn e un URL
+    quella fra parentesi (`bind_address`, `editor_url`). Si parte sempre da
+    questa, e le parentesi le rimette chi ne ha bisogno."""
+    h = (host or "").strip()
+    if h.startswith("[") and h.endswith("]"):
+        return h[1:-1]
+    return h
+
+
+def bind_address(host, port) -> str:
+    """Il `bind` di gunicorn per `host:port`, e la riga `listen:` del banner.
+
+    Un IPv6 va fra parentesi: `f"{host}:{port}"` dava `::1:7878`, che gunicorn
+    spezza sui due punti — host '' e porta '', un errore all'avvio dopo che il
+    piano della porta aveva sondato proprio quell'host."""
+    h = _bare_host(host)
+    return f"[{h}]:{port}" if ":" in h else f"{h}:{port}"
+
+
 def connect_host(host) -> str:
     """L'indirizzo a cui CONNETTERSI per raggiungere un bind su `host`.
 
     Un bind su tutte le interfacce non e' una destinazione: Chrome rifiuta
     0.0.0.0, e `::` non e' un indirizzo. Si passa dal loopback della stessa
     famiglia."""
-    h = (host or "").strip()
+    h = _bare_host(host)
     if h in ("", "0.0.0.0"):
         return "127.0.0.1"
-    if h in ("::", "[::]"):
+    if h == "::":
         return "::1"
     return h
 
@@ -515,7 +538,7 @@ def connect_host(host) -> str:
 def editor_url(host, port) -> str:
     """L'URL dell'editor servito dal bridge in ascolto su `host:port`."""
     h = connect_host(host)
-    if ":" in h and not h.startswith("["):
+    if ":" in h:
         h = f"[{h}]"
     return f"http://{h}:{port}/"
 
@@ -555,12 +578,17 @@ def bind_error(host, port):
 
     Con SO_REUSEADDR, come gunicorn: una connessione in TIME_WAIT lasciata da
     un bridge appena chiuso non e' un occupante per lui, e non deve esserlo
-    qui — il riavvio immediato finirebbe su un'altra porta per niente."""
+    qui — il riavvio immediato finirebbe su un'altra porta per niente.
+
+    L'host si binda nudo (`_bare_host`): `[::1]` e' la grafia che gunicorn
+    accetta, e passata cosi' al socket e' un gaierror — non EADDRINUSE, quindi
+    `unbindable`, e il bridge non partiva su un host che gunicorn serve."""
+    h = _bare_host(host)
     try:
-        fam = socket.AF_INET6 if ":" in (host or "") else socket.AF_INET
+        fam = socket.AF_INET6 if ":" in h else socket.AF_INET
         with socket.socket(fam, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind((host, port))
+            s.bind((h, port))
         return None
     except OSError as e:
         return e
@@ -699,7 +727,7 @@ def port_message(plan, host, workspace, root,
         ])
     if plan.action == "unbindable":
         e = plan.error
-        return (f"Non posso ascoltare su {host}:{plan.port}: "
+        return (f"Non posso ascoltare su {bind_address(host, plan.port)}: "
                 f"{e.strerror or e}.\n\nControlla --host e --port.")
     raise ValueError(plan.action)
 
@@ -1843,7 +1871,7 @@ def main():
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")
-    print(f"  listen:  {args.host}:{port}")
+    print(f"  listen:  {bind_address(args.host, port)}")
     for line in filter(None, port_message(plan, args.host, workspace,
                                           root).splitlines()):
         print(f"           {line}")
@@ -1873,7 +1901,7 @@ def main():
             return self.application
 
     options = {
-        "bind": f"{args.host}:{port}",
+        "bind": bind_address(args.host, port),
         # Uno solo, e non e' un dettaglio di prestazioni: il workspace
         # commutabile a caldo (#147) e' stato di processo, e con piu' worker
         # una POST /workspace ne cambierebbe uno mentre gli altri continuano a
