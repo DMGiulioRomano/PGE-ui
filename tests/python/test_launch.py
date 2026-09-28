@@ -441,6 +441,23 @@ def test_open_browser_detaches_a_child():
     assert seen["kw"].get("start_new_session") is True
 
 
+def test_a_child_that_cannot_start_does_not_stop_the_bridge(capsys):
+    """Il figlio esce 0 sempre, perche' un browser che non si apre non deve
+    fermare il bridge. Ma prima del figlio c'e' lo spawn, e quello puo'
+    fallire da se': `fork` con EAGAIN (limite di processi), ENOMEM. Nel master
+    di gunicorn l'OSError usciva da `when_ready`, cioe' da `Arbiter.start`:
+    traceback ed exit 1, dopo un banner che aveva gia' stampato l'indirizzo
+    dell'editor. Qui si ferma e lo dice a parole, come fa il figlio."""
+    def failing_popen(argv, **kw):
+        raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+    assert server.open_browser("http://127.0.0.1:7878/",
+                               popen=failing_popen) is None
+    err = capsys.readouterr().err
+    assert "http://127.0.0.1:7878/" in err, "l'indirizzo resta a chi legge"
+    assert "Resource temporarily unavailable" in err, "e il perche'"
+
+
 @pytest.mark.parametrize("body", [
     "def open(url, *a, **k):\n    return False\n",
     "def open(url, *a, **k):\n    raise RuntimeError('rotto')\n",

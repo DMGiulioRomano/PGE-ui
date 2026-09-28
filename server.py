@@ -773,9 +773,20 @@ def open_browser(url, popen=subprocess.Popen):
     """Apre `url` nel browser, in un processo staccato.
 
     `start_new_session`: fuori dal gruppo del terminale, cosi' il Ctrl-C che
-    ferma il bridge non si porta via il browser che ha appena aperto."""
-    return popen([sys.executable, "-c", BROWSER_CHILD, url],
-                 stdin=subprocess.DEVNULL, start_new_session=True)
+    ferma il bridge non si porta via il browser che ha appena aperto.
+
+    Lo spawn stesso puo' fallire (`fork` con EAGAIN, ENOMEM), e qui gira
+    dentro `when_ready`: un OSError lasciato uscire attraversava
+    `Arbiter.start` e spegneva il bridge con un traceback, dopo un banner che
+    aveva gia' stampato l'indirizzo. Stessa regola del figlio: il browser che
+    non si apre si dice a parole, e il bridge resta su. `None` in quel caso."""
+    try:
+        return popen([sys.executable, "-c", BROWSER_CHILD, url],
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        sys.stderr.write(f"pge-ui: non posso aprire il browser "
+                         f"({e.strerror or e}); l'editor e' su {url}\n")
+        return None
 
 
 # -------------------------------------------------------------------------

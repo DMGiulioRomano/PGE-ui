@@ -163,7 +163,8 @@ exists, the fourth only when a browser is installed):
   400), `test_launch.py` (#166: `plan_port` with injected probes — reuse,
   conflict, busy, next free port, the whole-window scan —, the real
   `bind_error` / `probe_bridge`, the proxy bypass, the browser child that
-  always exits 0 and never imports from the workspace it is launched in, and
+  always exits 0 and never imports from the workspace it is launched in, a
+  spawn of that child that fails without taking the bridge down, and
   the command itself: a `$BROWSER` recorder that does the
   GET a browser would, so "opened after the bind" is measured as a 200, plus an
   AST guard that `main()` calls `open_browser` only from `when_ready` or the
@@ -510,6 +511,11 @@ Three details hold it up:
   `SystemExit(3)` in it came out as the child's exit code. The child drops the
   empty `sys.path` entry before importing anything (`-I` would drop
   `PYTHONPATH` too, which the tests stub the browser with; `-P` is 3.11+).
+  The same rule covers the step *before* the child: the spawn itself can fail
+  (`fork` with `EAGAIN`, `ENOMEM`), and inside `when_ready` an `OSError` went
+  through `Arbiter.start` and stopped the bridge with a traceback, right after
+  a banner that had printed the editor's address. `open_browser` says so on
+  stderr and returns `None`.
 - **No window where there is no session.** Linux without `DISPLAY` /
   `WAYLAND_DISPLAY` and without `$BROWSER` doesn't try: `webbrowser` would fall
   back to lynx/w3m on the bridge's own terminal. `$BROWSER` always wins — that
