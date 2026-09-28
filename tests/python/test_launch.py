@@ -533,12 +533,17 @@ def test_the_child_does_not_import_from_the_workspace(tmp_path, monkeypatch):
 def _recorder(tmp_path: Path) -> tuple:
     """Un "browser" per $BROWSER: fa la GET che farebbe un browser vero e
     scrive cosa ha ottenuto. E' cosi' che si misura il timing: se l'apertura
-    arrivasse prima del bind la GET prenderebbe connection refused."""
+    arrivasse prima del bind la GET prenderebbe connection refused.
+
+    Il file compare gia' intero (scritto accanto, poi `os.replace`): i test
+    aspettano `rec.exists()` e lo leggono subito, e un `open(out, 'w')` lo
+    crea vuoto un istante prima di scriverlo — `json.loads('')`, un rosso che
+    dipende dallo scheduler."""
     out = tmp_path / "browser.json"
     script = tmp_path / "browser"
     script.write_text(
         f"#!{sys.executable}\n"
-        "import json, sys, urllib.request\n"
+        "import json, os, sys, urllib.request\n"
         "url = sys.argv[1]\n"
         "op = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
         "try:\n"
@@ -547,7 +552,10 @@ def _recorder(tmp_path: Path) -> tuple:
         "               'head': r.read(4096).decode('utf-8', 'replace')}\n"
         "except Exception as e:\n"
         "    rec = {'url': url, 'status': repr(e), 'head': ''}\n"
-        f"open({str(out)!r}, 'w').write(json.dumps(rec))\n")
+        f"tmp = {str(out)!r} + '.part'\n"
+        "with open(tmp, 'w') as f:\n"
+        "    f.write(json.dumps(rec))\n"
+        f"os.replace(tmp, {str(out)!r})\n")
     script.chmod(0o755)
     return script, out
 
