@@ -16,8 +16,14 @@
  * which engine parameter (and which field pair — the value bounds min_val/max_val
  * or the range bounds min_range/max_range) feeds each UI key. mergeEngineBounds()
  * is pure (node-tested in test-bounds.js); apply() installs the merge at boot
- * (app.jsx). Keys with no engine datum, and a null max_val (loop_* — the engine
- * bound is sample-driven), keep their static fallback.
+ * (app.jsx). Keys with no engine datum keep their static fallback.
+ *
+ * A null max_val has two readings, and ENGINE_PARAM_MAP says which (#170):
+ *   - no ceiling (the engine's own reading: ParameterBounds.clamp lets it
+ *     through) → max = Infinity. density since PGE #272.
+ *   - `ceiling: "sample"` — the real cap is the chosen sample's duration
+ *     (loopEnvMax, loop_*): the static placeholder is kept for when the
+ *     duration is unknown.
  *
  * Exports (window.PGEBounds): ENGINE_PARAM_MAP, resolveOutputSr(raw),
  * mergeEngineBounds(base, raw), apply(raw)
@@ -45,9 +51,13 @@
     // (snapDirection), come per gli altri controlli senza controparte diretta.
     readDirection:      { param: "read_direction",      field: "value" },
     offsetRange:        { param: "pointer_deviation",   field: "range" },
-    loopStart:          { param: "loop_start",          field: "value" },
-    loopDur:            { param: "loop_dur",            field: "value" },
-    loopEnd:            { param: "loop_end",            field: "value" },
+    // max_val null anche qui, ma il tetto c'e': e' la durata del sample
+    // scelto, e la applica loopEnvMax (envelope-utils.js). Il fallback statico
+    // resta il segnaposto per quando la durata non si sa. Senza questa
+    // dichiarazione il null vale «nessun tetto», come per density (#170).
+    loopStart:          { param: "loop_start",          field: "value", ceiling: "sample" },
+    loopDur:            { param: "loop_dur",            field: "value", ceiling: "sample" },
+    loopEnd:            { param: "loop_end",            field: "value", ceiling: "sample" },
     voicesNum:          { param: "num_voices",          field: "value" },
     scatter:            { param: "scatter",             field: "value" },
     voicePitchOffset:   { param: "voice_pitch_offset",  field: "value" },
@@ -94,15 +104,35 @@
 
     const params = raw.params || {};
     for (const uiKey in ENGINE_PARAM_MAP) {
-      const { param, field } = ENGINE_PARAM_MAP[uiKey];
+      const { param, field, ceiling } = ENGINE_PARAM_MAP[uiKey];
       const ep = params[param];
       if (!ep) continue;
       const lo = field === "range" ? ep.min_range : ep.min_val;
       const hi = field === "range" ? ep.max_range : ep.max_val;
       const next = Object.assign({}, out[uiKey]);
       if (typeof lo === "number") next.min = lo;
-      // null max (loop_* is sample-driven) keeps the fallback cap.
+      // Un `max_val` null e' una risposta, non un silenzio (#170). Il motore
+      // lo legge in un modo solo — `ParameterBounds.clamp` lascia passare — e
+      // la guardia che c'era qui ne conosceva un altro: «tieni il fallback»,
+      // scritto per i loop_*. Da PGE #272 lo stesso null arriva su density,
+      // dove vuol dire l'opposto, e il ramo teneva in piedi il 4000 di
+      // yaml-bridge.js (o del merge precedente: apply() fonde sopra il
+      // risultato di prima) mentre il motore non tagliava piu'.
+      //
+      // Quindi il null vale «nessun tetto», e la lettura dei loop_* e'
+      // l'eccezione dichiarata nella mappa (`ceiling: "sample"`), non il
+      // default: un parametro nuovo senza tetto entra con il significato che
+      // gli da' il motore. Infinity e non null, perche' ogni lettore fa
+      // `Math.min(max, v)` e `Math.min(null, v)` e' 0.
+      //
+      // Solo sul tetto del VALORE: e' li' che il motore legge il null.
+      // `max_range` non e' mai None nel registro, e un campo assente
+      // (undefined) non dice niente — resta la base, come ogni dato mancante.
+      // Ed e' assente, non null, anche il campo che l'AST del bridge non sa
+      // leggere (`_parse_bounds_call`): senza quella distinzione un tetto
+      // scritto come nome o espressione arrivava qui come «nessun tetto».
       if (typeof hi === "number") next.max = hi;
+      else if (hi === null && field === "value" && ceiling !== "sample") next.max = Infinity;
       out[uiKey] = next;
     }
 
@@ -169,8 +199,15 @@
     if (raw.pitch && typeof raw.pitch === "object") {
       out.pitch = Object.assign({}, out.pitch);
       for (const u of PITCH_UNITS) {
-        if (raw.pitch[u] && typeof raw.pitch[u] === "object") {
-          out.pitch[u] = Object.assign({}, out.pitch[u], raw.pitch[u]);
+        const rp = raw.pitch[u];
+        if (rp && typeof rp === "object") {
+          // Solo i numeri, come nel ramo dei parametri qui sopra: il record
+          // copiato intero portava un `max: null` in PGE_BOUNDS, e ogni
+          // lettore fa `Math.min(max, v)` — 0 (#170). Un campo che non e' un
+          // numero tiene la base, come ogni dato mancante.
+          const next = Object.assign({}, out.pitch[u]);
+          for (const f in rp) if (typeof rp[f] === "number") next[f] = rp[f];
+          out.pitch[u] = next;
         }
       }
       if (typeof raw.pitch.edoFactor === "number") out.pitch.edoFactor = raw.pitch.edoFactor;
