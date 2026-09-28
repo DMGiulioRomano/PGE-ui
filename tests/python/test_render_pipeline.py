@@ -1316,6 +1316,59 @@ def test_engine_parameter_bounds_parses_registry(tmp_path):
     assert params["reverse"]["variation_mode"] == "invert"
 
 
+def test_engine_parameter_bounds_unreadable_is_not_none(tmp_path):
+    """Un campo che l'AST non sa leggere non e' un `None` scritto dal motore.
+
+    Da #170 il `null` di `max_val` sul filo e' una risposta: «nessun tetto»
+    (`ParameterBounds.clamp` lascia passare), e `mergeEngineBounds` lo fa
+    diventare `Infinity`. `_ast_literal` pero' risponde `None` anche su
+    un'espressione che non risolve — un nome, un prodotto — e le due cose
+    uscivano identiche: un motore che scrivesse `max_val=DENSITY_CEILING`
+    avrebbe tolto il tetto alla UI, cioe' un «non lo so» letto come valore.
+    Illeggibile vuol dire assente: il campo manca dal record, e un campo
+    assente la UI lo legge come ogni dato mancante — tiene la base.
+    """
+    import server
+    _stub_parameter_files(tmp_path)
+    pd = tmp_path / "src" / "parameters" / "parameter_definitions.py"
+    src = pd.read_text(encoding="utf-8")
+    src = src.replace(
+        "'density': ParameterBounds(min_val=0.01, max_val=4000.0)",
+        "'density': ParameterBounds(min_val=0.01, max_val=DENSITY_CEILING)")
+    src = src.replace(
+        "'pointer_speed_ratio': ParameterBounds(min_val=-100.0, max_val=100.0)",
+        "'pointer_speed_ratio': ParameterBounds(-SPEED, 100.0)")
+    pd.write_text(src, encoding="utf-8")
+
+    params = server.engine_parameter_bounds(tmp_path)["params"]
+    # il record resta, con cio' che si legge; il campo illeggibile sparisce
+    assert params["density"]["min_val"] == 0.01
+    assert "max_val" not in params["density"], params["density"]
+    # anche in posizione, e anche sul pavimento
+    assert "min_val" not in params["pointer_speed_ratio"], params["pointer_speed_ratio"]
+    assert params["pointer_speed_ratio"]["max_val"] == 100.0
+    # il None scritto dal motore resta None: e' l'altra lettura, e la sola
+    # che il null sul filo deve portare
+    assert "max_val" in params["loop_dur"] and params["loop_dur"]["max_val"] is None
+
+
+def test_engine_parameter_bounds_unreadable_ratio_keeps_edo(tmp_path):
+    """Lo stesso campo assente sul record di RatioUnit non deve far saltare la
+    lettura di pitch: un indice secco sul record era un KeyError, e il `try`
+    di engine_parameter_bounds lo trasformava in `pitch = {}` — i preset EDO,
+    che si leggono, spariti insieme al tetto del ratio che non si legge."""
+    import server
+    _stub_parameter_files(tmp_path)
+    pu = tmp_path / "src" / "parameters" / "pitch_unit.py"
+    src = pu.read_text(encoding="utf-8")
+    src = src.replace("min_val=0.001, max_val=8.0,", "min_val=0.001, max_val=RATIO_MAX,")
+    pu.write_text(src, encoding="utf-8")
+
+    pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
+    assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}, pitch
+    assert pitch["ratio"]["min"] == 0.001, pitch
+
+
 def test_engine_parameter_bounds_pitch(tmp_path):
     import server
     _stub_parameter_files(tmp_path)

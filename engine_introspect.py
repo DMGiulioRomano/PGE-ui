@@ -95,13 +95,15 @@ _PB_DEFAULTS = {"min_range": 0.0, "max_range": 0.0,
 # del motore.
 
 
-def _ast_literal(node):
+def _ast_literal(node, default=None):
     """ast.literal_eval a node, tolerating unary minus (e.g. -100.0) and None.
-    Returns None on anything non-literal (an expression we can't resolve)."""
+    Returns `default` (None unless given) on anything non-literal (an
+    expression we can't resolve) — pass a sentinel where a literal None is
+    itself an answer."""
     try:
         return ast.literal_eval(node)
     except Exception:
-        return None
+        return default
 
 
 def _ast_call_name(call):
@@ -114,21 +116,33 @@ def _ast_call_name(call):
     return None
 
 
+# Un argomento che l'AST non sa risolvere. Non e' None: `max_val=None` e' una
+# risposta del motore («nessun tetto», #170), e il null sul filo deve portare
+# quella sola.
+_UNREADABLE = object()
+
+
 def _parse_bounds_call(call):
     """Turn a `ParameterBounds(...)` AST call into a plain dict, applying the
     dataclass defaults for omitted fields. Positional args map onto _PB_FIELDS
     in order; keywords override. Returns None unless both min_val and max_val
-    are present (max_val may legitimately be None — a sample-driven loop bound).
+    are present (max_val may legitimately be None — no ceiling, or a
+    sample-driven loop bound).
+
+    A field whose expression can't be resolved (a name, a product) is left
+    out of the record rather than written as None: since #170 the UI reads a
+    null `max_val` as "no ceiling", so an unreadable one would turn "don't
+    know" into a value. Absent is what the UI reads as "don't know".
     """
     rec = dict(_PB_DEFAULTS)
     for field, arg in zip(_PB_FIELDS, call.args):
-        rec[field] = _ast_literal(arg)
+        rec[field] = _ast_literal(arg, _UNREADABLE)
     for kw in call.keywords:
         if kw.arg in _PB_FIELDS:
-            rec[kw.arg] = _ast_literal(kw.value)
+            rec[kw.arg] = _ast_literal(kw.value, _UNREADABLE)
     if "min_val" not in rec or "max_val" not in rec:
         return None
-    return rec
+    return {k: v for k, v in rec.items() if v is not _UNREADABLE}
 
 
 def _assigned_value(node, name):
@@ -225,8 +239,11 @@ def _parse_ratio_bounds(tree):
             if isinstance(sub, ast.Call) and _ast_call_name(sub) == "ParameterBounds":
                 rec = _parse_bounds_call(sub)
                 if rec is not None and isinstance(rec.get("min_val"), (int, float)):
-                    return {"min": rec["min_val"], "max": rec["max_val"],
-                            "rangeMax": rec["max_range"]}
+                    # .get: un campo illeggibile ora manca dal record, e un
+                    # KeyError qui passerebbe dal `try` del chiamante e
+                    # cancellerebbe anche i preset EDO, che si leggono.
+                    return {"min": rec["min_val"], "max": rec.get("max_val"),
+                            "rangeMax": rec.get("max_range")}
     return None
 
 

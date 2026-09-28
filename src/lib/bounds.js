@@ -128,6 +128,9 @@
       // Solo sul tetto del VALORE: e' li' che il motore legge il null.
       // `max_range` non e' mai None nel registro, e un campo assente
       // (undefined) non dice niente — resta la base, come ogni dato mancante.
+      // Ed e' assente, non null, anche il campo che l'AST del bridge non sa
+      // leggere (`_parse_bounds_call`): senza quella distinzione un tetto
+      // scritto come nome o espressione arrivava qui come «nessun tetto».
       if (typeof hi === "number") next.max = hi;
       else if (hi === null && field === "value" && ceiling !== "sample") next.max = Infinity;
       out[uiKey] = next;
