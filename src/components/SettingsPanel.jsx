@@ -149,11 +149,11 @@ function SettingsPanel({ open, onClose, tweaks, setTweak, serverDown, onWorkspac
               ) : null}
               <div className="sp-hint">
                 Requires the bridge: <span className="mono">pge-ui</span> from your
-                piece's folder (or <span className="mono">make serve</span> in PGE-ui).
-                It also serves this editor, at the address it prints and opens:
-                by default the URL above is the bridge this page came from
-                (opened as <span className="mono">file://</span>, port 7878). See
-                <span className="mono">README-PGE-EDITOR.md</span>.
+                piece's folder (or <span className="mono">make serve</span> in PGE-ui),
+                which also serves this editor at the address it prints and opens.
+                By default the URL above is the bridge this page came from; a page
+                opened as <span className="mono">file://</span> falls back to port 7878.
+                See <span className="mono">README-PGE-EDITOR.md</span>.
               </div>
             </>
           ) : null}
