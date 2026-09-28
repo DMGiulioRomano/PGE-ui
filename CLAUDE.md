@@ -1096,9 +1096,10 @@ writing a value a typed edit would have clamped. The seed is `loopSeedWhole` now
 already computed as `loopMax`): `1` normalized, `sample_dur` in seconds, and `1`
 again when the sample duration is unknown — the only number available there, and
 what the menu wrote before. `loop_start` keeps its `0`: zero is zero under any
-scale factor, the same reason `loopUnitRescaleKeys` leaves zeros out. The truncation has a floor (`|| loopMax`): on a sample
-shorter than a tenth of a millisecond `Math.floor(cap * 1e4)` is `0`, and a
-zero-length seed is degenerate for `loopBoundsError` and under `loop_dur`'s
+scale factor, the same reason `loopUnitRescaleKeys` leaves zeros out. The
+truncation has a floor (`|| loopMax`): on a sample shorter than a tenth of a
+millisecond `Math.floor(cap * 1e4)` is `0`, and a zero-length seed is
+degenerate for `loopBoundsError` and under `loop_dur`'s
 static minimum — overshooting the cap by digits below the truncation threshold
 is the smaller evil. Same fix as #114's `grainSecondsToUnit(0.01, grainUnit)`
 one section down, one level over.
@@ -1320,9 +1321,10 @@ The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
 selector wherever the unit *governs a value that moves*
 (`loopUnitScaledKeys`, below), never on a condition that reads `time_mode` —
-the one of the old migration hint did (see below). With that condition the
-control erased itself: on `time_mode: absolute` + `loop_unit: normalized` + `start: 0.5` — the
-coexistence of the two axes that #222 made legitimate — a click on "seconds"
+the old migration hint's condition did (see below). With that condition the
+control erased itself: on `time_mode: absolute` + `loop_unit: normalized` +
+`start: 0.5` — the coexistence of the two axes that #222 made legitimate — a
+click on "seconds"
 deletes the key, the selector disappears (`loop_unit` is not in the
 AddParamMenu, so the selector *is* the only way to write it) and `start` is left
 reading `0.5` s where it read `0.5 × sample_dur`, with no way back short of the
