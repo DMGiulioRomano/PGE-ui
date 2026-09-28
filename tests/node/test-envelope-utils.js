@@ -500,12 +500,14 @@ console.log("\n── loopUnitSuffix (etichetta di start e del loop) ──");
 }
 
 // ---------------------------------------------------------------------------
-// loopUnitRescaleKeys — quali chiavi cambiano DAVVERO lettura per uno stream
-// che #222 ha spostato. Specchio di `_rescaling_would_change` sul giro di
-// `_LOOP_UNIT_SCOPE`: e' il filtro con cui il motore decide se emettere
-// l'avviso [LOOP_UNIT], e l'avviso dell'Inspector e' quello stesso avviso.
-// Senza filtro l'editor parla su `start: 0` — la forma piu' comune del corpus,
-// e quella con cui nasce ogni clip — dove non si muove un campione.
+// loopUnitRescaleKeys — quali chiavi l'unita' governa DAVVERO: quelle il cui
+// valore la conversione normalized → secondi muoverebbe. Specchio di cio' che
+// `scale_raw_param_values` tocca sul giro di `_LOOP_UNIT_SCOPE`. Decide la
+// visibilita' del selettore di loop_unit nell'Inspector; fino a #177 decideva
+// anche il suggerimento di migrazione, andato via con l'avviso [LOOP_UNIT] del
+// motore (PGE #242/#282). Senza il filtro sullo zero il selettore comparirebbe
+// su `start: 0` — la forma piu' comune del corpus, e quella con cui nasce ogni
+// clip — dove l'unita' non governa niente.
 // ---------------------------------------------------------------------------
 console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──");
 {
@@ -536,8 +538,7 @@ console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──"
   assert("start envelope (passa grezzo dal bridge) → start",
     eq(K({ start: [[0, 0.1], [1, 0.9]] }), ["start"]));
 
-  /* Ordine e grafia: sono le chiavi che il messaggio del motore nomina
-     (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), nell'ordine di
+  /* Ordine e grafia: le chiavi in grafia YAML, nell'ordine di
      `_LOOP_UNIT_SCOPE`. */
   assert("le chiavi escono in grafia YAML e nell'ordine del motore",
     eq(K({ loopEnd: 2, start: 0.5, loopDur: null, loopStart: 0 }), ["start", "loop_end"]));
@@ -545,8 +546,9 @@ console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──"
     eq(K({ start: 0.1, loopStart: 0.2, loopEnd: 0.3, loopDur: 0.4 }),
        ["start", "loop_start", "loop_end", "loop_dur"]));
 
-  /* Quel che la conversione lasciava passare invariato non si muoveva nemmeno
-     prima: `_rescaling_would_change` esclude None e i bool, e una stringa non
+  /* Quel che la conversione lascia passare invariato non dipende dall'unita':
+     `scale_raw_param_values` esclude i bool prima dei numeri (in Python `bool`
+     e' un `int`), None non arriva nemmeno alla conversione, e una stringa non
      e' envelope-like. */
   assert("null/undefined → nessuna chiave", eq(K({ start: null, loopStart: undefined }), []));
   assert("booleano → nessuna chiave (il motore esclude bool prima dei numeri)",
@@ -841,13 +843,13 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
     /loopWindowShown/.test(unitDecl) && /loopUnit != null/.test(unitDecl)
     && !/loopBlockShown/.test(inspSrc));
   /* E compare ovunque l'unita' governi un valore che si muove, non solo sulla
-     popolazione che #222 ha spostato: la condizione dell'avviso porta dentro
-     `time_mode`, e usarla anche per la visibilita' rimetteva la dipendenza
-     dallo stream che #222 ha tolto. La reachability e' verificata eseguendo le
-     due dichiarazioni, poco piu' sotto. */
+     popolazione che #222 ha spostato: la condizione del vecchio avviso di
+     migrazione portava dentro `time_mode`, e usarla anche per la visibilita'
+     rimetteva la dipendenza dallo stream che #222 ha tolto. La reachability e'
+     verificata eseguendo le dichiarazioni, poco piu' sotto. */
   assert("…e compare ovunque l'unità morda, senza passare da time_mode",
     /loopUnitScaledKeys\.length > 0/.test(unitDecl)
-    && !/loopUnitMigrated\b/.test(unitDecl)
+    && !/timeMode/.test(unitDecl)
     && /const loopUnitScaledKeys = window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc));
   assert("la × del loop non cancella più loop_unit",
     !/delete np\.loopDur; delete np\.loopDurEnv;\s*delete np\.loopUnit/.test(inspSrc));
@@ -867,22 +869,27 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
     && /loopUnitErr\.units\.join/.test(inspSrc));
   assert("con una grafia rotta nessun bottone è acceso",
     /const loopUnitSel = loopUnitErr \? null/.test(inspSrc));
-  /* L'avviso alla popolazione che #222 ha spostato: normalized senza chiave.
-     Il motore lo dice a render (`[LOOP_UNIT] … ora in secondi`) ma quel
-     messaggio e' marcato `# ponytail` e va via dopo una release. */
-  /* …ma solo quella a cui i numeri si muovono davvero. Il motore filtra il suo
-     avviso con `_rescaling_would_change` perche' `start: 0` e' la forma piu'
-     comune del corpus — ed e' quella con cui nasce ogni clip dell'editor —
-     quindi un avviso non filtrato parlerebbe dove il motore tace, e chi lo
-     seguisse scriverebbe una chiave che non muove un campione: fingerprint
-     mosso, un render in piu' su uno stem che era giusto. */
-  assert("uno stream normalized senza loop_unit viene avvisato",
-    /const loopUnitMigratedKeys = \(stream\.timeMode === "normalized" && loopUnit\.source === "default"\)/.test(inspSrc)
-    && /window\.PGEEnvUtils\.loopUnitRescaleKeys\(stream\.pointer\)/.test(inspSrc)
-    && /const loopUnitMigrated = loopUnitMigratedKeys\.length > 0/.test(inspSrc)
-    && /non implica più loop_unit: normalized/.test(inspSrc));
-  assert("…e l'avviso nomina le chiavi che cambiano, come fa il motore",
-    /\{loopUnitMigratedKeys\.join\(", "\)\}: ora in secondi/.test(inspSrc));
+  /* L'Inspector avvisava la popolazione che #222 ha spostato — `time_mode:
+     normalized` senza `loop_unit` — con la sua copia dell'avviso `[LOOP_UNIT]`
+     del motore. Quell'avviso era transitorio per costruzione (`# ponytail`,
+     PGE #242), e il motore lo ha tolto passata la release per cui esisteva
+     (PGE #282); la copia se ne va con lui (#177). Su quella popolazione non
+     si perde la lettura: la riga sotto il selettore dice gia' «in secondi»,
+     che e' quel che il motore fa. Si perde solo la storia, cioe' il compito
+     del ponytail. */
+  assert("il suggerimento di migrazione di loop_unit è andato via con l'avviso del motore",
+    !/loopUnitMigrat/.test(inspSrc) && !/non implica più loop_unit/.test(inspSrc));
+  /* E con lui l'ultima dichiarazione del blocco che leggeva `time_mode`. La
+     proprieta' che resta e' quella di #222 — l'unita' del loop non eredita
+     niente dallo stream — ed e' una domanda su tutte le dichiarazioni
+     `loopUnit*`, non su un nome: e' cosi' che la dipendenza e' gia' rientrata
+     una volta, dalla visibilita' del selettore (vedi sotto). Il conteggio
+     impedisce al censimento di passare vuoto se la regex smette di trovarle. */
+  const loopUnitDecls = inspSrc.match(/const loopUnit\w* = [\s\S]*?;/g) || [];
+  assert("nessuna dichiarazione dell'unità del loop legge time_mode (#222)",
+    loopUnitDecls.length >= 5 && loopUnitDecls.every(d => !/timeMode/.test(d)),
+    loopUnitDecls.filter(d => /timeMode/.test(d)).map(d => d.split("=")[0].trim()).join(", ")
+      || ("dichiarazioni trovate: " + loopUnitDecls.length));
   // start è is_smart=False lato motore (valore raw, nessun bound): clamparlo
   // qui sarebbe la UI a inventarsi un vincolo che il render non ha.
   assert("il ri-clamp resta sui tre estremi del loop, start fuori",
@@ -998,13 +1005,13 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
      indietro. */
   const declOf = (name) =>
     (new RegExp("const " + name + " = [\\s\\S]*?;").exec(inspSrc) || [""])[0];
-  /* Si porta dentro anche la catena dell'avviso — `loopUnit`,
-     `loopUnitMigratedKeys`, `loopUnitMigrated` — benche' la formulazione
-     corrente non la usi: e' quella la scorciatoia che il caso esiste per
-     escludere, e senza le sue variabili in scope una regressione morirebbe con
-     un ReferenceError invece di dare un rosso che si legge. */
-  const declNames = ["loopUnit", "loopWindowShown", "loopUnitScaledKeys",
-                     "loopUnitMigratedKeys", "loopUnitMigrated", "loopUnitShown"];
+  /* Si porta dentro anche `loopUnit`, benche' la formulazione corrente non la
+     usi: una regressione che tornasse a leggere la provenienza dell'unita' (o
+     `stream.timeMode`, che e' gia' in scope come parametro) deve dare un rosso
+     che si legge, non morire con un ReferenceError. La catena del vecchio
+     avviso di migrazione non c'e' piu' (#177): era quella la scorciatoia che il
+     caso esiste per escludere. */
+  const declNames = ["loopUnit", "loopWindowShown", "loopUnitScaledKeys", "loopUnitShown"];
   const decls = declNames.map(declOf);
   assert("le dichiarazioni della visibilità sono estraibili dal sorgente",
     decls.every(d => d.length > 0), declNames.filter((_, i) => !decls[i].length).join(", "));
@@ -1024,13 +1031,15 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       back.get() !== null && back.get().pointer.loopUnit === "normalized");
   }
   {
-    // La popolazione che #222 ha spostato continua a vedere il controllo: la
-    // condizione e' strettamente piu' larga di quella dell'avviso.
+    // La popolazione che #222 ha spostato continua a vedere il controllo, anche
+    // senza piu' l'avviso di migrazione (#177): il selettore e' l'unica via per
+    // tornare alla lettura [0,1] × sample_dur, e la riga sotto dice «in secondi».
     assert("normalized senza chiave, con valori che si muovono: il controllo c'è",
       shownFor({ timeMode: "normalized", pointer: { start: 0.5 } }) === true);
-    // …e non si e' allargata dove il motore tace: zero non si muove, e quel
-    // pointer e' quello con cui nasce ogni clip dell'editor.
-    assert("start: 0 senza loop né chiave: niente controllo, come niente avviso",
+    // …e non si e' allargata dove l'unita' non governa niente: zero resta zero
+    // sotto qualunque fattore di scala, e quel pointer e' quello con cui nasce
+    // ogni clip dell'editor.
+    assert("start: 0 senza loop né chiave: niente controllo",
       shownFor({ timeMode: "normalized", pointer: { start: 0, speedRatio: 1, loopStart: null, loopDur: null } }) === false);
   }
 
