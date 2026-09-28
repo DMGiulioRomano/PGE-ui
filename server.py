@@ -23,13 +23,14 @@ engine/ found walking up from here. See "Risoluzione" below. #165
 
     python server.py --root /path/to/PythonGranularEngine --port 7878
 
-Then in the browser:
-    1) open PGE Editor.html
-    2) click the gear icon (top-right)
-    3) Backend → switch to "local"
-    4) Backend → server URL → http://localhost:7878  (default)
-    5) click "test connection" — should turn green
-    6) hit Render — the browser POSTs to /render and streams the log back
+The bridge serves the editor itself (GET / → PGE Editor.html) and, once the
+port is listening, opens the browser on it; --no-open to skip that. Without
+--port it takes the first free port from 7878 up; with --port, a busy one is an
+error. Either way, when a bridge already serves this workspace it opens that
+one instead of starting a second. The page
+talks to the origin it came from, so there is nothing to configure: hit
+Render, and the browser POSTs to /render and streams the log back. See
+"Avvio" below. #166
 
 The server speaks JSON-lines (NDJSON) for the /render endpoint so the browser
 can read events incrementally. All other endpoints are plain JSON.
@@ -43,6 +44,7 @@ checkout). The samples folder is refs/, or samples/ when that's the one the
 workspace already has. See #147/#148/#165.
 
 Endpoints:
+    GET  /                      — the editor (PGE Editor.html), and its assets
     GET  /health                — sanity check + resolved paths
     GET  /config                — same payload as /health
     GET  /workspace             — current workspace + its projects
@@ -66,10 +68,14 @@ Endpoints:
 """
 
 import argparse
+import errno
 import json
 import os
+import socket
 import subprocess
 import sys
+import urllib.request
+from collections import namedtuple
 from pathlib import Path
 
 try:
@@ -441,6 +447,348 @@ def banner_path_lines(root, root_source, paths, samples_follow,
         f"  output/:   {paths['output']}",
         f"  cache/:    {paths['cache']}",
     ]
+
+
+# -------------------------------------------------------------------------
+# Avvio: quale porta, e il browser (#166)
+#
+# Il bridge serve l'editor da se' (`GET /` → PGE Editor.html), quindi
+# l'indirizzo del bridge E' l'indirizzo dell'editor, e aprirlo e' compito suo.
+#
+# La porta si decide qui, prima del banner e prima di creare cartelle. Il
+# secondo avvio sulla stessa porta stampava `Open in browser` sull'editor del
+# PRIMO bridge — cioe' sull'altro workspace —, fabbricava configs/ output/
+# cache/, e solo dopo scopriva la porta occupata: cinque secondi di
+# `Connection in use` da gunicorn, poi exit 1.
+#
+# Funzioni pure, con le sonde iniettate, come la risoluzione qui sopra: la
+# decisione si prova senza toccare la rete.
+# -------------------------------------------------------------------------
+
+DEFAULT_PORT = 7878
+# Quante porte si guardano da DEFAULT_PORT in su: per sceglierne una libera, e
+# per trovare un bridge che serva gia' questo workspace. Sondarle costa un
+# bind a testa, e un /health solo per quelle occupate.
+PORT_SPAN = 20
+
+# `action` e' una fra:
+#   serve       ascolta su `port`; `passed` = [(porta, /health o None)] saltate
+#   reuse       un bridge su questo workspace, con questo motore, c'e' gia' su
+#               `port` (`other` = il suo /health): non se ne avvia un secondo
+#   conflict    questo workspace e' servito su `port` con un ALTRO motore
+#   busy        `--port` esplicito e occupato (`other` = /health, se e' un bridge)
+#   exhausted   nessuna porta libera nella finestra (`passed` = chi le tiene)
+#   unbindable  il bind fallisce per altro che l'occupazione (`error`)
+PortPlan = namedtuple("PortPlan", "action port other error passed",
+                      defaults=(None, None, ()))
+
+
+def port_arg(text) -> int:
+    """Il `type=` di `--port`: un intero fra 1 e 65535, o un errore di argparse
+    che lo dice.
+
+    Fuori da 0–65535 `socket.bind` alza `OverflowError`, che non e' un
+    `OSError`: `bind_error` non lo leggeva, e ne usciva un traceback. Lo `0`
+    il socket lo accetta, ed e' una porta che nessuno ha scelto — la sceglie
+    il kernel dopo il bind, mentre banner e browser dicono `:0`."""
+    try:
+        port = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} non e' un numero di porta")
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(
+            f"{port} non e' una porta: dev'essere fra 1 e 65535")
+    return port
+
+
+def _bare_host(host) -> str:
+    """`host` senza le parentesi di un IPv6 letterale: `[::1]` → `::1`.
+
+    `--host` ha due grafie per un IPv6, e ogni lettore ne vuole una sua: il
+    socket la nuda (`getaddrinfo('[::1]')` e' un gaierror), gunicorn e un URL
+    quella fra parentesi (`bind_address`, `editor_url`). Si parte sempre da
+    questa, e le parentesi le rimette chi ne ha bisogno."""
+    h = (host or "").strip()
+    if h.startswith("[") and h.endswith("]"):
+        return h[1:-1]
+    return h
+
+
+def bind_address(host, port) -> str:
+    """Il `bind` di gunicorn per `host:port`, e la riga `listen:` del banner.
+
+    Un IPv6 va fra parentesi: `f"{host}:{port}"` dava `::1:7878`, che gunicorn
+    spezza sui due punti — host '' e porta '', un errore all'avvio dopo che il
+    piano della porta aveva sondato proprio quell'host."""
+    h = _bare_host(host)
+    return f"[{h}]:{port}" if ":" in h else f"{h}:{port}"
+
+
+def connect_host(host) -> str:
+    """L'indirizzo a cui CONNETTERSI per raggiungere un bind su `host`.
+
+    Un bind su tutte le interfacce non e' una destinazione: Chrome rifiuta
+    0.0.0.0, e `::` non e' un indirizzo. Si passa dal loopback della stessa
+    famiglia."""
+    h = _bare_host(host)
+    if h in ("", "0.0.0.0"):
+        return "127.0.0.1"
+    if h == "::":
+        return "::1"
+    return h
+
+
+def editor_url(host, port) -> str:
+    """L'URL dell'editor servito dal bridge in ascolto su `host:port`."""
+    h = connect_host(host)
+    if ":" in h:
+        h = f"[{h}]"
+    return f"http://{h}:{port}/"
+
+
+def graphical_session(env=None, platform=None) -> bool:
+    """C'e' dove aprire una finestra?
+
+    Su Linux senza `DISPLAY` ne' `WAYLAND_DISPLAY` (ssh, container, CI)
+    `webbrowser` ripiega sui browser testuali — lynx, w3m — che si prendono il
+    terminale su cui il bridge sta scrivendo il suo log. Un `$BROWSER`
+    esplicito vince sempre: e' una scelta di chi lancia, non un'euristica.
+    macOS e Windows una finestra la hanno comunque."""
+    env = os.environ if env is None else env
+    platform = sys.platform if platform is None else platform
+    if _declared(env.get("BROWSER")):
+        return True
+    if platform == "darwin" or platform.startswith(("win", "cygwin")):
+        return True
+    return bool(_declared(env.get("DISPLAY"))
+                or _declared(env.get("WAYLAND_DISPLAY")))
+
+
+def browser_plan(open_flag, env=None, platform=None):
+    """`(si apre?, la riga del banner che dice perche')`."""
+    if not open_flag:
+        return False, "non si apre (--no-open): l'indirizzo e' qui sopra"
+    if not graphical_session(env, platform):
+        return False, ("non si apre: nessuna sessione grafica (DISPLAY e "
+                       "WAYLAND_DISPLAY vuoti, BROWSER non impostato); "
+                       "l'indirizzo e' qui sopra")
+    return True, ("si apre da solo appena la porta ascolta "
+                  "(--no-open per non aprirlo)")
+
+
+def bind_error(host, port):
+    """`None` se `host:port` si puo' prendere adesso, altrimenti l'OSError.
+
+    Con SO_REUSEADDR, come gunicorn: una connessione in TIME_WAIT lasciata da
+    un bridge appena chiuso non e' un occupante per lui, e non deve esserlo
+    qui — il riavvio immediato finirebbe su un'altra porta per niente.
+
+    L'host si binda nudo (`_bare_host`): `[::1]` e' la grafia che gunicorn
+    accetta, e passata cosi' al socket e' un gaierror — non EADDRINUSE, quindi
+    `unbindable`, e il bridge non partiva su un host che gunicorn serve."""
+    h = _bare_host(host)
+    try:
+        fam = socket.AF_INET6 if ":" in h else socket.AF_INET
+        with socket.socket(fam, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((h, port))
+        return None
+    except OSError as e:
+        return e
+
+
+def probe_bridge(host, port, timeout=1.0):
+    """Il `/health` di chi ascolta su `host:port`, se e' un bridge PGE.
+
+    `None` per qualunque altra cosa: niente in ascolto, un altro server, uno
+    che accetta e non risponde. Il riconoscimento e' la forma del payload
+    (`ok`, `workspace`, `root`), che i bridge hanno da prima di #166 — quindi
+    un bridge vecchio aperto in un altro terminale si riconosce lo stesso.
+
+    Senza proxy: urllib onora HTTP_PROXY anche verso 127.0.0.1, e con un
+    proxy nell'ambiente (un container, una rete aziendale) chiederebbe /health
+    al proxy — nessun bridge riconosciuto, mai."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(editor_url(host, port) + "health", timeout=timeout) as r:
+            data = json.loads(r.read(1 << 16))
+    except Exception:
+        return None
+    if (isinstance(data, dict) and data.get("ok") is True
+            and data.get("workspace") and data.get("root")):
+        return data
+    return None
+
+
+def _same_dir(a, b) -> bool:
+    """Due path sono la stessa cartella? Per realpath: un workspace
+    raggiunto attraverso un symlink e' lo stesso workspace."""
+    try:
+        return os.path.realpath(str(a)) == os.path.realpath(str(b))
+    except (OSError, ValueError):
+        return False
+
+
+def plan_port(port, explicit, workspace, root, can_bind, probe,
+              base=DEFAULT_PORT, span=PORT_SPAN) -> PortPlan:
+    """Dove ascoltare, o perche' no. Pura: `can_bind(p)` (None o l'OSError
+    del bind) e `probe(p)` sono le sonde — `bind_error` e `probe_bridge`.
+
+    Tre regole, in quest'ordine:
+
+    1. **Un workspace, un bridge.** Si guarda l'intera finestra
+       `[base, base+span)` — non solo la prima porta — cercando un bridge che
+       serva gia' questa cartella: con lo stesso motore si riusa quello, con un
+       altro e' un conflitto. Due bridge sullo stesso workspace scriverebbero
+       gli stessi config e gli stessi stem senza sapere l'uno dell'altro: la
+       guardia "un render alla volta" e' di processo. Vale anche con `--port`.
+    2. **Una dichiarazione sbagliata e' un errore, non una ricerca**: un
+       `--port` esplicito occupato si nomina e ci si ferma. E' la regola di
+       `--root` (#165).
+    3. Senza `--port`, la prima porta libera della finestra; `passed` dice chi
+       teneva quelle saltate, perche' il banner lo stampi.
+
+    Un bind che fallisce per altro che EADDRINUSE (permessi, un `--host` che
+    non e' di questa macchina) sulla porta che si voleva e' `unbindable`:
+    dirla "occupata" manderebbe a cercare un altro pge-ui che non c'e'."""
+    window = list(range(base, base + span))
+    first = port if explicit else base
+    first_err = can_bind(first)
+    if first_err is not None and first_err.errno != errno.EADDRINUSE:
+        return PortPlan("unbindable", first, error=first_err)
+
+    busy, unusable = {}, set()
+    for p in sorted(set(window) | {port}):
+        err = first_err if p == first else can_bind(p)
+        if err is None:
+            continue
+        if err.errno != errno.EADDRINUSE:
+            unusable.add(p)
+            continue
+        info = probe(p)
+        busy[p] = info
+        if info and _same_dir(info["workspace"], workspace):
+            same_engine = _same_dir(info["root"], root)
+            return PortPlan("reuse" if same_engine else "conflict", p, other=info)
+
+    if explicit:
+        if port in busy:
+            return PortPlan("busy", port, other=busy[port])
+        return PortPlan("serve", port, passed=[])
+
+    passed = []
+    for p in window:
+        if p in unusable:
+            continue
+        if p not in busy:
+            return PortPlan("serve", p, passed=passed)
+        passed.append((p, busy[p]))
+    return PortPlan("exhausted", base, passed=passed)
+
+
+def _held_by(info) -> str:
+    if info is None:
+        return "da un programma che non risponde come un bridge PGE"
+    return f"da un bridge PGE sul workspace {info['workspace']}"
+
+
+def port_message(plan, host, workspace, root,
+                 base=DEFAULT_PORT, span=PORT_SPAN) -> str:
+    """Il testo che l'utente legge per `plan`. Per `serve` sono le righe del
+    banner sulle porte saltate (vuoto se non ne ha saltate)."""
+    url = editor_url(host, plan.port)
+    if plan.action == "serve":
+        return "\n".join(f"({p} occupata {_held_by(i)})" for p, i in plan.passed)
+    if plan.action == "reuse":
+        return (f"Il workspace {workspace} e' gia' servito da un bridge su {url}\n"
+                f"Non ne avvio un secondo: l'editor e' quello.")
+    if plan.action == "conflict":
+        return "\n".join([
+            f"Il workspace {workspace} e' gia' servito da un bridge su {url},",
+            "ma con un altro motore:",
+            f"    quello:  {plan.other['root']}",
+            f"    questo:  {root}",
+            "",
+            "Un workspace, un bridge: due bridge sulla stessa cartella",
+            "scriverebbero gli stessi config e gli stessi stem senza sapere",
+            "l'uno dell'altro. Chiudi quello (Ctrl-C nel suo terminale) e",
+            "rilancia, oppure usa il suo motore.",
+        ])
+    if plan.action == "busy":
+        return "\n".join([
+            f"La porta {plan.port} e' occupata {_held_by(plan.other)}.",
+            "",
+            "Scegline un'altra con --port, oppure lancia senza --port: il",
+            f"bridge prende da solo la prima libera da {base} in su.",
+        ])
+    if plan.action == "exhausted":
+        return "\n".join([
+            f"Nessuna porta libera fra {base} e {base + span - 1}:",
+            *(f"    {p}  occupata {_held_by(i)}" for p, i in plan.passed),
+            "",
+            "Chiudi un bridge che non ti serve, o scegli una porta con --port.",
+        ])
+    if plan.action == "unbindable":
+        e = plan.error
+        return (f"Non posso ascoltare su {bind_address(host, plan.port)}: "
+                f"{e.strerror or e}.\n\nControlla --host e --port.")
+    raise ValueError(plan.action)
+
+
+# Il codice del processo che apre il browser. Un processo a parte, non un
+# thread: il master di gunicorn forka i worker subito dopo `when_ready`, e un
+# fork con un secondo thread a meta' di un `subprocess` e' il modo classico di
+# ereditare un lock preso. E alcuni `$BROWSER` (quelli senza `&`) bloccano chi
+# li lancia finche' non si chiudono.
+#
+# Esce 0 SEMPRE, e il fallimento lo dice a parole. Il figlio lo raccoglie il
+# master con `waitpid(-1)`, e fino a gunicorn 25 un figlio sconosciuto veniva
+# letto come un worker: exit 3 o 4 = "il worker non parte", HaltServer, e il
+# bridge si spegneva per un browser che non si e' aperto. requirements.txt
+# chiede gunicorn>=22. `BaseException`, non `Exception`: un `SystemExit`
+# alzato dentro l'import usciva col codice che sceglieva lui.
+#
+# E non importa dal workspace. `python -c` mette la cartella corrente in testa
+# a sys.path, e la cartella corrente del bridge e' quella del brano (#165): il
+# `signal.py` o lo `shlex.py` di un brano veniva importato — eseguito — al
+# posto di quello della stdlib, sulla strada di `webbrowser`. `-I` toglierebbe
+# anche PYTHONPATH, `-P` c'e' solo da Python 3.11: la voce vuota si toglie a
+# mano, prima di qualunque import (`sys` e' builtin, non si puo' mettere in
+# ombra).
+BROWSER_CHILD = """\
+import sys
+if sys.path and sys.path[0] == "":
+    del sys.path[0]
+url = sys.argv[1]
+try:
+    import webbrowser
+    ok = webbrowser.open(url)
+except BaseException:
+    ok = False
+if not ok:
+    sys.stderr.write("pge-ui: nessun browser da aprire; l'editor e' su %s\\n" % url)
+sys.exit(0)
+"""
+
+
+def open_browser(url, popen=subprocess.Popen):
+    """Apre `url` nel browser, in un processo staccato.
+
+    `start_new_session`: fuori dal gruppo del terminale, cosi' il Ctrl-C che
+    ferma il bridge non si porta via il browser che ha appena aperto.
+
+    Lo spawn stesso puo' fallire (`fork` con EAGAIN, ENOMEM), e qui gira
+    dentro `when_ready`: un OSError lasciato uscire attraversava
+    `Arbiter.start` e spegneva il bridge con un traceback, dopo un banner che
+    aveva gia' stampato l'indirizzo. Stessa regola del figlio: il browser che
+    non si apre si dice a parole, e il bridge resta su. `None` in quel caso."""
+    try:
+        return popen([sys.executable, "-c", BROWSER_CHILD, url],
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        sys.stderr.write(f"pge-ui: non posso aprire il browser "
+                         f"({e.strerror or e}); l'editor e' su {url}\n")
+        return None
 
 
 # -------------------------------------------------------------------------
@@ -1423,8 +1771,21 @@ def main():
     ap = argparse.ArgumentParser(
         description="Local HTTP bridge for the PGE browser editor.",
     )
-    ap.add_argument("--port", type=int, default=7878,
-                    help="port to listen on (default: 7878)")
+    ap.add_argument("--port", type=port_arg, default=None,
+                    help=f"port to listen on. Without it: the first free one "
+                         f"from {DEFAULT_PORT} up. Given and busy, it's an "
+                         f"error. Either way, a bridge that already serves "
+                         f"this workspace (on {DEFAULT_PORT}–"
+                         f"{DEFAULT_PORT + PORT_SPAN - 1}, or on the given "
+                         f"port) is reused instead of starting a second")
+    # Due flag dichiarati per esteso, non un BooleanOptionalAction: la guardia
+    # su bin/pge-ui (test-suite-harness.js) legge i nomi dagli add_argument di
+    # questo file, e `--no-open` scritto nel lanciatore deve trovarla. #164
+    ap.add_argument("--open", dest="open", action="store_true", default=True,
+                    help="open the editor in the browser once the port is "
+                         "listening (default)")
+    ap.add_argument("--no-open", dest="open", action="store_false",
+                    help="don't open a browser: background runs, CI, ssh")
     ap.add_argument("--root", default=None,
                     help="path to the PythonGranularEngine repo root. "
                          f"Without it: ${ENGINE_ENV_VAR}, then an "
@@ -1463,6 +1824,28 @@ def main():
             f"output/, cache/ e — su un motore con --samples-dir — refs/) "
             f"le crea il bridge.\n"
         )
+
+    # La porta prima delle cartelle: un avvio che non parte non deve lasciare
+    # configs/ output/ cache/ dietro di se', e il banner non deve promettere un
+    # indirizzo che e' di un altro bridge. #166
+    explicit_port = args.port is not None
+    plan = plan_port(args.port if explicit_port else DEFAULT_PORT,
+                     explicit_port, workspace, root,
+                     lambda p: bind_error(args.host, p),
+                     lambda p: probe_bridge(args.host, p))
+    will_open, browser_line = browser_plan(args.open)
+    if plan.action == "reuse":
+        print(port_message(plan, args.host, workspace, root))
+        if will_open:
+            print("Apro il browser su quello.")
+            open_browser(editor_url(args.host, plan.port))
+        else:
+            print(f"Il browser {browser_line}.")
+        return
+    if plan.action != "serve":
+        sys.exit(port_message(plan, args.host, workspace, root))
+    port = plan.port
+    url = editor_url(args.host, port)
 
     # Le sottodirectory le crea `_set_workspace`, e quando non ci riesce
     # (permessi, disco, un FILE che si chiama `output`, una `refs` che e' un
@@ -1526,11 +1909,20 @@ def main():
     print(f"  sox:     {'ok' if sox_ok else 'MISSING (brew install sox — needed for browser playback)'}")
     print(f"  soundfile:{' ok — sample durations' if sf_ok else ' MISSING (durations fall back to soxi)'}")
     print(f"  soxi:    {'ok' if soxi_ok else 'optional (durations via soundfile; sox/soxi for AIFF→WAV transcode)'}")
-    print(f"  listen:  http://{args.host}:{args.port}")
+    print(f"  listen:  {bind_address(args.host, port)}")
+    for line in filter(None, port_message(plan, args.host, workspace,
+                                          root).splitlines()):
+        print(f"           {line}")
     print(f"")
-    print(f"Open in browser:  http://{args.host}:{args.port}/")
-    print(f"  (gear → Backend → local → server URL http://{args.host}:{args.port})")
+    # L'editor e' servito da qui (`GET /`) e parla con l'origin da cui arriva:
+    # niente da configurare in Settings. `file://` resta possibile, ma e' il
+    # caso secondario — vedi il README. #166
+    print(f"Editor:  {url}")
+    print(f"  browser: {browser_line}")
     print(f"")
+    # Prima del fork dei worker: un buffer di stdout non svuotato verrebbe
+    # copiato nel figlio e stampato due volte quando stdout e' una pipe.
+    sys.stdout.flush()
     from gunicorn.app.base import BaseApplication
 
     class _StandaloneApp(BaseApplication):
@@ -1546,8 +1938,8 @@ def main():
         def load(self):
             return self.application
 
-    _StandaloneApp(app, {
-        "bind": f"{args.host}:{args.port}",
+    options = {
+        "bind": bind_address(args.host, port),
         # Uno solo, e non e' un dettaglio di prestazioni: il workspace
         # commutabile a caldo (#147) e' stato di processo, e con piu' worker
         # una POST /workspace ne cambierebbe uno mentre gli altri continuano a
@@ -1565,7 +1957,16 @@ def main():
         "threads": 200,
         "accesslog": "-",
         "loglevel": "warning",
-    }).run()
+    }
+    if will_open:
+        # `when_ready` scatta nel master DOPO il bind (Arbiter.start crea i
+        # socket, poi chiama l'hook) e prima che il worker sia su. Il browser
+        # che arriva in quell'intervallo finisce nella coda del socket e viene
+        # servito appena il worker accetta: mai "connection refused", che era
+        # la pagina d'errore da ricaricare a mano. Una volta sola: un reload
+        # (HUP) non ripassa da qui.
+        options["when_ready"] = lambda _arbiter: open_browser(url)
+    _StandaloneApp(app, options).run()
 
 
 if __name__ == "__main__":

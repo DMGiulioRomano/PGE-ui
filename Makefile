@@ -90,6 +90,20 @@ endif
 
 WS_FLAG  := --workspace $(if $(WORKSPACE),$(WORKSPACE),$(ENGINE_ROOT))
 
+# La porta la sceglie il bridge (#166): senza --port prende la prima libera da
+# 7878 in su, o riusa quello che serve gia' il workspace. Un `--port $(PORT)`
+# sempre sulla riga rendeva ogni `make serve` un --port ESPLICITO, cioe' un
+# errore sulla porta occupata invece della ricerca. Passa quindi solo quando
+# PORT lo dice qualcuno: riga di comando o ambiente (come valeva gia' con
+# `?=`); `$(origin PORT)` e' `file` quando a dirlo e' il default qui sopra.
+# Vuoto e' assente, come `PGE_ENGINE_ROOT=` (#165): `PORT=` e' il modo di
+# cancellare un PORT ereditato, e con l'origin da solo usciva `--port` senza
+# valore — con `OPEN=0` accanto, `--port --no-open`: argparse rifiuta tutti e due.
+PORT_FLAG := $(if $(filter file,$(origin PORT)),,$(if $(strip $(PORT)),--port $(PORT)))
+# Il browser si apre di default, ed e' il default del BRIDGE: qui non se ne
+# scrive una seconda copia. OPEN=0 (o no/false/off) lo spegne.
+OPEN_FLAG := $(if $(filter 0 no false off,$(OPEN)),--no-open,)
+
 .PHONY: help serve install install-cli dev-clean tests tests-node tests-python tests-parity tests-e2e
 
 help:
@@ -97,7 +111,7 @@ help:
 	@echo ""
 	@echo "  make install         crea .venv e installa requirements.txt"
 	@echo "  make install-cli     mette \`pge-ui\` sul PATH ($(BINDIR))"
-	@echo "  make serve           avvia il bridge locale su :$(PORT)"
+	@echo "  make serve           avvia il bridge e apre l'editor nel browser"
 	@echo "                       (default ROOT=$(ROOT))"
 	@echo "                       WORKSPACE=~/brani per lavorare fuori dal repo engine"
 	@echo ""
@@ -106,7 +120,9 @@ help:
 	@echo "  make tests-e2e       boot headless dell'editor (serve un browser)"
 	@echo ""
 	@echo " Variables:"
-	@echo "  PORT=7878            porta"
+	@echo "  PORT=7878            porta (senza: la prima libera da 7878, o il bridge"
+	@echo "                       che serve gia' il workspace; data e occupata = errore)"
+	@echo "  OPEN=0               make serve non apre il browser (--no-open)"
 	@echo "  ROOT=../PythonGranularEngine   path al repo engine (sorgente)"
 	@echo "                       (senza ROOT=: PGE_ENGINE_ROOT, poi il default)"
 	@echo "  WORKSPACE=~/brani    cartella con configs/ output/ cache/"
@@ -133,7 +149,7 @@ install: $(VENV_BIN)/pip
 # sbaglia; tests/python/test_cli_resolve.py adesso le confronta chiedendolo a
 # make, non trascrivendo.
 serve: $(VENV_BIN)/pip
-	$(VENV_BIN)/python server.py --root $(ENGINE_ROOT) $(WS_FLAG) --port $(PORT)
+	$(VENV_BIN)/python server.py --root $(ENGINE_ROOT) $(WS_FLAG) $(PORT_FLAG) $(OPEN_FLAG)
 
 # Un nome sul PATH per il bridge (#164): `cd ~/qualsiasi-brano && pge-ui`.
 # E' un symlink, non una copia, cosi' un `git pull` aggiorna anche il comando.

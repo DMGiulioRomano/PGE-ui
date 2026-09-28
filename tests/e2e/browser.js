@@ -23,14 +23,15 @@
  *             "Failed to load resource" in console per ognuno, e per questo
  *             il conteggio degli errori li attribuisce al test invece che
  *             all'app (vedi `consoleErrors` in test-boot.js).
- *   bridge  → l'app chiede `http://localhost:7878` perche' quella e' la sua
- *             costante (TWEAK_DEFAULTS non ha `serverUrl`, e le preferenze
- *             non stanno in localStorage: non c'e' un modo di dirglielo da
- *             fuori). Riscrivere l'URL della richiesta e' l'alternativa a
- *             occupare la 7878, che sulla macchina di chi sviluppa e' la
- *             porta di `make serve`. La costante e' presidiata da una
- *             guardia di sorgente in test-boot.js: se cambia, il test lo
- *             dice invece di ritrovarsi silenziosamente `serverDown`.
+ *   bridge  → la pagina arriva DAL bridge (`GET /`), come la apre
+ *             `pge-ui` (#166), e parla con il proprio origin: niente da
+ *             riscrivere. Fino a #166 l'app chiedeva la costante
+ *             `http://localhost:7878` qualunque fosse la porta che l'aveva
+ *             servita, e questo file riscriveva quelle richieste sulla porta
+ *             del bridge — cioe' il test verificava un'app che, servita da
+ *             una porta diversa dalla 7878, avrebbe parlato con un ALTRO
+ *             bridge. Adesso una richiesta a quel ripiego (che resta, per
+ *             file://) e' un fallimento con il suo nome: `net.fallback`.
  *
  * =========================================================================== */
 
@@ -43,9 +44,16 @@ const HERE = __dirname;
 const REPO = path.join(HERE, "..", "..");
 const NODE_MODULES = path.join(HERE, "node_modules");
 
-/* L'URL che l'app usa quando `tweaks.serverUrl` e' vuoto — cioe' sempre, al
- * boot. Scritto qui una volta e verificato contro app.jsx da test-boot.js. */
-const APP_DEFAULT_SERVER = "http://localhost:7878";
+/* Il ripiego che l'app usa su file://, dove un origin non c'e'. Letto da
+ * backend.js, non trascritto: e' l'indirizzo verso cui una pagina servita dal
+ * bridge NON deve mai andare, e una copia qui tacerebbe il giorno in cui
+ * backend.js lo cambia. `null` se la lettura non aggancia: test-boot.js lo
+ * dice. */
+const FILE_FALLBACK_SERVER = (() => {
+  const src = fs.readFileSync(path.join(REPO, "src", "lib", "backend.js"), "utf8");
+  const m = /const FILE_FALLBACK_SERVER\s*=\s*"([^"]+)"/.exec(src);
+  return m ? m[1] : null;
+})();
 
 /* I quattro script vendor: URL come sta nell'HTML → file dentro node_modules.
  * Le versioni nei due posti devono coincidere, ed e' `verifyVendor` a dirlo. */
@@ -194,6 +202,9 @@ function startBridge({ timeoutMs = 20000 } = {}) {
  *   net.unexpected — URL verso l'esterno che nessuno ha dichiarato: sono un
  *                    fallimento, e il chiamante li legge come tali
  *   net.served     — i vendor effettivamente serviti dal disco
+ *   net.fallback   — richieste al ripiego di file:// (FILE_FALLBACK_SERVER):
+ *                    una pagina servita dal bridge che le fa sta parlando con
+ *                    un bridge che non e' il suo
  */
 async function open({ chromium, headless = true } = {}) {
   const fonts = new Set(cssFontUrls());
@@ -203,7 +214,7 @@ async function open({ chromium, headless = true } = {}) {
   const bridgeOrigin = `http://127.0.0.1:${port}`;
 
   let browser;
-  const net = { blocked: [], unexpected: [], served: [] };
+  const net = { blocked: [], unexpected: [], served: [], fallback: [] };
   try {
     browser = await chromium.launch({ headless });
     const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
@@ -213,11 +224,9 @@ async function open({ chromium, headless = true } = {}) {
 
       if (url.startsWith(bridgeOrigin)) return route.continue();
 
-      // La costante dell'app: stessa richiesta, altra porta. Il browser resta
-      // convinto di parlare con la 7878 (headers e CORS compresi), che e'
-      // esattamente la configurazione dell'utente.
-      if (url.startsWith(APP_DEFAULT_SERVER + "/")) {
-        return route.continue({ url: bridgeOrigin + url.slice(APP_DEFAULT_SERVER.length) });
+      if (FILE_FALLBACK_SERVER && url.startsWith(FILE_FALLBACK_SERVER + "/")) {
+        net.fallback.push(url);
+        return route.abort();
       }
 
       const v = vendorByUrl.get(url);
@@ -252,6 +261,6 @@ async function open({ chromium, headless = true } = {}) {
 }
 
 module.exports = {
-  APP_DEFAULT_SERVER, VENDOR, REPO, NODE_MODULES,
+  FILE_FALLBACK_SERVER, VENDOR, REPO, NODE_MODULES,
   htmlVendorTags, cssFontUrls, sriOf, verifyVendor, startBridge, open,
 };

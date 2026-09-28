@@ -18,7 +18,7 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
 │   └── cache/                   ┘ (--workspace to choose)
 │
 └── PGE-ui/                      ← this repo
-    ├── PGE Editor.html          ← open this in a browser
+    ├── PGE Editor.html          ← the editor: the bridge serves it and opens it
     ├── server.py                ← local HTTP bridge to the renderer
     ├── requirements.txt         ← flask + flask-cors
     ├── Makefile                 ← convenience targets
@@ -92,12 +92,19 @@ PGE bridge
   configs/:  /Users/you/brani/mare-nostrum/configs
   output/:   /Users/you/brani/mare-nostrum/output
   cache/:    /Users/you/brani/mare-nostrum/cache
-  listen:    http://127.0.0.1:7878
+  …
+  listen:  127.0.0.1:7878
+
+Editor:  http://127.0.0.1:7878/
+  browser: si apre da solo appena la porta ascolta (--no-open per non aprirlo)
 ```
 
 The first two lines carry **who said so** next to the path — `--root`,
 `PGE_ENGINE_ROOT`, `engine/` for the engine; `= $PWD` or `--workspace` for the
 folder. With three ways to declare an engine, *which one* is not enough.
+
+The last line is the one you act on: the bridge serves the editor itself and
+opens your browser on it — see [Open the editor](#5-open-the-editor).
 
 ### 4b) (optional) One name on your `PATH`
 
@@ -150,15 +157,45 @@ a script) is what the target is waiting for.
 
 ### 5) Open the editor
 
-Open `PGE Editor.html` in any browser (Chrome, Firefox, Safari — all work, because the file system access goes through the bridge, not through `window.showDirectoryPicker`).
+There is nothing to open by hand: the bridge **serves the editor** at
+`http://127.0.0.1:7878/` and, once the port is listening, **opens your browser
+on it** (#166). Any browser works — Chrome, Firefox, Safari — because the file
+system access goes through the bridge, not through `window.showDirectoryPicker`.
+
+- `--no-open` (or `make serve OPEN=0`) starts the bridge without a window — for
+  background runs, CI, ssh. The address is still printed.
+- With no graphical session (Linux without `DISPLAY` / `WAYLAND_DISPLAY`, and no
+  `$BROWSER`) the bridge doesn't try: a text browser would take over the
+  terminal the bridge logs to. It says so, and prints the address.
+- The page talks to the bridge that served it — its own origin — so there is no
+  URL to set in Settings.
+
+**A second `pge-ui`.** Each piece gets its own bridge, and they don't fight over
+the port:
+
+- launched from **another folder**, the second bridge takes the first free port
+  from 7878 up and says who holds the ones it skipped
+  (`7878 occupata da un bridge PGE sul workspace …`);
+- launched from **the same folder**, it doesn't start a second bridge — two on
+  one workspace would write the same configs and stems without knowing about
+  each other. It opens the browser on the one already running and exits (with a
+  different engine on that workspace it refuses and says which two);
+- `--port N` is a declaration: busy, it stops and names who holds it instead of
+  searching. Nothing is created in the folder before the port is settled.
 
 In the editor:
 
-1. On launch the editor probes `server.py` (`http://localhost:7878` by default), lists the real contents of `refs/` and `configs/`, and auto-opens the last project (or the first on disk).
-2. **⚙ gear icon** (top-right) → **Server** to change the URL or run **"test connection"**, → **Workspace** to point the editor at another project folder without restarting the bridge.
+1. On launch the editor probes the bridge, lists the real contents of `refs/` and `configs/`, and auto-opens the last project (or the first on disk).
+2. **⚙ gear icon** (top-right) → **Server** to run **"test connection"**, → **Workspace** to point the editor at another project folder without restarting the bridge.
 3. Hit **Render**. The split-button's progress bar, the per-clip status dots, and the **log** terminal all stream live output from `python src/main.py`.
 
-If the server isn't running the editor shows a "start server.py" notice — there is no offline/in-browser mode.
+If the bridge isn't running the editor shows a "start the bridge" notice — there is no offline/in-browser mode.
+
+**Opening `PGE Editor.html` by hand** (`file://`) still works, as a fallback:
+with no origin to talk to, the page falls back to `http://localhost:7878`, so it
+only finds a bridge on the default port, and every request is cross-origin
+(that is what the bridge's open CORS is for). Prefer the address the bridge
+prints.
 
 ---
 
@@ -241,7 +278,7 @@ The editor speaks to a `PGEBackend` abstraction with a single implementation, `l
 
 | Backend | Storage                   | Render                                                    | Notes                                          |
 |---------|---------------------------|-----------------------------------------------------------|------------------------------------------------|
-| `local` | real disk via `server.py` | `subprocess.Popen(python src/main.py …)` streaming NDJSON | Requires `python server.py` running (`make serve`). |
+| `local` | real disk via `server.py` | `subprocess.Popen(python src/main.py …)` streaming NDJSON | Requires the bridge running (`pge-ui`, `make serve`), which also serves the editor. |
 
 The browser only does `fetch()`; the server holds all disk access, so the editor works in any browser. There is no offline mode — without the server, the editor can't list or load anything.
 
@@ -279,7 +316,7 @@ The browser only does `fetch()`; the server holds all disk access, so the editor
 
 ```
 PGE-ui/
-├── PGE Editor.html              entry point — load with file://
+├── PGE Editor.html              entry point — served by the bridge at http://127.0.0.1:7878/
 ├── server.py                    Flask bridge (this repo's only python)
 ├── requirements.txt
 ├── Makefile

@@ -6,8 +6,11 @@ full endpoint list, the NDJSON render protocol, troubleshooting and security.
 
 The bridge is `server.py` in this repo. It runs **from wherever your piece
 lives** and points at a separately-cloned `PythonGranularEngine` — it never
-copies itself into or mutates the engine source. It binds `127.0.0.1` only;
-CORS is open so the editor (a `file://` page) can reach it.
+copies itself into or mutates the engine source. It binds `127.0.0.1` only.
+It also **serves the editor** (`GET /` → `PGE Editor.html`) and opens the
+browser on it once the port is listening (#166), so the page and the bridge
+share one origin. CORS stays open for the fallback of opening the HTML by hand
+as a `file://` page.
 
 Two directories, not one. `--root` is engine source (`src/main.py`, `.venv`,
 `csound/`); `--workspace` is the folder holding `configs/`, `output/` and
@@ -17,6 +20,56 @@ checkout any more (#165): the engine is `--root`, else `$PGE_ENGINE_ROOT`, else
 an `engine/` found walking up from the current folder, else an error naming the
 three; the workspace is `--workspace`, else the current folder. See
 **Workspace** below.
+
+---
+
+## Launching: which port, and the browser (#166)
+
+The bridge's address *is* the editor's address, so the port is settled before
+anything else happens — before the banner, and before `configs/ output/
+cache/` are created in the workspace. The second launch used to print
+`Open in browser: http://127.0.0.1:7878/` (the *first* bridge's editor, on the
+other workspace), create the folders, and only then find the port taken:
+five seconds of gunicorn's `Connection in use`, then exit 1.
+
+`plan_port` in `server.py` decides, with three rules in this order:
+
+1. **One workspace, one bridge.** It looks at the whole window 7878–7897 — not
+   just the first port — for a bridge that already serves this folder (it asks
+   each occupied port for `/health`, bypassing any HTTP proxy in the
+   environment). Same engine: no second bridge; the browser opens on that one
+   and the command exits 0. Another engine: it refuses and names both. Two
+   bridges on one workspace would write the same config and stems without
+   knowing about each other — the "one render at a time" guard is per process.
+   This holds with `--port` too.
+2. **An explicit `--port` that is busy is an error, not a search** — the same
+   rule as `--root` (#165). The message names who holds it: a PGE bridge and
+   its workspace, or "something that doesn't answer like a PGE bridge".
+3. **Without `--port`, the first free port** of the window. The banner says who
+   held the ones it skipped.
+
+A bind that fails for another reason (a privileged port, a `--host` that isn't
+this machine's) is reported as such, not as "busy".
+
+**The browser** opens by default; `--no-open` (`make serve OPEN=0`) turns it
+off. It is launched from gunicorn's `when_ready` hook, which runs in the master
+*after* the sockets are bound: a browser that arrives before the worker is up
+waits in the socket's queue and is served, instead of landing on "connection
+refused". It runs in a detached child process — not a thread in a master that
+is about to fork its worker — and that child always exits 0, because up to
+gunicorn 25 the master read an unknown child's exit code 3 or 4 as "worker
+failed to boot" and halted. With no graphical session (Linux without `DISPLAY`
+/ `WAYLAND_DISPLAY`, and no `$BROWSER`) it doesn't try — `webbrowser` would
+fall back to a text browser on the bridge's own terminal — and the banner says
+so. A `$BROWSER` you set always wins. With `--host 0.0.0.0` the browser goes to
+`127.0.0.1`.
+
+**The page talks to its own origin.** `PGEBackend.defaultServerUrl()` is the
+bridge the editor uses when Settings has no URL (always, at boot): the page's
+`location.origin` when it was served over http, and `http://localhost:7878`
+only on `file://`, where there is no origin. Before #166 it was that constant
+everywhere, so an editor served from 7879 talked to the bridge on 7878 — the
+other workspace.
 
 ---
 
@@ -37,6 +90,10 @@ three; the workspace is `--workspace`, else the current folder. See
 ## Endpoints exposed by `server.py`
 
 ```
+# the editor itself
+GET  /                           — PGE Editor.html (the address the bridge opens)
+GET  /<path>                     — its scripts and styles (after every route below)
+
 # introspection / config
 GET  /health                     — sanity check + resolved paths (root, workspace, …)
 GET  /config                     — the same resolved paths
@@ -222,12 +279,22 @@ carry is a whole stream.
 
 ## Troubleshooting
 
-- **"test connection" fails** — is `server.py` actually running? Check the
-  terminal you launched it in for tracebacks. Also confirm the URL in the
-  settings panel matches what the server printed.
-- **CORS error in DevTools** — you're probably hitting a different origin.
-  CORS is wide-open on the bridge; if you still see it, you've installed
-  flask without `flask-cors`. Run `pip install flask-cors` again.
+- **"test connection" fails** — is the bridge actually running? Check the
+  terminal you launched it in for tracebacks. An editor opened from the address
+  the bridge prints talks to that bridge by construction; if you opened
+  `PGE Editor.html` by hand (`file://`) it looks for one on port 7878 only —
+  use the printed address instead.
+- **The browser didn't open** — the banner's `browser:` line says why:
+  `--no-open`, or no graphical session (`DISPLAY` / `WAYLAND_DISPLAY` empty,
+  e.g. over ssh). Open the `Editor:` address yourself, or set `$BROWSER`.
+- **"La porta 7878 e' occupata"** — you passed `--port` and something holds
+  it; the message names it. Drop `--port` and the bridge picks the next free
+  one. A second launch from the *same* folder isn't an error: it reuses the
+  bridge already serving it.
+- **CORS error in DevTools** — you're probably hitting a different origin
+  (an editor opened as `file://`). CORS is wide-open on the bridge; if you
+  still see it, you've installed flask without `flask-cors`. Run
+  `pip install flask-cors` again.
 - **"can't find src/main.py"** — you ran `server.py` from the wrong folder.
   Either `cd` into the PGE repo root first, or pass
   `python server.py --root /path/to/PythonGranularEngine`.
@@ -274,8 +341,8 @@ carry is a whole stream.
 │
 └── PGE-ui/                      ← THIS repo
     ├── server.py                ← the bridge
-    ├── PGE Editor.html          ← open in browser
+    ├── PGE Editor.html          ← served by the bridge at /
     └── …
 ```
 
-The browser editor is opened as a `file://` URL and lives entirely in this repo. Engine *source* is never modified — with a workspace of your own, the engine checkout isn't written to at all (and on an engine with `--samples-dir`, isn't read from either, beyond the engine's own code).
+The browser editor is served by the bridge (`GET /`) and lives entirely in this repo. Engine *source* is never modified — with a workspace of your own, the engine checkout isn't written to at all (and on an engine with `--samples-dir`, isn't read from either, beyond the engine's own code).

@@ -106,16 +106,13 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     tags.length > 0 && tags.every(t => t.integrity),
     "senza SRI il test servirebbe byte arbitrari e nessuno se ne accorgerebbe");
 
-  /* La costante che l'app usa quando `serverUrl` e' vuoto. browser.js
-   * riscrive quelle richieste sulla porta del bridge; se la costante cambia,
-   * la riscrittura non aggancia piu' niente e l'app va in `serverDown` — cioe'
-   * un boot che riesce a meta' e un test che continua a passare su meno di
-   * quello che credeva. */
-  const appSrc = fs.readFileSync(path.join(B.REPO, "src/components/app.jsx"), "utf8");
-  assert("l'URL di default del bridge in app.jsx e' quello che il test riscrive",
-    appSrc.includes(`"${B.APP_DEFAULT_SERVER}"`),
-    `app.jsx non contiene piu' "${B.APP_DEFAULT_SERVER}": aggiorna ` +
-    `APP_DEFAULT_SERVER in browser.js`);
+  /* Il ripiego di file:// (#166), letto da backend.js. Senza, la politica di
+   * rete non saprebbe riconoscere la richiesta che una pagina servita dal
+   * bridge non deve fare, e l'assert piu' sotto sarebbe verde per cecita'. */
+  assert("il ripiego di file:// si legge da backend.js",
+    /^https?:\/\/[^/]+$/.test(B.FILE_FALLBACK_SERVER || ""),
+    `letto: ${B.FILE_FALLBACK_SERVER} — se backend.js ha cambiato il modo di ` +
+    `dichiararlo, aggiorna la lettura in browser.js, non aggirarla`);
 
   /* I font esterni: la lista viene letta dal CSS, non trascritta. Se il CSS
    * ne aggiunge uno, la politica di rete lo blocca e il conteggio lo
@@ -194,6 +191,19 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     assert("i quattro vendor sono stati serviti dal disco",
       net.served.length === B.VENDOR.length,
       `serviti ${net.served.length}: ${net.served.join(", ")}`);
+
+    /* La strada che `pge-ui` apre (#166): la pagina arriva dal bridge e parla
+     * con il suo origin. Fino a #166 chiedeva `localhost:7878` qualunque
+     * porta l'avesse servita, e questo test lo nascondeva riscrivendo quelle
+     * richieste. Il bridge qui e' su una porta del kernel, quindi una sola
+     * fetch al ripiego e' una pagina che parla con un altro bridge. */
+    assert("l'editor servito dal bridge parla con il proprio origin",
+      net.fallback.length === 0,
+      [...new Set(net.fallback)].join("\n      "));
+    const baseUrl = await page.evaluate(() =>
+      window.PGEBackend && window.PGEBackend.current && window.PGEBackend.current.baseUrl);
+    assert("il backend di boot punta al bridge che ha servito la pagina",
+      baseUrl === `http://127.0.0.1:${session.port}`, String(baseUrl));
 
     /* Il bridge risponde davvero. Senza questo assert un `serverDown` — cioe'
      * meta' applicazione mai esercitata — passerebbe verde: la pagina si
