@@ -1367,6 +1367,13 @@ def test_engine_parameter_bounds_unreadable_ratio_keeps_edo(tmp_path):
     pitch = server.engine_parameter_bounds(tmp_path)["pitch"]
     assert pitch["semitones"] == {"min": -36.0, "max": 36.0, "rangeMax": 36.0}, pitch
     assert pitch["ratio"]["min"] == 0.001, pitch
+    # E il campo illeggibile manca anche qui, invece di tornare None: un
+    # `"max": null` sul filo e' proprio il «non lo so» letto come valore che
+    # _parse_bounds_call esiste per non mandare. Il merge del pitch lo
+    # copiava in PGE_BOUNDS.pitch.ratio.max, e `Math.min(null, v)` e' 0: ogni
+    # drag di una curva di pitch in ratio finiva sul pavimento.
+    assert "max" not in pitch["ratio"], pitch["ratio"]
+    assert pitch["ratio"]["rangeMax"] == 2.0, pitch["ratio"]
 
 
 def test_engine_parameter_bounds_pitch(tmp_path):

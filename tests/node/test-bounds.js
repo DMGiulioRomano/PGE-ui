@@ -123,6 +123,23 @@ assert("pitch unit absent from raw keeps fallback (cents)", out.pitch.cents.max 
     partial.pitch.cents.max === baseCentsMax);
 }
 
+/* E un campo che non e' un numero non entra: il merge del pitch copiava il
+ * record intero, quindi un `max: null` finiva in PGE_BOUNDS.pitch.ratio.max, e
+ * ogni lettore fa `Math.min(max, v)` — cioe' 0, e ogni drag di una curva di
+ * pitch in ratio schiacciato sul pavimento. E' la stessa regola del ramo dei
+ * parametri qui sopra (`typeof … === "number"`), e la stessa di #170: in
+ * PGE_BOUNDS un tetto e' un numero, mai null. */
+{
+  const base = { pitch: { ratio: { min: 0.001, max: 8, rangeMax: 2 } } };
+  const m = B.mergeEngineBounds(base,
+    { pitch: { ratio: { min: 0.002, max: null, rangeMax: "2" } } });
+  assert("pitch: un campo null o non numerico tiene la base",
+    m.pitch.ratio.max === 8 && m.pitch.ratio.rangeMax === 2, JSON.stringify(m.pitch.ratio));
+  assert("pitch: i campi numerici dello stesso record arrivano comunque",
+    m.pitch.ratio.min === 0.002, JSON.stringify(m.pitch.ratio));
+  assert("pitch: la base non e' mutata", base.pitch.ratio.min === 0.001);
+}
+
 console.log("\n── fallback preserved, base not mutated ──");
 assert("key without engine data keeps fallback (scatter)", out.scatter.max === baseScatterMax);
 assert("mergeEngineBounds does NOT mutate base", window.PGE_BOUNDS.density.max === baseDensityMax);

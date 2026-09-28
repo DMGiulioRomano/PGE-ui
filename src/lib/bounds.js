@@ -199,8 +199,15 @@
     if (raw.pitch && typeof raw.pitch === "object") {
       out.pitch = Object.assign({}, out.pitch);
       for (const u of PITCH_UNITS) {
-        if (raw.pitch[u] && typeof raw.pitch[u] === "object") {
-          out.pitch[u] = Object.assign({}, out.pitch[u], raw.pitch[u]);
+        const rp = raw.pitch[u];
+        if (rp && typeof rp === "object") {
+          // Solo i numeri, come nel ramo dei parametri qui sopra: il record
+          // copiato intero portava un `max: null` in PGE_BOUNDS, e ogni
+          // lettore fa `Math.min(max, v)` — 0 (#170). Un campo che non e' un
+          // numero tiene la base, come ogni dato mancante.
+          const next = Object.assign({}, out.pitch[u]);
+          for (const f in rp) if (typeof rp[f] === "number") next[f] = rp[f];
+          out.pitch[u] = next;
         }
       }
       if (typeof raw.pitch.edoFactor === "number") out.pitch.edoFactor = raw.pitch.edoFactor;

@@ -239,11 +239,17 @@ def _parse_ratio_bounds(tree):
             if isinstance(sub, ast.Call) and _ast_call_name(sub) == "ParameterBounds":
                 rec = _parse_bounds_call(sub)
                 if rec is not None and isinstance(rec.get("min_val"), (int, float)):
-                    # .get: un campo illeggibile ora manca dal record, e un
-                    # KeyError qui passerebbe dal `try` del chiamante e
-                    # cancellerebbe anche i preset EDO, che si leggono.
-                    return {"min": rec["min_val"], "max": rec.get("max_val"),
-                            "rangeMax": rec.get("max_range")}
+                    # Un campo illeggibile manca dal record, e deve mancare
+                    # anche qui. Un indice secco era un KeyError che il `try`
+                    # del chiamante trasformava in `pitch = {}`, preset EDO
+                    # compresi; un `.get` lo riscriveva None, cioe' il null sul
+                    # filo che _parse_bounds_call esiste per non mandare — e
+                    # in PGE_BOUNDS.pitch.ratio.max `Math.min(null, v)` e' 0.
+                    out = {"min": rec["min_val"]}
+                    for src, dst in (("max_val", "max"), ("max_range", "rangeMax")):
+                        if src in rec:
+                            out[dst] = rec[src]
+                    return out
     return None
 
 
