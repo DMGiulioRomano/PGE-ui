@@ -735,28 +735,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // — e ogni click scrive, che e' l'unico modo per uscire dal refuso.
   const loopUnitSel = loopUnitErr ? null
     : (loopUnit.unit === "normalized" ? "normalized" : LOOP_UNIT_DEFAULT);
-  // Gli stream a cui #222 ha cambiato il significato dei numeri sotto i piedi:
-  // `time_mode: normalized` senza `loop_unit`, cioe' quelli che prima
-  // ereditavano. Il motore li avvisa a render ([LOOP_UNIT] … ora in secondi),
-  // ma quel messaggio e' marcato `# ponytail` e va via dopo una release.
-  //
-  // «Cambiato il significato» va preso alla lettera, ed e' per questo che la
-  // condizione non si ferma alle due chiavi: uno zero resta zero sotto
-  // qualunque fattore di scala, e `start: 0` senza loop e' la forma piu'
-  // comune del corpus — lo stesso motivo per cui il motore filtra il suo
-  // avviso con `_rescaling_would_change` invece di parlare a tutta la
-  // popolazione. Senza il filtro l'editor griderebbe dove il motore tace, e
-  // chi seguisse il consiglio scriverebbe una chiave che non muove un
-  // campione, pagandola con un fingerprint mosso: un render in piu' su uno
-  // stem che era giusto.
   // Le chiavi su cui l'unita' morde davvero — un valore che la conversione
   // muoverebbe. Non dipende dallo stream: e' la domanda «questa chiave governa
-  // qualcosa?», e ha due lettori. L'avviso di migrazione e' il sottoinsieme
-  // gated su time_mode; la visibilita' del controllo, sotto, no.
+  // qualcosa?», e la sua risposta decide la visibilita' del controllo, sotto.
+  //
+  // Qui accanto c'era un avviso alla popolazione che #222 ha spostato
+  // (`time_mode: normalized` senza `loop_unit`), copia dell'avviso
+  // `[LOOP_UNIT]` del motore. Era transitorio per costruzione (`# ponytail`,
+  // PGE #242) e il motore lo ha tolto passata la sua release (PGE #282): la
+  // copia e' andata con lui (#177). Su quegli stream la riga sotto il
+  // selettore dice gia' «in secondi», cioe' la lettura in vigore; mancava
+  // solo la storia, ed era quella il compito del ponytail.
   const loopUnitScaledKeys = window.PGEEnvUtils.loopUnitRescaleKeys(stream.pointer);
-  const loopUnitMigratedKeys = (stream.timeMode === "normalized" && loopUnit.source === "default")
-    ? loopUnitScaledKeys : [];
-  const loopUnitMigrated = loopUnitMigratedKeys.length > 0;
   // In normalized le coordinate del loop non sono secondi: un suffisso "s"
   // contraddirebbe la riga di hint due righe più sotto. E su una grafia fuori
   // vocabolario il suffisso non c'è affatto — etichettare «s» mentre la riga
@@ -893,17 +883,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // NON passa da clampLoop e il Seg non lo include nel ri-clamp: sarebbe la UI a
   // inventarsi un vincolo che il motore non ha.
   // …e per la stessa ragione il controllo compare ovunque l'unita' governi un
-  // valore che si muove — `loopUnitScaledKeys`, non `loopUnitMigrated`. La
-  // condizione dell'avviso porta dentro `time_mode`, e usarla anche qui
-  // rimetteva la dipendenza dallo stream che #222 ha tolto, con l'effetto di un
-  // controllo che si cancella da se': su `time_mode: absolute` + `loop_unit:
-  // normalized` + `start: 0.5` — la coesistenza dei due assi che #222 ha reso
-  // legittima — un click su "seconds" toglie la chiave, il controllo sparisce
-  // (loop_unit non e' nell'AddParamMenu, il selettore E' l'unica via) e start
-  // resta a leggere 0.5 s dove leggeva 0.5 × sample_dur, senza ritorno.
-  // La condizione e' strettamente piu' larga della vecchia — loopUnitMigrated
-  // implica loopUnitScaledKeys non vuoto — quindi la popolazione che #222 ha
-  // spostato continua a vedere il controllo insieme al suo avviso.
+  // valore che si muove — `loopUnitScaledKeys`, mai una condizione che passi
+  // da `time_mode`. Quella del vecchio avviso di migrazione ce l'aveva dentro,
+  // e usarla anche qui rimetteva la dipendenza dallo stream che #222 ha tolto,
+  // con l'effetto di un controllo che si cancella da se': su `time_mode:
+  // absolute` + `loop_unit: normalized` + `start: 0.5` — la coesistenza dei
+  // due assi che #222 ha reso legittima — un click su "seconds" toglie la
+  // chiave, il controllo sparisce (loop_unit non e' nell'AddParamMenu, il
+  // selettore E' l'unica via) e start resta a leggere 0.5 s dove leggeva
+  // 0.5 × sample_dur, senza ritorno.
+  // La popolazione che #222 ha spostato ha sempre chiavi che si muovono, quindi
+  // continua a vedere il controllo: e' la via per tornare, se la vuole, alla
+  // lettura [0,1] × sample_dur.
   const loopUnitShown = loopWindowShown
     || !!(stream.pointer && stream.pointer.loopUnit != null)
     || loopUnitScaledKeys.length > 0;
@@ -1442,15 +1433,6 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                       <span className="v mono" style={{fontSize:9, color:"var(--status-error)", lineHeight:1.4}}>
                         loop_unit: {JSON.stringify(loopUnitErr.value)} non è un'unità riconosciuta — il motore rifiuta lo stream.
                         Unità disponibili: {loopUnitErr.units.join(", ")}.
-                      </span>
-                      <span />
-                    </div>
-                  ) : loopUnitMigrated ? (
-                    <div className="pge-prow hint" style={{paddingTop:0}}>
-                      <span className="k" /><span />
-                      <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
-                        {loopUnitMigratedKeys.join(", ")}: ora in secondi — time_mode: normalized non implica più loop_unit: normalized.
-                        Per la lettura precedente ([0,1] × sample_dur) scegli normalized qui sopra.
                       </span>
                       <span />
                     </div>

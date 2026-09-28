@@ -1202,10 +1202,10 @@ writing a value a typed edit would have clamped. The seed is `loopSeedWhole` now
 already computed as `loopMax`): `1` normalized, `sample_dur` in seconds, and `1`
 again when the sample duration is unknown — the only number available there, and
 what the menu wrote before. `loop_start` keeps its `0`: zero is zero under any
-scale factor, the same reason the migration warning filters on
-`loopUnitRescaleKeys`. The truncation has a floor (`|| loopMax`): on a sample
-shorter than a tenth of a millisecond `Math.floor(cap * 1e4)` is `0`, and a
-zero-length seed is degenerate for `loopBoundsError` and under `loop_dur`'s
+scale factor, the same reason `loopUnitRescaleKeys` leaves zeros out. The
+truncation has a floor (`|| loopMax`): on a sample shorter than a tenth of a
+millisecond `Math.floor(cap * 1e4)` is `0`, and a zero-length seed is
+degenerate for `loopBoundsError` and under `loop_dur`'s
 static minimum — overshooting the cap by digits below the truncation threshold
 is the smaller evil. Same fix as #114's `grainSecondsToUnit(0.01, grainUnit)`
 one section down, one level over.
@@ -1426,35 +1426,46 @@ click and the new stream arriving.
 The unit control's own visibility must not go through `time_mode` either, and
 that is a third way the same dependency crept back. `loopUnitShown` shows the
 selector wherever the unit *governs a value that moves*
-(`loopUnitScaledKeys`, below), never on the migration warning's condition, which
-carries `time_mode` inside it. With the warning's condition the control erased
-itself: on `time_mode: absolute` + `loop_unit: normalized` + `start: 0.5` — the
-coexistence of the two axes that #222 made legitimate — a click on "seconds"
+(`loopUnitScaledKeys`, below), never on a condition that reads `time_mode` —
+the old migration hint's condition did (see below). With that condition the
+control erased itself: on `time_mode: absolute` + `loop_unit: normalized` +
+`start: 0.5` — the coexistence of the two axes that #222 made legitimate — a
+click on "seconds"
 deletes the key, the selector disappears (`loop_unit` is not in the
 AddParamMenu, so the selector *is* the only way to write it) and `start` is left
 reading `0.5` s where it read `0.5 × sample_dur`, with no way back short of the
-Raw tab. The live condition is strictly wider than the old one — a migrated
-stream always has keys that move — so the population #222 displaced still sees
-the control together with its warning, and `start: 0` with no loop still shows
-nothing, exactly where the engine is also silent.
+Raw tab. The population #222 displaced always has keys that move, so it still
+sees the control — the one way back to the `[0,1] × sample_dur` reading — and
+`start: 0` with no loop still shows nothing, where the unit governs nothing.
+`test-envelope-utils.js` asks it of every `loopUnit*` declaration of the
+Inspector at once (none may read `timeMode`), since the dependency came back
+once through a name nobody was watching.
 
-The Inspector also warns the population #222 moved under the feet — `time_mode:
-normalized` with no `loop_unit`, which the engine reads as seconds now — but
-only where the numbers actually move. `loopUnitRescaleKeys` in
-`envelope-utils.js` is the mirror of the engine's `_rescaling_would_change` over
-its `_LOOP_UNIT_SCOPE` (`start`, `loop_start`, `loop_end`, `loop_dur`): a zero
-stays a zero under any scale factor, and `start: 0` with no loop is both the
-commonest shape in the config corpus and the one every clip the editor creates
-is born with. The engine filters its own `[LOOP_UNIT]` warning on exactly that,
-and the Inspector's hint *is* that warning, so it carries the same filter and
-names the same keys — otherwise the editor shouts where the engine is silent,
-and taking its advice writes a key that doesn't move a sample while moving the
-fingerprint: one render too many on a stem that was right. No parity pact for
-this one, unlike `LOOP_UNITS`: the engine method it mirrors is marked
-`# ponytail` (PGE #242) and goes away after a release, and it leans on
-`Envelope.is_envelope_like`, unreachable without numpy — which is what the CI
-node job running parity does not have. The residual divergences are all on the
-loud side (`isEnvValue` says yes to an empty list, `is_envelope_like` says no).
+**The Inspector no longer warns the population #222 moved under the feet**
+(#177) — `time_mode: normalized` with no `loop_unit`, which the engine reads as
+seconds. That hint was a copy of the engine's `[LOOP_UNIT]` render-time
+warning, filtered the way the engine filtered it, and the warning was transient
+by construction (`# ponytail`, PGE #242): the engine removed it once the release
+it existed for had shipped (PGE #282), and the copy went with it. Nothing about
+the *reading* is lost on those streams — the row under the selector already
+says "in secondi", which is what the engine does; what went is the history,
+which was the ponytail's job. Taking its advice also wrote a key on a stream
+the author may have been happy with, moving the fingerprint.
+
+`loopUnitRescaleKeys` in `envelope-utils.js` stays, and **not because of the
+hint**: it is what `loopUnitShown` asks, "does the unit govern a value here?".
+It mirrors what the engine's `scale_raw_param_values` touches over
+`_LOOP_UNIT_SCOPE` (`start`, `loop_start`, `loop_end`, `loop_dur`) — numbers and
+envelope-likes, nothing else, and a zero stays a zero under any scale factor.
+That zero filter is what keeps the selector away from `start: 0` with no loop,
+both the commonest shape in the config corpus and the one every clip the editor
+creates is born with. Removing the function with the hint would have brought
+back the selector that erases itself (above). No parity pact for it, unlike
+`LOOP_UNITS`: the envelope branch leans on `Envelope.is_envelope_like`,
+unreachable without numpy — which is what the CI node job running parity does
+not have. The residual divergences are all on the loud side (`isEnvValue` says
+yes to an empty list, `is_envelope_like` says no), i.e. the control shown once
+too often, never hidden where it governs something.
 
 `grain.duration_unit` (`seconds | samples | milliseconds`, PGE #158 then #171) is the same shape of problem one level down: the engine's `grain_duration` bounds are in **seconds**, the YAML values are in the declared unit. `grainUnitFactor` / `grainUnitBounds` / `grainDefaultDuration` / `grainUnitSuffix` in `envelope-utils.js` are the single source — bounds, the `0.05` s default and the row suffix expressed in the unit in force (in ms the cap is `10000`, not `10`); they drive the EnvelopeEditor `hardMin/hardMax` + vis window and the seed of the scalar↔env toggle. Changing the unit goes through `convertGrainDurationUnit`, which **converts** `duration`/`duration_range` — scalars and envelopes, every form `Envelope._scale_raw_values_y` scales — instead of letting the old number be reinterpreted in the new scale, then re-clamps the scalars (envelope points need no clamp: bounds scale by the same factor). An unknown unit converts nothing and gets no suffix. The key is deleted only for `seconds` — absence *is* seconds. One asymmetry is deliberate: changing the unit **does** mark the stem stale even though the rendered audio is identical, because `fingerprintStream` sees `0.05` become `50` — the safe direction (one render too many, never one too few), and normalizing the hash to seconds would cost more than it's worth.
 

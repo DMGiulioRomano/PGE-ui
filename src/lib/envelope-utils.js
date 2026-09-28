@@ -655,32 +655,39 @@
     ["loop_dur",   "loopDur",   "loopDurEnv"],
   ];
 
-  // Quali di quelle chiavi cambiano DAVVERO lettura su uno stream che PGE #222
-  // ha spostato — `time_mode: normalized` senza `loop_unit`, cioè quelli che
-  // prima ereditavano. Specchio di `_rescaling_would_change`: uno zero resta
-  // zero sotto qualunque fattore di scala, e quel che la conversione lasciava
-  // passare invariato non si muoveva nemmeno prima.
+  // Quali di quelle chiavi l'unità governa DAVVERO: quelle il cui valore la
+  // conversione `normalized` → secondi muoverebbe. Specchio di ciò che tocca
+  // `scale_raw_param_values` (envelope.py), la funzione con cui
+  // `_pre_normalize_loop_params` scala il giro di `_LOOP_UNIT_SCOPE`: numeri ed
+  // envelope-like, e nient'altro. Uno zero resta zero sotto qualunque fattore
+  // di scala, e quel che la conversione lascia passare invariato — una
+  // stringa, un booleano — non ha un'unità da cui dipendere.
   //
-  // Il filtro non è un di più: il motore lo ha messo apposta nel suo avviso, e
-  // il suo docstring dice perché — «senza il filtro sarebbero undici avvisi su
-  // stream in cui non si muove un campione, con i tre casi veri in mezzo al
-  // rumore». `start: 0` è la forma più comune nel corpus dei config, ed è anche
-  // quella con cui nasce ogni clip dell'editor. La riga d'avviso dell'Inspector
-  // È quell'avviso, quindi porta lo stesso filtro: senza, l'editor griderebbe
-  // dove il motore tace, e chi seguisse il consiglio scriverebbe una chiave che
-  // non cambia un campione — pagandola con un fingerprint mosso, cioè un render
-  // in più su uno stem che era giusto.
+  // Il lettore è la visibilità del selettore di `loop_unit` nell'Inspector
+  // (`loopUnitShown`): il controllo compare dove l'unità morde, e la domanda
+  // non passa da `time_mode` (#222: l'unità non eredita niente). Il filtro
+  // sullo zero è ciò che lo tiene zitto dove non c'è niente da governare:
+  // `start: 0` senza loop è la forma più comune nel corpus dei config, ed è
+  // quella con cui nasce ogni clip dell'editor.
   //
-  // Si restituiscono le chiavi, non un booleano: sono quelle che il messaggio
-  // del motore nomina (`[LOOP_UNIT] [id] start, loop_end: ora in secondi`), e
-  // l'Inspector le nomina uguale.
+  // Fino a #177 aveva un secondo lettore, il suggerimento di migrazione
+  // dell'Inspector, copia dell'avviso `[LOOP_UNIT]` del motore e del suo filtro
+  // `_rescaling_would_change`. Entrambi erano transitori (`# ponytail`, PGE
+  // #242) e se ne sono andati passata la release per cui esistevano (PGE
+  // #282). La funzione resta, perché la sua domanda — «questa chiave governa
+  // qualcosa?» — non era mai stata una domanda di migrazione.
   //
-  // Niente patto di parità su questa, a differenza di LOOP_UNITS: la funzione
-  // del motore che rispecchia è marcata `# ponytail` (PGE #242) e va via dopo
-  // una release, mentre `Envelope.is_envelope_like` — da cui dipende — non è
+  // Si restituiscono le chiavi, in grafia YAML e nell'ordine di
+  // `_LOOP_UNIT_SCOPE`, anche se l'unico lettore ne guarda la lunghezza: costa
+  // lo stesso, e un test rosso nomina la chiave invece di dire `false`.
+  //
+  // Niente patto di parità su questa, a differenza di LOOP_UNITS:
+  // `Envelope.is_envelope_like` — da cui dipende il ramo envelope — non è
   // raggiungibile senza numpy, che il job node della CI non ha. Le divergenze
-  // residue sono tutte nella direzione sicura (avvisare di troppo): `isEnvValue`
-  // dice sì anche su una lista vuota, dove `is_envelope_like` dice no.
+  // residue sono tutte nella direzione sicura (mostrare il controllo di
+  // troppo): `isEnvValue` dice sì anche su una lista vuota, dove
+  // `is_envelope_like` dice no, e un envelope con tutte le y a zero conta come
+  // valore che si muove.
   function loopUnitRescaleKeys(pointer) {
     if (!pointer) return [];
     const moves = (v) => {
@@ -688,7 +695,7 @@
       if (typeof v === "number") return v !== 0;
       // Stesso discriminatore che il resto del modulo usa per «il motore lo
       // tratterà da envelope», invece di una seconda lettura della stessa cosa.
-      // Qui copre anche i booleani: `_rescaling_would_change` deve escluderli a
+      // Qui copre anche i booleani: `scale_raw_param_values` deve escluderli a
       // mano perché in Python `bool` è un `int` e cadrebbe nel ramo numerico,
       // mentre in JS `typeof true !== "number"` e il booleano arriva intero
       // fin qui, dove `isEnvValue` dice no. Un ramo esplicito sarebbe copia
