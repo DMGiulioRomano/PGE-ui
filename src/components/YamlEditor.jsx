@@ -48,14 +48,78 @@ function tokenizeYamlLine(rawLine) {
   return { indent, spans, key: null };
 }
 
+// The dotted YAML path of every line of the text the bridge emitted, or null
+// for a line that carries no key (a block-sequence item, a comment). The path
+// comes from the indentation: a line's parents are the keys above it with a
+// smaller column. A key after "- " sits at the column of its dash plus two,
+// which is where YAML puts the mapping it opens. #180: annotations used to
+// attach to the first line with the same BARE key, so an error on
+// `grain.duration` landed on the stream's own `duration:`, and one on
+// `deviation_probability.pan` on the top-level `pan:`.
+function yamlLinePaths(lines) {
+  const stack = [];            // [{ col, key }]
+  return lines.map((raw) => {
+    const tok = tokenizeYamlLine(raw);
+    if (!tok.key) return null;
+    const dashes = (raw.slice(tok.indent.length).match(/^(- )*/) || [""])[0].length;
+    const col = tok.indent.length + dashes;
+    while (stack.length && stack[stack.length - 1].col >= col) stack.pop();
+    stack.push({ col, key: tok.key });
+    return stack.map((f) => f.key).join(".");
+  });
+}
+
+// A value as the author wrote it: JSON for structures, but numbers printed as
+// numbers, or `.nan` / `.inf` would read `null`.
+function fmtShapeValue(v) {
+  return typeof v === "number" ? String(v) : JSON.stringify(v);
+}
+
+// The sentence for one envShapeError (window.PGEEnv, envelope-loops.js). The
+// rule lives in the mirror; this is only its wording for the Raw tab — the
+// EnvelopeEditor words the same error in its own panel.
+function shapeErrorText(e) {
+  const v = fmtShapeValue(e.value);
+  switch (e.where) {
+    case "point":
+      return `element ${e.index} is not a breakpoint [t, v] / [t, v, type], a BP group or a compact block: ${v}`;
+    case "group.interp":
+      return `BP group interp ${v} is not one of ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
+    case "group.points":
+      return "a BP group needs at least 2 points — a single point is written as a bare breakpoint [t, v]";
+    case "compact.n_reps":
+      return `n_reps (3rd element of the compact block) must be an integer ≥ 1 — got ${v}${typeof e.value === "boolean" ? " (true is not 1)" : ""}`;
+    case "compact.end_time":
+      return e.why === "offset"
+        ? `end_time ${v} must be past the block start (${+e.start.toFixed(6)}) — it is an absolute time, not a duration`
+        : `end_time (2nd element of the compact block) must be a finite number — got ${v}`;
+    case "compact.pattern":
+      if (e.why === "empty") return "the compact block's pattern is empty";
+      if (e.why === "range") return `pattern point ${e.point}: x = ${v} is outside [0, 100] (a percentage of the cycle)`;
+      if (e.why === "order") return `pattern point ${e.point}: x = ${v} goes backwards — a repeated x is fine, a smaller one is not`;
+      return `pattern point ${e.point} must be [x%, y] or [x%, y, type] with numbers (true is not 1) — got ${v}`;
+    case "compact.time_dist": {
+      const d = e.dist || {};
+      if (d.kind === "overflow")
+        return `time_dist ${d.name}: ${d.param}=${d.value} with n_reps=${d.nReps} overflows a float`;
+      if (d.kind === "param")
+        return `time_dist ${d.name}: parameter "${d.param}" is not valid`;
+      return `time_dist ${v} is not a known distribution (${window.PGEEnv.TIME_DIST_NAMES.join(", ")})`;
+    }
+    default:
+      return `malformed envelope: ${v}`;
+  }
+}
+
 // Validation annotations computed from the stream (not from emitter internals).
-// Returns { byKey: Map<yamlKey, {kind:"err"|"warn", msg}> }; the component
-// attaches each to the first serialized line carrying that key. Mirrors the
-// three checks the old buildLines did inline (sample / loop bounds / pan). #42
+// Returns { byPath: Map<dotted YAML path, {kind:"err"|"warn", msg}> }; the
+// component attaches each to the serialized line with that path
+// (yamlLinePaths). Mirrors the three checks the old buildLines did inline
+// (sample / loop bounds / pan), #42, plus the shape of every envelope, #180.
 function computeAnnotations(stream, sampleRec) {
-  const byKey = new Map();
+  const byPath = new Map();
   if (!sampleRec) {
-    byKey.set("sample", { kind: "err", msg: `sample not found: ${stream.sample}` });
+    byPath.set("sample", { kind: "err", msg: `sample not found: ${stream.sample}` });
   } else {
     const ptr = stream.pointer || {};
     // Il tetto della finestra di loop NON e' la durata del sample: e' la durata
@@ -82,7 +146,7 @@ function computeAnnotations(stream, sampleRec) {
     // del cap ignoto tre righe piu' giu'.
     const loopUnitErr = window.PGEEnvUtils.loopUnitError(ptr);
     if (loopUnitErr) {
-      byKey.set("loop_unit", { kind: "err",
+      byPath.set("pointer.loop_unit", { kind: "err",
         msg: `loop_unit: ${JSON.stringify(loopUnitErr.value)} is not a recognized unit — the engine rejects the stream (${loopUnitErr.units.join(", ")})` });
     }
     const loopCap = window.PGEEnvUtils.loopEnvMax(stream, sampleRec.duration);
@@ -94,22 +158,37 @@ function computeAnnotations(stream, sampleRec) {
       : `sample duration (${loopCap != null ? loopCap.toFixed(3) : "?"} s)`;
     const overCap = (v) => !loopUnitErr && loopCap != null && v > loopCap;
     if (!ptr.loopEndEnv && ptr.loopEnd != null && overCap(ptr.loopEnd)) {
-      byKey.set("loop_end", { kind: "err", msg: `loop_end must be ≤ ${capMsg}` });
+      byPath.set("pointer.loop_end", { kind: "err", msg: `loop_end must be ≤ ${capMsg}` });
     }
     if (!ptr.loopDurEnv && ptr.loopDur != null && overCap(ptr.loopDur)) {
-      byKey.set("loop_dur", { kind: "err", msg: `loop_dur must be ≤ ${capMsg}` });
+      byPath.set("pointer.loop_dur", { kind: "err", msg: `loop_dur must be ≤ ${capMsg}` });
     }
   }
   if (Array.isArray(stream.panEnv) && stream.panEnv.some(p => Math.abs(p[1]) > 3600)) {
-    byKey.set("pan", { kind: "warn", msg: "pan values exceed conventional range [−3600, 3600]" });
+    byPath.set("pan", { kind: "warn", msg: "pan values exceed conventional range [−3600, 3600]" });
   }
-  return { byKey };
+  // La forma di ogni envelope, come la giudica il builder del motore (PGE
+  // #211): la regola e' PGEEnv.envShapeError, gli envelope e il loro path YAML
+  // li dice il catalogo — lo stesso che l'EnvelopeEditor apre. Le voci inerti
+  // restano fuori: il motore non le costruisce, quindi non le rifiuta, e un
+  // rosso li' direbbe il falso. Un errore di forma vince sul warn del pan: e'
+  // il motivo per cui il render non parte.
+  const sampleDur = sampleRec ? sampleRec.duration : undefined;
+  for (const entry of window.PGEEnvCatalog.listEnvelopes(stream, sampleDur)) {
+    if (entry.inert) continue;
+    const env = entry.path.reduce((o, k) => (o == null ? o : o[k]), stream);
+    const err = window.PGEEnv.envShapeError(env);
+    if (err) byPath.set(entry.yaml, { kind: "err",
+      msg: `${entry.yaml}: ${shapeErrorText(err)} — the engine rejects the stream` });
+  }
+  return { byPath };
 }
 
 // Expose the pure (JSX-free) presentation helpers so node tests can exercise
 // them. Harmless in the browser. #42
 window.PGE = window.PGE || {};
 window.PGE.tokenizeYamlLine = tokenizeYamlLine;
+window.PGE.yamlLinePaths = yamlLinePaths;
 window.PGE.computeAnnotations = computeAnnotations;
 
 /* ==== node-test boundary: everything above is JSX-free and reusable ==== */
@@ -122,6 +201,7 @@ function YamlEditor({ stream, onChange, samples }) {
   // its output for coloring and compute annotations alongside.
   const generated = useMemoYE(() => window.PGEYaml.serializeStream(stream), [stream]);
   const tokens = useMemoYE(() => generated.split("\n").map(tokenizeYamlLine), [generated]);
+  const linePaths = useMemoYE(() => yamlLinePaths(generated.split("\n")), [generated]);
   const annotations = useMemoYE(() => computeAnnotations(stream, sampleRec), [stream, sampleRec]);
 
   const [mode, setMode] = useStateYE("view"); // 'view' | 'edit'
@@ -166,15 +246,16 @@ function YamlEditor({ stream, onChange, samples }) {
   }
 
   // render highlighted view from the bridge text + annotations
-  const ann = annotations.byKey;
-  const usedKeys = new Set();
+  const ann = annotations.byPath;
+  const usedPaths = new Set();
   let errCount = 0, warnCount = 0, firstErrLine = -1;
   const rendered = [];
   tokens.forEach((tok, i) => {
     let a = null;
-    if (tok.key && ann.has(tok.key) && !usedKeys.has(tok.key)) {
-      a = ann.get(tok.key);
-      usedKeys.add(tok.key);
+    const p = linePaths[i];
+    if (p && ann.has(p) && !usedPaths.has(p)) {
+      a = ann.get(p);
+      usedPaths.add(p);
     }
     const isErr = a && a.kind === "err";
     const isWarn = a && a.kind === "warn";

@@ -1423,10 +1423,13 @@ global.React = {};                                    // satisfies `const {…} 
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-loops.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/deviation-probability.js"), "utf8"));
 eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-utils.js"), "utf8"));
+// …e il catalogo, da cui computeAnnotations prende gli envelope dello stream e
+// il path YAML di ciascuno (#180).
+eval(fs.readFileSync(path.join(__dirname, "../../src/lib/envelope-catalog.js"), "utf8"));
 
 const yeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/YamlEditor.jsx"), "utf8");
 eval(yeSrc.split("/* ==== node-test boundary")[0]);   // only the JSX-free head
-// The eval above leaks `tokenizeYamlLine`/`computeAnnotations` (function
+// The eval above leaks `tokenizeYamlLine`/`computeAnnotations`/`yamlLinePaths` (function
 // declarations) into this scope; we call them directly rather than re-declaring
 // with const (which would clash). They're also exposed on window.PGE.
 
@@ -1516,25 +1519,26 @@ assert("#42 presentation helpers loaded",
 }
 
 {
-  // computeAnnotations: the three validations, attached by yaml key.
+  // computeAnnotations: the three validations, attached by YAML path (#180:
+  // the bare key put `grain.duration` on the stream's own `duration:` line).
   const sNoRec = streamOf(minimalYaml(null));
   const a1 = computeAnnotations(sNoRec, null);   // no sample record
-  assert("#42 annotate missing sample", a1.byKey.get("sample") && a1.byKey.get("sample").kind === "err",
-    JSON.stringify([...a1.byKey]));
+  assert("#42 annotate missing sample", a1.byPath.get("sample") && a1.byPath.get("sample").kind === "err",
+    JSON.stringify([...a1.byPath]));
 
   const sLoop = streamOf(pointerYaml(["loop_end: 9"]));
   const a2 = computeAnnotations(sLoop, { name: "test.wav", duration: 5 });
-  assert("#42 annotate loop_end over sample dur", a2.byKey.get("loop_end") && a2.byKey.get("loop_end").kind === "err",
-    JSON.stringify([...a2.byKey]));
+  assert("#42 annotate loop_end over sample dur", a2.byPath.get("pointer.loop_end") && a2.byPath.get("pointer.loop_end").kind === "err",
+    JSON.stringify([...a2.byPath]));
 
   const sOk = streamOf(pointerYaml(["loop_end: 3"]));
   const a3 = computeAnnotations(sOk, { name: "test.wav", duration: 5 });
-  assert("#42 no annotation when loop_end within sample dur", !a3.byKey.has("loop_end"), JSON.stringify([...a3.byKey]));
+  assert("#42 no annotation when loop_end within sample dur", !a3.byPath.has("pointer.loop_end"), JSON.stringify([...a3.byPath]));
 
   const sPan = streamOf(topLevelYaml(["pan: [[0, 0], [5, 5000]]"]));
   const a4 = computeAnnotations(sPan, { name: "test.wav", duration: 5 });
-  assert("#42 annotate pan env out of range", a4.byKey.get("pan") && a4.byKey.get("pan").kind === "warn",
-    JSON.stringify([...a4.byKey]));
+  assert("#42 annotate pan env out of range", a4.byPath.get("pan") && a4.byPath.get("pan").kind === "warn",
+    JSON.stringify([...a4.byPath]));
 }
 
 {
@@ -1552,36 +1556,36 @@ assert("#42 presentation helpers loaded",
   // per giunta lo chiamava secondi.
   const nOk = computeAnnotations(normLoop(["loop_end: 0.9"]), { name: "test.wav", duration: 0.4 });
   assert("normalized: nessun rosso su un loop_end dentro [0,1] di un sample corto",
-    !nOk.byKey.has("loop_end"), JSON.stringify([...nOk.byKey]));
+    !nOk.byPath.has("pointer.loop_end"), JSON.stringify([...nOk.byPath]));
 
   // Muto dove il motore parla: 5 normalized sono cinque volte la fine del file,
   // e 5 > 8 è falso — il controllo in secondi non vedeva niente.
   const nOver = computeAnnotations(normLoop(["loop_end: 5"]), { name: "test.wav", duration: 8 });
   assert("normalized: loop_end oltre 1 è rosso, per quanto lungo sia il sample",
-    nOver.byKey.get("loop_end") && nOver.byKey.get("loop_end").kind === "err",
-    JSON.stringify([...nOver.byKey]));
+    nOver.byPath.get("pointer.loop_end") && nOver.byPath.get("pointer.loop_end").kind === "err",
+    JSON.stringify([...nOver.byPath]));
   // Letto da un `|| {}`: se l'assert qui sopra e' rosso questa riga deve dare
   // un rosso anch'essa, non uccidere la suite su un .msg di undefined.
-  const nOverMsg = (nOver.byKey.get("loop_end") || {}).msg || "";
+  const nOverMsg = (nOver.byPath.get("pointer.loop_end") || {}).msg || "";
   assert("…e il messaggio dichiara il tetto normalizzato, non i secondi",
     /≤ 1 \(loop_unit: normalized/.test(nOverMsg), nOverMsg);
 
   // Stessa coppia sull'altra chiave: una lunghezza di 2 è due volte il file.
   const nDur = computeAnnotations(normLoop(["loop_dur: 2"]), { name: "test.wav", duration: 8 });
   assert("normalized: loop_dur oltre 1 è rosso",
-    nDur.byKey.get("loop_dur") && nDur.byKey.get("loop_dur").kind === "err",
-    JSON.stringify([...nDur.byKey]));
+    nDur.byPath.get("pointer.loop_dur") && nDur.byPath.get("pointer.loop_dur").kind === "err",
+    JSON.stringify([...nDur.byPath]));
   const nDurOk = computeAnnotations(normLoop(["loop_dur: 0.9"]), { name: "test.wav", duration: 0.4 });
   assert("normalized: loop_dur dentro [0,1] resta pulito",
-    !nDurOk.byKey.has("loop_dur"), JSON.stringify([...nDurOk.byKey]));
+    !nDurOk.byPath.has("pointer.loop_dur"), JSON.stringify([...nDurOk.byPath]));
 
   // La grafia storica dell'assoluto è la stessa lettura dei secondi: il tetto
   // torna a essere la durata del file.
   const absOver = computeAnnotations(streamOf(pointerYaml(["loop_unit: absolute", "loop_end: 9"])),
                                      { name: "test.wav", duration: 5 });
   assert("absolute: alias dei secondi, il tetto resta la durata del sample",
-    absOver.byKey.get("loop_end") && /sample duration \(5\.000 s\)/.test(absOver.byKey.get("loop_end").msg),
-    JSON.stringify([...absOver.byKey]));
+    absOver.byPath.get("pointer.loop_end") && /sample duration \(5\.000 s\)/.test(absOver.byPath.get("pointer.loop_end").msg),
+    JSON.stringify([...absOver.byPath]));
 
   // Durata ignota in secondi: loopEnvMax non risponde, e un controllo che non
   // sa contro cosa misurare tace invece di inventarsi un confronto (prima
@@ -1589,7 +1593,7 @@ assert("#42 presentation helpers loaded",
   // sarebbe morto su .toFixed di undefined).
   const noDur = computeAnnotations(streamOf(pointerYaml(["loop_end: 9"])), { name: "test.wav" });
   assert("secondi con durata ignota: nessun rosso e nessun crash",
-    !noDur.byKey.has("loop_end"), JSON.stringify([...noDur.byKey]));
+    !noDur.byPath.has("pointer.loop_end"), JSON.stringify([...noDur.byPath]));
 
   /* — e una grafia fuori vocabolario non ha un tetto affatto ————————————
      Dopo PGE #222 `normalised` non e' piu' «assoluto per esclusione»: il motore
@@ -1604,15 +1608,15 @@ assert("#42 presentation helpers loaded",
     streamOf(pointerYaml(["loop_unit: normalised", "loop_end: 9"])),
     { name: "test.wav", duration: 5 });
   assert("unità fuori vocabolario: il rosso è sull'unità",
-    badUnit.byKey.get("loop_unit") && badUnit.byKey.get("loop_unit").kind === "err",
-    JSON.stringify([...badUnit.byKey]));
+    badUnit.byPath.get("pointer.loop_unit") && badUnit.byPath.get("pointer.loop_unit").kind === "err",
+    JSON.stringify([...badUnit.byPath]));
   assert("…e nomina il vocabolario, come fa l'Inspector",
-    /normalised/.test((badUnit.byKey.get("loop_unit") || {}).msg || "")
-    && /seconds, absolute, normalized/.test((badUnit.byKey.get("loop_unit") || {}).msg || ""),
-    (badUnit.byKey.get("loop_unit") || {}).msg);
+    /normalised/.test((badUnit.byPath.get("pointer.loop_unit") || {}).msg || "")
+    && /seconds, absolute, normalized/.test((badUnit.byPath.get("pointer.loop_unit") || {}).msg || ""),
+    (badUnit.byPath.get("pointer.loop_unit") || {}).msg);
   assert("…e la finestra tace, invece di misurarla in un'unità che non è quella scritta",
-    !badUnit.byKey.has("loop_end") && !badUnit.byKey.has("loop_dur"),
-    JSON.stringify([...badUnit.byKey]));
+    !badUnit.byPath.has("pointer.loop_end") && !badUnit.byPath.has("pointer.loop_dur"),
+    JSON.stringify([...badUnit.byPath]));
   // Una grafia FALSY non e' un refuso: e' la chiave assente, che il
   // serializzatore toglie (`ptr.loopUnit || undefined`) e il motore non vede
   // mai. Li' il controllo torna quello dei secondi, come dice loopUnitInfo.
@@ -1620,9 +1624,141 @@ assert("#42 presentation helpers loaded",
     streamOf(pointerYaml(["loop_unit: \"\"", "loop_end: 9"])),
     { name: "test.wav", duration: 5 });
   assert("grafia falsy: nessun rosso sull'unità, e la finestra si misura in secondi",
-    !falsyUnit.byKey.has("loop_unit")
-    && falsyUnit.byKey.get("loop_end") && falsyUnit.byKey.get("loop_end").kind === "err",
-    JSON.stringify([...falsyUnit.byKey]));
+    !falsyUnit.byPath.has("pointer.loop_unit")
+    && falsyUnit.byPath.get("pointer.loop_end") && falsyUnit.byPath.get("pointer.loop_end").kind === "err",
+    JSON.stringify([...falsyUnit.byPath]));
+}
+
+/* ============================================================
+ * SECTION — la forma degli envelope nel tab Raw (#180, PGE #211)
+ *
+ * Da PGE #211 il builder del motore rifiuta, per ogni chiave, i compatti con
+ * una x fuori da [0, 100] o all'indietro, n_reps/end_time booleani, una y
+ * booleana nel pattern — scritture che prima si rendevano. L'editor non le
+ * scrive; il tab Raw si', ed e' li' che lo specchio (PGEEnv.envShapeError)
+ * deve parlare, sulla riga della chiave giusta.
+ *
+ * «La riga giusta» e' il punto delicato: l'annotazione si agganciava alla
+ * prima riga con quella CHIAVE NUDA, e `grain.duration` finiva sulla
+ * `duration:` dello stream, `deviation_probability.pan` sulla `pan:` di primo
+ * livello. Ora si aggancia per path: yamlLinePaths lo calcola riga per riga
+ * dall'indentazione del testo che il bridge ha emesso.
+ * ============================================================ */
+
+console.log("\n── la forma degli envelope nel tab Raw (#180) ──");
+
+{
+  const rec = { name: "test.wav", duration: 5 };
+  const annOf = (lines) => computeAnnotations(streamOf(topLevelYaml(lines)), rec).byPath;
+  const pathsOf = (lines) => yamlLinePaths(serializeStream(streamOf(topLevelYaml(lines))).split("\n"));
+
+  // yamlLinePaths: il path di ogni riga, non la chiave nuda
+  {
+    const lines = ["density: [[0, 1], [1, 2]]", "pan: 10",
+                   "grain:", "  duration: [[0, 0.01], [1, 0.02]]",
+                   "deviation_probability:", "  pan: [[0, 10], [1, 20]]"];
+    const ps = pathsOf(lines);
+    assert("yamlLinePaths: la duration dello stream e' `duration`", ps.includes("duration"), JSON.stringify(ps));
+    assert("…e quella del grano `grain.duration`", ps.includes("grain.duration"), JSON.stringify(ps));
+    assert("…e il pan per-parametro `deviation_probability.pan`, distinto dal `pan` di primo livello",
+      ps.includes("deviation_probability.pan") && ps.includes("pan"), JSON.stringify(ps));
+    assert("…e le righe senza chiave (gli elementi di una lista a blocchi) non hanno path",
+      yamlLinePaths(["grain:", "  duration:", "    - [[0, 1], [100, 2]]", "    - 1"]).slice(2)
+        .every(p => p === null));
+    assert("…e una chiave dentro un elemento di sequenza conta il trattino come indentazione",
+      JSON.stringify(yamlLinePaths(["a:", "  - b: 1", "    c: 2", "d: 3"])) ===
+      JSON.stringify(["a", "a.b", "a.c", "d"]),
+      JSON.stringify(yamlLinePaths(["a:", "  - b: 1", "    c: 2", "d: 3"])));
+  }
+
+  // gli envelope validi restano muti
+  {
+    const ok = annOf(["density: [[[0, 1], [100, 2]], 1, 4]",
+                      "grain:", "  duration: [[0, 0.01], [1, 0.02]]",
+                      "pan: [[[[0, 0], [1, 90]], cubic], [2, 0]]"]);
+    assert("envelope validi: nessuna annotazione di forma", ok.size === 0, JSON.stringify([...ok]));
+  }
+
+  // le quattro scritture di PGE #211, ciascuna sulla sua riga
+  {
+    const a = annOf(["density: [[[0, 0], [150, 1]], 1, 2]"]);
+    const d = a.get("density");
+    assert("x a 150 sotto density: rosso su `density`", d && d.kind === "err", JSON.stringify([...a]));
+    assert("…e il messaggio dice [0, 100] e che il motore rifiuta",
+      /\[0, 100\]/.test((d || {}).msg || "") && /engine rejects/.test((d || {}).msg || ""), (d || {}).msg);
+  }
+  {
+    const a = annOf(["grain:", "  duration: [[[0, 0.01], [100, 0.02]], 1, true]"]);
+    const g = a.get("grain.duration");
+    assert("n_reps: true sotto grain.duration: rosso su `grain.duration`",
+      g && g.kind === "err" && /n_reps/.test(g.msg), JSON.stringify([...a]));
+    assert("…e NON sulla duration dello stream", !a.has("duration"), JSON.stringify([...a]));
+    const ps = pathsOf(["grain:", "  duration: [[[0, 0.01], [100, 0.02]], 1, true]"]);
+    assert("…e il path dell'annotazione e' una riga che il serializer emette davvero",
+      ps.includes("grain.duration"), JSON.stringify(ps));
+  }
+  {
+    const a = annOf(["deviation_probability:", "  pan: [[[0, 10], [100, 20]], true, 2]"]);
+    assert("end_time: true sotto deviation_probability.pan: rosso li', non sul pan dello stream",
+      a.has("deviation_probability.pan") && !a.has("pan") &&
+      /end_time/.test(a.get("deviation_probability.pan").msg), JSON.stringify([...a]));
+  }
+  {
+    const a = annOf(["pitch:", "  cents: [[[0, true], [100, 100]], 1, 2]"]);
+    assert("y booleana sotto pitch.cents: rosso su `pitch.cents`",
+      a.has("pitch.cents") && /pattern point/.test(a.get("pitch.cents").msg), JSON.stringify([...a]));
+  }
+  {
+    const a = annOf(["pointer:", "  speed_ratio: [[[100, 1], [0, 2]], 1, 2]"]);
+    assert("x all'indietro sotto pointer.speed_ratio: rosso li'",
+      a.has("pointer.speed_ratio") && /backwards/.test(a.get("pointer.speed_ratio").msg),
+      JSON.stringify([...a]));
+  }
+  {
+    const a = annOf(["voices:", "  num_voices: 2", "  pitch:", "    strategy: step",
+                     "    step: [[[0, 1], [100, 2]], 1, true]"]);
+    assert("n_reps: true sotto voices.pitch.step: rosso li'",
+      a.has("voices.pitch.step"), JSON.stringify([...a]));
+  }
+  // una chiave inerte il motore non la costruisce: niente rosso
+  {
+    const a = annOf(["grain:", "  envelope: hanning",
+                     "deviation_probability:", "  envelope: [[[0, 10], [100, 20]], 1, true]"]);
+    assert("un envelope malformato su una chiave inerte non e' un rosso (il motore non lo legge)",
+      !a.has("deviation_probability.envelope"), JSON.stringify([...a]));
+  }
+  // piu' envelope malformati: un'annotazione per ciascuno
+  {
+    const a = annOf(["density: [[[0, 0], [150, 1]], 1, 2]", "volume: [[[0, 0], [100, 1]], 1, 0]"]);
+    assert("due envelope malformati: due annotazioni", a.has("density") && a.has("volume"),
+      JSON.stringify([...a]));
+  }
+  // il messaggio nomina il motivo per ogni caso che lo specchio distingue
+  {
+    const cases = [
+      ["[[[0, 0], [100, 1]], 1, 0]", /n_reps/],
+      ["[[[0, 0], [100, 1]], .inf, 2]", /end_time/],
+      ["[[[0, 0], [100, 1]], 0, 2]", /past the block start/],
+      ["[[], 1, 2]", /pattern is empty/],
+      ["[[[0, 0], [100, 1]], 1, 2, linear, bogus]", /time_dist/],
+      ["[[[0, 0]], cubic]", /at least 2 points/],
+      ["[[[0, 0], [1, 1]], cubicc]", /interp/],
+      ["[[0, 0], x]", /element 1/],
+    ];
+    for (const [body, re] of cases) {
+      const a = annOf([`volume: ${body}`]);
+      const m = (a.get("volume") || {}).msg || "";
+      assert(`volume: ${body} → ${re}`, re.test(m), m || JSON.stringify([...a]));
+    }
+  }
+  // la sorgente e' una sola: il componente non ha una copia della regola
+  {
+    const yeCode = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
+    assert("computeAnnotations chiede allo specchio, non lo ricopia",
+      /PGEEnv\.envShapeError\(/.test(yeCode) && !/is_compact_format|_engineIsCompact/.test(yeCode));
+    assert("…e prende gli envelope dal catalogo, col loro path YAML",
+      /PGEEnvCatalog\.listEnvelopes\(/.test(yeCode) && /\.yaml\b/.test(yeCode));
+  }
 }
 
 /* ============================================================

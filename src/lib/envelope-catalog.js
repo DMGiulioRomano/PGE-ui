@@ -93,56 +93,56 @@
     const list = [];
     if (stream.densityEnv) {
       list.push({ key: "density", label: "density", group: "Overall density",
-        path: ["densityEnv"], unit: "g/s",
+        path: ["densityEnv"], yaml: "density", unit: "g/s",
         visMin: 0, visMax: 50, hardMin: PB.density.min, hardMax: PB.density.max });
     }
     if (stream.fillFactorEnv) {
       list.push({ key: "fillFactor", label: "fill_factor", group: "Overall density",
-        path: ["fillFactorEnv"], unit: "×",
+        path: ["fillFactorEnv"], yaml: "fill_factor", unit: "×",
         visMin: 0.1, visMax: 20, hardMin: PB.fillFactor.min, hardMax: PB.fillFactor.max });
     }
     if (stream.distributionEnv) {
       list.push({ key: "distribution", label: "distribution", group: "Distribution",
-        path: ["distributionEnv"], unit: "",
+        path: ["distributionEnv"], yaml: "distribution", unit: "",
         visMin: 0, visMax: 1, hardMin: PB.distribution.min, hardMax: PB.distribution.max });
     }
     if (stream.pointer && stream.pointer.speedRatioEnv) {
       list.push({ key: "speedRatio", label: "speed_ratio", group: "Pointer",
-        path: ["pointer", "speedRatioEnv"], unit: "×",
+        path: ["pointer", "speedRatioEnv"], yaml: "pointer.speed_ratio", unit: "×",
         visMin: -1, visMax: 1, hardMin: PB.speedRatio.min, hardMax: PB.speedRatio.max });
     }
     if (stream.pointer && stream.pointer.loopStartEnv) {
       list.push({ key: "loopStart", label: "loop_start", group: "Pointer",
-        path: ["pointer", "loopStartEnv"], unit: loopUnitSuffix, fine: true,
+        path: ["pointer", "loopStartEnv"], yaml: "pointer.loop_start", unit: loopUnitSuffix, fine: true,
         visMin: 0, visMax: loopMax != null ? loopMax : 10,
         hardMin: PB.loopStart.min, hardMax: loopMax != null ? loopMax : PB.loopStart.max });
     }
     if (stream.pointer && stream.pointer.loopDurEnv) {
       list.push({ key: "loopDur", label: "loop_dur", group: "Pointer",
-        path: ["pointer", "loopDurEnv"], unit: loopUnitSuffix, fine: true,
+        path: ["pointer", "loopDurEnv"], yaml: "pointer.loop_dur", unit: loopUnitSuffix, fine: true,
         visMin: 0, visMax: loopMax != null ? loopMax : 10,
         hardMin: PB.loopDur.min, hardMax: loopMax != null ? loopMax : PB.loopDur.max });
     }
     if (stream.pointer && stream.pointer.loopEndEnv) {
       list.push({ key: "loopEnd", label: "loop_end", group: "Pointer",
-        path: ["pointer", "loopEndEnv"], unit: loopUnitSuffix, fine: true,
+        path: ["pointer", "loopEndEnv"], yaml: "pointer.loop_end", unit: loopUnitSuffix, fine: true,
         visMin: 0, visMax: loopMax != null ? loopMax : 10,
         hardMin: PB.loopEnd.min, hardMax: loopMax != null ? loopMax : PB.loopEnd.max });
     }
     if (stream.pointer && stream.pointer.offsetRangeEnv) {
       list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
-        path: ["pointer", "offsetRangeEnv"], unit: "",
+        path: ["pointer", "offsetRangeEnv"], yaml: "pointer.offset_range", unit: "",
         visMin: 0, visMax: 1, hardMin: PB.offsetRange.min, hardMax: PB.offsetRange.max });
     }
     if (stream.grain && stream.grain.durationEnv) {
       list.push({ key: "grainDur", label: "duration", group: "Grain",
-        path: ["grain", "durationEnv"], unit: grainUnitSuffix, fine: true,
+        path: ["grain", "durationEnv"], yaml: "grain.duration", unit: grainUnitSuffix, fine: true,
         visMin: grainDurVis.min, visMax: grainDurVis.max,
         hardMin: grainDurBounds.min, hardMax: grainDurBounds.max });
     }
     if (stream.grain && stream.grain.durationRangeEnv) {
       list.push({ key: "durationRange", label: "duration_range", group: "Grain",
-        path: ["grain", "durationRangeEnv"], unit: grainRangeSuffix, fine: true,
+        path: ["grain", "durationRangeEnv"], yaml: "grain.duration_range", unit: grainRangeSuffix, fine: true,
         visMin: grainRangeVis.min, visMax: grainRangeVis.max,
         hardMin: grainRangeBounds.min, hardMax: grainRangeBounds.max });
     }
@@ -153,34 +153,38 @@
       // restano [-1, 1] perché servono al disegno — è lo snap, non il clamp, a
       // far rispettare il dominio quando l'utente trascina.
       list.push({ key: "readDirection", label: "read_direction", group: "Grain",
-        path: ["grain", "readDirectionEnv"], unit: "",
+        path: ["grain", "readDirectionEnv"], yaml: "grain.read_direction", unit: "",
         domain: "direction", integer: true,
         visMin: -1, visMax: 1,
         hardMin: PB.readDirection.min, hardMax: PB.readDirection.max });
     }
     if (stream.panEnv) {
       list.push({ key: "pan", label: "pan", group: "Volume & Pan",
-        path: ["panEnv"], unit: "°",
+        path: ["panEnv"], yaml: "pan", unit: "°",
         visMin: -360, visMax: 360, hardMin: PB.pan.min, hardMax: PB.pan.max });
     }
     if (stream.panRangeEnv) {
       list.push({ key: "panRange", label: "pan_range", group: "Volume & Pan",
-        path: ["panRangeEnv"], unit: "°",
+        path: ["panRangeEnv"], yaml: "pan_range", unit: "°",
         visMin: 0, visMax: 360, hardMin: PB.panRange.min, hardMax: PB.panRange.max });
     }
     if (stream.volumeEnv) {
       list.push({ key: "volume", label: "volume", group: "Volume & Pan",
-        path: ["volumeEnv"], unit: "dB",
+        path: ["volumeEnv"], yaml: "volume", unit: "dB",
         visMin: -40, visMax: 0, hardMin: PB.volume.min, hardMax: PB.volume.max });
     }
     if (stream.volumeRangeEnv) {
       list.push({ key: "volumeRange", label: "volume_range", group: "Volume & Pan",
-        path: ["volumeRangeEnv"], unit: "dB",
+        path: ["volumeRangeEnv"], yaml: "volume_range", unit: "dB",
         visMin: 0, visMax: 12, hardMin: PB.volumeRange.min, hardMax: PB.volumeRange.max });
     }
     if (stream.pitch && stream.pitch.valueEnv) {
       const pu = stream.pitch.unit || "semitones";
       const puLabel = pu === "ratio" ? "ratio" : pu;
+      // Il valore sta sotto la chiave dell'unita' (`pitch.cents: …`), tranne
+      // in edo, dove sta a fianco: `pitch: {edo: N, value: …}` — lo stesso
+      // path che il motore nomina negli errori (PGE #211).
+      const pitchYamlKey = pu === "edo" ? "pitch.value" : "pitch." + pu;
       const edoN = stream.pitch.edoDivisions || 12;
       // Il simbolo lo dice il modulo (PGEEnv.pitchUnitSymbol), come per le due
       // voci di voices.pitch qui sotto e come fa l'Inspector sulla stessa riga.
@@ -197,7 +201,7 @@
         : pu === "ratio"       ? [0.5, 2, pb.min, pb.max]
         : [-12, 12, pb.min, pb.max];
       list.push({ key: "pitch", label: puLabel, group: "Pitch",
-        path: ["pitch", "valueEnv"], unit: puUnit,
+        path: ["pitch", "valueEnv"], yaml: pitchYamlKey, unit: puUnit,
         integer: window.PGEEnv.pitchUnitIsInteger(pu),
         visMin: pvMin, visMax: pvMax, hardMin: phMin, hardMax: phMax });
     }
@@ -213,25 +217,25 @@
         : pu === "ratio"       ? [2, prb.rangeMax]
         : [12, prb.rangeMax];
       list.push({ key: "pitchRange", label: "range", group: "Pitch",
-        path: ["pitch", "rangeEnv"], unit: puUnit,
+        path: ["pitch", "rangeEnv"], yaml: "pitch.range", unit: puUnit,
         integer: window.PGEEnv.pitchUnitIsInteger(pu),
         visMin: 0, visMax: prVis, hardMin: 0, hardMax: prHard });
     }
     if (stream.voices && stream.voices.numEnv) {
       list.push({ key: "voicesNum", label: "num_voices", group: "Voices",
-        path: ["voices", "numEnv"], unit: "",
+        path: ["voices", "numEnv"], yaml: "voices.num_voices", unit: "",
         visMin: 1, visMax: 16, hardMin: PB.voicesNum.min, hardMax: PB.voicesNum.max });
     }
     if (stream.voices && stream.voices.scatterEnv) {
       list.push({ key: "scatter", label: "scatter", group: "Voices",
-        path: ["voices", "scatterEnv"], unit: "",
+        path: ["voices", "scatterEnv"], yaml: "voices.scatter", unit: "",
         visMin: 0, visMax: 1, hardMin: PB.scatter.min, hardMax: PB.scatter.max });
     }
     if (stream.voices && stream.voices.pitch && stream.voices.pitch.stepEnv) {
       const vpu = (stream.voices.pitch || {}).unit;
       const b = pitchEnvBounds(vpu, { vis: 12, hard: PB.voicePitchOffset.max }, true);
       list.push({ key: "voicesPitchStep", label: "pitch · step", group: "Voices",
-        path: ["voices", "pitch", "stepEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+        path: ["voices", "pitch", "stepEnv"], yaml: "voices.pitch.step", unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
         integer: window.PGEEnv.pitchUnitIsInteger(vpu),
         visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
     }
@@ -239,37 +243,37 @@
       const vpu = (stream.voices.pitch || {}).unit;
       const b = pitchEnvBounds(vpu, { vis: 24, hard: 96 }, false);
       list.push({ key: "voicesPitchRange", label: "pitch · pitch_range", group: "Voices",
-        path: ["voices", "pitch", "pitch_rangeEnv"], unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
+        path: ["voices", "pitch", "pitch_rangeEnv"], yaml: "voices.pitch.pitch_range", unit: window.PGEEnv.pitchUnitSymbol(vpu || "semitones"),
         integer: window.PGEEnv.pitchUnitIsInteger(vpu),
         visMin: b.visMin, visMax: b.visMax, hardMin: b.hardMin, hardMax: b.hardMax });
     }
     if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.stepEnv)
       list.push({ key: "voicesOnsetStep", label: "onset · step", group: "Voices",
-        path: ["voices", "onset_offset", "stepEnv"], unit: "s", fine: true,
+        path: ["voices", "onset_offset", "stepEnv"], yaml: "voices.onset_offset.step", unit: "s", fine: true,
         visMin: 0, visMax: 1, hardMin: 0, hardMax: 60 });
     if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.baseEnv)
       list.push({ key: "voicesOnsetBase", label: "onset · base", group: "Voices",
-        path: ["voices", "onset_offset", "baseEnv"], unit: "",
+        path: ["voices", "onset_offset", "baseEnv"], yaml: "voices.onset_offset.base", unit: "",
         visMin: 1, visMax: 4, hardMin: 0.01, hardMax: 100 });
     if (stream.voices && stream.voices.onset_offset && stream.voices.onset_offset.max_offsetEnv)
       list.push({ key: "voicesOnsetMaxOffset", label: "onset · max_offset", group: "Voices",
-        path: ["voices", "onset_offset", "max_offsetEnv"], unit: "s", fine: true,
+        path: ["voices", "onset_offset", "max_offsetEnv"], yaml: "voices.onset_offset.max_offset", unit: "s", fine: true,
         visMin: 0, visMax: 2, hardMin: 0, hardMax: 60 });
     if (stream.voices && stream.voices.pointer && stream.voices.pointer.stepEnv)
       list.push({ key: "voicesPointerStep", label: "pointer · step", group: "Voices",
-        path: ["voices", "pointer", "stepEnv"], unit: "",
+        path: ["voices", "pointer", "stepEnv"], yaml: "voices.pointer.step", unit: "",
         visMin: -1, visMax: 1, hardMin: PB.voicePointerOffset.min, hardMax: PB.voicePointerOffset.max });
     if (stream.voices && stream.voices.pointer && stream.voices.pointer.pointer_rangeEnv)
       list.push({ key: "voicesPointerRange", label: "pointer · range", group: "Voices",
-        path: ["voices", "pointer", "pointer_rangeEnv"], unit: "",
+        path: ["voices", "pointer", "pointer_rangeEnv"], yaml: "voices.pointer.pointer_range", unit: "",
         visMin: 0, visMax: 1, hardMin: PB.voicePointerRange.min, hardMax: PB.voicePointerRange.max });
     if (stream.voices && stream.voices.pan && stream.voices.pan.spreadEnv)
       list.push({ key: "voicesPanSpread", label: "pan · spread", group: "Voices",
-        path: ["voices", "pan", "spreadEnv"], unit: "°",
+        path: ["voices", "pan", "spreadEnv"], yaml: "voices.pan.spread", unit: "°",
         visMin: 0, visMax: 360, hardMin: 0, hardMax: 3600 });
     if (stream.voices && stream.voices.pan && stream.voices.pan.stepEnv)
       list.push({ key: "voicesPanStep", label: "pan · step", group: "Voices",
-        path: ["voices", "pan", "stepEnv"], unit: "°",
+        path: ["voices", "pan", "stepEnv"], yaml: "voices.pan.step", unit: "°",
         visMin: -90, visMax: 90, hardMin: -3600, hardMax: 3600 });
     // deviation_probability env detection goes through the shared classifier
     // (window.PGEDeviationProb), so the typed {type, points} form (cubic global
@@ -280,7 +284,7 @@
     const PGEDeviationProb = window.PGEDeviationProb;
     if (PGEDeviationProb.isEnvValue(stream.deviationProbability)) {
       list.push({ key: "deviation_probability", label: "probability", group: "Deviation",
-        path: ["deviationProbability"], unit: "%",
+        path: ["deviationProbability"], yaml: "deviation_probability", unit: "%",
         visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
     } else if (PGEDeviationProb.mode(stream.deviationProbability) === "perParam") {
       // ALL_PARAM_KEYS, non PARAM_KEYS: questo e' il catalogo, e ha lo stesso
@@ -299,7 +303,7 @@
       for (const pk of PGEDeviationProb.ALL_PARAM_KEYS) {
         if (PGEDeviationProb.isEnvValue(stream.deviationProbability[pk])) {
           list.push({ key: "deviation_probability_" + pk, label: pk, group: "Deviation",
-            path: ["deviationProbability", pk], unit: "%",
+            path: ["deviationProbability", pk], yaml: "deviation_probability." + pk, unit: "%",
             inert: PGEDeviationProb.inertReason(pk, liveKeys),
             visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
         }
@@ -316,7 +320,7 @@
       const isMultistate = Array.isArray(genv.states);
       const vmax = isMultistate ? Math.max(1, genv.states.length - 1) : 1;
       list.push({ key: "grainEnvCurve", label: isMultistate ? "states · blend" : "transition · blend", group: "Grain",
-        path: ["grain", "envelope", "curve"], unit: "",
+        path: ["grain", "envelope", "curve"], yaml: "grain.envelope.curve", unit: "",
         visMin: 0, visMax: vmax, hardMin: 0, hardMax: vmax });
     }
     return list;
