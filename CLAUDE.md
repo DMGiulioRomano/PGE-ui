@@ -63,7 +63,12 @@ exists, the fourth only when a browser is installed):
   `window.PGEEnv.timeDistError`, including the `(param, n_reps)` overflow whose
   thresholds are checked against the real engine, plus the no-longer-silent
   fallback in `computeCycleDurations` and the band where its warn may not speak
-  for the engine), and `test-deviation-probability.js`
+  for the engine), and `test-envelope-shape.js` (`window.PGEEnv.envShapeError`,
+  the mirror of the engine builder's shape guards of PGE #211: every rule in
+  both the bare and the in-list spelling, the order the guards fire in, where
+  a block *starts* after a compact one, the valid bodies — the editor's own
+  default block among them — that must stay silent, and the declared int/float
+  blind spot), and `test-deviation-probability.js`
   (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier,
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
@@ -189,7 +194,7 @@ exists, the fourth only when a browser is installed):
   suites in `tests/parity/`, which ask the **engine itself** the questions the
   mirrors in `src/lib/` answer from memory. See "Parity harness" below and
   `tests/parity/README.md`. The parity suites don't own their
-  verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
+  verdict (`harness.js` does, for all of them), but `test-suite-harness.js` still
   guards them against taking it back with a brutal exit.
 - **`make tests-e2e`** (node + python + a browser, needs **neither** the engine
   checkout nor its venv) — `tests/e2e/test-boot.js`, the headless boot. See
@@ -1023,7 +1028,74 @@ The request body carries `yamlContent`. `server.py` writes it **to the canonical
 
 ### YAML bodies that can kill a render
 
-Two engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123):
+Three engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123;
+PGE #211, PGE-ui #180):
+
+**The shape of an envelope** (PGE #211, #180). Since PGE #211 the shape guards
+live in the engine's `EnvelopeBuilder` and hold for **every** key, and four
+spellings that used to render in silence stop the render: a compact pattern
+`x` outside `[0, 100]` or going backwards, `n_reps: true` (`range(True)`
+rendered one cycle), `end_time: true` (it was `1.0`) or non-finite, and a
+boolean `y` in the pattern. No gesture of the editor writes them — pattern
+drags stay between the neighbours and inside `[0, 100]` — but the Raw tab does.
+`window.PGEEnv.envShapeError(env)` (`envelope-loops.js`, beside `timeDistError`,
+which it calls for the fifth slot) is the mirror, and it walks
+`EnvelopeBuilder.parse` step by step because the engine stops at the **first**
+guard: the bare compact / bare group first, then the list item by item (a dict
+`{t, v, type?}` becomes `[t, v, type?]`, then compact → group → 3-tuple →
+`[t, v]` → "element not recognized"), and inside a compact n_reps → end_time
+(type, then past the start) → empty pattern → each point (flat, `x` in
+`[0, 100]`, not decreasing — a repeated `x` is the discontinuity and is fine) →
+the distribution. It returns `where` as the engine's sub-position without the
+`envelope.` prefix (`compact.n_reps`, `group.points`, `point`, …), which is
+what the parity compares one by one.
+
+Three things in it are easy to get wrong, and each has its case:
+
+- **Recognition is the engine's, not the editor's.** `is_compact_format` /
+  `is_bp_group` are copied into `_engineIsCompact` / `_engineIsGroup`, looser
+  than `isCompactBlock` / `isBPGroup`, which say what the canvas can *draw*:
+  `[pattern, 1, true]` is no block to them, but it is a compact to the engine,
+  and the right error is on `n_reps`, not "unknown element".
+- **Where a block starts.** In a list, the block after a compact starts at the
+  *last expanded breakpoint* (`current_time = compact_expanded[-1][0]`, an
+  assignment, not a max), which is not its `end_time`: with a pattern ending at
+  `x = 50` it sits inside the last cycle, and with wrap it is `end − 1e-6`.
+  `_compactLastTime` computes it from `computeCycleDurations` (whose durations
+  the time-distribution parity already pins), only when a later compact needs
+  it. `expandMixed` restarts from `end_time` — the preview is not what decides
+  rejection.
+- **The int/float blind spot.** For Python `n_reps: 2.0` is a float, hence not
+  a compact, hence an error; here `2.0` and `2` are the same Number, and the
+  mirror stays silent — the safe direction, like `power.exponent` in
+  `timeDistError`. The parity asks it through `raw_json` (below).
+
+Out of scope, and said: what the engine rejects *outside* the builder (an
+unknown per-point or global interp, a dict without `points`, the empty list —
+that one is `wouldEmptyEnv`'s, PGE #209).
+
+It has two readers. The **Raw tab** (`computeAnnotations`) walks the envelopes
+of the stream through the catalog — `listEnvelopes`, the same list the
+EnvelopeEditor opens — and puts one red per malformed envelope on the line of
+its key. Inert catalog entries are skipped: the engine doesn't build them, so it
+doesn't reject them. That needed two things the Raw tab didn't have: each
+catalog entry now declares its **YAML path** (`yaml: "grain.duration"`,
+`pitch.<unit>` or `pitch.value` in edo, `deviation_probability.<key>`), pinned
+in `test-envelope-catalog.js` by serializing a stream holding that entry alone
+and reading the envelope back at that path; and annotations are keyed by that
+**path** (`byPath`), not by the bare key. The component computes each line's
+path from the indentation of the text the bridge emitted (`yamlLinePaths`);
+before, an annotation landed on the first line with the same bare key, so
+`grain.duration` would have gone on the stream's own `duration:` and
+`deviation_probability.pan` on the top-level `pan:`. The **EnvelopeEditor**
+shows the same error, in Italian, on a row under its header (`.ee-shape-err`),
+on the raw value and not the desugared one — outside the block panels, because
+the offending block may be one the preview cannot draw and so cannot select.
+
+One fix came with it: `timeDistError({type: null})` read `linear`, because the
+mirror tested `dist.type != null`; the engine reads `spec.get('type',
+'linear')`, which on a key *present* with `None` gives `None`, and rejects it
+(on both sides of PGE #211). It tests `!== undefined` now.
 
 **`deviation_probability`** with a body that can't build as an envelope exits 1. `window.PGEDeviationProb.error` (`src/lib/deviation-probability.js`, node-tested) is the mirror — deliberately the *conservative half*: it flags only bodies that can't be an envelope in any reading, so mixed forms pass here and are caught by the engine. The Inspector shows the error below the mode selector.
 
@@ -1494,6 +1566,7 @@ with the engine. Those pacts used to live only in prose. They are now executable
 (`fingerprint` — optionally with the semantics version swapped, to ask whether
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
+`build_envelope` — a real `Envelope`, which imports without numpy —,
 `parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
 name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
 included);
@@ -1524,6 +1597,21 @@ behind is legitimate (the pacts still hold, and the run notes by how much);
 not existing is not. It has no shallow-clone escape hatch — the first version
 had one and a `deadbeef…` SHA sailed through it — so CI checks the engine out
 with `fetch-depth: 300`.
+
+**`test-envelope-shape-parity.js` straddles an engine change** (#180). The
+mirror is written against PGE #211, and an engine before it lacks part of the
+guards: four spellings render there. A probe (`n_reps: true`) says which engine
+is on the other side, not a SHA — the CI checkout follows the engine's default
+branch, so the day #211 lands there the suite moves to the strict branch by
+itself. Strict: same verdict and same sub-position on every body. Before #211:
+the UI is still never *quieter* than the old engine, and where it is louder the
+error must be one of the four #211 spellings (`NEW_IN_211`, declared from the
+engine's CHANGELOG, not deduced), listed as a note. Once #211 is in the default
+branch the transition branch and `NEW_IN_211` are dead code, to be removed.
+Non-finite floats now travel tagged in **both** directions (`encodeFloat` in
+`oracle.js`, `_from_wire` in the oracle): `JSON.stringify(Infinity)` is `null`,
+and an `end_time: .inf` would have reached the engine as `end_time: None` — a
+different question with a different answer.
 
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the
