@@ -257,6 +257,69 @@ for (const p of walkPaths) {
   assert("streamWouldTruncate vede " + p.join("."), EU.streamWouldTruncate(s, 2) === true);
 }
 
+/* ── `yaml`: dove sta la voce nel file, chiesto al serializer ────────────────
+   Il tab Raw aggancia l'errore di forma di un envelope alla sua riga (#180), e
+   la riga la trova per path YAML. Quel path non si deduce dal path dello stato:
+   `grain.durationEnv` esce come `grain.duration`, ma `pitch.valueEnv` esce come
+   `pitch.<unita'>` (o `pitch.value` in edo) e `voices.numEnv` come
+   `voices.num_voices`. Il catalogo lo dichiara per voce, e qui lo si chiede al
+   SERIALIZER: uno stream che porta la sola voce, serializzato e riletto, deve
+   avere l'envelope esattamente al path dichiarato. Una voce col path sbagliato
+   agganciava l'errore alla riga di un'altra chiave, o a nessuna. */
+console.log("\n── listEnvelopes: il path YAML di ogni voce e' quello del serializer ──");
+{
+  const SENT = [[0, 7], [1, 7.5]];
+  const getAt = (obj, dotted) => typeof dotted !== "string" ? undefined
+    : dotted.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+  const minimal = (setup) => {
+    const s = { id: "s", onset: 0, duration: 10, sample: "x.wav" };
+    setup(s);
+    return s;
+  };
+  // Nella forma dello stato che il parse produce: `x` e `xEnv` sono campi
+  // paralleli, esattamente uno non-null. La gemella scalare a null non e' un
+  // dettaglio — `packStrategy` emette un kwarg dei voices solo se la chiave
+  // scalare esiste, e senza lo stream minimale non sarebbe quello dell'editor.
+  const setPath = (obj, p, v) => {
+    let cur = obj;
+    for (const k of p.slice(0, -1)) cur = (cur[k] = cur[k] || {});
+    const last = p[p.length - 1];
+    cur[last] = v;
+    if (last.endsWith("Env") && !(last.slice(0, -3) in cur)) cur[last.slice(0, -3)] = null;
+  };
+  const sources = fatList.map(e => ({
+    label: e.key,
+    key: e.key,
+    stream: minimal(s => {
+      if (eq(e.path, ["grain", "envelope", "curve"]))
+        s.grain = { envelope: { from: "hanning", to: "bartlett", curve: SENT } };
+      else setPath(s, e.path, SENT);
+    }),
+  })).concat([
+    { label: "pitch in cents", key: "pitch",
+      stream: minimal(s => { s.pitch = { unit: "cents", valueEnv: SENT }; }) },
+    { label: "pitch in edo", key: "pitch",
+      stream: minimal(s => { s.pitch = { unit: "edo", edoDivisions: 19, valueEnv: SENT }; }) },
+    { label: "deviation_probability globale", key: "deviation_probability",
+      stream: minimal(s => { s.deviationProbability = SENT; }) },
+    { label: "deviation_probability per parametro", key: "deviation_probability_volume",
+      stream: minimal(s => { s.deviationProbability = { volume: SENT }; }) },
+  ]);
+  assert("ogni voce del catalogo dichiara il suo path YAML",
+    fatList.every(e => typeof e.yaml === "string" && e.yaml.length > 0),
+    fatList.filter(e => typeof e.yaml !== "string").map(e => e.key).join(", "));
+  for (const src of sources) {
+    const entry = byKey(C.listEnvelopes(src.stream, 8), src.key);
+    const loaded = window.jsyaml.load(window.PGEYaml.serializeStream(src.stream));
+    assert(`${src.label}: l'envelope sta a «${entry && entry.yaml}» nel file`,
+      !!entry && eq(getAt(loaded, entry.yaml), SENT),
+      JSON.stringify({ yaml: entry && entry.yaml, found: entry && getAt(loaded, entry.yaml) }));
+  }
+  const edo = byKey(C.listEnvelopes(sources.find(s => s.label === "pitch in edo").stream, 8), "pitch");
+  assert("in edo il valore sta a fianco della chiave: pitch.value",
+    !!edo && edo.yaml === "pitch.value", edo && edo.yaml);
+}
+
 /* ── loop_unit: DUE provenienze, non tre ─────────────────────────────────────
    La #140 ne chiedeva tre perche' all'epoca `loop_unit` ereditava da
    `time_mode`. PGE #222 ha tagliato quel fallback (PGE-ui #149): le
@@ -546,6 +609,22 @@ assert("nessuna copia locale di listEnvelopes nel componente",
 assert("le prende dai moduli",
   /window\.PGEEnv\.wouldEmptyEnv/.test(eeSrc) &&
   /window\.PGEEnvCatalog\.listEnvelopes/.test(eeSrc));
+/* La forma dell'envelope aperto (#180, PGE #211): l'editor la dice sotto
+   l'header, e la regola e' lo specchio di envelope-loops.js, non una copia.
+   Il rosso appare solo per i corpi scritti a mano nel tab Raw — i drag non li
+   producono — ma e' qui che l'autore li guarda disegnati. */
+assert("l'editor chiede la forma a PGEEnv.envShapeError, non la ricopia",
+  /PGEEnv\.envShapeError\(/.test(eeSrc) && !/_engineIsCompact|is_compact_format/.test(eeSrc));
+assert("…e la tace sulle voci inerti, come il tab Raw (il motore non le costruisce)",
+  /envShapeError\([^)]*\)/.test(eeSrc) && /\.inert\s*\?\s*null|!\s*env\.inert/.test(eeSrc));
+{
+  const css = fs.readFileSync(path.join(__dirname, "../../styles/envelope_editor.css"), "utf8");
+  assert("la riga d'errore di forma ha il suo stile, rosso",
+    /\.ee-shape-err\s*\{[^}]*--status-error/.test(css));
+  assert("…e il componente la usa",
+    /className="ee-shape-err/.test(eeSrc));
+}
+
 /* La ragione dell'inerzia non sta piu' in un componente: il catalogo e' una
    lib e leggerla da window.PGE sarebbe una lib che dipende da un componente. */
 assert("il catalogo NON legge la ragione dell'inerzia da un componente",

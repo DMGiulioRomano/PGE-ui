@@ -288,6 +288,15 @@
 .pge-envedit .ee-loop-panel-hint {
   font-size: 10px; color: var(--fg-4); line-height: 1.5;
 }
+/* La forma dell'envelope aperto, quando il motore la rifiuta (#180): una riga
+   sotto l'header, fuori dai pannelli di blocco — l'errore puo' stare in un
+   blocco che l'anteprima non sa disegnare, e quindi non si seleziona. */
+.pge-envedit .ee-shape-err {
+  flex: 0 0 auto; padding: 4px 12px;
+  font-size: 10px; line-height: 1.5; color: var(--status-error);
+  border-bottom: 1px solid var(--border-default);
+  white-space: normal;
+}
 
 /* ---- segment interpolation context menu ---- */
 .pge-envedit .ee-seg-ctx-menu {

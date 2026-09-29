@@ -51,7 +51,7 @@ const SPECS = [
   { type: "logarithmic", base: 0.5 },
   { type: "power", exponent: 2 }, { type: "power", exponent: -3 },
   { type: "power", exponent: 0 }, { type: "power", exponent: "x" },
-  { type: "bogus" }, { type: 5 }, { ratio: 1.5 },
+  { type: "bogus" }, { type: 5 }, { type: null }, {}, { ratio: 1.5 },
   { type: "exponential", ratio: 1.5 }, { type: "geometric", rate: 2 },
   { type: "geometric", ratio: 1.5, extra: 1 },
 ];
