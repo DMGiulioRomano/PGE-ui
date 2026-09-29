@@ -269,13 +269,13 @@ assert("la suite ha piu' di un file da controllare", suiteFiles.length > 1,
   `trovati ${suiteFiles.length}`);
 assert("il runner di tests/parity/ e' nella lista",
   suiteFiles.some(f => f.label === "parity/harness.js"),
-  "harness.js governa cinque suite: il contratto d'uscita vale anche per lui");
+  "harness.js governa tutte le suite di parita': il contratto d'uscita vale anche per lui");
 assert("la suite e2e e' nella lista",
   suiteFiles.some(f => f.label === "e2e/test-boot.js"),
   "tests/e2e/test-boot.js e' sparita: se e' stata rinominata, aggiorna la " +
   "guardia invece di lasciarla muta");
 
-/* Le CINQUE suite di parita' non devono rispettare l'intero contratto — il
+/* Le suite di parita' non devono rispettare l'intero contratto — il
  * verdetto non e' loro, lo tiene harness.js per tutte — ma non devono nemmeno
  * poterselo riprendere. Un'uscita brutale appesa in fondo a una di loro la
  * fa uscire 0 senza riepilogo, con un sabotaggio reale dentro, e la guardia

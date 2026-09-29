@@ -284,7 +284,7 @@ tests-python:
 
 # js-yaml sta in tests/node/node_modules (unico package.json del repo): le
 # suite di parita' che serializzano uno stream lo caricano da li'.
-# `|| exit 1` fermerebbe il ciclo alla prima suite rossa, e con cinque suite
+# `|| exit 1` fermerebbe il ciclo alla prima suite rossa, e con sei suite
 # significa vedere un fallimento per giro invece di tutti. Qui l'esito si
 # accumula e si esce in fondo: un giro, il censimento completo.
 tests-parity:

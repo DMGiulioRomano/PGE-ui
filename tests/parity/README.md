@@ -40,9 +40,12 @@ test-*-parity.js   le suite.
 
 Due dettagli del protocollo che non si indovinano leggendo il codice:
 
-- **I float non finiti viaggiano etichettati.** `Infinity` e `NaN` non sono
-  JSON, quindi `_json_safe` li manda come `{"__float__": "Infinity"}` e
-  `oracle.js` li ridecodifica in numeri veri. La prima versione li mandava a
+- **I float non finiti viaggiano etichettati, nei due versi.** `Infinity` e
+  `NaN` non sono JSON, quindi `_json_safe` li manda come
+  `{"__float__": "Infinity"}` e `oracle.js` li ridecodifica in numeri veri. Da
+  #180 vale anche all'andata: `encodeFloat` etichetta gli argomenti e
+  `_from_wire` li toglie, perché `JSON.stringify(Infinity)` è `null` e una
+  domanda su `end_time: .inf` arrivava al motore come `end_time: None`. La prima versione li mandava a
   `null` "come farebbe `JSON.stringify`": era vero e inutile, perché
   `JSON.stringify` fa lo stesso di qua e il confronto diventava `null === null`
   — indistinguibili, non confrontabili. Chi confronta valori dell'oracolo deve
@@ -63,6 +66,7 @@ Le operazioni dell'oracolo:
 | `parse_magnify_spec` | i target di `--magnify-at`, o l'errore | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
+| `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `filter_solo_mute` | gli `stream_id` che `Generator._filter_solo_mute` tiene — estratto dall'AST di `generator.py` ed eseguito, perché il modulo tira dentro numpy | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
 | `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
@@ -285,6 +289,8 @@ commento.
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
+| envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
+| envelope-shape | contro un motore **precedente** a PGE #211, la UI rifiuta quattro scritture che il motore rende (`x` fuori da [0, 100] o all'indietro, `n_reps`/`end_time` booleani o `end_time` non finito, `y` booleana nel pattern) | lo specchio descrive il motore di #211. Una sonda (`n_reps: true`) sceglie il ramo: stretto con i guard, di transizione senza — lì la UI non può essere più muta del motore, e dove è più rumorosa l'errore deve essere una delle quattro (`NEW_IN_211`). Il ramo e `NEW_IN_211` si tolgono quando #211 è nel default branch del motore |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
