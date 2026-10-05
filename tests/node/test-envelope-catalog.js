@@ -637,6 +637,53 @@ assert("…e dopo i quattro moduli che legge",
   ["yaml-bridge.js", "envelope-loops.js", "deviation-probability.js", "envelope-utils.js"]
     .every(f => htmlSrc.indexOf("src/lib/" + f) < htmlSrc.indexOf("src/lib/envelope-catalog.js")));
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   density senza tetto (PGE #272, #170)
+   ═══════════════════════════════════════════════════════════════════════════ */
+console.log("\n── la riga di density non ha tetto, e il paste non la appiattisce ──");
+{
+  const dens = (s) => byKey(C.listEnvelopes(s, 8), "density");
+  const S = { id: "s", densityEnv: [[0, 8], [0.5, 6000], [1, 20]] };
+  // Il tetto della riga e' il clamp di ogni drag e il limite della finestra
+  // (computeYFit): a 4000 un punto scritto a mano a 6000 restava fuori quadro,
+  // e il primo trascinamento lo riportava sotto il tetto.
+  assert("fallback statico: hardMax di density e' Infinity",
+    dens(S).hardMax === Infinity && dens(S).hardMin === PB.density.min,
+    String(dens(S).hardMax));
+  const fit = EU.computeYFit(S.densityEnv.map(p => p[1]),
+    { visMin: dens(S).visMin, visMax: dens(S).visMax, hardMin: dens(S).hardMin, hardMax: dens(S).hardMax });
+  assert("la finestra contiene il punto a 6000", fit.ymax >= 6000 && Number.isFinite(fit.ymax),
+    JSON.stringify(fit));
+
+  // Col motore che parla: /bounds porta max_val null, e dopo apply() la riga
+  // resta aperta — anche partendo da un merge precedente che il 4000 ce
+  // l'aveva (un motore aggiornato sotto un `make serve` acceso).
+  eval(fs.readFileSync(LIB("bounds.js"), "utf8"));
+  const prev = window.PGE_BOUNDS;
+  window.PGEBounds.apply({ params: { density: { min_val: 0.01, max_val: 4000 } } });
+  assert("motore di prima: la riga ha il suo tetto", dens(S).hardMax === 4000);
+  window.PGEBounds.apply({ params: { density: { min_val: 0.01, max_val: null } } });
+  assert("motore di adesso: il tetto se ne va con lui", dens(S).hardMax === Infinity,
+    String(dens(S).hardMax));
+  window.PGE_BOUNDS = prev;
+
+  // Il paste usa i bound delle due righe del catalogo (handleCopyEnv salva
+  // quelli della sorgente, handlePasteEnv legge quelli della destinazione).
+  const pan = byKey(C.listEnvelopes({ id: "s", panEnv: [[0, 0], [1, 90]] }, 8), "pan");
+  const self = EU.remapEnvY(S.densityEnv, dens(S).hardMin, dens(S).hardMax,
+                            dens(S).hardMin, dens(S).hardMax);
+  assert("copia/incolla density → density: la curva torna identica",
+    eq(self, S.densityEnv), JSON.stringify(self));
+  const intoDens = EU.remapEnvY([[0, 0], [1, 90]], pan.hardMin, pan.hardMax,
+                                dens(S).hardMin, dens(S).hardMax);
+  assert("pan → density: numeri, mai NaN (lo YAML li scriverebbe .nan)",
+    intoDens.every(p => Number.isFinite(p[1])), JSON.stringify(intoDens));
+}
+
+assert("nessuna copia locale di remapEnvY nel componente",
+  !/function\s+remapEnvY\s*\(/.test(eeSrc));
+assert("…la prende da PGEEnvUtils", /window\.PGEEnvUtils\.remapEnvY/.test(eeSrc));
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

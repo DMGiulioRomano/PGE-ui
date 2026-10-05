@@ -293,8 +293,15 @@ commento.
 | envelope-shape | contro un motore **precedente** a PGE #211, la UI rifiuta quattro scritture che il motore rende (`x` fuori da [0, 100] o all'indietro, `n_reps`/`end_time` booleani o `end_time` non finito, `y` booleana nel pattern) | lo specchio descrive il motore di #211. Una sonda (`n_reps: true`) sceglie il ramo: stretto con i guard, di transizione senza — lì la UI non può essere più muta del motore, e dove è più rumorosa l'errore deve essere una delle quattro (`NEW_IN_211`). Il ramo e `NEW_IN_211` si tolgono quando #211 è nel default branch del motore |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
-| bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample |
+| bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |
+
+Lo stesso `max_val: null` sui parametri che **non** sono in quell'elenco non è
+una divergenza: è `density` da PGE #272 (#170), e li' la UI non ha tetto, né
+nel merge né nel fallback statico (`Infinity`). La suite lo chiede nel verso
+che prima non si guardava — un fallback statico che *rifiuta* ciò che il
+motore accetta — e quei parametri li deriva dal registro invece di elencarli,
+così il prossimo senza tetto entra da solo sotto la stessa domanda.
 
 ## La semantica del motore, e perché non è più un numero scritto qui
 

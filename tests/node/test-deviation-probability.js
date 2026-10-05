@@ -444,10 +444,9 @@ console.log("\n── il paste (quinta via): esecuzione, non regex ──");
 /* handlePasteEnv vive dentro il componente: si prende il suo corpo e lo si
    rimonta su un harness che fornisce le variabili di chiusura. Tutto il resto
    (unwrapEnv, wrapEnv, desugarBPGroups, remapEnvY, patchForPath,
-   wouldEmptyEnv) e' il codice vero — le prime e l'ultima dai moduli, le altre
-   due estratte dal JSX come handlePasteEnv. */
+   wouldEmptyEnv) e' il codice vero — dai moduli, tranne patchForPath, estratta
+   dal JSX come handlePasteEnv. remapEnvY sta in envelope-utils.js da #170. */
 const pasteSrc = [
-  extractFn(eeSrc, "remapEnvY"),
   extractFn(eeSrc, "patchForPath"),
   extractFn(eeSrc, "handlePasteEnv"),
   "return handlePasteEnv;",
@@ -461,10 +460,11 @@ function runPaste(rawEnv) {
   const env = { key: "volume", path: ["volumeEnv"], hardMin: 0, hardMax: 100 };
   const stream = { id: "s1" };
   const onChange = (p) => { patched = p; };
-  // `wouldEmptyEnv` non sta piu' nel JSX (#140): entra come il modulo vero,
-   // che e' esattamente cio' che il componente lega a quel nome.
-  new Function("envClipboard", "env", "stream", "onChange", "wouldEmptyEnv", pasteSrc)(
-    envClipboard, env, stream, onChange, window.PGEEnv.wouldEmptyEnv)();
+  // `wouldEmptyEnv` non sta piu' nel JSX (#140), e nemmeno `remapEnvY`
+  // (#170): entrano come i moduli veri, che e' esattamente cio' che il
+  // componente lega a quei nomi.
+  new Function("envClipboard", "env", "stream", "onChange", "wouldEmptyEnv", "remapEnvY", pasteSrc)(
+    envClipboard, env, stream, onChange, window.PGEEnv.wouldEmptyEnv, window.PGEEnvUtils.remapEnvY)();
   return patched;
 }
 

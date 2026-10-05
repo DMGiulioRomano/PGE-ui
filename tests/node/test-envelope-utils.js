@@ -3147,6 +3147,49 @@ console.log("\n── le grafie che il walk sui tempi non vedeva (bare / dict) �
   }
 }
 
+console.log("\n── remapEnvY: il copia/incolla fra parametri, con un dominio senza tetto (#170) ──");
+{
+  /* Il paste dell'EnvelopeEditor riporta la curva dal dominio [hardMin,
+     hardMax] della sorgente a quello della destinazione, in proporzione. Con
+     density senza tetto (PGE #272) uno dei due domini e' [0.01, Infinity), e la
+     proporzione non esiste: t = (y - min) / Infinity e' 0 per ogni punto, e
+     dall'altra parte 0 * Infinity e' NaN. Density su density appiattiva la
+     curva sul pavimento; da pan a density scriveva NaN nello YAML. */
+  const R = U.remapEnvY;
+  assert("remapEnvY e' esposta", typeof R === "function");
+  const ok = (items) => JSON.stringify(items).indexOf("null") === -1;
+
+  // Il caso finito resta la proporzione di prima, byte per byte.
+  assert("finito → finito: la proporzione di sempre",
+    eq(R([[0, 0], [0.5, 50], [1, 100]], 0, 100, -1, 1), [[0, -1], [0.5, 0], [1, 1]]));
+  assert("dominio degenere (min = max): il centro della destinazione",
+    eq(R([[0, 3]], 3, 3, 0, 10), [[0, 5]]));
+
+  // Stesso dominio aperto: niente da riportare, la curva resta com'e'.
+  const DENS = [[0, 8], [0.5, 6000], [1, 0.5]];
+  assert("density → density: la curva torna identica",
+    eq(R(DENS, 0.01, Infinity, 0.01, Infinity), DENS),
+    JSON.stringify(R(DENS, 0.01, Infinity, 0.01, Infinity)));
+  // Sorgente aperta → destinazione finita: la proporzione non c'e', il numero
+  // passa com'e' e si richiude nella destinazione.
+  const toPan = R(DENS, 0.01, Infinity, -3600, 3600);
+  assert("density → pan: il valore passa e si richiude, niente pavimento per tutti",
+    eq(toPan, [[0, 8], [0.5, 3600], [1, 0.5]]), JSON.stringify(toPan));
+  // Sorgente finita → destinazione aperta: idem, e mai NaN.
+  const toDens = R([[0, -90], [0.5, 0], [1, 12]], -120, 12, 0.01, Infinity);
+  assert("volume → density: nessun NaN, il pavimento della destinazione tiene",
+    ok(toDens) && eq(toDens, [[0, 0.01], [0.5, 0.01], [1, 12]]), JSON.stringify(toDens));
+
+  // Le altre due grafie che il paste attraversa: gruppo BP e blocco compatto.
+  const grp = R([[[[0, 1], [1, 5000]], "cubic"]], 0.01, Infinity, 0.01, Infinity);
+  assert("gruppo BP: stesso dominio aperto, identico",
+    eq(grp, [[[[0, 1], [1, 5000]], "cubic"]]), JSON.stringify(grp));
+  const blk = R([[[[0, 10], [100, 9000]], 1, 4]], 0.01, Infinity, 0, 1);
+  assert("blocco compatto: dominio aperto → finito, clamp e niente NaN",
+    ok(blk) && eq(blk, [[[[0, 1], [100, 1]], 1, 4]]), JSON.stringify(blk));
+  assert("non muta l'input", eq(DENS, [[0, 8], [0.5, 6000], [1, 0.5]]));
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

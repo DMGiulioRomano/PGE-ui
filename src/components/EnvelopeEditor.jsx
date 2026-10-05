@@ -7,9 +7,14 @@ const { useState: useStateEE, useEffect: useEffectEE, useRef: useRefEE, useMemo:
    invece di estrarle dal sorgente. Qui resta la colla React — stato, canvas,
    eventi — come app.jsx fa con PGEHistoryCore.
      wouldEmptyEnv  → window.PGEEnv        (envelope-loops.js)
-     listEnvelopes  → window.PGEEnvCatalog (envelope-catalog.js) */
+     listEnvelopes  → window.PGEEnvCatalog (envelope-catalog.js)
+   La terza e' remapEnvY, la proporzione del copia/incolla fra parametri: da
+   quando density non ha tetto (#170) uno dei due domini puo' essere aperto, e
+   li' la proporzione scriveva NaN.
+     remapEnvY      → window.PGEEnvUtils   (envelope-utils.js) */
 const wouldEmptyEnv = window.PGEEnv.wouldEmptyEnv;
 const listEnvelopes = window.PGEEnvCatalog.listEnvelopes;
+const remapEnvY = window.PGEEnvUtils.remapEnvY;
 
 function getNested(obj, path) {return path.reduce((o, k) => o == null ? o : o[k], obj);}
 function patchForPath(stream, path, value) {
@@ -345,21 +350,6 @@ function BPZonePanel({ zone, interp, color, onSetInterp, interpTypes }) {
 }
 
 let _envClipboard = null;
-
-function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
-  const range = srcMax - srcMin;
-  function remap(y) {
-    const t = range === 0 ? 0.5 : (y - srcMin) / range;
-    return Math.max(dstMin, Math.min(dstMax, dstMin + t * (dstMax - dstMin)));
-  }
-  const PGEEnv = window.PGEEnv;
-  return items.map(it => {
-    if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
-    if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
-    if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
-    return it;
-  });
-}
 
 function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoopPanelChange, focusKey, arrowOwnerRef, samples }) {
   const { Icon, NumberField } = window.PGE;
