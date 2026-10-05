@@ -120,8 +120,8 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`9071a37f3623c328c2a7bcbb71a4e7d60d828fc3`
-(«Merge pull request #279 from DMGiulioRomano/claude/wizardly-brahmagupta-vqf5uv»)
+`0bc8a513a3293239c653a7afa06873df397da55c`
+(«Merge pull request #287 from DMGiulioRomano/feat/dazzling-rubin-n1kd0v»)
 
 Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
 che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
@@ -138,10 +138,15 @@ hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` ed
 un terzo asse, che la UI ha poi costruito accanto al proprio hash (#151) invece
 di infilarlo dentro — e su cui la scelta del backend nel popover (#150) poggia:
 la *conoscenza* di chi ha scritto lo stem c'era prima della scelta. Fra
-`e57ccec` e il commit qui sopra è entrata la banda relativa di PGE #267
+`e57ccec` e `9071a37` è entrata la banda relativa di PGE #267
 (`0234b12`, fusa con PGE #268): `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS`, che la
 UI rispecchia da #163 — il primo patto che contro `e57ccec` non si potrebbe
-nemmeno porre, perché lì le due costanti non esistono.
+nemmeno porre, perché lì le due costanti non esistono. Fra `9071a37` e il
+commit qui sopra sono entrati i guard di forma degli envelope nel builder (PGE
+#211, fuso con PGE #287): è il motore contro cui `test-envelope-shape-parity.js`
+confronta lo specchio di #180, e da qui quella suite non ha più un ramo per il
+motore precedente — su un motore che non ha questo commit è rossa, e la verifica
+dello SHA qui sopra dice perché.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -290,7 +295,6 @@ commento.
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
 | envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
-| envelope-shape | contro un motore **precedente** a PGE #211, la UI rifiuta quattro scritture che il motore rende (`x` fuori da [0, 100] o all'indietro, `n_reps`/`end_time` booleani o `end_time` non finito, `y` booleana nel pattern) | lo specchio descrive il motore di #211. Una sonda (`n_reps: true`) sceglie il ramo: stretto con i guard, di transizione senza — lì la UI non può essere più muta del motore, e dove è più rumorosa l'errore deve essere una delle quattro (`NEW_IN_211`). Il ramo e `NEW_IN_211` si tolgono quando #211 è nel default branch del motore |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |

@@ -1604,16 +1604,17 @@ not existing is not. It has no shallow-clone escape hatch — the first version
 had one and a `deadbeef…` SHA sailed through it — so CI checks the engine out
 with `fetch-depth: 300`.
 
-**`test-envelope-shape-parity.js` straddles an engine change** (#180). The
-mirror is written against PGE #211, and an engine before it lacks part of the
-guards: four spellings render there. A probe (`n_reps: true`) says which engine
-is on the other side, not a SHA — the CI checkout follows the engine's default
-branch, so the day #211 lands there the suite moves to the strict branch by
-itself. Strict: same verdict and same sub-position on every body. Before #211:
-the UI is still never *quieter* than the old engine, and where it is louder the
-error must be one of the four #211 spellings (`NEW_IN_211`, declared from the
-engine's CHANGELOG, not deduced), listed as a note. Once #211 is in the default
-branch the transition branch and `NEW_IN_211` are dead code, to be removed.
+**`test-envelope-shape-parity.js` compares one way only: strictly** (#180).
+The mirror is written against PGE #211, where four spellings that used to
+render (pattern `x` outside [0, 100] or going back, boolean `n_reps`/`end_time`
+or a non-finite `end_time`, a boolean `y` in the pattern) became errors and
+every other shape guard gained a field. The suite was born with a transition
+branch for the engine before it, picked by a probe (`n_reps: true`); it went
+once #211 (merged as PGE #287) reached the engine's default branch. Now it is
+same verdict and same sub-position on every body, and every rejection must
+carry a field. Against an engine without #211 it is red, naming the bodies; the
+README's recorded SHA — the #287 merge, required to be an ancestor of the run's
+commit — is what says why.
 Non-finite floats now travel tagged in **both** directions (`encodeFloat` in
 `oracle.js`, `_from_wire` in the oracle): `JSON.stringify(Infinity)` is `null`,
 and an `end_time: .inf` would have reached the engine as `end_time: None` — a

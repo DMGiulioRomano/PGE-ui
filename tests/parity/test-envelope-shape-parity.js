@@ -8,25 +8,18 @@
  * corpus qui sotto e' fatto di corpi, non di chiavi: da PGE #211 i guard di
  * forma stanno nel builder e valgono per ogni chiave allo stesso modo.
  *
- * ## Il motore prima e dopo PGE #211
+ * ## Il motore contro cui si confronta
  *
- * I guard esistevano in parte anche prima (gruppo di un punto, `n_reps < 1`,
- * `end_time` non oltre l'inizio, pattern vuoto, elemento sconosciuto: errori,
- * ma ValueError nudi), e quattro scritture si rendevano in silenzio: la `x` del
- * pattern fuori da [0, 100] o all'indietro, `n_reps`/`end_time` booleani (o
- * `end_time` non finito), la `y` booleana nel pattern. Lo specchio descrive il
- * motore di PGE #211. Contro un motore che lo precede:
- *
- *   - dove il vecchio motore rifiuta, la UI deve rifiutare anche lei (lo
- *     specchio non e' mai piu' muto del motore, nemmeno di quello vecchio);
- *   - dove la UI rifiuta e il vecchio motore no, l'errore della UI deve essere
- *     una delle quattro scritture di PGE #211 — la regola che le riconosce e'
- *     `NEW_IN_211` qui sotto, dichiarata e non dedotta — e l'elenco si stampa.
- *
- * Quale motore c'e' lo dice una sonda (`n_reps: true`), non lo SHA: il checkout
- * della CI segue il default branch del motore, e il giorno in cui PGE #211 ci
- * arriva la suite passa da sola al ramo stretto. Da li' in poi il ramo di
- * transizione e' morto, e va tolto con `NEW_IN_211`.
+ * Prima di PGE #211 quattro scritture si rendevano in silenzio (la `x` del
+ * pattern fuori da [0, 100] o all'indietro, `n_reps`/`end_time` booleani o
+ * `end_time` non finito, la `y` booleana nel pattern) e gli altri guard erano
+ * ValueError nudi, senza campo. La suite e' nata con un ramo di transizione per
+ * quel motore, scelto da una sonda (`n_reps: true`), e lo ha tolto quando PGE
+ * #211 (fuso con PGE #287) e' arrivato sul default branch che la CI segue. Il
+ * confronto adesso e' uno solo, stretto; che il motore lo regga lo pretende lo
+ * SHA registrato in tests/parity/README.md, che `test-fingerprint-parity.js`
+ * vuole antenato del commit del run. Contro un motore piu' vecchio questa suite
+ * non e' una transizione da accompagnare: e' rossa, e nomina i corpi.
  *
  * Run: node tests/parity/test-envelope-shape-parity.js
  * =========================================================================== */
@@ -122,25 +115,6 @@ const CORPUS = [
   ["dopo breakpoint dict", [{ t: 0, v: 0 }, { t: 0.5, v: 1 }, [PAT, 0.5, 2]]],
 ];
 
-/* Le quattro scritture che PGE #211 ha trasformato da render silenzioso in
- * errore. Serve SOLO al ramo di transizione: contro un motore precedente, un
- * corpo che la UI rifiuta e il motore rende deve cadere qui. E' una
- * dichiarazione presa dal CHANGELOG del motore, non una deduzione — ed e' per
- * questo che si toglie insieme al ramo, il giorno in cui PGE #211 e' nel
- * motore contro cui la CI confronta. */
-function NEW_IN_211(err, raw) {
-  if (!err) return false;
-  if (err.where === "compact.pattern" && (err.why === "range" || err.why === "order")) return true;
-  if (err.where === "compact.n_reps" && typeof err.value === "boolean") return true;
-  if (err.where === "compact.end_time" && err.why === "type") return true;   // bool, .inf, .nan
-  if (err.where === "compact.pattern" && err.why === "point" &&
-      Array.isArray(err.value) && typeof err.value[1] === "boolean") return true;
-  return false;
-}
-
-// La sonda: `range(True)` rendeva un ciclo, e da PGE #211 e' un errore.
-const PROBE_211 = [PAT, 1, true];
-
 const verdicts = async (ask) => {
   const answers = await ask(CORPUS.map(([, raw]) => ({ op: "build_envelope", args: { raw } })));
   return CORPUS.map(([label, raw], i) => {
@@ -165,9 +139,7 @@ parity({
     },
     {
       label: "stesso verdetto, corpo per corpo",
-      run: async (ask, assert, ctx) => {
-        const probe = (await ask("build_envelope", { raw: PROBE_211 })).value;
-        const has211 = !probe.ok;
+      run: async (ask, assert) => {
         const rows = await verdicts(ask);
         const rejected = rows.filter(r => !r.engine.ok).length;
         /* Il presidio contro il passaggio a vuoto: un corpus che il motore
@@ -176,43 +148,20 @@ parity({
         assert(`il corpus ha corpi validi e corpi rifiutati (${rows.length - rejected} / ${rejected})`,
           rejected >= 20 && rows.length - rejected >= 15,
           `accettati ${rows.length - rejected}, rifiutati ${rejected}`);
-
-        if (has211) {
-          ctx.note("motore con i guard di forma di PGE #211: confronto stretto", []);
-          const bad = rows.filter(r => (r.ui === null) !== r.engine.ok)
-            .map(r => `${r.label}: ui=${r.ui ? r.ui.where : "valido"} motore=${r.engine.ok ? "valido" : r.engine.error}`);
-          assert(`${rows.length} corpi, stesso verdetto`, bad.length === 0, bad.join("\n      "));
-          return;
-        }
-
-        /* Ramo di transizione: un motore che precede PGE #211. */
-        const quieter = rows.filter(r => !r.engine.ok && r.ui === null)
-          .map(r => `${r.label}: il motore rifiuta (${r.engine.error}), la UI tace`);
-        assert("la UI non e' mai piu' muta del motore, nemmeno di quello vecchio",
-          quieter.length === 0, quieter.join("\n      "));
-        const louder = rows.filter(r => r.engine.ok && r.ui !== null);
-        const notNew = louder.filter(r => !NEW_IN_211(r.ui, r.raw))
-          .map(r => `${r.label}: la UI rifiuta (${r.ui.where}/${r.ui.why}) e non e' una scritta di PGE #211`);
-        assert("dove la UI rifiuta e il motore vecchio no, e' una delle scritture di PGE #211",
-          notNew.length === 0, notNew.join("\n      "));
-        assert("...e la sonda e' fra quelle: il ramo di transizione e' davvero quello di #211",
-          louder.some(r => JSON.stringify(r.raw) === JSON.stringify(PROBE_211)),
-          "la sonda non e' nel corpus, o la UI non la rifiuta");
-        ctx.note(`motore precedente a PGE #211: la UI anticipa ${louder.length} rifiuti`,
-          louder.map(r => `${r.label} → ${r.ui.where}/${r.ui.why}`));
+        const bad = rows.filter(r => (r.ui === null) !== r.engine.ok)
+          .map(r => `${r.label}: ui=${r.ui ? r.ui.where : "valido"} motore=${r.engine.ok ? "valido" : r.engine.error}`);
+        assert(`${rows.length} corpi, stesso verdetto`, bad.length === 0, bad.join("\n      "));
       },
     },
     {
       label: "stessa sotto-posizione: il primo guard che scatta e' lo stesso",
-      run: async (ask, assert, ctx) => {
-        const has211 = !(await ask("build_envelope", { raw: PROBE_211 })).value.ok;
+      run: async (ask, assert) => {
         const rows = await verdicts(ask);
-        /* Da PGE #211 ogni rifiuto del builder e' un InvalidFieldValueError
-           col campo; senza chiave passata, il campo e' la sotto-posizione
-           `envelope.<where>`. Prima quasi tutti erano ValueError nudi: si
-           confrontano i rifiuti che il campo ce l'hanno (sul motore vecchio,
-           l'interp del gruppo), e solo dopo PGE #211 si pretende che ce
-           l'abbiano tutti. */
+        /* Ogni rifiuto del builder e' un InvalidFieldValueError col campo;
+           senza chiave passata, il campo e' la sotto-posizione
+           `envelope.<where>`. Un rifiuto senza campo e' un errore che non
+           viene dal builder (o un motore precedente a PGE #211), e qui non ha
+           niente con cui confrontarsi: e' rosso anche lui. */
         const withField = rows.filter(r => !r.engine.ok && r.engine.field);
         const bad = withField.filter(r => !r.ui || `envelope.${r.ui.where}` !== r.engine.field)
           .map(r => `${r.label}: ui=${r.ui ? "envelope." + r.ui.where : "valido"} motore=${r.engine.field}`);
@@ -220,10 +169,6 @@ parity({
           bad.length === 0, bad.join("\n      "));
         const noField = rows.filter(r => !r.engine.ok && !r.engine.field)
           .map(r => `${r.label}: ${r.engine.error}`);
-        if (!has211) {
-          ctx.note(`motore precedente a PGE #211: ${noField.length} rifiuti senza campo, niente da confrontare`, []);
-          return;
-        }
         assert("ogni rifiuto del corpus porta il campo (e' un InvalidFieldValueError del builder)",
           noField.length === 0, noField.join("\n      "));
         assert("...e i confronti fatti sono tutti i rifiuti, non zero",
