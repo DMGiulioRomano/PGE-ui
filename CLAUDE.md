@@ -2109,7 +2109,14 @@ writes that curve, and on a dict it drew the default diagonal and `2 bp` — a
 curve that isn't there — and a BP group in the list put `NaN` in its polyline.
 They all read through `unwrapEnv` now: the two sparklines through the editor's
 own path (`unwrapEnv` → `desugarBPGroups` → `expandMixed`), written once as
-`PGEEnv.envSketch` so the two rows can't drift apart again, the warning
+`PGEEnv.envSketch` so the two rows can't drift apart again — and the editor's
+path down to the third field: the dict is rebuilt around the desugared items,
+as in the editor's own `exp`, or `expandMixed` tags the untyped points `linear`
+and the sketch loses the very `type` this section is about. Its `count` is
+`PGEEnv.envCount`, which the Inspector badges read too: written elements, with
+a **bare** block or group (the whole value, or a dict's `points`) counting as
+one, not as the three or two fields `unwrapEnv` hands back — `↻1 · 3 el` on an
+envelope made of one block. The warning goes
 through the same first two steps and then the
 *written* y's — points, groups, and a block's pattern, never its expansion, which
 would cost `n_reps` cycles on every keystroke of the Raw tab (and the old check

@@ -485,6 +485,54 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
   assert("envSketch conta i blocchi", skL.loops === 1 && skL.points.length > 2, JSON.stringify(skL));
   assert("envSketch su un valore assente: niente punti, conteggio zero",
     eq(E.envSketch(null), { count: 0, points: [], loops: 0 }), JSON.stringify(E.envSketch(null)));
+
+  /* (review) «La strada dell'EnvelopeEditor» valeva per x e y, non per il
+     terzo campo: envSketch desugarava gli item e li passava a expandMixed come
+     LISTA, quindi sul dict i punti senza tipo suo uscivano `linear` invece
+     che col `type` — il dato che #189 esiste per conservare. L'editor rifa'
+     il dict attorno agli item desugarati (l'espressione che il guard di
+     sorgente qui sopra fissa), e lo schizzo deve tracciare la stessa cosa,
+     tag compresi: chi un giorno disegnasse i segmenti dal tag lo leggerebbe
+     di qui. */
+  const editorExp = (raw) => {
+    const items = E.desugarBPGroups(E.unwrapEnv(raw).items);
+    return E.expandMixed(E.isTypedEnv(raw) ? { type: raw.type, points: items } : items);
+  };
+  for (const [nome, raw] of [["la forma mista", MISTA],
+                             ["il dict con un gruppo", { type: "cubic", points: CURVA_GRUPPO }],
+                             ["il dict di soli punti nudi", { type: "step", points: [[0, 0], [0.5, 1], [1, 0]] }],
+                             ["la lista", CURVA_GRUPPO]]) {
+    assert(`envSketch traccia come l'editor, interp compreso: ${nome}`,
+      eq(E.envSketch(raw).points, editorExp(raw).points),
+      `${JSON.stringify(E.envSketch(raw).points)} contro ${JSON.stringify(editorExp(raw).points)}`);
+  }
+
+  /* (review) `count` sono gli elementi SCRITTI, e una grafia nuda — il blocco
+     o il gruppo che E' il valore, 26 stream nel corpus del motore — e' un
+     elemento solo. `unwrapEnv` la rende tale e quale, cioe' i suoi tre campi
+     (pattern, end_time, n_reps) o i suoi due (punti, interp), e il conteggio
+     li contava: «↻1 · 3 el» su un envelope fatto di un blocco. */
+  const BLOCCO_NUDO = [[[0, 0], [100, 1]], 1, 4];
+  const GRUPPO_NUDO = [[[0, 0], [0.5, 1], [1, 0]], "step"];
+  assert("envSketch: un blocco nudo e' un elemento, non i suoi tre campi",
+    E.envSketch(BLOCCO_NUDO).count === 1 && E.envSketch(BLOCCO_NUDO).loops === 1,
+    JSON.stringify({ count: E.envSketch(BLOCCO_NUDO).count, loops: E.envSketch(BLOCCO_NUDO).loops }));
+  assert("…un gruppo nudo e' un elemento, non i suoi due",
+    E.envSketch(GRUPPO_NUDO).count === 1, String(E.envSketch(GRUPPO_NUDO).count));
+  assert("…e cosi' dentro il dict, i cui points sono un blocco nudo (la forma della docstring di Envelope)",
+    E.envSketch({ type: "cubic", points: BLOCCO_NUDO }).count === 1,
+    String(E.envSketch({ type: "cubic", points: BLOCCO_NUDO }).count));
+  assert("envCount e' la stessa regola, esportata per chi conta senza tracciare",
+    [MISTA, CURVA_GRUPPO, BLOCCO_NUDO, GRUPPO_NUDO, { type: "cubic", points: BLOCCO_NUDO }, null]
+      .every((raw) => typeof E.envCount === "function" && E.envCount(raw) === E.envSketch(raw).count));
+  /* I badge «N bp» dell'Inspector contano con la stessa regola delle righe
+     sotto di loro: con `unwrapEnv(...).items.length` un fill_factor fatto di
+     un blocco nudo leggeva «3 bp» nel badge e «1 el» nella riga. */
+  assert("i badge dell'Inspector contano con envCount",
+    ["fillFactorEnv", "densityEnv", "readDirectionEnv"].every((k) =>
+      new RegExp(`PGEEnv\\.envCount\\(\\s*[\\w.]*\\b${k}\\s*\\)`).test(inspSrc))
+      && !/unwrapEnv\([^)]*Env\)\.items\.length/.test(inspSrc),
+    (inspSrc.match(/[\w.]*Env\)\.items\.length/g) || []).join(", "));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

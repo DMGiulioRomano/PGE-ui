@@ -1158,9 +1158,9 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
 
             <Section title="Overall density"
                      badge={densityUnitSel === "fill_factor"
-                       ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${window.PGEEnv.unwrapEnv(stream.fillFactorEnv).items.length} bp` : "fill_factor"}</span>
+                       ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${window.PGEEnv.envCount(stream.fillFactorEnv)} bp` : "fill_factor"}</span>
                        : (stream.densityEnv
-                           ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {window.PGEEnv.unwrapEnv(stream.densityEnv).items.length} bp</span>
+                           ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {window.PGEEnv.envCount(stream.densityEnv)} bp</span>
                            : <span className="mono">density</span>)}>
               <div className="pge-prow">
                 <span className="k">unit</span>
@@ -1721,7 +1721,7 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                       {state === "env" ? (
                         <span className="v env" onClick={focusEnv("readDirection")}>
                           <span className="env-label" style={{color:"var(--accent)"}}>
-                            {window.PGEEnv.unwrapEnv(g.readDirectionEnv).items.length} bp · a gradino
+                            {window.PGEEnv.envCount(g.readDirectionEnv)} bp · a gradino
                           </span>
                         </span>
                       ) : (

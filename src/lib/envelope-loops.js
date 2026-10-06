@@ -840,13 +840,30 @@
      interp globale non lineare, eccezioni sul punto comprese (#189) — una
      mostrava il segnaposto al posto della curva, l'altra la diagonale di
      default. Una lettura sola, cosi' non tornano a divergere.
-       count:  gli elementi SCRITTI (per il dict, i suoi points)
+       count:  gli elementi SCRITTI (envCount)
        points: i punti da tracciare, [t, v, interp]
-       loops:  quanti blocchi compatti                                       */
+       loops:  quanti blocchi compatti
+     La strada e' quella dell'editor anche sul terzo campo: il dict si rifa'
+     attorno agli item desugarati, come `exp` in EnvelopeEditor.jsx, perche'
+     expandMixed tagghi col `type` i punti senza tipo suo. Passati come lista
+     uscivano `linear`, cioe' lo schizzo perdeva proprio il dato che #189
+     esiste per conservare.                                                  */
   function envSketch(env) {
+    const flat = desugarBPGroups(unwrapEnv(env).items);
+    const exp = expandMixed(isTypedEnv(env) ? { type: env.type, points: flat } : flat);
+    return { count: envCount(env), points: exp.points, loops: exp.blocks.length };
+  }
+
+  /* Quanti elementi SCRITTI ha un envelope — i badge «N bp» dell'Inspector e
+     le righe di envSketch, con una regola sola: per il dict i suoi points, per
+     la lista i suoi item, e per una grafia NUDA (il blocco o il gruppo che E'
+     il valore, anche come `points` del dict) uno. `unwrapEnv` la rende tale e
+     quale, cioe' i tre campi del blocco (pattern, end_time, n_reps) o i due
+     del gruppo, e contarli dava «↻1 · 3 el» su un envelope fatto di un
+     blocco. Non espande niente: costa una lunghezza, non n_reps cicli.      */
+  function envCount(env) {
     const items = unwrapEnv(env).items;
-    const exp = expandMixed(desugarBPGroups(items));
-    return { count: items.length, points: exp.points, loops: exp.blocks.length };
+    return isBareEnv(items) ? 1 : items.length;
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
@@ -1265,7 +1282,7 @@
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
-    computeCycleDurations, isPreviewFallback, expandMixed, envSketch,
+    computeCycleDurations, isPreviewFallback, expandMixed, envSketch, envCount,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
     INTERP_TYPES, envShapeError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
