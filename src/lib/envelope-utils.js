@@ -676,8 +676,8 @@
   }
 
   // Le chiavi del blocco pointer che `loop_unit` interpreta, nella grafia dello
-  // YAML e nell'ordine in cui il motore le elenca (`_LOOP_UNIT_SCOPE` in
-  // pointer_controller.py). 'start' è fra queste benché loop non sia: è una
+  // YAML e nell'ordine in cui il motore le elenca (`LOOP_UNIT_SCOPE` in
+  // parameters/loop_unit.py). 'start' è fra queste benché loop non sia: è una
   // posizione nel sample come loop_start, stesso dominio e stessa unità. Accanto
   // a ciascuna, i campi con cui il bridge la tiene in stato — il valore scalare
   // e il gemello `*Env`, che `unpackValueOrEnv` riempie solo su una forma
@@ -692,7 +692,7 @@
   // Quali di quelle chiavi l'unità governa DAVVERO: quelle il cui valore la
   // conversione `normalized` → secondi muoverebbe. Specchio di ciò che tocca
   // `scale_raw_param_values` (envelope.py), la funzione con cui
-  // `_pre_normalize_loop_params` scala il giro di `_LOOP_UNIT_SCOPE`: numeri ed
+  // `_pre_normalize_loop_params` scala il giro di `LOOP_UNIT_SCOPE`: numeri ed
   // envelope-like, e nient'altro. Uno zero resta zero sotto qualunque fattore
   // di scala, e quel che la conversione lascia passare invariato — una
   // stringa, un booleano — non ha un'unità da cui dipendere.
@@ -712,7 +712,7 @@
   // qualcosa?» — non era mai stata una domanda di migrazione.
   //
   // Si restituiscono le chiavi, in grafia YAML e nell'ordine di
-  // `_LOOP_UNIT_SCOPE`, anche se l'unico lettore ne guarda la lunghezza: costa
+  // `LOOP_UNIT_SCOPE`, anche se l'unico lettore ne guarda la lunghezza: costa
   // lo stesso, e un test rosso nomina la chiave invece di dire `false`.
   //
   // Niente patto di parità su questa, a differenza di LOOP_UNITS:

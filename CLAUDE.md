@@ -187,7 +187,11 @@ exists, the fourth only when a browser is installed):
   fake binaries on a temporary `PATH`, `GET /renderers`, the `renderers` row of
   `/diagnose`, `/render` refusing a backend the engine doesn't offer before the
   config write — plus three canaries on the real engine, the binary names among
-  them), and `test_engine_render.py`
+  them), `test_parity_oracle.py` (the parity oracle's two loaders with a
+  fallback — `parse_magnify_spec`, `filter_solo_mute` — driven over stub
+  engines of every vintage, each in its own process: the light module
+  imported, the historic ast-slice, a module without the name, a module that
+  doesn't import), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -861,7 +865,7 @@ event comes from a parsed log line, not from a file), while the `done` fallback
 does not validate — `generated` is the list of files the server found on disk,
 so even a deleted stream's stem exists and the index must know. What it must
 not do is **claim** a file this run didn't write: a declared stream the engine
-doesn't build — muted, or outside the solo set (`Generator._filter_solo_mute`)
+doesn't build — muted, or outside the solo set (`filter_solo_mute`)
 — has an earlier run's stem on disk, perhaps another backend's or another
 semantics', and the synthetic `stream-done` would stamp this run's fingerprint,
 version and backend on it (🟢 once unmuted, on a stem the engine will redo).
@@ -1562,7 +1566,7 @@ the author may have been happy with, moving the fingerprint.
 `loopUnitRescaleKeys` in `envelope-utils.js` stays, and **not because of the
 hint**: it is what `loopUnitShown` asks, "does the unit govern a value here?".
 It mirrors what the engine's `scale_raw_param_values` touches over
-`_LOOP_UNIT_SCOPE` (`start`, `loop_start`, `loop_end`, `loop_dur`) — numbers and
+`LOOP_UNIT_SCOPE` (`start`, `loop_start`, `loop_end`, `loop_dur`) — numbers and
 envelope-likes, nothing else, and a zero stays a zero under any scale factor.
 That zero filter is what keeps the selector away from `start: 0` with no loop,
 both the commonest shape in the config corpus and the one every clip the editor
@@ -1613,11 +1617,34 @@ failure under `PGE_PARITY_STRICT=1` and in CI when the engine is present.
 Two rules when touching it:
 
 - **The oracle imports from the engine, it never reimplements it.** A copy would
-  be a third mirror to keep aligned. The two exceptions have one shape: the
-  `--magnify-at` grammar, which lives in `pge.cli` (unimportable without
-  numpy/soundfile/matplotlib), and `Generator._filter_solo_mute`, whose module
-  drags in numpy. The oracle extracts those AST nodes from `cli.py` /
-  `generator.py` and executes them — the engine's own bytes.
+  be a third mirror to keep aligned. It used to have two exceptions, of one
+  shape: the `--magnify-at` grammar, which lived in `pge.cli` (unimportable
+  without numpy/soundfile/matplotlib), and `Generator._filter_solo_mute`, whose
+  module drags in numpy. There the oracle extracted those AST nodes from
+  `cli.py` / `generator.py` and executed them — the engine's own bytes, so the
+  answer was true, but the reading pinned **private names** and their position
+  in the file, and a rename upstream turned this repo's CI red on every open
+  PR, unrelated ones included. The engine registered that in PGE #246 and moved
+  both into modules that import nothing, with public names:
+  `pge.shared.magnify_spec.parse_magnify_spec` (plus `MAGNIFY_KEYS` /
+  `MAGNIFY_NUMERIC_KEYS` / `MAGNIFY_STR_KEYS`) and
+  `pge.engine.solo_mute.filter_solo_mute`. Both ops now **import**. The old
+  ast-slice stays as a fallback on engines older than that issue — not out of
+  caution: this repo's CI checks out the engine's **default branch**, and the
+  two merges don't land in the same instant. Which branch answered travels in
+  the payload (`magnify_source`), and `test-magnify-parity.js` requires it to
+  be one of the three known ones, never a silent fourth. A module that exists
+  and lacks the name is `IncompleteNamespace` — declared, never a reason to
+  fall through and hide the rename behind a branch that succeeds. A module
+  that exists and doesn't *import* is declared too, with the import's own
+  error: on an engine with #246 the historic branches can't succeed (`pge.cli`
+  and `generator.py` read from the new modules), so falling through only
+  replaced a `ModuleNotFoundError` — a heavy dependency slipped into the light
+  module, the very regression #246 guards — with «the grammar moved». What
+  separates "older engine" from "broken module" is whether the file is in the
+  checkout (`_modulo_nel_checkout`), not whether the import failed.
+  `tests/python/test_parity_oracle.py` drives the loaders over stub engines of
+  each vintage.
 - **No op may need the engine venv.** The CI node job checks the engine out but
   builds no venv, and that is where parity runs. Verified module by module; if
   you add an op that drags in numpy, it will silently stop running there.
@@ -1671,10 +1698,28 @@ The rule has one more subject since #149: `LOOP_UNITS` in `envelope-utils.js`,
 the vocabulary of `pointer.loop_unit`. Before PGE #222 there was nothing to
 mirror — the key had no declared set — and now a spelling outside it kills the
 render, so the UI has to name it while you type. `engine_loop_units` reads it
-from `pointer_controller.py` by AST (importing that module drags in numpy, which
-the CI node job doesn't have), and `test-bounds-parity.js` requires the UI's copy
-to equal the engine's **in order** — the first spelling is the canonical one, and
-`LOOP_UNIT_DEFAULT` is what the Inspector's selector writes.
+by AST — from `pge/parameters/loop_unit.py` since PGE #246, with the three
+historic `pointer_controller.py` paths kept as fallbacks, because the bridge has
+to work on every vintage of engine. AST and not import for the reason that holds
+for this whole module: the bridge never imports the engine. The move removed a
+second constraint that only applied to the oracle (`pointer_controller` drags in
+numpy, which the CI node job doesn't have), so parity now reads the constant
+**both ways** — imported from `pge.parameters.loop_unit` and through the
+bridge's AST — and requires them to agree, like `RANGE_UNITS`. On an engine
+older than #246 the module is absent (`loop_units_module_absent`) and that half
+is a note, not a red; a module that is there and doesn't import is a red.
+`test-bounds-parity.js` also requires the UI's copy to equal the engine's **in
+order** — the first spelling is the canonical one, and `LOOP_UNIT_DEFAULT` is
+what the Inspector's selector writes.
+
+The candidate order decides less than it looks. The walk moves on past a file
+that doesn't declare the constant, or declares it unreadably (`_read_int_constant`'s
+rule), so a new engine whose `pointer_controller.py` merely *imports*
+`LOOP_UNITS` is read right in either order. The order decides only when two
+files both declare a literal — a copy left behind in the old home — and then the
+new home must win, or a stale vocabulary speaks for the engine. That is what
+`test_render_pipeline.py` pins, and what the import half of the parity case
+would catch if the AST read ever answered from the wrong file.
 
 That was **false for the `pitch` half** until this round: three fallbacks
 (`edoFactor`, the ratio record, the EDO preset table) returned today's engine
@@ -2238,7 +2283,7 @@ top-level `seed` the point is moot anyway: `voice_rng` falls back to
 
 `app.jsx` derives `tracks` with `useMemo` and routes every layout change
 through `mutateTracks`. Mute/solo do **not**: they stay per-stream because
-that's what the engine filters on (`Generator._filter_solo_mute`) and what the
+that's what the engine filters on (`filter_solo_mute`) and what the
 YAML carries. The header's M/S is a three-valued fan-out (all / some / none)
 over the group; per-clip M/S buttons appear only once a lane holds more than
 one clip. The header VU sums the group's analyser **powers** — there is no

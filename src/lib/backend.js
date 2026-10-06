@@ -212,7 +212,7 @@
   }
 
   /* Gli id degli stream che il motore COSTRUISCE in un giro: il mirror di
-     `Generator._filter_solo_mute` (generator.py). Con almeno un `solo` si
+     `filter_solo_mute` (engine/solo_mute.py). Con almeno un `solo` si
      prendono quelli e basta — il `mute` li' non conta, un solista muto suona —,
      altrimenti tutti meno i muti. Il motore guarda la PRESENZA della chiave, e
      il serializzatore scrive `solo`/`mute` solo quando veri (yaml-bridge.js),

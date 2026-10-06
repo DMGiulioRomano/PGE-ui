@@ -535,7 +535,7 @@ console.log("\n── i due record viaggiano insieme in un giro solo (sorgente) 
  * server.py). Il fallback lo usa come rete per ogni stream DIRTY del giro,
  * e senza `--cache` e' l'UNICA sorgente di `stream-done` (le righe `[CACHE]`
  * non ci sono). Ma uno stream muto — o fuori dal solo — il motore non lo
- * costruisce affatto (`Generator._filter_solo_mute`): il suo file e' di un
+ * costruisce affatto (`pge.engine.solo_mute.filter_solo_mute`): il suo file e' di un
  * giro precedente, magari di un altro backend o di un'altra semantica.
  * Reclamarlo scriveva i tre record di QUESTO giro su audio che questo giro non
  * ha toccato: tolto il muto, verde su uno stem che il motore rifara' — un
@@ -604,7 +604,7 @@ console.log("\n── senza --cache il fallback e' l'unica sorgente, e resta tal
 
 console.log("\n── col solo, il motore costruisce SOLO i solisti (anche se muti) ──");
 {
-  // `_filter_solo_mute`: con almeno un `solo` si prendono quelli e basta, e
+  // `filter_solo_mute`: con almeno un `solo` si prendono quelli e basta, e
   // il `mute` non conta piu' — un solista muto suona. La regola e' sulla
   // PRESENZA della chiave, e il serializzatore scrive `solo`/`mute` solo
   // quando veri, quindi nello stato vale la verita'.

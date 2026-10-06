@@ -5,7 +5,7 @@
  * Perché esiste: uno SPEC malformato non degrada la partitura, fa uscire
  * main.py con codice 1 — quindi un refuso nel campo di testo ammazzerebbe
  * l'intero render, audio compreso. La grammatica è quella di
- * `_parse_magnify_spec` nel motore (src/pge/cli.py): target separati da ';',
+ * `parse_magnify_spec` nel motore (src/pge/shared/magnify_spec.py): target separati da ';',
  * coppie chiave=valore separate da ',', chiave 't' obbligatoria, chiavi
  * numeriche t/y/zoom/out/src e stringa 'stream'.
  *

@@ -64,13 +64,13 @@ Le operazioni dell'oracolo:
 | op | risponde con | mirror che verifica |
 |---|---|---|
 | `fingerprint` | `StreamCacheManager.compute_fingerprint` (con `semantics` opzionale, che rimpiazza la costante per la durata della chiamata, e `renderer`, il backend che sta dentro l'hash accanto ad essa — default `numpy`, come cabla la UI) | `backend.fingerprintStream` |
-| `parse_magnify_spec` | i target di `--magnify-at`, o l'errore | `window.PGEMagnifySpec` |
+| `parse_magnify_spec` | i target di `--magnify-at`, o l'errore — da `pge.shared.magnify_spec`, importato, da PGE #246 | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
-| `filter_solo_mute` | gli `stream_id` che `Generator._filter_solo_mute` tiene — estratto dall'AST di `generator.py` ed eseguito, perché il modulo tira dentro numpy | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
-| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
+| `filter_solo_mute` | gli `stream_id` che `pge.engine.solo_mute.filter_solo_mute` tiene — importata, da PGE #246 | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
+| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` sia importato da `pge.parameters.loop_unit` (PGE #246) sia dall'AST del bridge, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
 
 ## Come si lancia
 
@@ -92,8 +92,35 @@ Variabili:
 L'oracolo non ha bisogno del venv del motore: nessuna delle op importa numpy,
 soundfile o matplotlib, verificato modulo per modulo. È voluto — in CI il job
 node fa il checkout del motore ma non ne costruisce il venv. Se il venv c'è,
-`oracle.js` lo preferisce (con quello anche `pge.cli` si importa davvero,
-invece di eseguire i soli nodi AST della grammatica di `--magnify-at`).
+`oracle.js` lo preferisce.
+
+Da PGE #246 quella regola non ha più eccezioni. Due op la violavano, con la
+stessa forma: `parse_magnify_spec`, perché la grammatica stava in `pge.cli` e
+quell'import tira dentro matplotlib, e `filter_solo_mute`, perché la regola era
+un metodo di `Generator` e quell'import tira dentro numpy. Lì l'oracolo
+estraeva dall'AST del file i soli nodi che gli servivano e li eseguiva: i byte
+del motore, quindi la risposta era vera, ma la lettura pinnava **nomi privati**
+e la loro posizione nel file — e una rinomina là dentro rendeva rossa la CI di
+qui su ogni PR aperta, comprese quelle che non c'entravano (il motore l'ha
+registrato in PGE #246).
+
+Il motore ha spostato entrambi in moduli che non importano niente, con nomi
+pubblici: `pge.shared.magnify_spec` e `pge.engine.solo_mute`. Le due op
+**importano**. Il vecchio ast-slice resta come ripiego sui motori anteriori a
+quella issue, e non per prudenza: la CI di qui fa il checkout del **ramo di
+default** del motore, e i due merge non avvengono nello stesso istante. Quale
+ramo ha risposto lo dice il payload (`magnify_source`), e
+`test-magnify-parity.js` pretende che sia uno dei tre noti — mai un quarto
+silenzioso.
+
+Si ripiega solo quando il modulo nuovo **non c'è nel checkout**. Uno che c'è e
+non si importa è un guasto da dichiarare, con l'errore dell'import: su un
+motore con PGE #246 `pge.cli` e `generator.py` leggono dai moduli nuovi, quindi
+i rami storici non possono riuscire, e il loro messaggio («la grammatica si è
+spostata») mandava a cercare una rinomina dove c'era una dipendenza pesante
+scesa nel modulo leggero — proprio la regressione che #246 sorveglia.
+`tests/python/test_parity_oracle.py` guida i caricatori su motori finti di ogni
+annata.
 
 ## Un caso saltato non è un caso passato
 
@@ -281,9 +308,19 @@ rename upstream, che nessuna suite node vedrebbe. Le domande, in
   chiuso — su uno YAML `time_mode: normalized` senza `loop_unit` lo split
   scriveva `0.075` dove il motore legge `0.6` s.
 
-Solo AST, e non per eleganza: `pointer_controller` importa
-`pge.envelopes.envelope` e quindi numpy, che nel job node della CI non esiste —
-ed è lì che la parità gira.
+Solo AST, e non per eleganza: il bridge non importa mai il motore — è un
+processo Flask nel venv dell'editor, e rispondere a `GET /bounds` eseguendo
+codice del motore non è una cosa che fa. Da PGE #246 la costante sta in
+`pge/parameters/loop_unit.py`, un modulo che non importa niente, e
+l'oracolo la legge in tutti e due i modi: importata, cioè il valore che il
+motore usa, e attraverso l'AST del bridge, che resta una lettura **al path**
+con candidati storici. La suite pretende che coincidano, come per
+`RANGE_UNITS`; su un motore anteriore il modulo manca
+(`loop_units_module_absent`) e quella metà è una nota, non un rosso. Prima la costante stava in
+`controllers/pointer_controller.py`, che importa `pge.envelopes.envelope` e
+quindi numpy: là il vincolo era doppio. I candidati vanno dal più recente al
+più vecchio e il vecchio path resta, perché il bridge deve funzionare su ogni
+annata di motore.
 
 ## Divergenze dichiarate
 
