@@ -270,6 +270,7 @@ _OP_REQUIRES = {
     "filter_solo_mute": None,     # idem
     "constants": "pge.rendering.stream_cache_manager",
     "build_envelope": "pge.envelopes.envelope",
+    "evaluate_envelope": "pge.envelopes.envelope",
 }
 
 
@@ -747,6 +748,57 @@ def _op_build_envelope(args):
         out["error"] = _fmt_exc(exc)
         field = getattr(exc, "field", None)
         out["field"] = field if isinstance(field, str) else None
+    return out
+
+
+# =============================================================================
+# OP — evaluate_envelope
+# =============================================================================
+
+@op("evaluate_envelope")
+def _op_evaluate_envelope(args):
+    """Quanto vale un envelope ai tempi chiesti, secondo il motore: il
+    `Envelope` vero costruito dal corpo come sta nello YAML, poi
+    `Envelope.evaluate` tempo per tempo.
+
+    `build_envelope` dice SE il motore costruisce un corpo; questa dice COSA ne
+    suona. Serve alle domande di forma che lasciano il corpo valido e ne
+    cambiano il senso — la prima e' #189: `wrapEnv` riscriveva un `{type,
+    points}` come lista piatta, il motore la costruiva benissimo, e i segmenti
+    che seguivano il `type` globale diventavano lineari. Due corpi si
+    confrontano qui chiedendo gli stessi tempi a entrambi; nessun valore
+    atteso e' scritto dal lato node.
+
+    Stesso modulo di `build_envelope`, quindi niente numpy: gira nel job node
+    della CI.
+
+    args:
+        raw    il valore come sta nello YAML: una lista, o un dict con `points`
+        times  lista di tempi (numeri), nell'unita' dei breakpoint
+
+    return:
+        ok      True se l'Envelope si costruisce e si valuta
+        values  i valori, uno per tempo, o null
+        error   null, o `Classe: messaggio`
+    """
+    env_mod = ENGINE.module("pge.envelopes.envelope")
+    if "raw" not in args:
+        raise OracleError("evaluate_envelope: manca 'raw'")
+    times = args.get("times")
+    if (not isinstance(times, list)
+            or not all(isinstance(t, (int, float)) and not isinstance(t, bool)
+                       for t in times)):
+        raise OracleError("evaluate_envelope: 'times' deve essere una lista di numeri")
+    out = {"ok": True, "values": None, "error": None}
+    try:
+        # Il clip logger annuncia il proprio file la prima volta: vedi
+        # build_envelope.
+        with contextlib.redirect_stdout(io.StringIO()):
+            env = env_mod.Envelope(args["raw"])
+            out["values"] = [float(env.evaluate(t)) for t in times]
+    except Exception as exc:
+        out["ok"] = False
+        out["error"] = _fmt_exc(exc)
     return out
 
 

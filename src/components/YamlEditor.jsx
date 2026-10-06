@@ -164,7 +164,18 @@ function computeAnnotations(stream, sampleRec) {
       byPath.set("pointer.loop_dur", { kind: "err", msg: `loop_dur must be ≤ ${capMsg}` });
     }
   }
-  if (Array.isArray(stream.panEnv) && stream.panEnv.some(p => Math.abs(p[1]) > 3600)) {
+  // Le y SCRITTE del pan, in ogni grafia: il dict `{type, points}` (che wrapEnv
+  // scrive per ogni interp globale non lineare, eccezioni sul punto comprese,
+  // da #189), i gruppi, i punti `{t, v}` e i pattern dei blocchi. Il controllo
+  // guardava le sole liste, e un pan ritoccato con setZoneInterp ne usciva.
+  // Niente expandMixed: un blocco ripete le y del suo pattern e basta, e
+  // espanderlo costerebbe n_reps cicli a ogni tasto del tab Raw.
+  const E = window.PGEEnv;
+  const panYs = stream.panEnv
+    ? E.desugarBPGroups(E.unwrapEnv(stream.panEnv).items).flatMap((it) =>
+        E.isCompactBlock(it) ? it[0].map((p) => p[1]) : (E.bpAt(it) ? [E.bpAt(it)[1]] : []))
+    : [];
+  if (panYs.some(y => Math.abs(y) > 3600)) {
     byPath.set("pan", { kind: "warn", msg: "pan values exceed conventional range [−3600, 3600]" });
   }
   // La forma di ogni envelope, come la giudica il builder del motore (PGE

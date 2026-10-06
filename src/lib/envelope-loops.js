@@ -5,10 +5,13 @@
  * Modello dati:
  *   Forme top-level di una envelope:
  *   (A) array mixed   :  [item, item, …]
- *   (B) dict con type :  {type: 'linear'|'cubic'|'step', points: [[t,v], …]}
- *                        — solo per envelope di soli breakpoint, applica
- *                        l'interpolazione globalmente a tutti i segmenti.
- *                        Non si combina con loop block.
+ *   (B) dict con type :  {type: 'linear'|'cubic'|'step', points: [item, …]}
+ *                        — il `type` governa ogni segmento che non dichiara
+ *                        un tipo sul punto; dentro `points` stanno gli stessi
+ *                        item della forma (A). wrapEnv la scrive per ogni
+ *                        interp globale non lineare, eccezioni sul punto e BP
+ *                        group compresi (#189), ma non con un loop block fra
+ *                        gli item (caso dichiarato, #191).
  *
  *   Gli `item` nella forma (A) sono:
  *   - breakpoint:  [t, v]                    (t∈[0,1] in editor visivo)
@@ -79,16 +82,30 @@
     }
     return { interp: "linear", items: Array.isArray(env) ? env.slice() : [] };
   }
+  /* L'inversa di unwrapEnv: un interp globale non lineare esce `{type, points}`,
+     ANCHE con 3-tuple o BP group fra gli item (#189). Per il motore il `type`
+     del dict e' il tipo di ogni segmento che non ne dichiara uno sul punto
+     (`Envelope._parse_segments`: `seg_types[i] if seg_types[i] is not None
+     else self.type`), e il builder legge 3-tuple e gruppi dentro `points`
+     come in una lista. In una lista piatta invece un punto senza tipo e'
+     `linear`: scriverla appena c'era un'eccezione sul punto — com'era — faceva
+     del primo commit una riscrittura silenziosa, e dopo il commit anche il
+     disegno si adeguava (unwrapEnv della lista rende `interp: linear`), quindi
+     non restava neppure un segno. Il gesto piu' corto per arrivarci era
+     setZoneInterp su una curva che l'editor stesso aveva scritto cubica.
+
+     Resta fuori un caso, dichiarato: un blocco compatto fra gli item tiene la
+     lista piatta, come prima. Lì il motore legge l'interp del blocco in due
+     modi che l'editor non rispecchia — nella lista quello del PRIMO blocco
+     diventa il tipo globale (`EnvelopeBuilder.extract_interp_type`), nel dict
+     viene ignorato e governa il `type` — mentre expandMixed lo disegna per
+     blocco. Il dict renderebbe identico il valore per il motore e falso il
+     disegno del blocco appena aggiunto con "add loop": la decisione sta nella
+     issue #191, e la divergenza e' asserita in
+     tests/parity/test-envelope-wrap-parity.js. */
   function wrapEnv(items, interp) {
-    const hasLoop = items.some(isCompactBlock);
-    // BP groups keep the flat mixed-array form: the dict form is only for
-    // pure-BP envelopes with a single global interp
-    const hasGroup = items.some(isBPGroup);
-    // if any breakpoint has an explicit per-point type, keep flat array (3-tuples)
-    const hasPerPoint = items.some((it) => Array.isArray(it) && it.length === 3 && typeof it[2] === "string");
-    if (hasPerPoint || hasGroup) return items;
-    if (!interp || interp === "linear" || hasLoop) return items;
-    // dict form available only for pure-BP envelopes with non-linear global interp
+    if (!interp || interp === "linear") return items;
+    if (items.some(isCompactBlock)) return items;
     return { type: interp, points: items.slice() };
   }
 
@@ -910,21 +927,24 @@
   function fmtBPGroup(group) {
     return `[${fmtPattern(group[0])}, '${group[1]}']`;
   }
+  function fmtItem(it) {
+    return isBreakpoint(it) ? fmtBP(it) :
+           isBPGroup(it)    ? fmtBPGroup(it) :
+           fmtCompact(it);
+  }
   function fmtEnvInline(env) {
-    // typed envelope dict form: {type: 'cubic', points: [[t,v], …]}
+    // typed envelope dict form: {type: 'cubic', points: [item, …]} — gli item
+    // sono quelli della lista (3-tuple e BP group compresi, che wrapEnv ci
+    // scrive da #189), quindi passano dallo stesso formattatore.
     if (isTypedEnv(env)) {
-      const pts = env.points.map(fmtBP).join(", ");
+      const pts = env.points.map(fmtItem).join(", ");
       return `{type: ${env.type}, points: [${pts}]}`;
     }
     if (!Array.isArray(env)) return JSON.stringify(env);
     // Single compact block / BP group: emit bare form (no outer wrapping)
     if (env.length === 1 && isCompactBlock(env[0])) return fmtCompact(env[0]);
     if (env.length === 1 && isBPGroup(env[0])) return fmtBPGroup(env[0]);
-    return "[" + env.map(it =>
-      isBreakpoint(it) ? fmtBP(it) :
-      isBPGroup(it)    ? fmtBPGroup(it) :
-      fmtCompact(it)
-    ).join(", ") + "]";
+    return "[" + env.map(fmtItem).join(", ") + "]";
   }
 
   /* normalizza un valore parsato all'array di items mixed-format

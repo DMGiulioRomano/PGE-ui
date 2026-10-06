@@ -627,12 +627,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const interpTypes = interpIsFixed
     ? _INTERP_TYPES.filter((o) => o.val === defaultInterp) : _INTERP_TYPES;
   /* expandMixed sul desugarato (non su rawEnvRaw): blocks.originalIdx deve
-     indicizzare rawEnv, e con i gruppi gli indici nativi divergerebbero. La
-     forma typed {type,points} non contiene gruppi e passa com'è. */
+     indicizzare rawEnv, e con i gruppi gli indici nativi divergerebbero. Vale
+     anche per la forma typed {type,points}, che da #189 porta gruppi e 3-tuple
+     — wrapEnv ce li scrive — e che a mano poteva portarli gia' prima: il dict
+     si ricostruisce attorno agli item desugarati, cosi' expandMixed tiene il
+     `type` come interp dei punti senza tipo e gli indici restano quelli di
+     rawEnv. */
   const exp = useMemoEE(() => {
     if (!rawEnvRaw) return { points: [], cycles: [], blocks: [] };
-    const src = PGEEnv.isTypedEnv(rawEnvRaw) ? rawEnvRaw : PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(rawEnvRaw).items);
-    return PGEEnv.expandMixed(src);
+    const items = PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(rawEnvRaw).items);
+    return PGEEnv.expandMixed(PGEEnv.isTypedEnv(rawEnvRaw) ? { type: rawEnvRaw.type, points: items } : items);
   }, [rawEnvRaw]);
   /* La forma dell'envelope aperto (PGE #211, #180), sul valore GREZZO: il
      motore giudica quello che c'e' nello YAML, non la forma desugarata su cui

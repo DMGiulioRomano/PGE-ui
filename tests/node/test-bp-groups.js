@@ -129,8 +129,12 @@ console.log("\n── expandMixed: propagazione interp per-zona ──");
 }
 
 console.log("\n── wrapEnv / normalizeEnv / fmtEnvInline ──");
-assert("wrapEnv non incarta in dict un env con gruppi",
-  Array.isArray(E.wrapEnv([ZONE_A], "cubic")));
+/* Fino a #189 qui c'era l'opposto — «wrapEnv non incarta in dict un env con
+   gruppi» — ed era il difetto fissato come contratto: la lista piatta perde il
+   `type` globale, e i punti senza tipo suo tornano lineari. */
+assert("wrapEnv tiene il dict anche con un gruppo dentro: il type globale resta",
+  eq(E.wrapEnv([ZONE_A], "cubic"), { type: "cubic", points: [ZONE_A] }),
+  JSON.stringify(E.wrapEnv([ZONE_A], "cubic")));
 assert("normalizeEnv: bare group → [group]",
   eq(E.normalizeEnv(ZONE_A), [ZONE_A]));
 assert("normalizeEnv: lista mista invariata",
@@ -305,6 +309,154 @@ console.log("\n── le grafie nude entrano nell'editor come quelle annidate �
   assert("…e sul blocco nudo continua a muoversi come prima del riuso",
     U.rescaleEnvArray(BARE_BLOCK, 2)[1] === 1.6 &&
     E.isCompactBlock(U.rescaleEnvArray(BARE_BLOCK, 2)));
+}
+
+/* ── {type, points}: il type globale sopravvive al commit (#189) ────────────
+   Per il motore il `type` di un dict e' il tipo di ogni segmento che non ne
+   dichiara uno sul punto (`Envelope._parse_segments`: `seg_types[i] if
+   seg_types[i] is not None else self.type`); in una lista piatta quel punto e'
+   `linear`. `wrapEnv` scriveva la lista appena c'era un 3-tuple o un BP group,
+   quindi il primo commit raddrizzava in silenzio ogni segmento che seguiva il
+   tipo globale — e dopo il commit anche il disegno, perche' `unwrapEnv` della
+   lista rende `interp: linear`. Che la semantica sia la stessa per il motore,
+   valore per valore, lo chiede tests/parity/test-envelope-wrap-parity.js; qui
+   si fissa la forma. */
+console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189) ──");
+{
+  const rewrap = (x) => { const w = E.unwrapEnv(x); return E.wrapEnv(w.items, w.interp); };
+  // Il percorso di ogni commit dell'EnvelopeEditor (commit, commitCur, frecce,
+  // paste): desugar per lavorare, resugar + wrap per scrivere.
+  const commitPath = (items, interp) =>
+    E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp);
+  const roundTrip = (x) => {
+    const w = E.unwrapEnv(x);
+    return commitPath(E.desugarBPGroups(w.items), w.interp);
+  };
+
+  // la forma mista: tipo globale ed eccezioni sul punto (la riproduzione della issue)
+  const MISTA = { type: "cubic", points: [[0, 2], [0.2586, 0.4, "linear"], [1, 1]] };
+  assert("forma mista: wrapEnv ∘ unwrapEnv la rende identica",
+    eq(rewrap(MISTA), MISTA), JSON.stringify(rewrap(MISTA)));
+  assert("forma mista: il round-trip dell'editor senza modifiche la rende identica",
+    eq(roundTrip(MISTA), MISTA), JSON.stringify(roundTrip(MISTA)));
+
+  const CON_GRUPPO = { type: "cubic", points: [[0, 2], [[[0.1, 1], [0.2, 3], [0.3, 0]], "step"], [1, 1]] };
+  assert("BP group dentro il dict: wrapEnv ∘ unwrapEnv lo rende identico",
+    eq(rewrap(CON_GRUPPO), CON_GRUPPO), JSON.stringify(rewrap(CON_GRUPPO)));
+  /* Il gruppo fra due breakpoint nudi non si ricompatta: resugarBPGroups
+     rifa un gruppo solo da un run INTERO di segmenti uniformi, e qui il run e'
+     tutto l'envelope. Esce come i suoi 3-tuple — la stessa cosa che fa sulla
+     lista piatta da sempre, e la stessa espansione che fa il builder
+     (`_expand_bp_group`). La forma cambia, la semantica no; e il type globale
+     resta, che e' il punto. */
+  assert("BP group dentro il dict: dopo il commit il type resta, il gruppo diventa i suoi 3-tuple",
+    eq(roundTrip(CON_GRUPPO),
+       { type: "cubic", points: [[0, 2], [0.1, 1, "step"], [0.2, 3, "step"], [0.3, 0], [1, 1]] }),
+    JSON.stringify(roundTrip(CON_GRUPPO)));
+
+  const STEP_CON_CUBIC = { type: "step", points: [[0, 0], [0.5, 1, "cubic"], [0.7, 0.2, "cubic"], [1, 1]] };
+  assert("anche con step globale e cubic sul punto",
+    eq(roundTrip(STEP_CON_CUBIC), STEP_CON_CUBIC), JSON.stringify(roundTrip(STEP_CON_CUBIC)));
+
+  /* Il caso della issue, da un gesto dell'editor: fill_factor di stream4 in
+     mare-nostrum.yml, una zona di tre punti portata a `step` con
+     setZoneInterp (EnvelopeEditor.jsx), che tagga i punti interni della zona
+     col tipo scelto — o li lascia nudi se e' il default — e committa. */
+  const FF = { type: "cubic", points: [[0, 2], [0.0926, 2.01], [0.1631, 0.46], [0.2586, 0.4], [0.3133, 2.75], [1, 1]] };
+  {
+    const w = E.unwrapEnv(FF);
+    const rawEnv = E.desugarBPGroups(w.items);
+    const g = w.interp;
+    const internal = new Set([1, 2, 3].slice(0, -1));
+    const next = rawEnv.map((it, i) => {
+      if (!internal.has(i) || !E.isBreakpoint(it)) return it;
+      return "step" === g ? [it[0], it[1]] : [it[0], it[1], "step"];
+    });
+    const scritto = commitPath(next, g);
+    assert("setZoneInterp su un {type: cubic}: esce il dict con le due eccezioni step",
+      eq(scritto, { type: "cubic", points: [[0, 2], [0.0926, 2.01, "step"], [0.1631, 0.46, "step"], [0.2586, 0.4], [0.3133, 2.75], [1, 1]] }),
+      JSON.stringify(scritto));
+    assert("…e riaperto, l'editor rilegge cubic come interp globale",
+      E.unwrapEnv(scritto).interp === "cubic");
+    // E il disegno, che passa da expandMixed: i segmenti 0, 3 e 4 restano cubici.
+    const tags = E.expandMixed(scritto).points.map((p) => p[2]);
+    assert("…e expandMixed disegna cubici i segmenti senza eccezione",
+      eq(tags.slice(0, 5), ["cubic", "step", "step", "cubic", "cubic"]), JSON.stringify(tags));
+  }
+
+  // I confini, che non devono muoversi
+  assert("interp lineare con un 3-tuple: lista piatta, come prima",
+    eq(E.wrapEnv([[0, 0, "cubic"], [1, 1]], "linear"), [[0, 0, "cubic"], [1, 1]]));
+  assert("interp assente: lista piatta, come prima",
+    eq(E.wrapEnv([[0, 0], [[[0.2, 1], [0.8, 0]], "step"], [1, 1]], null),
+       [[0, 0], [[[0.2, 1], [0.8, 0]], "step"], [1, 1]]));
+  assert("soli breakpoint nudi con interp non lineare: dict, come prima",
+    eq(E.wrapEnv([[0, 0], [1, 1]], "step"), { type: "step", points: [[0, 0], [1, 1]] }));
+
+  /* Il caso dichiarato: con un blocco compatto fra gli item la lista resta
+     piatta, come prima di #189. Il motore legge l'interp del blocco in due
+     modi che l'editor non rispecchia — nella lista piatta quello del PRIMO
+     blocco diventa il tipo globale (`EnvelopeBuilder.extract_interp_type`),
+     nel dict viene ignorato e governa il `type` — mentre expandMixed lo
+     disegna per blocco. Tenere il dict qui renderebbe identico il valore per
+     il motore ma aprirebbe un disegno falso proprio sul blocco appena
+     aggiunto con "add loop"; la decisione sta nella issue #191, e la
+     divergenza e' asserita dalla suite di parita'. Se questo assert cade,
+     qualcuno ha deciso: aggiornare la parita' e CLAUDE.md insieme. */
+  const LOOPED = [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2]];
+  assert("con un blocco compatto la lista resta piatta (caso dichiarato, #191)",
+    eq(E.wrapEnv(LOOPED, "cubic"), LOOPED), JSON.stringify(E.wrapEnv(LOOPED, "cubic")));
+
+  /* fmtEnvInline formattava i points del dict con fmtBP e basta: un gruppo
+     dentro usciva come numeri senza senso. */
+  const inline = E.fmtEnvInline(CON_GRUPPO);
+  assert("fmtEnvInline: un gruppo dentro il dict esce come gruppo",
+    inline === "{type: cubic, points: [[0, 2], [[[0.1, 1], [0.2, 3], [0.3, 0]], 'step'], [1, 1]]}",
+    inline);
+  assert("parseEnvLiteral ∘ fmtEnvInline round-trip sul dict con gruppo",
+    eq(E.parseEnvLiteral(inline), CON_GRUPPO), inline);
+}
+
+/* ── l'anteprima dell'editor sul dict che porta gruppi (#189) ────────────────
+   EnvelopeEditor passava il dict a expandMixed cosi' com'era, con un commento
+   che lo giustificava — «la forma typed non contiene gruppi» — falso da #189,
+   e falso gia' prima per un dict scritto a mano. Con un gruppo E un blocco nel
+   dict, `blocks[].originalIdx` indicizzava i points non desugarati, mentre
+   l'editor lo usa su `rawEnv`, che e' desugarato. */
+console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di rawEnv ──");
+{
+  const DICT = { type: "cubic", points: [[[[0, 0], [0.2, 1], [0.3, 0.5]], "step"], [[[0, 1], [100, 0]], 1, 2]] };
+  const rawEnv = E.desugarBPGroups(E.unwrapEnv(DICT).items);
+  const SG = require("./source-guard.js");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  assert("l'editor non passa piu' il dict grezzo a expandMixed",
+    !/isTypedEnv\(rawEnvRaw\)\s*\?\s*rawEnvRaw\s*:/.test(eeSrc));
+  assert("…ma un dict con i points desugarati, e il type del dict",
+    /expandMixed\(\s*PGEEnv\.isTypedEnv\(rawEnvRaw\)\s*\?\s*\{\s*type:\s*rawEnvRaw\.type,\s*points:\s*items\s*\}\s*:\s*items\s*\)/.test(eeSrc));
+  const exp = E.expandMixed({ type: DICT.type, points: rawEnv });
+  assert("originalIdx indicizza un blocco di rawEnv",
+    exp.blocks.length === 1 && E.isCompactBlock(rawEnv[exp.blocks[0].originalIdx]),
+    JSON.stringify(exp.blocks.map((b) => b.originalIdx)));
+  assert("…e il disegno dei breakpoint e' quello del dict grezzo",
+    eq(exp.points, E.expandMixed(DICT).points));
+
+  /* Gli altri lettori che misuravano un envelope come lista. Da #189 il dict
+     lo scrive l'editor per ogni interp globale non lineare con eccezioni sul
+     punto — curve che prima uscivano liste — e `.length` su un dict e'
+     `undefined`: la riga dell'Inspector mostrava il segnaposto al posto della
+     curva e «undefined bp» come conteggio. */
+  const primSrc = SG.codeOf(path.join(__dirname, "../../src/components/primitives.jsx"));
+  assert("ParamRow legge l'envelope per unwrapEnv, non per la sua lunghezza",
+    /PGEEnv\.unwrapEnv\(envValue\)/.test(primSrc) && !/envValue\.length/.test(primSrc));
+  const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
+  assert("i conteggi «N bp» dell'Inspector passano da unwrapEnv",
+    !/(fillFactorEnv|densityEnv|readDirectionEnv)\.length/.test(inspSrc),
+    (inspSrc.match(/\w+Env\.length/g) || []).join(", "));
+  // …e quel che ParamRow disegna di un dict e' la stessa curva della lista.
+  const sketch = (v) => E.expandMixed(E.desugarBPGroups(E.unwrapEnv(v).items)).points.map((p) => [p[0], p[1]]);
+  const MISTA = { type: "cubic", points: [[0, 2], [0.2586, 0.4, "linear"], [1, 1]] };
+  assert("il disegno di ParamRow sul dict ha i punti della lista",
+    eq(sketch(MISTA), [[0, 2], [0.2586, 0.4], [1, 1]]), JSON.stringify(sketch(MISTA)));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
