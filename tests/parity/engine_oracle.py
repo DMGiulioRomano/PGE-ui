@@ -1023,17 +1023,30 @@ def _op_constants(args):
         out["envelope_colors_keys_ast"] = None
         out["envelope_colors_keys_ast_error"] = str(exc)
 
-    # Il vocabolario di `pointer.loop_unit` (PGE #222). Solo AST: importare
-    # `pointer_controller` tira dentro `pge.envelopes.envelope` e quindi numpy,
-    # e nessuna op puo' pretendere il venv del motore — il job node della CI,
-    # dove la parita' gira, non ne costruisce uno. L'ordine conta: la prima
-    # grafia e' quella canonica, ed e' quella che il selettore dell'Inspector
-    # scrive.
+    # Il vocabolario di `pointer.loop_unit` (PGE #222), letto DUE volte come
+    # `RANGE_UNITS` qui sotto: dall'AST del bridge (cio' che la UI riceve) e
+    # importato (cio' che il motore usa). L'import e' possibile da PGE #246,
+    # che ha spostato la costante in `pge.parameters.loop_unit`, un modulo che
+    # non importa niente; prima stava in `pointer_controller`, e la lettura era
+    # solo AST. L'ordine conta: la prima grafia e' quella canonica, ed e'
+    # quella che il selettore dell'Inspector scrive.
+    #
+    # Su un motore anteriore il modulo non c'e', e quello e' l'unico caso in
+    # cui l'import manca senza che sia un guasto: `loop_units_module_absent`
+    # lo dice, e la suite lo tratta come un'annata, non come un'op saltata.
     try:
         out["loop_units_ast"] = _introspect("constants").engine_loop_units(ENGINE.root)
     except OracleError as exc:
         out["loop_units_ast"] = None
         out["loop_units_ast_error"] = str(exc)
+    out["loop_units_module_absent"] = not _modulo_nel_checkout(
+        "pge.parameters.loop_unit")
+    try:
+        lu = ENGINE.module("pge.parameters.loop_unit")
+        out["loop_units"] = list(lu.LOOP_UNITS)
+    except (OracleError, AttributeError, TypeError) as exc:
+        out["loop_units"] = None
+        out["loop_units_error"] = str(exc)
 
     # La banda relativa di `grain.duration_range` (PGE #267, PGE-ui #163): il
     # vocabolario di `<param>_range_unit` e il dominio della frazione. Stanno in

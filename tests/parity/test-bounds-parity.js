@@ -578,6 +578,24 @@ parity({
           Array.isArray(fromEngine) && fromEngine.length > 0,
           c.loop_units_ast_error || JSON.stringify(fromEngine));
 
+        /* La lettura del bridge e' un AST al path, con candidati storici: da
+         * PGE #246 la costante si importa anche senza venv, quindi la si
+         * confronta col valore che il motore usa davvero. Senza, un candidato
+         * vecchio che rispondesse con un letterale rimasto indietro
+         * passerebbe per la verita' del motore. Su un motore anteriore il
+         * modulo non c'e': e' un'annata, si dice e si passa — ma un modulo
+         * che c'e' e non si importa e' un guasto. */
+        if (c.loop_units_module_absent) {
+          ctx.note("pge.parameters.loop_unit assente: motore anteriore a PGE #246, confronto con l'import non disponibile");
+        } else {
+          assert("pge.parameters.loop_unit si importa e dichiara LOOP_UNITS",
+            Array.isArray(c.loop_units) && c.loop_units.length > 0,
+            c.loop_units_error || JSON.stringify(c.loop_units));
+          assert("la lettura AST del bridge e' il valore che il motore usa, nello stesso ordine",
+            JSON.stringify(fromEngine) === JSON.stringify(c.loop_units),
+            `ast=${JSON.stringify(fromEngine)} import=${JSON.stringify(c.loop_units)}`);
+        }
+
         assert("la UI ne ha la stessa copia, nello stesso ordine",
           JSON.stringify(window.PGEEnvUtils.LOOP_UNITS) === JSON.stringify(fromEngine),
           `ui=${JSON.stringify(window.PGEEnvUtils.LOOP_UNITS)} motore=${JSON.stringify(fromEngine)}`);

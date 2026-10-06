@@ -182,7 +182,11 @@ exists, the fourth only when a browser is installed):
   fake binaries on a temporary `PATH`, `GET /renderers`, the `renderers` row of
   `/diagnose`, `/render` refusing a backend the engine doesn't offer before the
   config write — plus three canaries on the real engine, the binary names among
-  them), and `test_engine_render.py`
+  them), `test_parity_oracle.py` (the parity oracle's two loaders with a
+  fallback — `parse_magnify_spec`, `filter_solo_mute` — driven over stub
+  engines of every vintage, each in its own process: the light module
+  imported, the historic ast-slice, a module without the name, a module that
+  doesn't import), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -1529,7 +1533,16 @@ Two rules when touching it:
   the payload (`magnify_source`), and `test-magnify-parity.js` requires it to
   be one of the three known ones, never a silent fourth. A module that exists
   and lacks the name is `IncompleteNamespace` — declared, never a reason to
-  fall through and hide the rename behind a branch that succeeds.
+  fall through and hide the rename behind a branch that succeeds. A module
+  that exists and doesn't *import* is declared too, with the import's own
+  error: on an engine with #246 the historic branches can't succeed (`pge.cli`
+  and `generator.py` read from the new modules), so falling through only
+  replaced a `ModuleNotFoundError` — a heavy dependency slipped into the light
+  module, the very regression #246 guards — with «the grammar moved». What
+  separates "older engine" from "broken module" is whether the file is in the
+  checkout (`_modulo_nel_checkout`), not whether the import failed.
+  `tests/python/test_parity_oracle.py` drives the loaders over stub engines of
+  each vintage.
 - **No op may need the engine venv.** The CI node job checks the engine out but
   builds no venv, and that is where parity runs. Verified module by module; if
   you add an op that drags in numpy, it will silently stop running there.
@@ -1572,17 +1585,23 @@ historic `pointer_controller.py` paths kept as fallbacks, because the bridge has
 to work on every vintage of engine. AST and not import for the reason that holds
 for this whole module: the bridge never imports the engine. The move removed a
 second constraint that only applied to the oracle (`pointer_controller` drags in
-numpy, which the CI node job doesn't have), so parity now imports the constant
-while the bridge still reads the text. `test-bounds-parity.js` requires the UI's
-copy to equal the engine's **in order** — the first spelling is the canonical
-one, and `LOOP_UNIT_DEFAULT` is what the Inspector's selector writes.
+numpy, which the CI node job doesn't have), so parity now reads the constant
+**both ways** — imported from `pge.parameters.loop_unit` and through the
+bridge's AST — and requires them to agree, like `RANGE_UNITS`. On an engine
+older than #246 the module is absent (`loop_units_module_absent`) and that half
+is a note, not a red; a module that is there and doesn't import is a red.
+`test-bounds-parity.js` also requires the UI's copy to equal the engine's **in
+order** — the first spelling is the canonical one, and `LOOP_UNIT_DEFAULT` is
+what the Inspector's selector writes.
 
-The candidate order is load-bearing, and the failure mode is the quiet one: a
-new engine has the new module *and* a `pointer_controller.py` that no longer
-declares the constant, and this reading stops at the first file it can parse —
-read in the wrong order it would answer "don't know" and close the search, so
-the vocabulary would vanish and the UI would refuse every spelling.
-`test_render_pipeline.py` pins the precedence.
+The candidate order decides less than it looks. The walk moves on past a file
+that doesn't declare the constant, or declares it unreadably (`_read_int_constant`'s
+rule), so a new engine whose `pointer_controller.py` merely *imports*
+`LOOP_UNITS` is read right in either order. The order decides only when two
+files both declare a literal — a copy left behind in the old home — and then the
+new home must win, or a stale vocabulary speaks for the engine. That is what
+`test_render_pipeline.py` pins, and what the import half of the parity case
+would catch if the AST read ever answered from the wrong file.
 
 That was **false for the `pitch` half** until this round: three fallbacks
 (`edoFactor`, the ratio record, the EDO preset table) returned today's engine

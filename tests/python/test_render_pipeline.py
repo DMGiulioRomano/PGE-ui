@@ -2755,14 +2755,15 @@ def test_engine_loop_units_reads_the_new_module(tmp_path):
 
 
 def test_engine_loop_units_prefers_the_new_module(tmp_path):
-    """Con entrambi i file, vince quello nuovo.
+    """Con entrambi i file che dichiarano un letterale, vince quello nuovo.
 
-    Non e' un caso di laboratorio: fra il merge di PGE #246 e il prossimo
-    `git pull` nel checkout fratello, un motore puo' avere il modulo nuovo e
-    un `pointer_controller.py` che la costante non la dichiara piu'. Letto
-    nell'ordine sbagliato, il secondo risponderebbe "non lo so" **e chiuderebbe
-    la ricerca**, perche' questa lettura si ferma al primo file che si parsa:
-    il vocabolario spariva e la UI rifiutava ogni grafia.
+    E' l'unico caso in cui l'ordine dei candidati decide: un file che la
+    costante non la dichiara (o la dichiara in modo illeggibile) non chiude la
+    ricerca, la lettura passa al successivo — la regola di
+    `_read_int_constant`. Quindi un `pointer_controller.py` che `LOOP_UNITS`
+    lo *importa* da `loop_unit.py` si legge giusto in qualunque ordine. Quel
+    che l'ordine sbagliato farebbe e' dare la parola a una copia rimasta nella
+    vecchia casa: un vocabolario stantio al posto di quello del motore.
     """
     import engine_introspect as ei
     _stub_loop_unit(tmp_path, "LOOP_UNITS = ('seconds', 'normalized')\n")

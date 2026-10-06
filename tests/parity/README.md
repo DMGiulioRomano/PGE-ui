@@ -65,7 +65,7 @@ Le operazioni dell'oracolo:
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `filter_solo_mute` | gli `stream_id` che `pge.engine.solo_mute.filter_solo_mute` tiene — importata, da PGE #246 | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
-| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` solo via AST perché è la lettura del bridge che va confrontata, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
+| `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` sia importato da `pge.parameters.loop_unit` (PGE #246) sia dall'AST del bridge, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
 
 ## Come si lancia
 
@@ -107,6 +107,15 @@ default** del motore, e i due merge non avvengono nello stesso istante. Quale
 ramo ha risposto lo dice il payload (`magnify_source`), e
 `test-magnify-parity.js` pretende che sia uno dei tre noti — mai un quarto
 silenzioso.
+
+Si ripiega solo quando il modulo nuovo **non c'è nel checkout**. Uno che c'è e
+non si importa è un guasto da dichiarare, con l'errore dell'import: su un
+motore con PGE #246 `pge.cli` e `generator.py` leggono dai moduli nuovi, quindi
+i rami storici non possono riuscire, e il loro messaggio («la grammatica si è
+spostata») mandava a cercare una rinomina dove c'era una dipendenza pesante
+scesa nel modulo leggero — proprio la regressione che #246 sorveglia.
+`tests/python/test_parity_oracle.py` guida i caricatori su motori finti di ogni
+annata.
 
 ## Un caso saltato non è un caso passato
 
@@ -287,9 +296,12 @@ rename upstream, che nessuna suite node vedrebbe. Le domande, in
 Solo AST, e non per eleganza: il bridge non importa mai il motore — è un
 processo Flask nel venv dell'editor, e rispondere a `GET /bounds` eseguendo
 codice del motore non è una cosa che fa. Da PGE #246 la costante sta in
-`pge/parameters/loop_unit.py`, un modulo che non importa niente, quindi
-l'oracolo la importerebbe; quel che si confronta qui è però la lettura del
-bridge, che resta un AST **al path**. Prima la costante stava in
+`pge/parameters/loop_unit.py`, un modulo che non importa niente, e
+l'oracolo la legge in tutti e due i modi: importata, cioè il valore che il
+motore usa, e attraverso l'AST del bridge, che resta una lettura **al path**
+con candidati storici. La suite pretende che coincidano, come per
+`RANGE_UNITS`; su un motore anteriore il modulo manca
+(`loop_units_module_absent`) e quella metà è una nota, non un rosso. Prima la costante stava in
 `controllers/pointer_controller.py`, che importa `pge.envelopes.envelope` e
 quindi numpy: là il vincolo era doppio. I candidati vanno dal più recente al
 più vecchio e il vecchio path resta, perché il bridge deve funzionare su ogni
