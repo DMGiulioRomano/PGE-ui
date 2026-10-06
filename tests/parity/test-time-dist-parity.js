@@ -5,7 +5,10 @@
  * Questa suite esiste per una riga precisa di `tests/node/test-time-dist.js`:
  *
  *     "verificato eseguendo il motore, {geometric, ratio: 2} a 1024 cicli e
- *      {exponential, rate: 0.5} a 1025 alzano ParameterBoundError"
+ *      {exponential, rate: 0.5} a 1024 alzano ParameterBoundError"
+ *
+ * (il secondo era 1025 fino a PGE #293, che ha aggiunto la guardia sulla somma
+ * dei pesi: la suite l'ha visto cambiare, che e' esattamente il suo mestiere)
  *
  * Qualcuno ha lanciato il motore una volta e ha trascritto il risultato. Da
  * quel momento quei numeri sono un'affermazione sul motore che nessun test
@@ -67,6 +70,11 @@ const OVERFLOW_PAIRS = [
   [{ type: "exponential", rate: 0.5 }, 1023], [{ type: "exponential", rate: 0.5 }, 1025],
   [{ type: "exponential", rate: 0.5 }, 1026], [{ type: "exponential", rate: 0.5 }, 1200],
   [{ type: "exponential", rate: 0.25 }, 513],
+  // PGE #293: la somma dei pesi trabocca prima del peso piu' grande
+  [{ type: "exponential", rate: 0.5 }, 1024], [{ type: "exponential", rate: 0.25 }, 512],
+  [{ type: "exponential", rate: 0.9 }, 6715], [{ type: "exponential", rate: 0.9 }, 6716],
+  [{ type: "power", exponent: 100.5 }, 1139], [{ type: "power", exponent: 100.5 }, 1140],
+  [{ type: "exponential", rate: 5e-324 }, 1], [{ type: "exponential", rate: 5e-324 }, 2],
   [{ type: "exponential", rate: 0.1 }, 300], [{ type: "exponential", rate: 0.1 }, 400],
   [{ type: "exponential", rate: 2 }, 2000],
   [{ type: "power", exponent: 200.5 }, 4], [{ type: "power", exponent: 200.5 }, 400],
@@ -175,10 +183,17 @@ parity({
       run: async (ask, assert, ctx) => {
         // I tre casi che test-time-dist.js afferma a mano. La soglia della UI
         // e la soglia del motore vengono cercate, non scritte.
+        // Le ultime due esistono per PGE #293: il motore guarda la SOMMA dei
+        // pesi, che con `rate` vicino a 1 o un esponente moderato trabocca
+        // molto prima del peso piu' grande — lo specchio che guardava il solo
+        // peso tace 22 cicli a `rate: 0.9` e 28 a `exponent: 100.5`. Le prime
+        // tre, dove peso e somma distano un ciclo o meno, non lo vedevano.
         const probes = [
           [{ type: "geometric", ratio: 2 }, 900, 1200],
           [{ type: "exponential", rate: 0.5 }, 900, 1200],
           [{ type: "geometric", ratio: 10 }, 200, 400],
+          [{ type: "exponential", rate: 0.9 }, 5000, 9000],
+          [{ type: "power", exponent: 100.5 }, 500, 3000],
         ];
         const widths = [];
         for (const [spec, lo, hi] of probes) {
@@ -264,9 +279,8 @@ parity({
         // rifiuti e' un'affermazione che qui si verifica.
         const banda = [
           [{ type: "geometric", ratio: 2 }, 1024],
-          [{ type: "exponential", rate: 0.5 }, 1025],
+          [{ type: "exponential", rate: 0.5 }, 1024],
           [{ type: "geometric", ratio: 2.5 }, 775],
-          [{ type: "exponential", rate: 0.25 }, 513],
         ];
         const answers = await ask(banda.map(([spec, n]) => ({
           op: "build_time_distribution", args: { spec, n_reps: n, total_time: T } })));

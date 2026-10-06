@@ -121,8 +121,8 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`0bc8a513a3293239c653a7afa06873df397da55c`
-(«Merge pull request #287 from DMGiulioRomano/feat/dazzling-rubin-n1kd0v»)
+`c120af592b0afcf6740cead07a65f8c8b096cbf4`
+(«Merge pull request #293 from DMGiulioRomano/claude/jolly-sagan-saqxna»)
 
 Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
 che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
@@ -146,8 +146,13 @@ nemmeno porre, perché lì le due costanti non esistono. Fra `9071a37` e il
 commit qui sopra sono entrati i guard di forma degli envelope nel builder (PGE
 #211, fuso con PGE #287): è il motore contro cui `test-envelope-shape-parity.js`
 confronta lo specchio di #180, e da qui quella suite non ha più un ramo per il
-motore precedente — su un motore che non ha questo commit è rossa, e la verifica
-dello SHA qui sopra dice perché.
+motore precedente — su un motore che non ha quel commit è rossa. Fra `0bc8a51`
+(il merge di PGE #287) e il commit qui sopra è entrata la guardia sulla **somma**
+dei pesi delle distribuzioni temporali (PGE #219, fusa con PGE #293): in
+`exponential` e `power` la somma trabocca prima del peso più grande, e lo
+specchio di `timeDistError` la guarda da allora. Su un motore senza quel commit
+`test-time-dist-parity.js` è rossa — la UI avvisa su coppie che lì rendono
+ancora — e la verifica dello SHA qui sopra dice perché.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -296,7 +301,7 @@ commento.
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
 | envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
-| time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
+| time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus. In `exponential` la banda non viene dalla lettura intera (con `rate < 1` i pesi sono sempre float) ma da un pareggio: a `rate: 0.5` la somma dei pesi è `2**1024 - 1` e `1024·log10(2)` è esattamente `log10(MAX)`, su cui la disuguaglianza stretta tace. In `power` la somma si stima per difetto (PGE #293): la soglia della UI può solo arrivare dopo quella del motore |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |

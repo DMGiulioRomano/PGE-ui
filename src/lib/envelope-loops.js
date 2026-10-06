@@ -410,8 +410,22 @@
      INTERA, che è la più permissiva delle due: `ratio: 10` con `n_reps: 309`
      rende davvero, e adottare la soglia float lo segnalerebbe per sbaglio.
      Il prezzo è una banda di un valore dove il float trabocca e noi taciamo —
-     `ratio: 10.0` a 309, `ratio: 2` a 1024, `rate: 0.5` a 1025 — sempre nella
-     direzione dichiarata sicura. I bordi sono fissati nei test. */
+     `ratio: 10.0` a 309, `ratio: 2` a 1024 — sempre nella direzione
+     dichiarata sicura. I bordi sono fissati nei test.
+
+     Da PGE #293 (#219) il motore non guarda più solo la potenza: in
+     `exponential` e in `power` controlla anche la SOMMA dei pesi
+     (`TimeDistributionStrategy._normalize`), che trabocca prima del peso più
+     grande — tanto prima quanto più `rate` è vicino a 1 o l'esponente è
+     moderato: a `rate: 0.9` il peso trabocca a 6738 cicli e la somma a 6716,
+     a `exponent: 60.5` a 124486 contro 109992. Qui si guarda quindi la somma.
+     In `exponential` la somma ha una forma chiusa; in `power` no, e se ne
+     prende un MINORANTE — mai un valore più alto del vero, così l'avviso non
+     esce mai su uno YAML che rende. `rate: 0.5` resta l'unica banda di
+     quella distribuzione, e non per la semantica intera (con rate < 1 i pesi
+     sono sempre float): la somma vale 2**1024 - 1, `1024 * log10(2)` è
+     esattamente LOG10_MAX, e la disuguaglianza stretta tace sul pareggio che
+     il motore, sommando davvero, fa traboccare. */
   function _overflowError(name, p, nReps) {
     const N = +nReps;
     if (!isFinite(N) || N < 1) return null;
@@ -428,9 +442,17 @@
     }
     if (name === "exponential" || name === "exp") {
       const rate = p.rate != null ? +p.rate : 2.0;
-      // weights[i] = rate ** -i: cresce solo se rate < 1, e al massimo in i=N-1.
+      // weights[i] = rate ** -i: crescono solo se rate < 1. La somma, che il
+      // motore controlla (PGE #293), e' geometrica di ragione q = 1/rate:
+      // (q**N - 1) / (q - 1), in logaritmi. Contiene il peso piu' grande,
+      // quindi trabocca prima di lui o insieme.
+      // log10(q) si scrive -log10(rate), senza calcolare q: con un rate
+      // subnormale 1/rate e' Infinity, e a n_reps 1 — un peso solo, che vale 1
+      // — si segnalerebbe un overflow che il motore non ha.
       if (!(rate > 0) || rate >= 1) return null;
-      const mag = (N - 1) * Math.log10(1 / rate);
+      const lq = -Math.log10(rate);
+      const mag = N * lq + Math.log10(1 - Math.pow(rate, N))
+                - (Math.log10(1 - rate) + lq);                 // log10(q - 1)
       return mag > LOG10_MAX ? mk("rate", rate) : null;
     }
     if (name === "power") {
@@ -442,7 +464,13 @@
       // un secondo chiamante che saltasse quel controllo non deve poter
       // ottenere un `mag` NaN letto come "non trabocca".
       if (!isFinite(e) || e <= 0 || Number.isInteger(e)) return null;
-      const mag = e * Math.log10(N);
+      // La somma (PGE #293) non ha forma chiusa: se ne prende un minorante.
+      // Per pesi crescenti sum(i**e, 1..N) >= integrale di x**e su [0, N] =
+      // N**(e+1)/(e+1); con e >= 1 la funzione e' convessa, i trapezi stanno
+      // sopra l'integrale e si guadagna N**e / 2. E la somma contiene il peso
+      // piu' grande, N**e: il minorante e' il massimo fra i due.
+      const c = e >= 1 ? 0.5 : 0;
+      const mag = e * Math.log10(N) + Math.log10(Math.max(1, N / (e + 1) + c));
       return mag > LOG10_MAX ? mk("exponent", e) : null;
     }
     return null; // linear e logarithmic non elevano niente a potenza
