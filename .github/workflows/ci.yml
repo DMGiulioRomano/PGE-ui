@@ -158,13 +158,20 @@ jobs:
         env:
           PGE_REQUIRE_ENGINE_FIXTURES: ${{ steps.engine.outcome == 'success' && '1' || '' }}
         run: python -m pytest tests/python/ -v
-      # La parita' gira DUE volte in CI, e non per ridondanza: l'oracolo ha due
-      # strade per la grammatica di --magnify-at, e possono divergere. Il job
-      # node non costruisce il venv del motore, quindi li' vince sempre il ramo
-      # ast-slice; qui il venv c'e', `pickPython` lo preferisce, e a girare e' il
-      # ramo import — quello che il README chiama piu' fedele e che, fino a
-      # questo commit, nessuna CI esercitava mai. Il primo difetto finitoci
-      # dentro (il namespace senza le tre costanti) e' arrivato in main verde.
+      # La parita' gira DUE volte in CI, e non per ridondanza: l'oracolo ha piu'
+      # di una strada per la grammatica di --magnify-at, e possono divergere.
+      # Il primo difetto finitoci dentro (il namespace senza le tre costanti)
+      # e' arrivato in main verde, perche' nessuna CI esercitava il ramo import.
+      #
+      # Da PGE #246 la grammatica sta in `pge.shared.magnify_spec`, un modulo
+      # senza dipendenze: il ramo import vince su **entrambi** i job, venv o
+      # no, e i due passaggi diventano la stessa strada. Resta il motivo per
+      # cui questo passo esiste: fra il merge di PGE-ui #180 e quello di PGE
+      # #246 la CI gira contro un motore anteriore allo spostamento, dove le
+      # strade tornano due e divergenti — qui il venv c'e', `pickPython` lo
+      # preferisce e vince `import-storico`; nel job node vince
+      # `ast-slice-storico`. `test-magnify-parity.js` stampa quale ha risposto
+      # e pretende che sia uno dei tre noti.
       #
       # Se il venv non e' stato costruito, `pickPython` ripiega su python3 e
       # questo passo replica il job node: ridondante, mai sbagliato.

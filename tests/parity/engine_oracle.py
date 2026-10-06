@@ -24,12 +24,20 @@ sarebbe un terzo specchio da tenere allineato, cioe' il problema che questo
 file esiste per chiudere. Ogni op qui sotto e' un adattatore: normalizza gli
 argomenti, chiama il motore, serializza il risultato o l'eccezione.
 
-Le deroghe sono due, e hanno la stessa forma: `parse_magnify_spec`, dove
+Le deroghe erano due, e avevano la stessa forma: `parse_magnify_spec`, dove
 `pge.cli` non e' importabile senza numpy/soundfile/matplotlib, e
 `filter_solo_mute`, dove `pge.engine.generator` tira dentro numpy. Li'
-l'oracolo estrae dal file i soli nodi AST che servono e li esegue. Sono
-comunque i byte del motore, non una parafrasi — vedi
-`_load_magnify_from_source` e `_load_filter_solo_mute`.
+l'oracolo estraeva dal file i soli nodi AST che servivano e li eseguiva: i byte
+del motore, quindi la risposta era vera, ma la lettura pinnava nomi *privati* e
+la loro posizione nel file, cosi' che una rinomina la' dentro rendeva rossa la
+CI di qui su ogni PR aperta.
+
+PGE #246 ha spostato entrambi in moduli che non importano niente —
+`pge.shared.magnify_spec` e `pge.engine.solo_mute`, con nomi pubblici — e
+`_load_magnify_from_source` e `_load_filter_solo_mute` adesso **importano**.
+Il vecchio ast-slice resta come ripiego sui motori anteriori a quella issue:
+la CI di qui fa il checkout del ramo di default del motore, e i due merge non
+avvengono nello stesso istante.
 
 ## Il protocollo
 
@@ -80,7 +88,7 @@ from pathlib import Path
 # STDOUT PRIVATO
 # =============================================================================
 # Il motore stampa. `configure_clip_logger` annuncia "Clip log file: ..." la
-# prima volta che si costruisce un gate con envelope, e `_parse_magnify_spec`
+# prima volta che si costruisce un gate con envelope, e `parse_magnify_spec`
 # stampa l'errore prima di uscire. Se quelle righe finissero nel canale del
 # protocollo il client node leggerebbe JSON malformato — e il sintomo sarebbe
 # un test di parita' rotto per un motivo che non c'entra niente con la parita'.
@@ -176,7 +184,7 @@ class OracleError(Exception):
 def _fmt_exc(exc: BaseException) -> str:
     """`ClasseErrore: messaggio`, la forma che i test confrontano.
 
-    Per SystemExit — cioe' per `_parse_magnify_spec`, che stampa ed esce — il
+    Per SystemExit — cioe' per `parse_magnify_spec`, che stampa ed esce — il
     messaggio utile e' quello stampato, non il codice di uscita: chi chiama lo
     passa in `.oracle_stdout` e lo appende qui."""
     out = getattr(exc, "oracle_stdout", "")
@@ -266,8 +274,12 @@ _OP_REQUIRES = {
     "classify_deviation_probability": "pge.parameters.gate_factory",
     "build_time_distribution": "pge.envelopes.time_distribution",
     "parameter_bounds": "pge.parameters.parameter_definitions",
-    "parse_magnify_spec": None,   # sorgente, non import (vedi sotto)
-    "filter_solo_mute": None,     # idem
+    # Dalla PGE #246 sono import come gli altri, ma restano `None` qui: il
+    # loro caricatore ha un ripiego sul motore anteriore a quella issue, quindi
+    # "il modulo non si importa" non vuol dire "l'op non e' disponibile".
+    # Dichiararne uno direbbe non disponibile un'op che risponde.
+    "parse_magnify_spec": None,
+    "filter_solo_mute": None,
     "constants": "pge.rendering.stream_cache_manager",
     "build_envelope": "pge.envelopes.envelope",
     "evaluate_envelope": "pge.envelopes.envelope",
@@ -339,17 +351,43 @@ _MAGNIFY_NAMESPACE = None
 
 # I nomi che la grammatica di `--magnify-at` deve consegnare, qualunque strada
 # l'oracolo prenda per procurarseli. UNA lista sola, e questo e' il punto: i
-# due rami (import e ast-slice) hanno gia' divergiuto una volta — il ramo
-# import popolava il solo `_parse_magnify_spec`, quindi `constants` leggeva
-# None per le tre chiavi e la suite falliva con `null` come unico messaggio.
-# Chi ha il venv del motore vedeva 8/3, chi non ce l'ha 11/0, sullo stesso
-# commit.
-_MAGNIFY_NAMES = ("_MAGNIFY_NUMERIC_KEYS", "_MAGNIFY_STR_KEYS", "_MAGNIFY_KEYS",
-                  "_parse_magnify_spec")
+# rami hanno gia' divergiuto una volta — quello import popolava il solo
+# parser, quindi `constants` leggeva None per le tre chiavi e la suite falliva
+# con `null` come unico messaggio. Chi ha il venv del motore vedeva 8/3, chi
+# non ce l'ha 11/0, sullo stesso commit.
+#
+# Sono i nomi PUBBLICI, che il motore ha dato alla grammatica spostandola in
+# `pge.shared.magnify_spec` (PGE #246): un modulo che non importa niente, cioe'
+# importabile col solo python del runner. Era la prima delle due deroghe alla
+# regola non negoziabile di questo file, e non c'e' piu'.
+_MAGNIFY_NAMES = ("MAGNIFY_NUMERIC_KEYS", "MAGNIFY_STR_KEYS", "MAGNIFY_KEYS",
+                  "parse_magnify_spec")
+
+# Come si chiamavano in `pge.cli`, prima di PGE #246. Il namespace che i rami
+# consegnano e' sempre chiavato sui nomi pubblici — chi legge non deve sapere
+# da quale annata di motore e' arrivata la risposta — e questa mappa e' cio'
+# che traduce i rami storici.
+#
+# Il ripiego non e' prudenza: questo repository e il motore si mergiano quando
+# capita, e la CI di qui fa il checkout del ramo di default del motore. Fra il
+# merge di questa PR e quello della PGE #246 la parita' girerebbe contro un
+# motore che i moduli nuovi non li ha — e un'op non disponibile, sotto
+# PGE_PARITY_STRICT=1, e' un fallimento.
+_MAGNIFY_NAMI_STORICI = {
+    "MAGNIFY_NUMERIC_KEYS": "_MAGNIFY_NUMERIC_KEYS",
+    "MAGNIFY_STR_KEYS": "_MAGNIFY_STR_KEYS",
+    "MAGNIFY_KEYS": "_MAGNIFY_KEYS",
+    "parse_magnify_spec": "_parse_magnify_spec",
+}
 
 
 class IncompleteNamespace(OracleError):
     """Un ramo ha consegnato un namespace incompleto.
+
+    La usano le due op che hanno un ripiego su un motore piu' vecchio
+    (`parse_magnify_spec`, `filter_solo_mute`): dice «il modulo c'e' e il nome
+    no», che e' un guasto da dichiarare, mai una ragione per scendere al ramo
+    successivo.
 
     Ha un tipo suo perche' e' l'unico errore che NON deve far ripiegare
     `_load_magnify_from_source` sull'altro ramo: se `pge.cli` si importa ma non
@@ -373,47 +411,113 @@ def _check_magnify_namespace(ns, source, where):
     return ns
 
 
+def _modulo_nel_checkout(dotted: str) -> bool:
+    """Il file del modulo sta nel checkout del motore?
+
+    E' la domanda che separa «motore anteriore a PGE #246» (il modulo non
+    c'e', si ripiega sul ramo storico) da «il modulo c'e' e non si importa»
+    (un guasto da dichiarare). Un import fallito da solo non le distingue: in
+    tutti e due i casi `ENGINE.module` alza `OracleError`."""
+    rel = Path(*dotted.split("."))
+    src = ENGINE.root / "src"
+    return ((src / rel.with_suffix(".py")).is_file()
+            or (src / rel / "__init__.py").is_file())
+
+
+def _import_rotto(op: str, dotted: str, exc: OracleError) -> OracleError:
+    """L'errore per un modulo leggero che c'e' e non si importa.
+
+    Non si ripiega sul ramo storico, per la stessa ragione di
+    `IncompleteNamespace`: su un motore con PGE #246 `pge.cli` e `generator.py`
+    leggono dal modulo nuovo, quindi i rami storici non possono riuscire — e
+    il loro errore («la grammatica si e' spostata») mandava a cercare una
+    rinomina dove c'era un import rotto. Il caso tipico e' proprio quello che
+    #246 sorveglia: una dipendenza pesante scesa nel modulo che non doveva
+    importare niente, che senza venv non si risolve."""
+    return OracleError(
+        f"{op}: {dotted} c'e' nel checkout ma non si importa — {exc}. Il "
+        f"modulo dev'essere importabile senza il venv del motore (PGE #246)."
+    )
+
+
 def _load_magnify_from_source():
-    """La grammatica di `--magnify-at` presa dai byte di `cli.py`.
+    """La grammatica di `--magnify-at`, dal modulo che il motore ha fatto
+    apposta perche' si potesse importare.
 
-    `import pge.cli` tira dentro Generator e ScoreVisualizer, cioe' numpy,
-    soundfile e matplotlib: in CI il job node ha il checkout del motore e
-    nessun venv, quindi quell'import non c'e'. Ma la grammatica sta in tre
-    costanti e una funzione che non dipendono da niente di tutto cio'.
+    Dalla PGE #246 sta in `pge.shared.magnify_spec`, che non importa niente:
+    l'import riesce col solo python del runner, e questa op non e' piu' una
+    deroga alla regola non negoziabile di questo file. Prima stava in
+    `pge.cli`, il cui import tira dentro `ScoreVisualizer` (matplotlib) e
+    `Generator` (numpy): per chiedere al motore come si parsa uno SPEC
+    bisognava cercarne i quattro nodi nell'AST di `cli.py`, compilarli ed
+    eseguirli — i byte del motore, quindi la risposta era vera, ma la lettura
+    pinnava quattro nomi *privati* e la loro posizione nel file.
 
-    Si estraggono quei nodi dall'AST di cli.py e si esegue il loro codice —
-    non una parafrasi, gli stessi byte. Se domani la grammatica cambia, questa
-    estrazione la segue senza modifiche; se cambia il NOME dei nodi, l'op
-    fallisce dicendo quale manca, che e' il fallimento giusto.
+    Tre rami, dal piu' recente al piu' vecchio, ed e' lo stesso ordine di
+    candidati che tiene `engine_introspect.py`:
 
-    Entrambi i rami passano da `_check_magnify_namespace`: un nome mancante e'
-    un errore parlante su QUALUNQUE interprete, non un `None` che scende fino
-    all'assert. Che i due rami diano poi le stesse risposte lo verifica la CI,
-    che gira la parita' due volte — job node senza venv (ast-slice) e job
-    python col venv del motore (import).
+    1. `pge.shared.magnify_spec` importato — il caso di oggi, su qualunque
+       interprete;
+    2. `pge.cli` importato, coi nomi privati di prima — un motore anteriore a
+       PGE #246, su chi ha il venv;
+    3. l'ast-slice di `cli.py`, coi nomi privati — lo stesso motore, senza venv.
+       E' il ramo che la CI di questo repository prendeva prima.
+
+    I rami 2 e 3 non sono prudenza: la CI di qui fa il checkout del **ramo di
+    default** del motore, e fra il merge di questa modifica e quello di PGE
+    #246 la parita' girerebbe contro un motore che il modulo nuovo non ce
+    l'ha. Un'op non disponibile, sotto `PGE_PARITY_STRICT=1`, e' un
+    fallimento.
+
+    Qualunque ramo risponda, il namespace e' chiavato sui **nomi pubblici**:
+    chi legge non deve sapere da quale annata di motore e' arrivata la
+    risposta. `_MAGNIFY_NAMI_STORICI` e' cio' che traduce i due rami storici.
+
+    Tutti passano da `_check_magnify_namespace`: un nome mancante e' un errore
+    parlante, non un `None` che scende fino all'assert. Un namespace
+    incompleto **non** fa ripiegare sul ramo successivo — il modulo si e'
+    importato, quindi quel nome manca davvero, e ripiegare nasconderebbe la
+    rinomina dietro un ramo che riesce.
     """
     global _MAGNIFY_NAMESPACE
     if _MAGNIFY_NAMESPACE is not None:
         return _MAGNIFY_NAMESPACE
 
-    # Prima il vero import: quando il venv del motore c'e', la fedelta' e'
-    # totale e non c'e' ragione di estrarre niente.
+    # 1. Il modulo di PGE #246: nessuna dipendenza, nessun venv richiesto.
     try:
-        cli = ENGINE.module("pge.cli")
-        ns = {n: getattr(cli, n, None) for n in _MAGNIFY_NAMES}
+        mod = ENGINE.module("pge.shared.magnify_spec")
+        ns = {n: getattr(mod, n, None) for n in _MAGNIFY_NAMES}
         ns["_source"] = "import"
-        _MAGNIFY_NAMESPACE = _check_magnify_namespace(ns, "import", "pge.cli")
+        _MAGNIFY_NAMESPACE = _check_magnify_namespace(
+            ns, "import", "pge.shared.magnify_spec")
         return _MAGNIFY_NAMESPACE
     except IncompleteNamespace:
-        # Un namespace incompleto e' un guasto da dichiarare, non una ragione
-        # per ripiegare sull'altro ramo e nasconderlo: `pge.cli` si e' importato,
-        # quindi il motore c'e' e un nome manca davvero.
         raise
+    except OracleError as exc:
+        # C'e' e non si importa: un guasto da dichiarare, non un motore vecchio.
+        if _modulo_nel_checkout("pge.shared.magnify_spec"):
+            raise _import_rotto(
+                "parse_magnify_spec", "pge.shared.magnify_spec", exc) from exc
+        # Il modulo non c'e': motore anteriore a PGE #246. Si prova `pge.cli`.
+
+    # 2. `pge.cli` importato, coi nomi di prima dello spostamento. Qui un
+    #    namespace incompleto NON e' un errore da dichiarare ma la prova che
+    #    il motore e' ancora piu' vecchio (o che `cli.py` non ha mai avuto
+    #    quei nomi), quindi si scende all'ast-slice come su un import fallito:
+    #    e' il ramo storico, e la sua diagnosi la da' il punto 3.
+    try:
+        cli = ENGINE.module("pge.cli")
+        ns = {n: getattr(cli, _MAGNIFY_NAMI_STORICI[n], None)
+              for n in _MAGNIFY_NAMES}
+        ns["_source"] = "import-storico"
+        _MAGNIFY_NAMESPACE = _check_magnify_namespace(
+            ns, "import-storico", "pge.cli")
+        return _MAGNIFY_NAMESPACE
     except OracleError:
-        # L'import non e' andato (nessun venv): si passa all'ast-slice, che e'
-        # il ramo previsto in CI.
         pass
 
+    # 3. L'ast-slice di `cli.py`, coi nomi privati: il ramo che questa CI
+    #    prendeva prima di PGE #246.
     import ast
 
     path = ENGINE.root / "src" / "pge" / "cli.py"
@@ -421,6 +525,7 @@ def _load_magnify_from_source():
         raise OracleError(f"parse_magnify_spec: {path} non esiste")
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
+    storici = {v: k for k, v in _MAGNIFY_NAMI_STORICI.items()}
     picked, found = [], set()
     for node in tree.body:
         name = None
@@ -429,21 +534,25 @@ def _load_magnify_from_source():
         elif isinstance(node, ast.Assign):
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
             name = names[0] if names else None
-        if name in _MAGNIFY_NAMES:
+        if name in storici:
             picked.append(node)
-            found.add(name)
+            found.add(storici[name])
 
     missing = [w for w in _MAGNIFY_NAMES if w not in found]
     if missing:
         raise OracleError(
-            f"parse_magnify_spec: {path.name} non definisce {', '.join(missing)} "
-            f"— la grammatica si e' spostata, l'oracolo va aggiornato"
+            f"parse_magnify_spec: ne' pge.shared.magnify_spec (PGE #246) ne' "
+            f"{path.name} definiscono {', '.join(missing)} — la grammatica si "
+            f"e' spostata un'altra volta, l'oracolo va aggiornato"
         )
 
     ns = {"__name__": "pge_cli_magnify_slice"}
     exec(compile(ast.Module(body=picked, type_ignores=[]), str(path), "exec"), ns)
-    ns["_source"] = "ast-slice"
-    _MAGNIFY_NAMESPACE = _check_magnify_namespace(ns, "ast-slice", str(path))
+    ns = {pubblico: ns[storico]
+          for pubblico, storico in _MAGNIFY_NAMI_STORICI.items()}
+    ns["_source"] = "ast-slice-storico"
+    _MAGNIFY_NAMESPACE = _check_magnify_namespace(
+        ns, "ast-slice-storico", str(path))
     return _MAGNIFY_NAMESPACE
 
 
@@ -464,7 +573,7 @@ def _op_parse_magnify_spec(args):
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            targets = ns["_parse_magnify_spec"](spec)
+            targets = ns["parse_magnify_spec"](spec)
     except SystemExit as exc:
         exc.oracle_stdout = buf.getvalue().strip()
         raise
@@ -479,19 +588,55 @@ _SOLO_MUTE_FN = None
 
 
 def _load_filter_solo_mute():
-    """`Generator._filter_solo_mute`, presa dai byte di `generator.py`.
+    """La regola solo/mute, dal modulo che il motore ha fatto apposta.
 
-    `import pge.engine.generator` tira dentro Stream e i renderer, cioe' numpy:
-    il job node della CI non ha il venv del motore. Il metodo pero' non tocca
-    niente di tutto cio' — legge la presenza di due chiavi e stampa — quindi
-    si estrae il suo FunctionDef dal corpo della classe e lo si esegue come
-    funzione libera, con `self` a None. Se il metodo si sposta o cambia nome,
-    l'op fallisce dicendolo, che e' il fallimento giusto; se usa `self`, il
-    `None` lo fa esplodere invece di rispondere a caso.
+    Dalla PGE #246 e' `pge.engine.solo_mute.filter_solo_mute`, funzione libera
+    di un modulo che non importa niente. Prima era `Generator._filter_solo_mute`
+    e `import pge.engine.generator` tira dentro `Stream` e i renderer, cioe'
+    numpy, che il job node di questa CI non ha: bisognava cercare il
+    `FunctionDef` dentro il `ClassDef` di `Generator` nell'AST del file ed
+    eseguirlo come funzione libera con `self` a None. Era la seconda delle due
+    deroghe alla regola non negoziabile di questo file, e non c'e' piu'.
+
+    Il ripiego sull'ast-slice resta per lo stesso motivo dell'altra op: fra il
+    merge di questa modifica e quello di PGE #246, la CI di qui gira contro un
+    motore che il modulo nuovo non ce l'ha.
+
+    **Quello che torna prende un argomento solo**, qualunque ramo risponda: la
+    funzione libera ha firma `(stream_data_list)`, il metodo estratto dall'AST
+    `(self, stream_data_list)`. La differenza si chiude qui e non nell'op, che
+    altrimenti dovrebbe sapere da quale annata di motore e' arrivata la
+    risposta — e un `self` di troppo o di meno e' un `TypeError` che nel
+    payload arriva come un errore qualunque.
     """
     global _SOLO_MUTE_FN
     if _SOLO_MUTE_FN is not None:
         return _SOLO_MUTE_FN
+
+    try:
+        mod = ENGINE.module("pge.engine.solo_mute")
+        fn = getattr(mod, "filter_solo_mute", None)
+        if fn is None:
+            # Il modulo c'e' e il nome no: un guasto da dichiarare, non una
+            # ragione per ripiegare sull'ast-slice e nasconderlo. Il tipo
+            # dell'eccezione e' cio' che lo distingue -- `IncompleteNamespace`
+            # esiste in questo file proprio perche' quella distinzione era
+            # stata una substring del messaggio, cioe' flusso di controllo
+            # appeso al testo italiano di una frase che qualcuno riscrivera'.
+            raise IncompleteNamespace(
+                "filter_solo_mute: pge.engine.solo_mute non espone "
+                "filter_solo_mute. Il modulo c'e', quindi il nome e' cambiato: "
+                "l'oracolo va aggiornato (PGE #246)."
+            )
+        _SOLO_MUTE_FN = fn
+        return _SOLO_MUTE_FN
+    except IncompleteNamespace:
+        raise
+    except OracleError as exc:
+        if _modulo_nel_checkout("pge.engine.solo_mute"):
+            raise _import_rotto(
+                "filter_solo_mute", "pge.engine.solo_mute", exc) from exc
+        # Il modulo non c'e': motore anteriore a PGE #246, si passa all'AST.
 
     import ast
 
@@ -507,13 +652,16 @@ def _load_filter_solo_mute():
                     picked = item
     if picked is None:
         raise OracleError(
-            f"filter_solo_mute: {path.name} non definisce "
-            f"Generator._filter_solo_mute — la regola si e' spostata, "
-            f"l'oracolo va aggiornato"
+            f"filter_solo_mute: ne' pge.engine.solo_mute (PGE #246) ne' "
+            f"Generator._filter_solo_mute in {path.name} esistono — la regola "
+            f"si e' spostata, l'oracolo va aggiornato"
         )
     ns = {"__name__": "pge_generator_solo_mute_slice"}
     exec(compile(ast.Module(body=[picked], type_ignores=[]), str(path), "exec"), ns)
-    _SOLO_MUTE_FN = ns["_filter_solo_mute"]
+    metodo = ns["_filter_solo_mute"]
+    # `self` a None: il metodo non lo usa, e se un giorno lo usasse il None lo
+    # fa esplodere invece di rispondere a caso.
+    _SOLO_MUTE_FN = lambda streams: metodo(None, streams)   # noqa: E731
     return _SOLO_MUTE_FN
 
 
@@ -524,7 +672,7 @@ def _op_filter_solo_mute(args):
     args:
         streams  lista di dict come appaiono nello YAML (snake_case)
 
-    Il print del metodo (`⚡ SOLO MODE`, `🔇 N stream muted`) finirebbe
+    Il print della regola (`⚡ SOLO MODE`, `🔇 N stream muted`) finirebbe
     comunque su stderr, ma una riga per caso seppellirebbe le asserzioni:
     si cattura e si butta.
     """
@@ -533,7 +681,7 @@ def _op_filter_solo_mute(args):
         raise OracleError("filter_solo_mute: 'streams' deve essere una lista di dict")
     fn = _load_filter_solo_mute()
     with contextlib.redirect_stdout(io.StringIO()):
-        kept = fn(None, streams)
+        kept = fn(streams)
     return {"kept": [s.get("stream_id") for s in kept]}
 
 
@@ -1017,17 +1165,30 @@ def _op_constants(args):
         out["envelope_colors_keys_ast"] = None
         out["envelope_colors_keys_ast_error"] = str(exc)
 
-    # Il vocabolario di `pointer.loop_unit` (PGE #222). Solo AST: importare
-    # `pointer_controller` tira dentro `pge.envelopes.envelope` e quindi numpy,
-    # e nessuna op puo' pretendere il venv del motore — il job node della CI,
-    # dove la parita' gira, non ne costruisce uno. L'ordine conta: la prima
-    # grafia e' quella canonica, ed e' quella che il selettore dell'Inspector
-    # scrive.
+    # Il vocabolario di `pointer.loop_unit` (PGE #222), letto DUE volte come
+    # `RANGE_UNITS` qui sotto: dall'AST del bridge (cio' che la UI riceve) e
+    # importato (cio' che il motore usa). L'import e' possibile da PGE #246,
+    # che ha spostato la costante in `pge.parameters.loop_unit`, un modulo che
+    # non importa niente; prima stava in `pointer_controller`, e la lettura era
+    # solo AST. L'ordine conta: la prima grafia e' quella canonica, ed e'
+    # quella che il selettore dell'Inspector scrive.
+    #
+    # Su un motore anteriore il modulo non c'e', e quello e' l'unico caso in
+    # cui l'import manca senza che sia un guasto: `loop_units_module_absent`
+    # lo dice, e la suite lo tratta come un'annata, non come un'op saltata.
     try:
         out["loop_units_ast"] = _introspect("constants").engine_loop_units(ENGINE.root)
     except OracleError as exc:
         out["loop_units_ast"] = None
         out["loop_units_ast_error"] = str(exc)
+    out["loop_units_module_absent"] = not _modulo_nel_checkout(
+        "pge.parameters.loop_unit")
+    try:
+        lu = ENGINE.module("pge.parameters.loop_unit")
+        out["loop_units"] = list(lu.LOOP_UNITS)
+    except (OracleError, AttributeError, TypeError) as exc:
+        out["loop_units"] = None
+        out["loop_units_error"] = str(exc)
 
     # La banda relativa di `grain.duration_range` (PGE #267, PGE-ui #163): il
     # vocabolario di `<param>_range_unit` e il dominio della frazione. Stanno in
@@ -1079,11 +1240,11 @@ def _op_constants(args):
     try:
         ns = _load_magnify_from_source()
         out["magnify_source"] = ns["_source"]
-        out["magnify_keys"] = sorted(ns["_MAGNIFY_KEYS"]) if "_MAGNIFY_KEYS" in ns else None
+        out["magnify_keys"] = sorted(ns["MAGNIFY_KEYS"]) if "MAGNIFY_KEYS" in ns else None
         out["magnify_numeric_keys"] = (
-            sorted(ns["_MAGNIFY_NUMERIC_KEYS"]) if "_MAGNIFY_NUMERIC_KEYS" in ns else None)
+            sorted(ns["MAGNIFY_NUMERIC_KEYS"]) if "MAGNIFY_NUMERIC_KEYS" in ns else None)
         out["magnify_str_keys"] = (
-            sorted(ns["_MAGNIFY_STR_KEYS"]) if "_MAGNIFY_STR_KEYS" in ns else None)
+            sorted(ns["MAGNIFY_STR_KEYS"]) if "MAGNIFY_STR_KEYS" in ns else None)
     except OracleError as exc:
         out["magnify_source"] = None
         out["magnify_keys"] = None

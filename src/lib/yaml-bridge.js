@@ -597,7 +597,7 @@
       y.voices = vy;
     }
 
-    // solo/mute are presence-keyed engine-side: _filter_solo_mute (generator.py)
+    // solo/mute are presence-keyed engine-side: filter_solo_mute (engine/solo_mute.py)
     // checks key PRESENCE, not value, so a `solo: false` would still count as
     // solo-active. Emit them ONLY when truthy and omit them otherwise — never
     // `solo: false`. Mirrors the presence read in streamFromYaml. #63
@@ -786,7 +786,7 @@
       durationUnresolved: dur.unresolved,
       sample: y.sample || "",
       color: colorForStream(id, idx),
-      // Presence-keyed to match the engine's _filter_solo_mute: the key being
+      // Presence-keyed to match the engine's filter_solo_mute: the key being
       // present (any value, even `false`) means active, since the engine tests
       // `'solo' in stream`, not its value. Absent → false. Serialized back out
       // only when true (see streamToYaml). #63

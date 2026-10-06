@@ -251,7 +251,7 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
   const { Icon, SplitPane } = window.PGE;
   const anySolo = streams.some(s => s.solo);
   // solo/mute stay PER STREAM: that is what the engine filters on
-  // (Generator._filter_solo_mute) and what the YAML carries. A lane's M/S
+  // (pge.engine.solo_mute.filter_solo_mute) and what the YAML carries. A lane's M/S
   // button is a fan-out over its group, never a new piece of state.
   const isEffMuted = (s) => s.mute || (anySolo && !s.solo);
   // A lane is a track; with no track model supplied it degrades to one lane per
@@ -1209,7 +1209,7 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
 /* One lane's header. It stands for a TRACK, which may hold several streams.
  *
  * M/S are a fan-out, not new state: the engine filters per stream
- * (Generator._filter_solo_mute) and the YAML carries mute/solo per stream, so
+ * (pge.engine.solo_mute.filter_solo_mute) and the YAML carries mute/solo per stream, so
  * a group button reads three-valued (all / some / none) and writes the whole
  * group. For a lane with one clip — still the default — this is byte-identical
  * to the per-stream button it replaces. Per-clip M/S buttons appear on the

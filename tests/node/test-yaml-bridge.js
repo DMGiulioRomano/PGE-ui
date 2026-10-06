@@ -1268,7 +1268,7 @@ const ser50 = (d) => window.jsyaml.load(serialize(d)).streams[0];
 
 /* ============================================================
  * SECTION 8g — solo/mute propagated through parse + serialize, presence-keyed
- * to match the engine (#63). The engine's _filter_solo_mute (generator.py) keys
+ * to match the engine (#63). The engine's filter_solo_mute (engine/solo_mute.py) keys
  * off KEY PRESENCE, not value: `solo: false` still counts as solo-active. So
  * serialize must emit the key ONLY when true (omit when false — never
  * `solo: false`), and parse must read presence-of-key as true. Both used to be
