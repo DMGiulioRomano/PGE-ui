@@ -272,7 +272,7 @@ async function parity({ suite, why, cases }) {
      chiudeva verde su quello che restava.
      Sotto strict e' un fallimento, e lo e' senza distinguere quali op questa
      suite usi: l'elenco arriva dall'oracolo che le prova TUTTE all'avvio, le
-     cinque suite girano nello stesso `make tests-parity`, e un buco vale per
+     suite girano tutte nello stesso `make tests-parity`, e un buco vale per
      tutte. Non e' nemmeno un caso atteso: nessuna op deve dipendere dal venv
      del motore (in CI il job node fa il checkout e basta), quindi con il motore
      presente un'op indisponibile significa che quella regola e' saltata. */

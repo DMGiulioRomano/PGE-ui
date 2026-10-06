@@ -63,7 +63,12 @@ exists, the fourth only when a browser is installed):
   `window.PGEEnv.timeDistError`, including the `(param, n_reps)` overflow whose
   thresholds are checked against the real engine, plus the no-longer-silent
   fallback in `computeCycleDurations` and the band where its warn may not speak
-  for the engine), and `test-deviation-probability.js`
+  for the engine), and `test-envelope-shape.js` (`window.PGEEnv.envShapeError`,
+  the mirror of the engine builder's shape guards of PGE #211: every rule in
+  both the bare and the in-list spelling, the order the guards fire in, where
+  a block *starts* after a compact one, the valid bodies — the editor's own
+  default block among them — that must stay silent, and the declared int/float
+  blind spot), and `test-deviation-probability.js`
   (`window.PGEDeviationProb`: the off/implicit/global/perParam classifier,
   `error()` as the mirror of the bodies the engine rejects, the live/dead
   per-param keys tied to behaviour rather than to a copy of the list, and source
@@ -193,7 +198,7 @@ exists, the fourth only when a browser is installed):
   suites in `tests/parity/`, which ask the **engine itself** the questions the
   mirrors in `src/lib/` answer from memory. See "Parity harness" below and
   `tests/parity/README.md`. The parity suites don't own their
-  verdict (`harness.js` does, for all five), but `test-suite-harness.js` still
+  verdict (`harness.js` does, for all of them), but `test-suite-harness.js` still
   guards them against taking it back with a brutal exit.
 - **`make tests-e2e`** (node + python + a browser, needs **neither** the engine
   checkout nor its venv) — `tests/e2e/test-boot.js`, the headless boot. See
@@ -1027,7 +1032,82 @@ The request body carries `yamlContent`. `server.py` writes it **to the canonical
 
 ### YAML bodies that can kill a render
 
-Two engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123):
+Three engine rejections the UI mirrors client-side (PGE #209/#212, PGE-ui #123;
+PGE #211, PGE-ui #180):
+
+**The shape of an envelope** (PGE #211, #180). Since PGE #211 the shape guards
+live in the engine's `EnvelopeBuilder` and hold for **every** key, and four
+spellings that used to render in silence stop the render: a compact pattern
+`x` outside `[0, 100]` or going backwards, `n_reps: true` (`range(True)`
+rendered one cycle), `end_time: true` (it was `1.0`) or non-finite, and a
+boolean `y` in the pattern. No gesture of the editor writes them — pattern
+drags stay between the neighbours and inside `[0, 100]` — but the Raw tab does.
+`window.PGEEnv.envShapeError(env)` (`envelope-loops.js`, beside `timeDistError`,
+which it calls for the fifth slot) is the mirror, and it walks
+`EnvelopeBuilder.parse` step by step because the engine stops at the **first**
+guard: the bare compact / bare group first, then the list item by item (a dict
+`{t, v, type?}` becomes `[t, v, type?]`, then compact → group → 3-tuple →
+`[t, v]` → "element not recognized"), and inside a compact n_reps → end_time
+(type, then past the start) → empty pattern → each point (flat, `x` in
+`[0, 100]`, not decreasing — a repeated `x` is the discontinuity and is fine) →
+the distribution. It returns `where` as the engine's sub-position without the
+`envelope.` prefix (`compact.n_reps`, `group.points`, `point`, …), which is
+what the parity compares one by one.
+
+Three things in it are easy to get wrong, and each has its case:
+
+- **Recognition is the engine's, not the editor's.** `is_compact_format` /
+  `is_bp_group` are copied into `_engineIsCompact` / `_engineIsGroup`, looser
+  than `isCompactBlock` / `isBPGroup`, which say what the canvas can *draw*:
+  `[pattern, 1, true]` is no block to them, but it is a compact to the engine,
+  and the right error is on `n_reps`, not "unknown element".
+- **Where a block starts.** In a list, the block after a compact starts at the
+  *last expanded breakpoint* (`current_time = compact_expanded[-1][0]`, an
+  assignment, not a max), which is not its `end_time`: with a pattern ending at
+  `x = 50` it sits inside the last cycle, and with wrap it is `end − 1e-6`.
+  `_compactLastTime` computes it from `computeCycleDurations` (whose durations
+  the time-distribution parity already pins), only when a later compact needs
+  it. "A later compact" is asked of the items *after* the dict normalization,
+  as the builder asks it: `{t: pattern, v: end_time, type: n_reps}` normalizes
+  into a compact too, and looking for the last compact among the items as
+  written missed it — the next block restarted from 0, silent where the engine
+  rejects. `expandMixed` restarts from `end_time` — the preview is not what
+  decides rejection.
+- **The int/float blind spot.** For Python `n_reps: 2.0` is a float, hence not
+  a compact, hence an error; here `2.0` and `2` are the same Number, and the
+  mirror stays silent — the safe direction, like `power.exponent` in
+  `timeDistError`. The parity asks it through `raw_json` (below).
+
+Out of scope, and said: what the engine rejects *outside* the builder (an
+unknown per-point or global interp, a dict without `points` or with a number
+or `null` there, the empty list — that one is `wouldEmptyEnv`'s, PGE #209). A
+string or a mapping under `points` is **not** on that list: the builder
+iterates them (by character, by key), and rejects the first item as an element
+it doesn't recognize — reachable from the Raw tab through
+`deviation_probability`, whose recognition is `'points' in obj`.
+
+It has two readers. The **Raw tab** (`computeAnnotations`) walks the envelopes
+of the stream through the catalog — `listEnvelopes`, the same list the
+EnvelopeEditor opens — and puts one red per malformed envelope on the line of
+its key. Inert catalog entries are skipped: the engine doesn't build them, so it
+doesn't reject them. That needed two things the Raw tab didn't have: each
+catalog entry now declares its **YAML path** (`yaml: "grain.duration"`,
+`pitch.<unit>` or `pitch.value` in edo, `deviation_probability.<key>`), pinned
+in `test-envelope-catalog.js` by serializing a stream holding that entry alone
+and reading the envelope back at that path; and annotations are keyed by that
+**path** (`byPath`), not by the bare key. The component computes each line's
+path from the indentation of the text the bridge emitted (`yamlLinePaths`);
+before, an annotation landed on the first line with the same bare key, so
+`grain.duration` would have gone on the stream's own `duration:` and
+`deviation_probability.pan` on the top-level `pan:`. The **EnvelopeEditor**
+shows the same error, in Italian, on a row under its header (`.ee-shape-err`),
+on the raw value and not the desugared one — outside the block panels, because
+the offending block may be one the preview cannot draw and so cannot select.
+
+One fix came with it: `timeDistError({type: null})` read `linear`, because the
+mirror tested `dist.type != null`; the engine reads `spec.get('type',
+'linear')`, which on a key *present* with `None` gives `None`, and rejects it
+(on both sides of PGE #211). It tests `!== undefined` now.
 
 **`deviation_probability`** with a body that can't build as an envelope exits 1. `window.PGEDeviationProb.error` (`src/lib/deviation-probability.js`, node-tested) is the mirror — deliberately the *conservative half*: it flags only bodies that can't be an envelope in any reading, so mixed forms pass here and are caught by the engine. The Inspector shows the error below the mode selector.
 
@@ -1058,7 +1138,28 @@ Their only coverage before that was **by extraction** — `extractFn` + `new Fun
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
-**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-utils.js` checks on logarithms. Thresholds model Python **integer** semantics (more permissive) and are re-derived from the running engine on every parity run (`tests/parity/test-time-dist-parity.js` bisects for the first rejected `n_reps` on both sides); the constants in `test-time-dist.js` are the transcript of an older run of the same question. There is an at-most-one-value band where the engine overflows and the UI stays quiet — always the safe direction, and zero wide on the probes where the integer and float thresholds land on the same `n_reps` (the parity suite caps it per probe and requires it to still exist somewhere in the corpus). `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
+**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-loops.js` checks on logarithms. Thresholds model Python **integer** semantics (more permissive) and are re-derived from the running engine on every parity run (`tests/parity/test-time-dist-parity.js` bisects for the first rejected `n_reps` on both sides); the constants in `test-time-dist.js` are the transcript of an older run of the same question. There is an at-most-one-value band where the engine overflows and the UI stays quiet — always the safe direction, and zero wide on the probes where the integer and float thresholds land on the same `n_reps` (the parity suite caps it per probe and requires it to still exist somewhere in the corpus). `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
+
+**What overflows is the sum of the weights, not only the largest one** (PGE
+#293, engine #219). The engine's `TimeDistributionStrategy._normalize` guards
+the *sum* in `exponential` and `power`, and the sum leaves the floats well
+before its largest term does when `rate` sits near 1 or the exponent is
+moderate: at `rate: 0.9` the largest weight overflows at 6738 cycles and the sum
+at 6716, at `exponent: 60.5` at 124486 against 109992. The mirror used to check
+the largest weight alone, so it stayed quiet on all of those — and the parity
+probes couldn't see it, because on the three they had (`ratio: 2`, `rate: 0.5`,
+`ratio: 10`) weight and sum sit at most one cycle apart. It checks the sum now:
+in closed form for `exponential` (`(q**N - 1)/(q - 1)`, `q = 1/rate`), and as a
+**lower bound** for `power`, which has none (the integral of `x**e` over
+`[0, N]`, plus `N**e / 2` when `e >= 1` makes the curve convex, and never less
+than the largest weight) — a lower bound so the warning can only come late,
+never on a YAML that renders. `exponential`'s remaining band is not the
+integer reading (with `rate < 1` its weights are always floats): at `rate: 0.5`
+the sum is `2**1024 - 1`, `1024 * log10(2)` equals `LOG10_MAX` exactly, and the
+strict `>` stays quiet on the tie the engine's real sum overflows. The parity
+suite gained `rate: 0.9` and `exponent: 100.5` as probes — the two where the old
+mirror lagged by 22 and 28 cycles — and requires an engine with #293
+(`tests/parity/README.md`'s recorded SHA).
 
 ### Dynamic parameter bounds
 
@@ -1504,6 +1605,7 @@ with the engine. Those pacts used to live only in prose. They are now executable
 (`fingerprint` — optionally with the semantics version swapped, to ask whether
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
+`build_envelope` — a real `Envelope`, which imports without numpy —,
 `parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
 name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
 included);
@@ -1557,6 +1659,22 @@ behind is legitimate (the pacts still hold, and the run notes by how much);
 not existing is not. It has no shallow-clone escape hatch — the first version
 had one and a `deadbeef…` SHA sailed through it — so CI checks the engine out
 with `fetch-depth: 300`.
+
+**`test-envelope-shape-parity.js` compares one way only: strictly** (#180).
+The mirror is written against PGE #211, where four spellings that used to
+render (pattern `x` outside [0, 100] or going back, boolean `n_reps`/`end_time`
+or a non-finite `end_time`, a boolean `y` in the pattern) became errors and
+every other shape guard gained a field. The suite was born with a transition
+branch for the engine before it, picked by a probe (`n_reps: true`); it went
+once #211 (merged as PGE #287) reached the engine's default branch. Now it is
+same verdict and same sub-position on every body, and every rejection must
+carry a field. Against an engine without #211 it is red, naming the bodies; the
+README's recorded SHA — the #287 merge, required to be an ancestor of the run's
+commit — is what says why.
+Non-finite floats now travel tagged in **both** directions (`encodeFloat` in
+`oracle.js`, `_from_wire` in the oracle): `JSON.stringify(Infinity)` is `null`,
+and an `end_time: .inf` would have reached the engine as `end_time: None` — a
+different question with a different answer.
 
 Engine-source introspection (`engine_introspect.py`) was split out of
 `server.py` for this: it AST-parses the engine with the stdlib alone, so both the

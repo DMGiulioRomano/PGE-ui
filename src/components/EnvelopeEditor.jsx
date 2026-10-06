@@ -112,6 +112,42 @@ function EnvParamSelect({ envelopes, value, onChange, compact }) {
 
 }
 
+/* ---------- la forma dell'envelope, come la giudica il motore ----------
+   La regola e' PGEEnv.envShapeError (envelope-loops.js), lo specchio dei guard
+   di EnvelopeBuilder (PGE #211, #180); qui c'e' solo la frase. I corpi che la
+   accendono non li scrive nessun gesto di questo editor — i drag del pattern
+   restano fra i vicini e in [0, 100] — ma il tab Raw si', ed e' qui che
+   l'autore li guarda disegnati: a volte non disegnati affatto (un `n_reps:
+   true` non e' un blocco che l'anteprima sappia espandere), a volte disegnati
+   oltre il ciclo (una x a 150). Il tab Raw dice lo stesso errore con parole
+   sue, sulla riga della chiave. */
+function shapeErrorHint(e) {
+  const v = typeof e.value === "number" ? String(e.value) : JSON.stringify(e.value);
+  switch (e.where) {
+    case "point":
+      return `l'elemento ${e.index} non e' un breakpoint [t, v] / [t, v, type], un BP group ne' un blocco compatto: ${v}`;
+    case "group.interp":
+      return `l'interp del BP group ${v} non e' fra ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
+    case "group.points":
+      return "un BP group richiede almeno 2 punti (un punto isolato si scrive come breakpoint nudo)";
+    case "compact.n_reps":
+      return `n_reps (terzo elemento del blocco compatto) dev'essere un intero ≥ 1 — trovato ${v}${typeof e.value === "boolean" ? " (true non e' 1)" : ""}`;
+    case "compact.end_time":
+      return e.why === "offset"
+        ? `end_time ${v} deve superare l'inizio del blocco (${+e.start.toFixed(6)}): e' un istante assoluto, non una durata`
+        : `end_time (secondo elemento del blocco compatto) dev'essere un numero finito — trovato ${v}`;
+    case "compact.pattern":
+      if (e.why === "empty") return "il pattern del blocco compatto e' vuoto";
+      if (e.why === "range") return `punto ${e.point} del pattern: x = ${v} e' fuori da [0, 100] (percentuale del ciclo)`;
+      if (e.why === "order") return `punto ${e.point} del pattern: x = ${v} torna indietro — una x ripetuta va bene, una minore no`;
+      return `il punto ${e.point} del pattern dev'essere [x%, y] o [x%, y, type] con numeri (true non e' 1) — trovato ${v}`;
+    case "compact.time_dist":
+      return `time_dist ${v}: la distribuzione non si costruisce`;
+    default:
+      return `envelope malformato: ${v}`;
+  }
+}
+
 /* ---------- LoopBlockPanel — controls for the selected loop ---------- */
 const DIST_TYPES = [
 { val: "linear", label: "linear", hint: "durate uguali" },
@@ -598,6 +634,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const src = PGEEnv.isTypedEnv(rawEnvRaw) ? rawEnvRaw : PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(rawEnvRaw).items);
     return PGEEnv.expandMixed(src);
   }, [rawEnvRaw]);
+  /* La forma dell'envelope aperto (PGE #211, #180), sul valore GREZZO: il
+     motore giudica quello che c'e' nello YAML, non la forma desugarata su cui
+     lavora l'editor. Muta sulle voci inerti, come il tab Raw: il motore non
+     le costruisce, quindi non le rifiuta. */
+  const shapeErr = (rawEnvRaw && env && !env.inert) ? PGEEnv.envShapeError(rawEnvRaw) : null;
   const blockByOrig = useMemoEE(() => {
     const m = new Map();
     exp.blocks.forEach((b) => m.set(b.originalIdx, { ...b, raw: rawEnv[b.originalIdx] }));
@@ -1681,6 +1722,12 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         null}
         <span className="ee-hint mono">dbl-click ▸ add bp · in a loop ▸ add pattern pt · drag ▸ move · shift+click segmento ▸ interp · click zona bp ▸ interp di zona · drag zone bar ▸ riordina blocchi · click ▸ select · ⌫ ▸ delete · ⌘Z ▸ undo</span>
       </header>
+
+      {shapeErr ?
+      <div className="ee-shape-err mono">
+          {env.yaml}: {shapeErrorHint(shapeErr)} — il motore rifiuta lo stream.
+        </div> :
+      null}
 
       {/* ============ optional: selected loop / bp-zone control panel ============ */}
       {selectedBlockObj ?

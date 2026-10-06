@@ -139,6 +139,22 @@ def _json_safe(o):
     return o
 
 
+def _from_wire(o):
+    """Il verso d'andata della sentinella: `oracle.js` etichetta i numeri non
+    finiti degli argomenti come questo file etichetta quelli delle risposte.
+
+    Senza, `JSON.stringify` di la' li manda a `null`, e una domanda su
+    `end_time: .inf` arrivava qui come `end_time: None` — un'altra domanda,
+    con un'altra risposta, e nessun modo di accorgersene."""
+    if isinstance(o, dict):
+        if len(o) == 1 and NON_FINITE_TAG in o:
+            return float(o[NON_FINITE_TAG])   # "Infinity", "-Infinity", "NaN"
+        return {k: _from_wire(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_from_wire(v) for v in o]
+    return o
+
+
 def _emit(payload: dict) -> None:
     _PROTOCOL.write(json.dumps(_json_safe(payload), allow_nan=False) + "\n")
     _PROTOCOL.flush()
@@ -265,6 +281,7 @@ _OP_REQUIRES = {
     "parse_magnify_spec": None,
     "filter_solo_mute": None,
     "constants": "pge.rendering.stream_cache_manager",
+    "build_envelope": "pge.envelopes.envelope",
 }
 
 
@@ -819,6 +836,69 @@ def _op_build_time_distribution(args):
 
 
 # =============================================================================
+# OP — build_envelope
+# =============================================================================
+
+@op("build_envelope")
+def _op_build_envelope(args):
+    """Il verdetto del motore su un corpo di envelope: si costruisce un
+    `Envelope` vero, lo stesso oggetto che ogni chiave costruisce dal proprio
+    valore YAML.
+
+    E' la domanda a cui risponde `PGEEnv.envShapeError`, e da PGE #211 la
+    risposta sta nel builder: i guard di forma (arita' dei gruppi, gli slot del
+    compatto, i punti del pattern, la distribuzione) valgono per ogni chiave e
+    alzano InvalidFieldValueError. Si costruisce l'Envelope intero e non il
+    solo `EnvelopeBuilder.parse` perche' "il motore rifiuta" vuol dire questo:
+    su un motore precedente la `y` stringa di un pattern passava il builder e
+    cadeva dopo, nell'interpolazione — rifiutata lo stesso.
+
+    `pge.envelopes.envelope` si importa senza numpy (verificato: il builder,
+    le strategie di interpolazione, i segmenti e le distribuzioni importano la
+    sola stdlib), quindi l'op gira nel job node della CI come le altre.
+
+    args:
+        raw       il valore come sta nello YAML: una lista, o un dict con
+                  `points`
+        raw_json  in alternativa: lo stesso valore come TESTO JSON, letto qui.
+                  Serve a una domanda sola, quella che dal lato node non si
+                  puo' fare: `2.0` e `2` sono lo stesso Number, e
+                  `JSON.stringify` scrive `2` per entrambi — mentre per il
+                  motore `n_reps: 2.0` e' un float, cioe' non un compatto.
+
+    return:
+        ok     True se l'Envelope si costruisce
+        error  null, o `Classe: messaggio`
+        field  null, o il `field` dell'errore. Nessuna chiave viene passata al
+               costruttore, quindi da PGE #211 e' la sotto-posizione che il
+               builder sa da solo (`envelope.compact.n_reps`, …); prima gli
+               errori di forma erano ValueError nudi, e qui c'e' null.
+    """
+    env_mod = ENGINE.module("pge.envelopes.envelope")
+    if "raw_json" in args:
+        if not isinstance(args["raw_json"], str):
+            raise OracleError("build_envelope: 'raw_json' deve essere una stringa")
+        raw = json.loads(args["raw_json"])
+    elif "raw" in args:
+        raw = args["raw"]
+    else:
+        raise OracleError("build_envelope: manca 'raw' (o 'raw_json')")
+    out = {"ok": True, "error": None, "field": None}
+    try:
+        # Il clip logger annuncia il proprio file la prima volta: stdout e'
+        # gia' dirottato su stderr, ma una riga per caso seppellirebbe le
+        # asserzioni.
+        with contextlib.redirect_stdout(io.StringIO()):
+            env_mod.Envelope(raw)
+    except Exception as exc:
+        out["ok"] = False
+        out["error"] = _fmt_exc(exc)
+        field = getattr(exc, "field", None)
+        out["field"] = field if isinstance(field, str) else None
+    return out
+
+
+# =============================================================================
 # OP — parameter_bounds
 # =============================================================================
 
@@ -938,6 +1018,16 @@ def _op_constants(args):
     except OracleError as exc:
         out["default_output_sr_ast"] = None
         out["default_output_sr_ast_error"] = str(exc)
+
+    # Le interpolazioni che il builder ammette (per l'interp di un BP group,
+    # PGE #64): `PGEEnv.INTERP_TYPES` le ricopia per `envShapeError`. Il
+    # modulo importa la sola stdlib.
+    try:
+        eb = ENGINE.module("pge.envelopes.envelope_builder")
+        out["envelope_interp_types"] = list(eb.EnvelopeBuilder.VALID_INTERP_TYPES)
+    except (OracleError, AttributeError) as exc:
+        out["envelope_interp_types"] = None
+        out["envelope_interp_types_error"] = str(exc)
 
     try:
         td = ENGINE.module("pge.envelopes.time_distribution")
@@ -1125,7 +1215,7 @@ def _handle(req: dict) -> dict:
         return {"id": rid, "ok": False,
                 "error": f"OracleError: op sconosciuta {name!r} "
                          f"(disponibili: {', '.join(sorted(_OPS))})"}
-    args = req.get("args") or {}
+    args = _from_wire(req.get("args") or {})
     if not isinstance(args, dict):
         return {"id": rid, "ok": False,
                 "error": "OracleError: 'args' deve essere un oggetto"}

@@ -41,6 +41,14 @@ const ORACLE_PY = path.join(__dirname, "engine_oracle.py");
 const NON_FINITE_TAG = "__float__";
 const NON_FINITE = { Infinity: Infinity, "-Infinity": -Infinity, NaN: NaN };
 
+/* E il verso d'andata. `JSON.stringify(Infinity)` e' `null`: una domanda su
+ * `end_time: .inf` arrivava all'oracolo come `end_time: None`, cioe' un'altra
+ * domanda, con un'altra risposta. Gli argomenti viaggiano quindi con la stessa
+ * sentinella delle risposte, e `_from_wire` la toglie di la'. */
+function encodeFloat(_key, v) {
+  return (typeof v === "number" && !Number.isFinite(v)) ? { [NON_FINITE_TAG]: String(v) } : v;
+}
+
 function decodeFloats(v) {
   if (Array.isArray(v)) return v.map(decodeFloats);
   if (v && typeof v === "object") {
@@ -159,7 +167,7 @@ class Oracle {
     const waits = [];
     for (const req of batch) {
       const id = this._nextId++;
-      lines.push(JSON.stringify({ id, op: req.op, args: req.args || {} }));
+      lines.push(JSON.stringify({ id, op: req.op, args: req.args || {} }, encodeFloat));
       waits.push(this._expect(id, timeoutMs));
     }
     if (this._dead) throw new Error(this._withStderr(this._dead));

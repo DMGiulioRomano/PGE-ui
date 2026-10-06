@@ -40,12 +40,16 @@ test-*-parity.js   le suite.
 
 Due dettagli del protocollo che non si indovinano leggendo il codice:
 
-- **I float non finiti viaggiano etichettati.** `Infinity` e `NaN` non sono
-  JSON, quindi `_json_safe` li manda come `{"__float__": "Infinity"}` e
-  `oracle.js` li ridecodifica in numeri veri. La prima versione li mandava a
-  `null` "come farebbe `JSON.stringify`": era vero e inutile, perché
-  `JSON.stringify` fa lo stesso di qua e il confronto diventava `null === null`
-  — indistinguibili, non confrontabili. Chi confronta valori dell'oracolo deve
+- **I float non finiti viaggiano etichettati, nei due versi.** `Infinity` e
+  `NaN` non sono JSON, quindi `_json_safe` li manda come
+  `{"__float__": "Infinity"}` e `oracle.js` li ridecodifica in numeri veri. Da
+  #180 vale anche all'andata: `encodeFloat` etichetta gli argomenti e
+  `_from_wire` li toglie, perché `JSON.stringify(Infinity)` è `null` e una
+  domanda su `end_time: .inf` arrivava al motore come `end_time: None`. La
+  prima versione li mandava a `null` "come farebbe `JSON.stringify`": era vero
+  e inutile, perché `JSON.stringify` fa lo stesso di qua e il confronto
+  diventava `null === null` — indistinguibili, non confrontabili. Chi
+  confronta valori dell'oracolo deve
   quindi **non** passare per `JSON.stringify` (vedi `sameValue` in
   `test-magnify-parity.js`).
 - **`ctx.note(label, righe)` non è un assert.** Serve agli elenchi che
@@ -63,6 +67,7 @@ Le operazioni dell'oracolo:
 | `parse_magnify_spec` | i target di `--magnify-at`, o l'errore — da `pge.shared.magnify_spec`, importato, da PGE #246 | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
+| `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `filter_solo_mute` | gli `stream_id` che `pge.engine.solo_mute.filter_solo_mute` tiene — importata, da PGE #246 | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
 | `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` sia importato da `pge.parameters.loop_unit` (PGE #246) sia dall'AST del bridge, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
@@ -143,8 +148,8 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`9071a37f3623c328c2a7bcbb71a4e7d60d828fc3`
-(«Merge pull request #279 from DMGiulioRomano/claude/wizardly-brahmagupta-vqf5uv»)
+`c120af592b0afcf6740cead07a65f8c8b096cbf4`
+(«Merge pull request #293 from DMGiulioRomano/claude/jolly-sagan-saqxna»)
 
 Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
 che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
@@ -161,10 +166,20 @@ hanno intercettato, e la ragione della sezione qui sotto. Fra `cce3234` ed
 un terzo asse, che la UI ha poi costruito accanto al proprio hash (#151) invece
 di infilarlo dentro — e su cui la scelta del backend nel popover (#150) poggia:
 la *conoscenza* di chi ha scritto lo stem c'era prima della scelta. Fra
-`e57ccec` e il commit qui sopra è entrata la banda relativa di PGE #267
+`e57ccec` e `9071a37` è entrata la banda relativa di PGE #267
 (`0234b12`, fusa con PGE #268): `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS`, che la
 UI rispecchia da #163 — il primo patto che contro `e57ccec` non si potrebbe
-nemmeno porre, perché lì le due costanti non esistono.
+nemmeno porre, perché lì le due costanti non esistono. Fra `9071a37` e il
+commit qui sopra sono entrati i guard di forma degli envelope nel builder (PGE
+#211, fuso con PGE #287): è il motore contro cui `test-envelope-shape-parity.js`
+confronta lo specchio di #180, e da qui quella suite non ha più un ramo per il
+motore precedente — su un motore che non ha quel commit è rossa. Fra `0bc8a51`
+(il merge di PGE #287) e il commit qui sopra è entrata la guardia sulla **somma**
+dei pesi delle distribuzioni temporali (PGE #219, fusa con PGE #293): in
+`exponential` e `power` la somma trabocca prima del peso più grande, e lo
+specchio di `timeDistError` la guarda da allora. Su un motore senza quel commit
+`test-time-dist-parity.js` è rossa — la UI avvisa su coppie che lì rendono
+ancora — e la verifica dello SHA qui sopra dice perché.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
@@ -322,7 +337,8 @@ commento.
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
-| time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus |
+| envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
+| time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus. In `exponential` la banda non viene dalla lettura intera (con `rate < 1` i pesi sono sempre float) ma da un pareggio: a `rate: 0.5` la somma dei pesi è `2**1024 - 1` e `1024·log10(2)` è esattamente `log10(MAX)`, su cui la disuguaglianza stretta tace. In `power` la somma si stima per difetto (PGE #293): la soglia della UI può solo arrivare dopo quella del motore |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |

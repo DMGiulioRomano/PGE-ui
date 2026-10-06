@@ -1930,7 +1930,7 @@ console.log("\n── cablaggio unità/precisione dell'EnvelopeEditor (issue #12
 
   assert("le curve del loop non hardcodano più il suffisso in secondi",
     /const loopUnitSuffix = window\.PGEEnvUtils\.loopUnitSuffix\(stream\.pointer\)/.test(catSrc)
-    && (catSrc.match(/path: \["pointer", "loop\w+Env"\], unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
+    && (catSrc.match(/path: \["pointer", "loop\w+Env"\], yaml: "pointer\.loop_\w+", unit: loopUnitSuffix, fine: true,/g) || []).length === 3);
   assert("nessun consumatore deduce più la precisione dal suffisso",
     !/unit === "s"/.test(eeSrc) && !/unit === "s"/.test(catSrc));
   assert("la precisione viaggia su `fine` (formato, nudge, editing)",
