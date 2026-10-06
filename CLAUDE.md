@@ -1134,7 +1134,28 @@ Their only coverage before that was **by extraction** — `extractFn` + `new Fun
 
 The per-param "remove" button must serialize the off state as `false` or absent — **never as an empty key** (empty key = implicit 1% mode, PGE #210).
 
-**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-utils.js` checks on logarithms. Thresholds model Python **integer** semantics (more permissive) and are re-derived from the running engine on every parity run (`tests/parity/test-time-dist-parity.js` bisects for the first rejected `n_reps` on both sides); the constants in `test-time-dist.js` are the transcript of an older run of the same question. There is an at-most-one-value band where the engine overflows and the UI stays quiet — always the safe direction, and zero wide on the probes where the integer and float thresholds land on the same `n_reps` (the parity suite caps it per probe and requires it to still exist somewhere in the corpus). `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
+**Compact block time distribution** overflow (`{type: geometric, ratio: 10, n_reps: 400}`): `timeDistError(dist, nReps)` in `envelope-loops.js` checks on logarithms. Thresholds model Python **integer** semantics (more permissive) and are re-derived from the running engine on every parity run (`tests/parity/test-time-dist-parity.js` bisects for the first rejected `n_reps` on both sides); the constants in `test-time-dist.js` are the transcript of an older run of the same question. There is an at-most-one-value band where the engine overflows and the UI stays quiet — always the safe direction, and zero wide on the probes where the integer and float thresholds land on the same `n_reps` (the parity suite caps it per probe and requires it to still exist somewhere in the corpus). `computeCycleDurations` has an output net: if durations aren't all finite or don't sum to `T`, it falls back to equal cycles and marks the array `previewFallback`. The warn text must NOT claim what the engine will do in the band — only "drawn durations are not the block's".
+
+**What overflows is the sum of the weights, not only the largest one** (PGE
+#293, engine #219). The engine's `TimeDistributionStrategy._normalize` guards
+the *sum* in `exponential` and `power`, and the sum leaves the floats well
+before its largest term does when `rate` sits near 1 or the exponent is
+moderate: at `rate: 0.9` the largest weight overflows at 6738 cycles and the sum
+at 6716, at `exponent: 60.5` at 124486 against 109992. The mirror used to check
+the largest weight alone, so it stayed quiet on all of those — and the parity
+probes couldn't see it, because on the three they had (`ratio: 2`, `rate: 0.5`,
+`ratio: 10`) weight and sum sit at most one cycle apart. It checks the sum now:
+in closed form for `exponential` (`(q**N - 1)/(q - 1)`, `q = 1/rate`), and as a
+**lower bound** for `power`, which has none (the integral of `x**e` over
+`[0, N]`, plus `N**e / 2` when `e >= 1` makes the curve convex, and never less
+than the largest weight) — a lower bound so the warning can only come late,
+never on a YAML that renders. `exponential`'s remaining band is not the
+integer reading (with `rate < 1` its weights are always floats): at `rate: 0.5`
+the sum is `2**1024 - 1`, `1024 * log10(2)` equals `LOG10_MAX` exactly, and the
+strict `>` stays quiet on the tie the engine's real sum overflows. The parity
+suite gained `rate: 0.9` and `exponent: 100.5` as probes — the two where the old
+mirror lagged by 22 and 28 cycles — and requires an engine with #293
+(`tests/parity/README.md`'s recorded SHA).
 
 ### Dynamic parameter bounds
 
