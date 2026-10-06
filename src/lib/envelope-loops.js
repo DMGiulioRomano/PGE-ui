@@ -359,7 +359,11 @@
   function timeDistError(dist, nReps) {
     if (dist == null) return null;
     if (typeof dist !== "string" && typeof dist !== "object") return { kind: "name" };
-    const rawName = typeof dist === "string" ? dist : (dist.type != null ? dist.type : "linear");
+    // `spec.get('type', 'linear')`: il default vale solo per la chiave ASSENTE.
+    // `{type: null}` la chiave ce l'ha, e None non e' un nome — il motore lo
+    // rifiuta (AttributeError prima di PGE #211, InvalidFieldValueError dopo).
+    // Leggerlo `!= null` lo faceva `linear`, cioe' valido.
+    const rawName = typeof dist === "string" ? dist : (dist.type !== undefined ? dist.type : "linear");
     if (typeof rawName !== "string") return { kind: "name" };
     const name = rawName.toLowerCase();
     if (!TIME_DIST_NAMES.includes(name)) return { kind: "name", name: rawName };
@@ -564,6 +568,223 @@
   }
   function isPreviewFallback(durs) {
     return !!(durs && durs.previewFallback);
+  }
+
+  /* ---------- la forma di un envelope: i guard di EnvelopeBuilder (PGE #211, #180) ----------
+     Da PGE #211 i guard di forma stanno nel builder del motore e valgono per
+     OGNI chiave, e tre scritture che il motore rendeva in silenzio sono
+     diventate errori che fermano il render: una `x` del pattern di un compatto
+     fuori da [0, 100] o che torna indietro, `n_reps`/`end_time` booleani
+     (`range(True)` rendeva un ciclo, `true` valeva 1.0 come istante) e una `y`
+     booleana nel pattern. L'editor non li scrive — i drag del pattern restano
+     fra i vicini e in [0, 100] — ma il tab Raw si', e prima nessuno lo diceva
+     prima del render. `timeDistError` qui sopra era lo specchio di UNO slot;
+     questo e' quello del blocco intero, e lo chiama per il suo.
+
+     Ripercorre `EnvelopeBuilder.parse` passo per passo, e il motivo e' l'ordine:
+     il motore si ferma al primo guard, e il primo errore e' quello che conta.
+       · la forma diretta: il valore E' un compatto (inizio 0), o E' un gruppo;
+       · altrimenti la lista, elemento per elemento: un dict `{t, v, type?}`
+         diventa `[t, v, type?]`, poi compatto → gruppo → 3-tuple → `[t, v]`,
+         e ogni altra cosa e' un elemento non riconosciuto;
+       · dentro il compatto: n_reps, end_time (tipo, poi oltre l'inizio),
+         pattern vuoto, i punti uno a uno (piatti, x in [0, 100], x non
+         decrescente — una x ripetuta e' la discontinuita' e va bene), infine
+         la distribuzione (timeDistError, overflow compreso).
+     Il riconoscimento e' quello del motore, `is_compact_format` /
+     `is_bp_group`, e NON isCompactBlock / isBPGroup: quelle dicono cosa
+     l'editor sa disegnare, e sono piu' strette. `[pattern, 1, true]` per
+     isCompactBlock non e' un blocco — non lo disegna — ma per il motore si', e
+     l'errore giusto e' su `n_reps`, non «elemento sconosciuto».
+
+     Il campo dell'errore e' la sotto-posizione del motore senza `envelope.`
+     davanti (`where`: "compact.n_reps", "group.points", "point", …): e' cio'
+     che il builder nomina quando nessuno gli passa la chiave YAML, e la
+     parita' lo confronta una per una (test-envelope-shape-parity.js). La
+     chiave YAML la aggiunge chi la sa, cioe' chi chiama.
+
+     Fuori scope, e detto: cio' che il motore rifiuta FUORI dal builder — un
+     interp per-punto o globale ignoto, la lista vuota (PGE #209, per cui c'e'
+     wouldEmptyEnv), un dict senza `points` — e il punto cieco int/float:
+     `n_reps: 2.0` e' un float per Python, quindi non un compatto, quindi un
+     errore; di qua `2.0` e `2` sono lo stesso Number. Lo specchio tace, che e'
+     il verso sicuro — lo stesso di `power.exponent` in timeDistError.
+
+     Ritorna null, oppure { where, why, value, index, point?, start?, dist? }:
+       where  la sotto-posizione (sopra)
+       why    "element" | "interp" | "arity" | "reps" | "type" | "offset" |
+              "empty" | "point" | "range" | "order" | il `kind` di timeDistError
+       value  il valore colpevole come scritto (l'elemento, la x, n_reps, …)
+       index  la posizione dell'elemento nella lista; null nella forma diretta
+       point  l'indice del punto dentro il pattern
+       start  l'istante da cui il blocco comincia, per `offset`
+       dist   l'errore di timeDistError, tale e quale                      */
+  // EnvelopeBuilder.VALID_INTERP_TYPES — la parita' pretende che coincidano.
+  const INTERP_TYPES = ["linear", "cubic", "step"];
+
+  // `bool` in Python e' sottoclasse di `int`, e `_is_number` lo esclude a
+  // mano. In JS e' un tipo a se', quindi basta il typeof.
+  const _isNum = (v) => typeof v === "number";
+  const _isDict = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const _has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+  // EnvelopeBuilder.is_compact_format, alla lettera. Qui `isinstance(x, int)`
+  // include il booleano (sottoclasse) e un float intero come 2.0 no: il primo
+  // si replica, il secondo di qua non si vede (vedi sopra).
+  function _engineIsCompact(item) {
+    if (!Array.isArray(item) || item.length < 3 || item.length > 6) return false;
+    if (!Array.isArray(item[0])) return false;
+    if (!item[0].every((p) => Array.isArray(p) && (p.length === 2 || p.length === 3))) return false;
+    if (!(_isNum(item[1]) || typeof item[1] === "boolean")) return false;
+    if (!(Number.isInteger(item[2]) || typeof item[2] === "boolean")) return false;
+    if (item.length >= 4 && item[3] != null && typeof item[3] !== "string") return false;
+    if (item.length >= 5 && item[4] != null && !(typeof item[4] === "string" || _isDict(item[4]))) return false;
+    if (item.length === 6 && item[5] != null && typeof item[5] !== "boolean") return false;
+    return true;
+  }
+
+  // EnvelopeBuilder.is_bp_group. Un gruppo senza punti E' un gruppo (il loop
+  // su una lista vuota non trova niente da rifiutare): lo ferma l'arita'.
+  function _engineIsGroup(item) {
+    if (!Array.isArray(item) || item.length !== 2) return false;
+    const [pts, interp] = item;
+    if (typeof interp !== "string" || !Array.isArray(pts)) return false;
+    return pts.every((p) => Array.isArray(p) && (p.length === 2 || p.length === 3) &&
+      _isNum(p[0]) && _isNum(p[1]) && (p.length === 2 || typeof p[2] === "string"));
+  }
+
+  function _groupError(group) {
+    const [pts, interp] = group;
+    if (!INTERP_TYPES.includes(interp))
+      return { where: "group.interp", why: "interp", value: interp };
+    if (pts.length < 2)
+      return { where: "group.points", why: "arity", value: pts };
+    return null;
+  }
+
+  // _expand_compact_format, i soli guard, nell'ordine in cui scattano.
+  function _compactError(c, start) {
+    const [pattern, end, nReps] = c;
+    if (!_isNum(nReps) || nReps < 1)
+      return { where: "compact.n_reps", why: "reps", value: nReps };
+    if (!_isNum(end) || !isFinite(end))
+      return { where: "compact.end_time", why: "type", value: end };
+    if (end <= start)
+      return { where: "compact.end_time", why: "offset", value: end, start };
+    if (pattern.length === 0)
+      return { where: "compact.pattern", why: "empty", value: pattern };
+    let prev = null;
+    for (let i = 0; i < pattern.length; i++) {
+      const p = pattern[i];
+      const x = p[0];
+      const type = p.length === 3 ? p[2] : null;
+      if (!_isNum(x) || !_isNum(p[1]) || !(type == null || typeof type === "string"))
+        return { where: "compact.pattern", why: "point", value: p, point: i };
+      // Scritto cosi' e non `x < 0 || x > 100`: NaN deve cadere, come
+      // `not 0 <= x <= 100` in Python.
+      if (!(x >= 0 && x <= 100))
+        return { where: "compact.pattern", why: "range", value: x, point: i };
+      if (prev != null && x < prev)
+        return { where: "compact.pattern", why: "order", value: x, point: i };
+      prev = x;
+    }
+    const dist = c.length > 4 ? c[4] : null;
+    const dErr = timeDistError(dist, nReps);
+    if (dErr) return { where: "compact.time_dist", why: dErr.kind, value: dist, dist: dErr };
+    return null;
+  }
+
+  /* Dove sta l'ultimo breakpoint che un compatto valido espande: e' da li' che
+     comincia il blocco successivo (`current_time = compact_expanded[-1][0]`).
+     Non e' l'end_time — e' l'ultimo punto dell'ultimo ciclo, che con un
+     pattern finito prima di x=100 cade dentro il ciclo; con wrap il motore
+     aggiunge un punto a fine ciclo (fine − DISCONTINUITY_OFFSET). L'ultimo
+     ciclo dura quel che dice la distribuzione: le durate sono quelle di
+     computeCycleDurations, che la parita' delle distribuzioni confronta con le
+     sue. Si calcola solo se un compatto successivo ne ha bisogno. */
+  function _compactLastTime(c, start) {
+    const [pattern, end, nReps] = c;
+    const dist = c.length > 4 ? c[4] : null;
+    const wrap = c.length > 5 && c[5] === true;
+    // Lineare (il default) in forma chiusa: computeCycleDurations alloca un
+    // array di n_reps durate, e un `n_reps` enorme scritto a mano nel tab Raw
+    // non deve bloccare le annotazioni, che prima non calcolavano niente.
+    const name = dist == null ? "linear"
+      : (typeof dist === "string" ? dist : (dist.type !== undefined ? dist.type : "linear"));
+    let lastDur;
+    if (typeof name === "string" && name.toLowerCase() === "linear") {
+      lastDur = (end - start) / nReps;
+    } else {
+      const durs = computeCycleDurations(end - start, nReps, dist);
+      lastDur = durs.length ? durs[durs.length - 1] : 0;
+    }
+    const xLast = pattern[pattern.length - 1][0];
+    let last = end - lastDur * (1 - xLast / 100);
+    if (pattern.length === 1 && (nReps > 1 || start > 0)) last += DISCONTINUITY_OFFSET;
+    if (wrap && xLast < 100) last = Math.max(last, end - DISCONTINUITY_OFFSET);
+    return last;
+  }
+
+  function envShapeError(env) {
+    // `Envelope.__init__`: il dict passa `breakpoints['points']` al builder, e
+    // senza la chiave e' un KeyError, prima del builder. Il builder poi itera
+    // quello che riceve, e non solo una lista: una stringa si itera per
+    // caratteri, un dict per chiavi — elementi che non sono breakpoint, e che
+    // il suo guard rifiuta (`envelope.point`). Un numero o null non si
+    // iterano: TypeError, fuori dal builder. Dal tab Raw ci si arriva da
+    // `deviation_probability`, riconosciuto envelope da `'points' in obj`.
+    let raw = env;
+    if (_isDict(env)) {
+      if (!_has(env, "points")) return null;
+      raw = env.points;
+      if (typeof raw === "string") raw = Array.from(raw);
+      else if (_isDict(raw)) raw = Object.keys(raw);
+    }
+    if (_engineIsCompact(raw)) {
+      const e = _compactError(raw, 0);
+      return e ? { ...e, index: null } : null;
+    }
+    if (_engineIsGroup(raw)) {
+      const e = _groupError(raw);
+      return e ? { ...e, index: null } : null;
+    }
+    if (!Array.isArray(raw)) return null;
+
+    // Gli elementi come li guarda il builder (`dict_as_list`): un dict
+    // `{t, v, type?}` diventa `[t, v, type?]` PRIMA di ogni riconoscimento —
+    // e cosi' normalizzato puo' essere anche un compatto (`{t: pattern,
+    // v: end_time, type: n_reps}`), che sposta l'inizio del blocco dopo come
+    // ogni altro. Cercare l'ultimo compatto sugli elementi come scritti lo
+    // perdeva, e il blocco dopo ripartiva da 0.
+    const items = raw.map((it) => (_isDict(it) && _has(it, "t") && _has(it, "v"))
+      ? (_has(it, "type") ? [it.t, it.v, it.type] : [it.t, it.v])
+      : it);
+    let lastCompact = -1;
+    items.forEach((it, i) => { if (_engineIsCompact(it)) lastCompact = i; });
+    let current = 0;
+    for (let i = 0; i < items.length; i++) {
+      const written = raw[i];
+      const item = items[i];
+      let e = null;
+      if (_engineIsCompact(item)) {
+        e = _compactError(item, current);
+        // `current_time = compact_expanded[-1][0]`: assegnato, non un massimo.
+        if (!e && i < lastCompact) current = _compactLastTime(item, current);
+      } else if (_engineIsGroup(item)) {
+        e = _groupError(item);
+        const lastT = item[0].length ? item[0][item[0].length - 1][0] : current;
+        if (!e && lastT > current) current = lastT;
+      } else if (Array.isArray(item) && _isNum(item[0]) && _isNum(item[1]) &&
+                 (item.length === 2 || (item.length === 3 && typeof item[2] === "string"))) {
+        // `max(current_time, t)` di Python: con t NaN resta current, e
+        // Math.max darebbe NaN. Il confronto esplicito e' la stessa regola.
+        if (item[0] > current) current = item[0];
+      } else {
+        e = { where: "point", why: "element", value: written };
+      }
+      if (e) return { ...e, index: i };
+    }
+    return null;
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
@@ -981,6 +1202,7 @@
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, isPreviewFallback, expandMixed,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
+    INTERP_TYPES, envShapeError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
     pitchUnitSymbol,

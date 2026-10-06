@@ -51,6 +51,16 @@ assert("dict con type ignoto → errore di nome",
   (E.timeDistError({ type: "bogus" }) || {}).kind === "name");
 assert("type non stringa → errore di nome (nel motore era un AttributeError)",
   (E.timeDistError({ type: 5 }) || {}).kind === "name");
+/* `{type: null}` non e' `{}`. Il motore legge `spec.get('type', 'linear')`,
+   che su una chiave PRESENTE a None da' None — e None non e' un nome
+   (AttributeError su `.lower()` prima di PGE #211, InvalidFieldValueError
+   dopo). Il mirror leggeva `dist.type != null`, cioe' trattava la chiave
+   scritta vuota come assente: `linear`, valido, su un blocco che il motore
+   rifiuta. Il dict vuoto invece e' `linear` davvero, per entrambi. */
+assert("type: null → errore di nome (la chiave c'e', e None non e' un nome)",
+  (E.timeDistError({ type: null }) || {}).kind === "name");
+assert("dict vuoto → linear, valido (la chiave manca davvero)",
+  E.timeDistError({}) === null);
 assert("maiuscole tollerate come nel factory (.lower())",
   E.timeDistError("Exponential") === null);
 
