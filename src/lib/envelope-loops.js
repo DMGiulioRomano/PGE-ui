@@ -726,12 +726,19 @@
   }
 
   function envShapeError(env) {
-    // `Envelope.__init__`: il dict passa i suoi `points` al builder. Un dict
-    // senza, o con `points` che non e' una lista, cade prima del builder.
+    // `Envelope.__init__`: il dict passa `breakpoints['points']` al builder, e
+    // senza la chiave e' un KeyError, prima del builder. Il builder poi itera
+    // quello che riceve, e non solo una lista: una stringa si itera per
+    // caratteri, un dict per chiavi — elementi che non sono breakpoint, e che
+    // il suo guard rifiuta (`envelope.point`). Un numero o null non si
+    // iterano: TypeError, fuori dal builder. Dal tab Raw ci si arriva da
+    // `deviation_probability`, riconosciuto envelope da `'points' in obj`.
     let raw = env;
     if (_isDict(env)) {
-      if (!Array.isArray(env.points)) return null;
+      if (!_has(env, "points")) return null;
       raw = env.points;
+      if (typeof raw === "string") raw = Array.from(raw);
+      else if (_isDict(raw)) raw = Object.keys(raw);
     }
     if (_engineIsCompact(raw)) {
       const e = _compactError(raw, 0);
@@ -743,14 +750,21 @@
     }
     if (!Array.isArray(raw)) return null;
 
+    // Gli elementi come li guarda il builder (`dict_as_list`): un dict
+    // `{t, v, type?}` diventa `[t, v, type?]` PRIMA di ogni riconoscimento —
+    // e cosi' normalizzato puo' essere anche un compatto (`{t: pattern,
+    // v: end_time, type: n_reps}`), che sposta l'inizio del blocco dopo come
+    // ogni altro. Cercare l'ultimo compatto sugli elementi come scritti lo
+    // perdeva, e il blocco dopo ripartiva da 0.
+    const items = raw.map((it) => (_isDict(it) && _has(it, "t") && _has(it, "v"))
+      ? (_has(it, "type") ? [it.t, it.v, it.type] : [it.t, it.v])
+      : it);
     let lastCompact = -1;
-    raw.forEach((it, i) => { if (_engineIsCompact(it)) lastCompact = i; });
+    items.forEach((it, i) => { if (_engineIsCompact(it)) lastCompact = i; });
     let current = 0;
-    for (let i = 0; i < raw.length; i++) {
+    for (let i = 0; i < items.length; i++) {
       const written = raw[i];
-      let item = written;
-      if (_isDict(item) && _has(item, "t") && _has(item, "v"))
-        item = _has(item, "type") ? [item.t, item.v, item.type] : [item.t, item.v];
+      const item = items[i];
       let e = null;
       if (_engineIsCompact(item)) {
         e = _compactError(item, current);

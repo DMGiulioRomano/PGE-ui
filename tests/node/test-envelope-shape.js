@@ -103,9 +103,21 @@ for (const [label, env] of VALID)
 console.log("\n── cio' che non e' un envelope non e' affare di questo specchio ──");
 for (const [label, v] of [["numero", 5], ["stringa", "x"], ["null", null],
                           ["undefined", undefined], ["dict senza points", { a: 1 }],
-                          ["points non lista", { points: 3 }], ["lista vuota", []]]) {
+                          ["points numero", { points: 3 }], ["points null", { points: null }],
+                          ["points stringa vuota", { points: "" }], ["lista vuota", []]]) {
   assert(`${label}: null (lo decide un altro strato, non il builder)`, err(v) === null, show(err(v)));
 }
+/* Un `points` che non e' una lista non cade per forza prima del builder: il
+   builder itera quello che riceve, e una stringa si itera per caratteri, un
+   dict per chiavi — elementi che non sono breakpoint, e che il suo guard
+   rifiuta (`envelope.point`). Dal tab Raw ci si arriva da
+   `deviation_probability`, il cui riconoscimento e' `'points' in obj`. */
+assert("points stringa: il builder la itera, e il primo carattere non e' un breakpoint",
+  is({ points: "abc" }, { where: "point", why: "element", value: "a", index: 0 }),
+  show(err({ points: "abc" })));
+assert("points dict: il builder ne itera le chiavi, e la prima non e' un breakpoint",
+  is({ type: "linear", points: { t: 0, v: 1 } }, { where: "point", why: "element", value: "t", index: 0 }),
+  show(err({ type: "linear", points: { t: 0, v: 1 } })));
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Le scritture che PGE #211 ha reso errori
@@ -242,6 +254,21 @@ assert("dopo un gruppo, il suo ultimo punto",
   const expo = [[half, 1, 2, null, "exponential"], [PAT, 0.85, 2]];
   assert("con cicli esponenziali l'ultimo ciclo e' piu' corto: 0.85 e' valido",
     err(expo) === null, show(err(expo)));
+  /* Il dict `{t, v, type}` il builder lo fa `[t, v, type]` prima di guardarlo,
+     e cosi' normalizzato puo' essere un compatto: `{t: pattern, v: end_time,
+     type: n_reps}`. Come ogni compatto, sposta l'inizio del blocco dopo — e
+     lo specchio cercava "l'ultimo compatto" sugli elementi COME SCRITTI, dove
+     un dict non e' un compatto: il blocco dopo ripartiva da 0, e taceva. */
+  const asDict = (c) => ({ t: c[0], v: c[1], type: c[2] });
+  for (const [label, env] of [
+    ["un compatto in forma dict, seguito da un altro in forma dict", [asDict([half, 1, 2]), asDict([PAT, 0.7, 2])]],
+    ["un compatto in forma dict, seguito da uno scritto come lista", [asDict([half, 1, 2]), [PAT, 0.7, 2]]],
+    ["un compatto scritto come lista, seguito da uno in forma dict", [[half, 1, 2], asDict([PAT, 0.7, 2])]],
+  ]) {
+    const e = err(env);
+    assert(`${label}: il secondo comincia dall'ultimo punto del primo (0.75)`,
+      e && e.where === "compact.end_time" && e.index === 1 && Math.abs(e.start - 0.75) < 1e-9, show(e));
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

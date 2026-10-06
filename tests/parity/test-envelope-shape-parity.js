@@ -113,6 +113,14 @@ const CORPUS = [
   ["un breakpoint dopo il compatto sposta l'inizio", [[HALF, 1, 2], [0.8, 1], [PAT, 0.79, 2]]],
   ["dopo un gruppo, il suo ultimo punto", [[[[0, 0], [0.7, 1]], "cubic"], [PAT, 0.6, 2]]],
   ["dopo breakpoint dict", [{ t: 0, v: 0 }, { t: 0.5, v: 1 }, [PAT, 0.5, 2]]],
+  // il dict `{t, v, type}` normalizzato e' anche un compatto, e sposta l'inizio
+  ["compatto in forma dict, poi un altro: 0.7 no", [{ t: HALF, v: 1, type: 2 }, { t: PAT, v: 0.7, type: 2 }]],
+  ["compatto in forma dict, poi un altro: 0.9 si'", [{ t: HALF, v: 1, type: 2 }, { t: PAT, v: 0.9, type: 2 }]],
+  ["compatto in lista, poi uno in forma dict: 0.7 no", [[HALF, 1, 2], { t: PAT, v: 0.7, type: 2 }]],
+
+  // `points` che non e' una lista: il builder la itera lo stesso
+  ["points stringa", { points: "abc" }],
+  ["points dict", { type: "linear", points: { t: 0, v: 1 } }],
 ];
 
 const verdicts = async (ask) => {
