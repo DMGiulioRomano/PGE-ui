@@ -143,6 +143,25 @@ console.log("\n── timeDistError: overflow della coppia con n_reps ──");
     kind({ type: "exponential", rate: 0.5 }, 1023) === undefined);
   assert("exponential rate 0.5 · n_reps 1200 → overflow",
     kind({ type: "exponential", rate: 0.5 }, 1200) === "overflow");
+  /* PGE #293 (#219): il motore controlla anche la SOMMA dei pesi, non solo
+     il peso piu' grande, e la somma trabocca prima. Con `rate` vicino a 1 la
+     distanza e' larga: a 0.9 il peso piu' grande trabocca a 6738 cicli, la
+     somma a 6716 — ventidue n_reps su cui la UI taceva e il motore rifiutava.
+     Soglie misurate sul motore; test-time-dist-parity.js le ricalcola. */
+  assert("exponential rate 0.9 · n_reps 6715 → sotto la soglia",
+    kind({ type: "exponential", rate: 0.9 }, 6715) === undefined);
+  assert("exponential rate 0.9 · n_reps 6716 → overflow (trabocca la somma, non ancora il peso)",
+    kind({ type: "exponential", rate: 0.9 }, 6716) === "overflow");
+  assert("exponential rate 0.25 · n_reps 513 → overflow (la somma, primo rifiutato dal motore)",
+    kind({ type: "exponential", rate: 0.25 }, 513) === "overflow");
+  assert("exponential rate 0.25 · n_reps 512 → sotto la soglia",
+    kind({ type: "exponential", rate: 0.25 }, 512) === undefined);
+  // Un rate subnormale: 1/rate e' Infinity, ma a un ciclo c'e' un peso solo
+  // (rate ** 0 = 1) e il motore rende; al secondo il peso trabocca davvero.
+  assert("exponential rate subnormale · n_reps 1 → nessun overflow (un peso solo, vale 1)",
+    kind({ type: "exponential", rate: 5e-324 }, 1) === undefined);
+  assert("exponential rate subnormale · n_reps 2 → overflow",
+    kind({ type: "exponential", rate: 5e-324 }, 2) === "overflow");
 
   assert("power exponent frazionario grande → overflow",
     kind({ type: "power", exponent: 200.5 }, 400) === "overflow");
@@ -156,6 +175,18 @@ console.log("\n── timeDistError: overflow della coppia con n_reps ──");
   // esce mai su uno YAML che rende.
   assert("power exponent intero → non segnalato (Python lo calcola su interi)",
     kind({ type: "power", exponent: 200 }, 400) === undefined);
+  /* La somma vale anche per `power` (PGE #293), e qui la distanza dal peso
+     piu' grande cresce quando l'esponente cala: a 100.5 il peso trabocca a
+     1168 cicli e la somma a 1140, a 60.5 a 124486 contro 109992. Soglie
+     misurate sul motore. */
+  assert("power exponent 100.5 · n_reps 1139 → sotto la soglia",
+    kind({ type: "power", exponent: 100.5 }, 1139) === undefined);
+  assert("power exponent 100.5 · n_reps 1140 → overflow (trabocca la somma, non ancora il peso)",
+    kind({ type: "power", exponent: 100.5 }, 1140) === "overflow");
+  assert("power exponent 60.5 · n_reps 109991 → sotto la soglia",
+    kind({ type: "power", exponent: 60.5 }, 109991) === undefined);
+  assert("power exponent 60.5 · n_reps 109992 → overflow",
+    kind({ type: "power", exponent: 60.5 }, 109992) === "overflow");
 
   /* I bordi della banda int/float, fissati qui perché il commento in
      _overflowError li dichiara. Il conto modella il quoziente intero, che è la
@@ -170,9 +201,14 @@ console.log("\n── timeDistError: overflow della coppia con n_reps ──");
   assert("ratio 2 · 1024 tace (il motore lo rifiuta: banda da uno)",
     kind({ type: "geometric", ratio: 2 }, 1024) === undefined);
   assert("ratio 2 · 1025 segnala", kind({ type: "geometric", ratio: 2 }, 1025) === "overflow");
-  assert("rate 0.5 · 1025 tace (il motore lo rifiuta: banda da uno)",
-    kind({ type: "exponential", rate: 0.5 }, 1025) === undefined);
-  assert("rate 0.5 · 1026 segnala", kind({ type: "exponential", rate: 0.5 }, 1026) === "overflow");
+  /* `exponential` con rate < 1 non ha una lettura intera — i pesi sono
+     sempre float — e la sua banda viene da un altro posto: a `rate: 0.5` la
+     somma vale 2**1024 - 1, e `1024 * Math.log10(2)` e' esattamente
+     `Math.log10(Number.MAX_VALUE)`. La disuguaglianza stretta tace sul pareggio,
+     il motore (che somma davvero) trabocca: banda da uno, verso sicuro. */
+  assert("rate 0.5 · 1024 tace (il motore lo rifiuta: banda da uno)",
+    kind({ type: "exponential", rate: 0.5 }, 1024) === undefined);
+  assert("rate 0.5 · 1025 segnala", kind({ type: "exponential", rate: 0.5 }, 1025) === "overflow");
 
   assert("linear non eleva niente a potenza", kind("linear", 100000) === undefined);
   assert("logarithmic nemmeno",
@@ -327,14 +363,15 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
    sull'output, che sa solo che il conto JS non e' arrivato — non cosa fara' il
    motore. Il messaggio del pannello non deve quindi affermarlo: verificato
    eseguendo il motore, {geometric, ratio: 2} a 1024 cicli e {exponential,
-   rate: 0.5} a 1025 alzano ParameterBoundError mentre la UI ripiega. */
+   rate: 0.5} a 1024 alzano ParameterBoundError mentre la UI ripiega.
+   (`rate: 0.25` a 513 stava qui fino a PGE #293: da quando la UI guarda la
+   somma dei pesi come il motore, su quella coppia le due soglie coincidono.) */
 {
   console.log("\n── la banda int/float: la guardia parla, ma non del motore ──");
   const banda = [
     [{ type: "geometric",   ratio: 2   }, 1024],
-    [{ type: "exponential", rate:  0.5 }, 1025],
+    [{ type: "exponential", rate:  0.5 }, 1024],
     [{ type: "geometric",   ratio: 2.5 }, 775],
-    [{ type: "exponential", rate:  0.25 }, 513],
   ];
   for (const [spec, n] of banda) {
     const label = `${spec.type} @${n}`;
