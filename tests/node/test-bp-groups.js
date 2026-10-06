@@ -446,17 +446,45 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
      `undefined`: la riga dell'Inspector mostrava il segnaposto al posto della
      curva e «undefined bp» come conteggio. */
   const primSrc = SG.codeOf(path.join(__dirname, "../../src/components/primitives.jsx"));
-  assert("ParamRow legge l'envelope per unwrapEnv, non per la sua lunghezza",
-    /PGEEnv\.unwrapEnv\(envValue\)/.test(primSrc) && !/envValue\.length/.test(primSrc));
+  assert("ParamRow legge l'envelope per envSketch, non per la sua lunghezza",
+    /PGEEnv\.envSketch\(envValue\)/.test(primSrc) && !/envValue\.length/.test(primSrc));
   const inspSrc = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
   assert("i conteggi «N bp» dell'Inspector passano da unwrapEnv",
     !/(fillFactorEnv|densityEnv|readDirectionEnv)\.length/.test(inspSrc),
     (inspSrc.match(/\w+Env\.length/g) || []).join(", "));
-  // …e quel che ParamRow disegna di un dict e' la stessa curva della lista.
-  const sketch = (v) => E.expandMixed(E.desugarBPGroups(E.unwrapEnv(v).items)).points.map((p) => [p[0], p[1]]);
+  /* La curva di blend di grain.envelope (transition / multistate) la scrive
+     lo stesso commit, e la riga che la mostra in piccolo — CurveRow, in
+     EnvelopeSelector.jsx — la leggeva solo come lista: `Array.isArray(value) ?
+     value : [[0, 0], [1, 1]]`. Su un dict disegnava la diagonale di default e
+     «2 bp», cioe' una curva che non c'e'; e da #189 setZoneInterp su una curva
+     cubica esce dict invece che lista, quindi il segnaposto avrebbe preso
+     proprio la curva appena ritoccata. Un gruppo nella lista, poi, dava NaN
+     nella polyline (`p[0]` di un gruppo e' una lista). */
+  const selSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeSelector.jsx"));
+  assert("CurveRow legge la curva per envSketch, non come lista",
+    /PGEEnv\.envSketch\(/.test(selSrc) && !/Array\.isArray\(value\)\s*\?\s*value\s*:/.test(selSrc));
+
+  /* envSketch e' la lettura condivisa delle due righe: una sola strada
+     (unwrapEnv → desugar → expandMixed), cosi' le due non divergono — ed e'
+     lei che il test esegue, non una sua copia. */
   const MISTA = { type: "cubic", points: [[0, 2], [0.2586, 0.4, "linear"], [1, 1]] };
-  assert("il disegno di ParamRow sul dict ha i punti della lista",
-    eq(sketch(MISTA), [[0, 2], [0.2586, 0.4], [1, 1]]), JSON.stringify(sketch(MISTA)));
+  const xy = (sk) => sk.points.map((p) => [p[0], p[1]]);
+  assert("envSketch sul dict: i punti della lista, e il conteggio dei points scritti",
+    eq(xy(E.envSketch(MISTA)), [[0, 2], [0.2586, 0.4], [1, 1]]) && E.envSketch(MISTA).count === 3
+      && E.envSketch(MISTA).loops === 0,
+    JSON.stringify(E.envSketch(MISTA)));
+  assert("…lo stesso disegno della lista piatta degli stessi item",
+    eq(xy(E.envSketch(MISTA)), xy(E.envSketch(MISTA.points))));
+  const CURVA_GRUPPO = [[0, 0], [[[0.2, 1], [0.5, 0]], "step"], [1, 1]];
+  const skG = E.envSketch(CURVA_GRUPPO);
+  assert("envSketch su una lista con un gruppo: nessun NaN, il gruppo e' i suoi punti",
+    eq(xy(skG), [[0, 0], [0.2, 1], [0.5, 0], [1, 1]]) && skG.count === 3, JSON.stringify(skG));
+  assert("envSketch su un dict col gruppo: gli stessi punti",
+    eq(xy(E.envSketch({ type: "cubic", points: CURVA_GRUPPO })), xy(skG)));
+  const skL = E.envSketch([[0, 0], [[[0, 0], [100, 1]], 1, 2]]);
+  assert("envSketch conta i blocchi", skL.loops === 1 && skL.points.length > 2, JSON.stringify(skL));
+  assert("envSketch su un valore assente: niente punti, conteggio zero",
+    eq(E.envSketch(null), { count: 0, points: [], loops: 0 }), JSON.stringify(E.envSketch(null)));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

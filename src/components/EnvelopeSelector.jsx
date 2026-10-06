@@ -479,8 +479,15 @@ function ListEditor({ items, onPickAt, onRemoveAt, onAdd, label, hint, indexed }
 /* ----- curve row for transition / multistate ----- */
 function CurveRow({ value, onChange, onEdit, range }) {
   const { Icon } = window.PGE;
-  // value is an envelope: [[t, v], ...]
-  const bp = Array.isArray(value) ? value : [[0, 0], [1, 1]];
+  /* `value` is an envelope in any of its graphies — the list, or the
+     `{type, points}` dict the EnvelopeEditor writes for a non-linear global
+     interp (per-point exceptions and BP groups included since #189). Read it
+     the editor's way (envSketch), not as a list: on a dict the row drew the
+     default diagonal and "2 bp", a curve that isn't there, and a BP group in
+     the list put NaN in the polyline. Absent, it is the default curve the
+     serializer writes (`env.curve || [[0, 0], [1, 1]]`). */
+  const sk = window.PGEEnv.envSketch(value != null ? value : [[0, 0], [1, 1]]);
+  const bp = sk.points;
   const xs = bp.map(p => p[0]); const ys = bp.map(p => p[1]);
   const xmin = Math.min(...xs), xmax = Math.max(...xs);
   const ymin = Math.min(...ys), ymax = Math.max(...ys);
@@ -496,7 +503,7 @@ function CurveRow({ value, onChange, onEdit, range }) {
           <polyline fill="none" stroke="var(--accent)" strokeWidth="1.2" points={pts} />
         </svg>
       </span>
-      <span className="env-curve-bp mono">{bp.length} bp</span>
+      <span className="env-curve-bp mono">{sk.count} bp</span>
     </div>
   );
 }

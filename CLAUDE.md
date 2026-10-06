@@ -2037,9 +2037,14 @@ measured an envelope as a list had to learn it.** `.length` on a dict is
 the placeholder instead of the curve — the very curves just retouched with
 `setZoneInterp` — and the Inspector's `fill_factor` / `density` /
 `read_direction` badges read `undefined bp`; the Raw tab's out-of-range `pan`
-warning looked at lists only. They all read through `unwrapEnv` now: the
-sparkline through the editor's own path (`unwrapEnv` → `desugarBPGroups` →
-`expandMixed`), the warning through the same first two steps and then the
+warning looked at lists only. So did `CurveRow` (`EnvelopeSelector.jsx`), the
+mini-curve of `grain.envelope`'s transition/multistate blend: the same commit
+writes that curve, and on a dict it drew the default diagonal and `2 bp` — a
+curve that isn't there — and a BP group in the list put `NaN` in its polyline.
+They all read through `unwrapEnv` now: the two sparklines through the editor's
+own path (`unwrapEnv` → `desugarBPGroups` → `expandMixed`), written once as
+`PGEEnv.envSketch` so the two rows can't drift apart again, the warning
+through the same first two steps and then the
 *written* y's — points, groups, and a block's pattern, never its expansion, which
 would cost `n_reps` cycles on every keystroke of the Raw tab (and the old check
 compared a block's `[1]`, its end time). The EnvelopeEditor's own `exp` handed the

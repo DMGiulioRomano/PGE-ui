@@ -804,6 +804,23 @@
     return null;
   }
 
+  /* Lo schizzo di un envelope, per le righe che lo mostrano in piccolo
+     (ParamRow in primitives.jsx, CurveRow in EnvelopeSelector.jsx): la strada
+     dell'EnvelopeEditor — unwrapEnv, desugar, expandMixed — per ogni grafia.
+     Le due righe la percorrevano ciascuna a modo suo, e misuravano l'envelope
+     come lista: su un dict `{type, points}` — che wrapEnv scrive per ogni
+     interp globale non lineare, eccezioni sul punto comprese (#189) — una
+     mostrava il segnaposto al posto della curva, l'altra la diagonale di
+     default. Una lettura sola, cosi' non tornano a divergere.
+       count:  gli elementi SCRITTI (per il dict, i suoi points)
+       points: i punti da tracciare, [t, v, interp]
+       loops:  quanti blocchi compatti                                       */
+  function envSketch(env) {
+    const items = unwrapEnv(env).items;
+    const exp = expandMixed(desugarBPGroups(items));
+    return { count: items.length, points: exp.points, loops: exp.blocks.length };
+  }
+
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
      Output:
        points: [[t, v], …]              — utili a tracciare la curva
@@ -1220,7 +1237,7 @@
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
-    computeCycleDurations, isPreviewFallback, expandMixed,
+    computeCycleDurations, isPreviewFallback, expandMixed, envSketch,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
     INTERP_TYPES, envShapeError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,

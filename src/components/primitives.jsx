@@ -240,19 +240,17 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
   let expandedBPs = [];
   let envCount = 0;   // gli elementi scritti: per il dict, i suoi points
   if (envValue && window.PGEEnv) {
-    /* La strada dell'EnvelopeEditor, per ogni grafia: unwrapEnv, desugar,
-       expandMixed. Il cancello era `envValue.length`, e il dict
+    /* La strada dell'EnvelopeEditor, per ogni grafia (envSketch: unwrapEnv,
+       desugar, expandMixed). Il cancello era `envValue.length`, e il dict
        `{type, points}` una lunghezza non ce l'ha: la riga mostrava il
        segnaposto al posto della curva. Da #189 wrapEnv scrive il dict per
        ogni interp globale non lineare, eccezioni sul punto comprese — curve
        che prima uscivano liste — quindi il segnaposto avrebbe preso proprio
        le curve appena ritoccate con setZoneInterp. */
-    const PGEEnv = window.PGEEnv;
-    const items = PGEEnv.unwrapEnv(envValue).items;
-    envCount = items.length;
-    const exp = PGEEnv.expandMixed(PGEEnv.desugarBPGroups(items));
-    expandedBPs = exp.points;
-    loopCount = exp.blocks.length;
+    const sk = window.PGEEnv.envSketch(envValue);
+    envCount = sk.count;
+    expandedBPs = sk.points;
+    loopCount = sk.loops;
     if (expandedBPs.length) {
       const xs = expandedBPs.map((p) => p[0]);
       const ys = expandedBPs.map((p) => p[1]);
