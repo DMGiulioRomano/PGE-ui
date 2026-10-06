@@ -128,22 +128,35 @@ for (const ch of STRIP_ONLY_PYTHON) {
   };
 }
 
+/* I rami da cui l'oracolo puo' procurarsi la grammatica, in ordine di
+ * preferenza. Dalla PGE #246 sta in `pge.shared.magnify_spec`, un modulo
+ * senza dipendenze, quindi il ramo normale e' un import su qualunque
+ * interprete; i due `-storico` sono il ripiego sui motori anteriori a quella
+ * issue, dove la grammatica stava in `pge.cli` coi nomi privati e l'import
+ * pretendeva matplotlib. Servono perche' la CI di qui fa il checkout del ramo
+ * di default del motore, e i due merge non avvengono nello stesso istante.
+ *
+ * Scritta una volta e letta da due casi: erano due letterali ripetuti, e di
+ * due copie di un elenco una resta indietro — qui si vedrebbe come un FAIL
+ * che nomina un ramo legittimo. */
+const RAMI_NOTI = ["import", "import-storico", "ast-slice-storico"];
+
 parity({
   suite: "magnify-spec",
-  why: "window.PGEMagnifySpec.error/targets  ↔  pge.cli._parse_magnify_spec",
+  why: "window.PGEMagnifySpec.error/targets  ↔  pge.shared.magnify_spec.parse_magnify_spec",
   cases: [
     {
       label: "il registro delle chiavi e' quello del motore",
       run: async (ask, assert, ctx) => {
         const c = (await ask("constants", {})).value;
-        // Da quale dei due rami arriva la grammatica. Non e' un dettaglio: i
-        // rami hanno gia' divergiuto (il ramo import non popolava le tre
-        // costanti, e la suite faceva 8/3 col venv del motore e 11/0 senza).
-        // La CI ora li esercita entrambi — job node senza venv, job python con
-        // — e questa riga dice a chi legge quale ha girato.
+        // Da quale ramo arriva la grammatica. Non e' un dettaglio: i rami
+        // hanno gia' divergiuto (quello import non popolava le tre costanti,
+        // e la suite faceva 8/3 col venv del motore e 11/0 senza). La CI li
+        // esercita tutti — job node senza venv, job python con — e questa
+        // riga dice a chi legge quale ha girato.
         ctx.note(`grammatica letta dal ramo '${c.magnify_source}'`);
-        assert("il ramo e' uno dei due noti, non un terzo silenzioso",
-          c.magnify_source === "import" || c.magnify_source === "ast-slice",
+        assert("il ramo e' uno dei noti, non un terzo silenzioso",
+          RAMI_NOTI.includes(c.magnify_source),
           // Senza questo, un namespace incompleto arrivava agli assert sotto
           // come `null` e basta: tre FAIL senza una ragione stampata.
           c.magnify_error || JSON.stringify(c.magnify_source));
@@ -166,7 +179,7 @@ parity({
 
         const source = (answers.find(a => a.ok) || {}).value;
         assert("la grammatica arriva dal motore, non da una copia",
-          source && (source.source === "import" || source.source === "ast-slice"),
+          source && RAMI_NOTI.includes(source.source),
           JSON.stringify(source && source.source));
 
         let agree = 0;

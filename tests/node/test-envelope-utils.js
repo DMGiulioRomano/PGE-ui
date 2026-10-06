@@ -502,7 +502,7 @@ console.log("\n── loopUnitSuffix (etichetta di start e del loop) ──");
 // ---------------------------------------------------------------------------
 // loopUnitRescaleKeys — quali chiavi l'unita' governa DAVVERO: quelle il cui
 // valore la conversione normalized → secondi muoverebbe. Specchio di cio' che
-// `scale_raw_param_values` tocca sul giro di `_LOOP_UNIT_SCOPE`. Decide la
+// `scale_raw_param_values` tocca sul giro di `LOOP_UNIT_SCOPE`. Decide la
 // visibilita' del selettore di loop_unit nell'Inspector; fino a #177 decideva
 // anche il suggerimento di migrazione, andato via con l'avviso [LOOP_UNIT] del
 // motore (PGE #242/#282). Senza il filtro sullo zero il selettore comparirebbe
@@ -539,7 +539,7 @@ console.log("\n── loopUnitRescaleKeys (chi cambia davvero, PGE #222) ──"
     eq(K({ start: [[0, 0.1], [1, 0.9]] }), ["start"]));
 
   /* Ordine e grafia: le chiavi in grafia YAML, nell'ordine di
-     `_LOOP_UNIT_SCOPE`. */
+     `LOOP_UNIT_SCOPE`. */
   assert("le chiavi escono in grafia YAML e nell'ordine del motore",
     eq(K({ loopEnd: 2, start: 0.5, loopDur: null, loopStart: 0 }), ["start", "loop_end"]));
   assert("tutte e quattro insieme",

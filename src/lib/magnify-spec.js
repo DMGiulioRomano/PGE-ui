@@ -6,7 +6,7 @@
  * più punti scelti a mano). Il secondo passa per un campo di testo, e uno SPEC
  * malformato non degrada la partitura: `main.py` stampa l'errore ed esce con
  * codice 1, quindi un refuso costerebbe l'intero render, audio compreso.
- * Questo modulo replica la grammatica del motore (`_parse_magnify_spec` in
+ * Questo modulo replica la grammatica del motore (`parse_magnify_spec` in
  * `src/pge/cli.py`) per dirlo prima, mentre si scrive.
  *
  * Grammatica: target separati da `;`, ogni target coppie `chiave=valore`
@@ -33,7 +33,7 @@
 
   /* Lo strip del motore, non quello di JS.
    *
-   * `_parse_magnify_spec` usa `str.strip()`, che toglie ciò per cui
+   * `parse_magnify_spec` usa `str.strip()`, che toglie ciò per cui
    * `str.isspace()` è vero. `String.prototype.trim()` toglie un insieme
    * diverso, e le due differenze non sono simmetriche:
    *

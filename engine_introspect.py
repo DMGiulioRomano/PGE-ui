@@ -540,7 +540,7 @@ _LOOP_UNITS_CACHE: dict = {}
 
 
 def engine_loop_units(root: Path) -> list:
-    """`LOOP_UNITS` del motore (`controllers/pointer_controller.py`), in ordine.
+    """`LOOP_UNITS` del motore (`parameters/loop_unit.py`), in ordine.
 
     E' il vocabolario di `pointer.loop_unit` da PGE #222: prima la chiave non
     aveva un insieme dichiarato — il motore testava solo `!= 'normalized'` e
@@ -550,15 +550,26 @@ def engine_loop_units(root: Path) -> list:
     `envelope-utils.js`), e questa lettura e' cio' che impedisce alla lista di
     diventare una trascrizione: la parita' pretende che le due coincidano.
 
-    AST come il resto del modulo, e qui non e' solo eleganza: importare
-    `pointer_controller` tira dentro `pge.envelopes.envelope` e quindi numpy,
-    che nel job node della CI non esiste — l'oracolo di parita' gira senza venv
-    del motore.
+    AST come il resto del modulo, e qui per la ragione di sempre: questo
+    bridge non importa mai il motore. Dalla PGE #246 la costante sta in
+    `pge/parameters/loop_unit.py`, un modulo che non importa niente, fatto
+    apposta perche' chi la legge possa importarla — e l'oracolo di parita'
+    infatti lo fa. Qui no: `server.py` e' un processo Flask nel venv
+    dell'editor, e rispondere a `GET /bounds` eseguendo codice del motore non
+    e' una cosa che fa. Prima la costante stava in
+    `controllers/pointer_controller.py`, il cui import tira dentro
+    `pge.envelopes.envelope` e quindi numpy: la' il vincolo era doppio.
+
+    I candidati vanno dal piu' recente al piu' vecchio, e i tre
+    `pointer_controller.py` restano perche' il bridge deve funzionare su ogni
+    annata di motore — compresa quella fra il merge di questa modifica e
+    quello di PGE #246.
 
     L'ordine e' significativo (la prima grafia e' quella canonica), quindi si
     restituisce una lista e non un insieme. `[]` = un motore senza la costante,
     piu' vecchio di #222: chi chiama non deve inventarsi un vocabolario."""
     candidates = (
+        root / "src" / "pge" / "parameters" / "loop_unit.py",
         root / "src" / "pge" / "controllers" / "pointer_controller.py",
         root / "src" / "controllers" / "pointer_controller.py",
         root / "src" / "pointer_controller.py",

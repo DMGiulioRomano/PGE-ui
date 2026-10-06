@@ -577,7 +577,7 @@ parity({
        * Il fallback di `done` in `run()` scorre `generated`, che e' il disco e
        * non il giro: uno stream muto (o fuori dal solo) ha li' il file di un
        * render precedente. `PGEBackend.streamsEngineBuilds` e' il mirror di
-       * `Generator._filter_solo_mute` che lo esclude — e un mirror che sbaglia
+       * `filter_solo_mute` che lo esclude — e un mirror che sbaglia
        * scrive impronta, semantica e backend di QUESTO giro su audio che il
        * motore non ha toccato (troppo largo), o lascia giallo per sempre uno
        * stem appena reso (troppo stretto).

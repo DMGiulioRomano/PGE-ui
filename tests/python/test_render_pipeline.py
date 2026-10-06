@@ -2666,10 +2666,25 @@ def test_render_state_claim_covers_the_gap_before_the_spawn():
 # e' cio' che impedisce a quella lista di diventare una trascrizione: la
 # parita' pretende che i due lati coincidano.
 #
-# Solo AST, e non per gusto: importare `pointer_controller` tira dentro
-# `pge.envelopes.envelope` e quindi numpy, che nel job node della CI — dove la
-# parita' gira — non esiste.
+# Solo AST, e non per gusto: questo bridge non importa mai il motore. Dalla PGE
+# #246 la costante sta in `pge/parameters/loop_unit.py`, un modulo che non
+# importa niente — l'oracolo di parita' infatti la importa — ma `server.py` e'
+# un processo Flask nel venv dell'editor, e rispondere a `GET /bounds`
+# eseguendo codice del motore non e' una cosa che fa. Prima la costante stava
+# in `controllers/pointer_controller.py`, che tira dentro
+# `pge.envelopes.envelope` e quindi numpy: la' il vincolo era doppio.
+#
+# I candidati vanno dal piu' recente al piu' vecchio, e il vecchio path resta
+# perche' il bridge deve funzionare su ogni annata di motore — compresa quella
+# fra il merge di questa modifica e quello di PGE #246.
 # ---------------------------------------------------------------------------
+
+def _stub_loop_unit(root, body):
+    """Il modulo di PGE #246, senza dipendenze."""
+    d = root / "src" / "pge" / "parameters"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "loop_unit.py").write_text(body)
+
 
 def _stub_pointer_controller(root, body, layout="pge"):
     d = {"pge": root / "src" / "pge" / "controllers",
@@ -2729,6 +2744,40 @@ def test_engine_loop_units_non_literal_is_empty(tmp_path):
     assert ei.engine_loop_units(tmp_path) == []
     _stub_pointer_controller(tmp_path, "LOOP_UNITS = ('seconds', 3)\n")
     assert ei.engine_loop_units(tmp_path) == []
+
+
+def test_engine_loop_units_reads_the_new_module(tmp_path):
+    """Il path di PGE #246, dove la costante abita adesso."""
+    import engine_introspect as ei
+    _stub_loop_unit(
+        tmp_path, "LOOP_UNITS = ('seconds', 'absolute', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "absolute", "normalized"]
+
+
+def test_engine_loop_units_prefers_the_new_module(tmp_path):
+    """Con entrambi i file, vince quello nuovo.
+
+    Non e' un caso di laboratorio: fra il merge di PGE #246 e il prossimo
+    `git pull` nel checkout fratello, un motore puo' avere il modulo nuovo e
+    un `pointer_controller.py` che la costante non la dichiara piu'. Letto
+    nell'ordine sbagliato, il secondo risponderebbe "non lo so" **e chiuderebbe
+    la ricerca**, perche' questa lettura si ferma al primo file che si parsa:
+    il vocabolario spariva e la UI rifiutava ogni grafia.
+    """
+    import engine_introspect as ei
+    _stub_loop_unit(tmp_path, "LOOP_UNITS = ('seconds', 'normalized')\n")
+    _stub_pointer_controller(
+        tmp_path, "LOOP_UNITS = ('questa', 'non', 'va', 'letta')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "normalized"]
+
+
+def test_engine_loop_units_falls_back_on_the_old_home(tmp_path):
+    """Un motore anteriore a PGE #246 non ha il modulo nuovo: si legge il
+    vecchio, ed e' la ragione per cui i tre candidati storici restano."""
+    import engine_introspect as ei
+    _stub_pointer_controller(
+        tmp_path, "LOOP_UNITS = ('seconds', 'absolute', 'normalized')\n")
+    assert ei.engine_loop_units(tmp_path) == ["seconds", "absolute", "normalized"]
 
 
 def test_engine_loop_units_sees_a_live_bump(tmp_path):
