@@ -1338,8 +1338,9 @@ row clamps when the number is typed.
 constant straight back. It is the same rule `wouldEmptyEnv` states one section
 up — a caller holding a wrapped value must `unwrapEnv` first — and the wrapped
 spelling here is not exotic: `wrapEnv` produces `{type, points}` the moment a
-pure-BP curve's global interp stops being linear, so the EnvelopeEditor writes
-it by itself. Indexed at `[0]` that dict has nothing, and a `loop_end` curve
+curve's global interp stops being linear (per-point exceptions and BP groups
+included since #189, see "the global `type` survives the commit" below), so the
+EnvelopeEditor writes it by itself. Indexed at `[0]` that dict has nothing, and a `loop_end` curve
 sitting at `6` came back as the whole file. A **compact block** as the first
 item was the other half and worse than the fallback: there `env[0][1]` is the
 block's *end time* (the module header spells the shape out:
@@ -1581,6 +1582,8 @@ with the engine. Those pacts used to live only in prose. They are now executable
 it is really in the hash — `parse_magnify_spec`,
 `classify_deviation_probability`, `build_time_distribution`,
 `build_envelope` — a real `Envelope`, which imports without numpy —,
+`evaluate_envelope` — what that same `Envelope` *plays* at the times asked, for
+the questions where the body stays valid and changes meaning (#189) —,
 `parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
 name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
 included);
@@ -1986,6 +1989,82 @@ Stream `duration` is **optional** (PGE #205): absent or `null` means "as long as
 - Sample changes → `applyStreamPatch(stream, patch, {samples})` re-resolves inherited duration.
 
 The EnvelopeEditor Y window auto-fits point values (`computeYFit` in `envelope-utils.js`, node-tested): fits min..max + 10% margin, clamped into `[hardMin,hardMax]`. Frozen during drag (a `useRef` snapshot) so the grabbed point can't slide under a rescaling axis.
+
+### EnvelopeEditor: the global `type` survives the commit (`wrapEnv`, #189)
+
+Every envelope the EnvelopeEditor writes goes out through one door:
+`wrapEnv(resugarBPGroups(items, interp), interp)` (`commit`, `commitCur`, the
+arrow nudge, the paste). `wrapEnv` is the inverse of `unwrapEnv`: a **non-linear
+global interp comes out as `{type, points}`, whatever the items are** — bare
+points, per-point 3-tuples, BP groups. A linear (or absent) one comes out as the
+list.
+
+That is the engine's reading, not a preference. In a dict the `type` is the type
+of every segment that doesn't declare one on its point
+(`Envelope._parse_segments`: `seg_types[i] if seg_types[i] is not None else
+self.type`), and the builder reads 3-tuples and groups inside `points` exactly as
+in a list. In a flat list that same segment is `linear`. `wrapEnv` used to return
+the list the moment an item had a type of its own, so the first commit
+straightened every segment that followed the global type — no error, and not
+even a sign afterwards, since `unwrapEnv` of the list reads `interp: linear` and
+the drawing followed. The shortest way there was one gesture on a curve the
+editor itself had written: `setZoneInterp` on the `fill_factor` of
+mare-nostrum's stream4 (`{type: cubic}`, six points) wrote the two `step`
+exceptions as a flat list, and the engine played `2.27` at `t = 0.5` where the
+curve said `2.53`. A hand-written mixed form — global type plus exceptions on the
+point — lost its type on the first unrelated edit the same way.
+
+What the round trip does now, and what it doesn't:
+
+- **The mixed form comes back identical** through the whole commit path.
+- **A BP group between bare points comes back as its 3-tuples**, inside the same
+  dict. `resugarBPGroups` re-forms a group only from a *whole* run of uniform
+  segments, and here the run is the whole envelope — the same thing it has
+  always done to a flat list, and the same expansion the builder does
+  (`_expand_bp_group`). The shape moves, the reading doesn't.
+- **A loop block among the items keeps the list**, as before: the declared case,
+  PGE-ui #191. The engine reads a compact block's interp by *form* — in a list
+  the **first** block's interp becomes the envelope's global type
+  (`EnvelopeBuilder.extract_interp_type`), in a dict it is ignored and the `type`
+  governs — while `expandMixed` and `buildEnvelopeD` draw it per block. Keeping
+  the dict there would make the engine's reading identical and the drawing of
+  the block just added with "add loop" false; the decision is about that model,
+  not about `wrapEnv`.
+
+**The dict now carries what used to be only in lists, so every reader that
+measured an envelope as a list had to learn it.** `.length` on a dict is
+`undefined`: `ParamRow` (`primitives.jsx`) gated its sparkline on it and showed
+the placeholder instead of the curve — the very curves just retouched with
+`setZoneInterp` — and the Inspector's `fill_factor` / `density` /
+`read_direction` badges read `undefined bp`; the Raw tab's out-of-range `pan`
+warning looked at lists only. They all read through `unwrapEnv` now: the
+sparkline through the editor's own path (`unwrapEnv` → `desugarBPGroups` →
+`expandMixed`), the warning through the same first two steps and then the
+*written* y's — points, groups, and a block's pattern, never its expansion, which
+would cost `n_reps` cycles on every keystroke of the Raw tab (and the old check
+compared a block's `[1]`, its end time). The EnvelopeEditor's own `exp` handed the
+dict to `expandMixed` as it was, on the premise "the typed form carries no
+groups": false since #189, and false before for a hand-written dict holding a
+group *and* a block, where `blocks[].originalIdx` indexed the raw points while
+the editor uses it on the desugared `rawEnv`. The dict is rebuilt around the
+desugared items now. `fmtEnvInline` formatted a dict's points with `fmtBP` alone,
+and threw on a group.
+
+`tests/node/test-bp-groups.js` pins the shapes (the old assert there,
+"wrapEnv doesn't wrap an env with groups in a dict", *was* the defect written as
+a contract). `tests/parity/test-envelope-wrap-parity.js` asks the engine the
+real question — the same body before and after `wrapEnv ∘ unwrapEnv` and the
+commit path, evaluated on the same grid by `Envelope.evaluate`, plus the
+`setZoneInterp` gesture against its intent — with a guard that the corpus
+discriminates (the flat list of the same items must play differently), and the
+loop case asserted as a divergence, so the day #191 is decided that suite
+speaks.
+
+One consequence outside this repo: mare-nostrum's lab writes a touched
+`{type, points}` with mixed types as its own list with the type on each point,
+*not* as the mixed form, because PGE-ui used to lose the global type on re-read
+(mare-nostrum's CLAUDE.md, "Gli inviluppi `{type, points}`"). That reason is
+gone; whether to change it is that repo's call.
 
 ### Audio playback (`audio-engine.js`)
 
