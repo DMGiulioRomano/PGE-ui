@@ -393,6 +393,35 @@ def _check_magnify_namespace(ns, source, where):
     return ns
 
 
+def _modulo_nel_checkout(dotted: str) -> bool:
+    """Il file del modulo sta nel checkout del motore?
+
+    E' la domanda che separa «motore anteriore a PGE #246» (il modulo non
+    c'e', si ripiega sul ramo storico) da «il modulo c'e' e non si importa»
+    (un guasto da dichiarare). Un import fallito da solo non le distingue: in
+    tutti e due i casi `ENGINE.module` alza `OracleError`."""
+    rel = Path(*dotted.split("."))
+    src = ENGINE.root / "src"
+    return ((src / rel.with_suffix(".py")).is_file()
+            or (src / rel / "__init__.py").is_file())
+
+
+def _import_rotto(op: str, dotted: str, exc: OracleError) -> OracleError:
+    """L'errore per un modulo leggero che c'e' e non si importa.
+
+    Non si ripiega sul ramo storico, per la stessa ragione di
+    `IncompleteNamespace`: su un motore con PGE #246 `pge.cli` e `generator.py`
+    leggono dal modulo nuovo, quindi i rami storici non possono riuscire — e
+    il loro errore («la grammatica si e' spostata») mandava a cercare una
+    rinomina dove c'era un import rotto. Il caso tipico e' proprio quello che
+    #246 sorveglia: una dipendenza pesante scesa nel modulo che non doveva
+    importare niente, che senza venv non si risolve."""
+    return OracleError(
+        f"{op}: {dotted} c'e' nel checkout ma non si importa — {exc}. Il "
+        f"modulo dev'essere importabile senza il venv del motore (PGE #246)."
+    )
+
+
 def _load_magnify_from_source():
     """La grammatica di `--magnify-at`, dal modulo che il motore ha fatto
     apposta perche' si potesse importare.
@@ -446,9 +475,12 @@ def _load_magnify_from_source():
         return _MAGNIFY_NAMESPACE
     except IncompleteNamespace:
         raise
-    except OracleError:
+    except OracleError as exc:
+        # C'e' e non si importa: un guasto da dichiarare, non un motore vecchio.
+        if _modulo_nel_checkout("pge.shared.magnify_spec"):
+            raise _import_rotto(
+                "parse_magnify_spec", "pge.shared.magnify_spec", exc) from exc
         # Il modulo non c'e': motore anteriore a PGE #246. Si prova `pge.cli`.
-        pass
 
     # 2. `pge.cli` importato, coi nomi di prima dello spostamento. Qui un
     #    namespace incompleto NON e' un errore da dichiarare ma la prova che
@@ -582,9 +614,11 @@ def _load_filter_solo_mute():
         return _SOLO_MUTE_FN
     except IncompleteNamespace:
         raise
-    except OracleError:
+    except OracleError as exc:
+        if _modulo_nel_checkout("pge.engine.solo_mute"):
+            raise _import_rotto(
+                "filter_solo_mute", "pge.engine.solo_mute", exc) from exc
         # Il modulo non c'e': motore anteriore a PGE #246, si passa all'AST.
-        pass
 
     import ast
 
