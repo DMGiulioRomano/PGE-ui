@@ -45,10 +45,11 @@ Due dettagli del protocollo che non si indovinano leggendo il codice:
   `{"__float__": "Infinity"}` e `oracle.js` li ridecodifica in numeri veri. Da
   #180 vale anche all'andata: `encodeFloat` etichetta gli argomenti e
   `_from_wire` li toglie, perché `JSON.stringify(Infinity)` è `null` e una
-  domanda su `end_time: .inf` arrivava al motore come `end_time: None`. La prima versione li mandava a
-  `null` "come farebbe `JSON.stringify`": era vero e inutile, perché
-  `JSON.stringify` fa lo stesso di qua e il confronto diventava `null === null`
-  — indistinguibili, non confrontabili. Chi confronta valori dell'oracolo deve
+  domanda su `end_time: .inf` arrivava al motore come `end_time: None`. La
+  prima versione li mandava a `null` "come farebbe `JSON.stringify`": era vero
+  e inutile, perché `JSON.stringify` fa lo stesso di qua e il confronto
+  diventava `null === null` — indistinguibili, non confrontabili. Chi
+  confronta valori dell'oracolo deve
   quindi **non** passare per `JSON.stringify` (vedi `sameValue` in
   `test-magnify-parity.js`).
 - **`ctx.note(label, righe)` non è un assert.** Serve agli elenchi che

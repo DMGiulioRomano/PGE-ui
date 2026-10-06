@@ -1063,16 +1063,24 @@ Three things in it are easy to get wrong, and each has its case:
   `x = 50` it sits inside the last cycle, and with wrap it is `end − 1e-6`.
   `_compactLastTime` computes it from `computeCycleDurations` (whose durations
   the time-distribution parity already pins), only when a later compact needs
-  it. `expandMixed` restarts from `end_time` — the preview is not what decides
-  rejection.
+  it. "A later compact" is asked of the items *after* the dict normalization,
+  as the builder asks it: `{t: pattern, v: end_time, type: n_reps}` normalizes
+  into a compact too, and looking for the last compact among the items as
+  written missed it — the next block restarted from 0, silent where the engine
+  rejects. `expandMixed` restarts from `end_time` — the preview is not what
+  decides rejection.
 - **The int/float blind spot.** For Python `n_reps: 2.0` is a float, hence not
   a compact, hence an error; here `2.0` and `2` are the same Number, and the
   mirror stays silent — the safe direction, like `power.exponent` in
   `timeDistError`. The parity asks it through `raw_json` (below).
 
 Out of scope, and said: what the engine rejects *outside* the builder (an
-unknown per-point or global interp, a dict without `points`, the empty list —
-that one is `wouldEmptyEnv`'s, PGE #209).
+unknown per-point or global interp, a dict without `points` or with a number
+or `null` there, the empty list — that one is `wouldEmptyEnv`'s, PGE #209). A
+string or a mapping under `points` is **not** on that list: the builder
+iterates them (by character, by key), and rejects the first item as an element
+it doesn't recognize — reachable from the Raw tab through
+`deviation_probability`, whose recognition is `'points' in obj`.
 
 It has two readers. The **Raw tab** (`computeAnnotations`) walks the envelopes
 of the stream through the catalog — `listEnvelopes`, the same list the
