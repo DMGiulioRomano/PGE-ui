@@ -796,13 +796,24 @@ def _op_build_time_distribution(args):
         name          il `name` della strategia costruita
         build_error   null, o l'errore del costruttore
         calc_error    null, o l'errore del calcolo (overflow)
+        calc_hint     null, o l'`hint` di quell'errore: la frase che il motore
+                      stampa sotto «Hint:» a render fallito, e quindi quella
+                      che l'utente legge. `_fmt_exc` non la porta — e' lo
+                      `str(exc)`, che per ParameterBoundError e' la sola riga
+                      «Parametro 'x' fuori bounds: v» — e serve a un patto che
+                      senza di lei non si puo' porre: l'avviso dell'editor
+                      (`TIME_DIST_OVERFLOW_WHY`, `TIME_DIST_OVERFLOW_FIX`)
+                      ripete due pezzi di questa frase, ed era una
+                      trascrizione verificata solo contro se stessa. Resta
+                      null dove l'errore non ha hint, cioe' su ogni bound
+                      ordinario del costruttore.
         summary       null, o {n, sum, first, last, min, max}
         durations     presente solo se richiesto e sotto il cap
     """
     td = ENGINE.module("pge.envelopes.time_distribution")
     spec = args.get("spec", None)
     out = {"name": None, "build_error": None, "calc_error": None,
-           "summary": None}
+           "calc_hint": None, "summary": None}
 
     try:
         strategy = td.TimeDistributionFactory.create(spec)
@@ -820,6 +831,11 @@ def _op_build_time_distribution(args):
         starts, durations = strategy.calculate_distribution(total_time, n_reps)
     except Exception as exc:
         out["calc_error"] = _fmt_exc(exc)
+        # `getattr` e non `exc.hint`: l'hint e' di ParameterBoundError, e qui
+        # puo' arrivare qualunque eccezione — un'op che morisse leggendo un
+        # attributo mentre riporta un errore direbbe «oracolo rotto» di un
+        # motore che ha risposto.
+        out["calc_hint"] = getattr(exc, "hint", None)
         return out
 
     out["summary"] = {

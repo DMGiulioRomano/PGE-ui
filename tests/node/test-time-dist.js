@@ -414,6 +414,62 @@ console.log("\n── expandMixed riporta l'errore sul blocco ──");
     /non\s+sono\s+quelle\s+del\s+blocco/.test(warn), warn.slice(0, 200));
   assert("e resta un warn, non un error",
     /--status-warn/.test(warn), warn.slice(0, 200));
+
+  /* L'altro messaggio del pannello, quello di `distError.kind === "overflow"`,
+     e il caso vero di PGE-ui #193: diceva «non sta in un float e il motore
+     rifiuta il blocco», che era l'hint del motore fino a PGE #219/#293. Da
+     allora il motore dice «il risultato non e' un numero finito» — la prima
+     frase era falsa delle somme `nan`, che in un float ci stanno — e questa
+     riga e' rimasta indietro senza che niente parlasse: l'avviso nell'editor
+     e l'errore del render non si riconoscevano piu'.
+     Il presidio e' in due pezzi, e nessuno dei due basta da solo. Quello che
+     la frase sia QUELLA DEL MOTORE lo chiede `test-time-dist-parity.js`
+     all'hint vero, perche' solo il motore puo' risponderne. Qui si chiede
+     l'altra meta', che non ha bisogno del motore: che il pannello la legga
+     dalla costante invece di trascriverla. Una seconda copia nella JSX e'
+     proprio cio' che la parita' non vede — legge la costante — ed e' la forma
+     in cui il difetto si e' presentato la prima volta.
+
+     La finestra e' delimitata dai due rami che la circondano, non da un
+     numero di caratteri: `SG.codeOf` svuota i commenti lasciando gli spazi,
+     e il commento di quel ramo e' lungo quanto il messaggio — con uno slice
+     fisso la finestra conteneva solo spazi, cioe' non accusava niente (e i
+     due assert in negativo passavano per cecita'). Che i due bordi si trovino
+     davvero e' percio' la prima cosa da chiedere. */
+  const dBlock = eeSrc.split("block.distError ?")[1] || "";
+  const rami = dBlock.split('block.distError.kind === "overflow"');
+  assert("il pannello ha un ramo per l'overflow", rami.length === 2,
+    `rami=${rami.length}`);
+  const chiuso = (rami[1] || "").split("il parametro");   // il ramo successivo
+  assert("e il ramo del parametro lo chiude", chiuso.length >= 2,
+    (rami[1] || "").replace(/\s+/g, " ").slice(0, 200));
+  const ovf = chiuso[0];
+  assert("il pannello ha un messaggio per l'overflow",
+    ovf.replace(/\s+/g, "").length > 0);
+  assert("legge la frase del motore dalla costante, non la trascrive",
+    /TIME_DIST_OVERFLOW_WHY/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  assert("e il rimedio dalla propria tabella",
+    /TIME_DIST_OVERFLOW_FIX\[/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  // Le due frasi insieme: la vecchia non deve tornare, ne' come letterale ne'
+  // come seconda copia della nuova. `SG.codeOf` ha gia' tolto i commenti, che
+  // la nominano di proposito — qui si guarda il testo che l'utente legge.
+  assert("non dice piu' «non sta in un float»",
+    !/non\s+sta\s+in\s+un\s+float/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  assert("e non tiene una copia della frase accanto alla costante",
+    !/numero\s+finito/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  // Nessuno dei due colpevoli e' fuori posto da solo: il messaggio li nomina
+  // entrambi, come fa l'hint del motore.
+  assert("nomina il parametro, il suo valore e n_reps",
+    /distError\.param/.test(ovf) && /distError\.value/.test(ovf)
+    && /distError\.nReps/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  assert("e dice che il motore rifiuta il blocco, al contrario del ripiego",
+    /il motore rifiuta il blocco/.test(ovf), ovf.replace(/\s+/g, " ").slice(0, 300));
+  // L'opposto del ripiego, che e' un warn: qui `timeDistError` ha stabilito
+  // che il motore rifiuta, quindi il colore lo dice. Lo stile sta sul `div`
+  // che avvolge i tre rami, cioe' prima del needle: si guarda `dBlock`.
+  assert("ed e' un error, non un warn",
+    /--status-error/.test(dBlock.slice(0, 400)),
+    dBlock.replace(/\s+/g, " ").slice(0, 200));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
