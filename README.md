@@ -20,7 +20,7 @@ The editor itself is a single HTML file plus a handful of `.jsx` / `.css` / `.js
 └── PGE-ui/                      ← this repo
     ├── PGE Editor.html          ← the editor: the bridge serves it and opens it
     ├── server.py                ← local HTTP bridge to the renderer
-    ├── requirements.txt         ← flask + flask-cors
+    ├── requirements.txt         ← the bridge's deps (flask, flask-cors, gunicorn, numpy, soundfile, pyyaml)
     ├── Makefile                 ← convenience targets
     ├── src/lib/                 ← browser-side logic (backend.js, yaml-bridge.js, …)
     ├── src/components/          ← editor UI (app.jsx, TopBar.jsx, … — React + Babel)
