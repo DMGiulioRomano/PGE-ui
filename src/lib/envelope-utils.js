@@ -183,6 +183,16 @@
         // BP group: tronca i punti interni (stessa regola dei BP); se resta
         // un solo punto il gruppo degenera a breakpoint nudo.
         if (prevX >= 1.0) break;
+        // Il gruppo comincia oltre il bordo: il segmento tagliato e' quello che
+        // ENTRA nel gruppo, ed e' del punto prima — il suo interp, non la zona.
+        // Da dentro il gruppo non si vede (li' non c'e' un punto prima), e il
+        // bordo si chiudeva sul primo y del gruppo.
+        const first = PGEEnv.bpAt(item[0][0]);
+        if (first && first[0] > 1.0 && prevY !== null) {
+          result.push(PGEEnv.bpMake(item[0][0], 1.0,
+            close(boundaryY(prevX, prevY, prevInterp, first[0], first[1], 1.0))));
+          break;
+        }
         // Dentro il gruppo il punto di partenza del segmento tagliato e'
         // interno (ne viene un altro dopo), quindi eredita l'interp di zona.
         const inner = truncateEnvArray(item[0], snap, item[1]);
@@ -482,6 +492,15 @@
         // tutto prima del taglio riaprirebbe l'envelope con un [0, y] che non
         // e' il valore al taglio (fra il gruppo e il taglio ci puo' essere un
         // altro breakpoint).
+        // Per la stessa ragione il punto d'apertura, quando il taglio cade sul
+        // segmento che ENTRA nel gruppo, va messo da qui: e' del punto prima
+        // (tag e interp), e da dentro il gruppo non c'e' un punto prima. Senza,
+        // la coda non si riapriva e il motore teneva il primo y del gruppo.
+        const first = PGEEnv.bpAt(item[0][0]);
+        if (!out.length && prevX !== null && first && first[0] > cut) {
+          out.push(PGEEnv.bpMake(item[0][0], 0,
+            close(boundaryY(prevX, prevY, prevEff, first[0], first[1], cut)), prevInterp));
+        }
         const inner = sliceEnvArray(item[0], cut, snap, true, item[1]);
         if (inner === null) return null;
         if (inner.length >= 2) out.push([inner, item[1]]);

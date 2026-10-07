@@ -2667,6 +2667,51 @@ console.log("\n── truncate / slice: l'interp ereditato (dict, gruppo, read_d
     JSON.stringify(altri.panEnv));
 }
 
+/* ── il segmento tagliato puo' ENTRARE in un BP group ────────────────────────
+ * Il bordo cade fra un punto e il PRIMO punto di un gruppo che viene dopo. Il
+ * walk scendeva nel gruppo, e da dentro il segmento tagliato non si vede: il
+ * gruppo non ha un punto prima. Il truncate chiudeva sul primo y del gruppo, lo
+ * slice non riapriva affatto (e il motore, prima del primo punto, tiene quello:
+ * la coda partiva dal valore sbagliato). Il segmento e' del punto prima, e col
+ * suo interp: nudo nel dict, il `type`. */
+console.log("\n── truncate / slice: il segmento che entra in un BP group ──");
+{
+  const G = [[[1.2, 1], [1.5, 2]], "linear"];
+  assert("truncate: il bordo prima del gruppo chiude interpolato verso il suo primo punto",
+    eq(U.truncateEnvArray([[0, 0], G]), [[0, 0], [1, 0.8333]]),
+    JSON.stringify(U.truncateEnvArray([[0, 0], G])));
+  assert("…e nel dict step tiene il punto prima, non il primo y del gruppo",
+    eq(U.truncateEnvArray({ type: "step", points: [[0, 0], G] }), { type: "step", points: [[0, 0], [1, 0]] }),
+    JSON.stringify(U.truncateEnvArray({ type: "step", points: [[0, 0], G] })));
+  assert("…un gruppo che scavalca il bordo resta tagliato da dentro, come prima",
+    eq(U.truncateEnvArray([[0, 0], [[[0.8, 1], [1.5, 2]], "linear"]]),
+       [[0, 0], [[[0.8, 1], [1, 1.2857]], "linear"]]));
+  assert("…un gruppo primo item, tutto oltre il bordo, chiude sul suo primo y (prima non c'e' niente)",
+    eq(U.truncateEnvArray([G, [2, 5]]), [[1, 1]]),
+    JSON.stringify(U.truncateEnvArray([G, [2, 5]])));
+  const S = [[[0.6, 1], [0.8, 2]], "linear"];
+  assert("slice: il taglio prima del gruppo riapre col valore al taglio",
+    eq(U.sliceEnvArray([[0, 0], S], 0.5), [[0, 0.8333], [[[0.2, 1], [0.6, 2]], "linear"]]),
+    JSON.stringify(U.sliceEnvArray([[0, 0], S], 0.5)));
+  assert("…col tag del punto prima, che governa il segmento",
+    eq(U.sliceEnvArray([[0, 0, "cubic"], S], 0.5), [[0, 0.8333, "cubic"], [[[0.2, 1], [0.6, 2]], "linear"]]),
+    JSON.stringify(U.sliceEnvArray([[0, 0, "cubic"], S], 0.5)));
+  assert("…e nel dict step il valore tenuto, senza tag (lo dice il type)",
+    eq(U.sliceEnvArray({ type: "step", points: [[0, 0.3], S] }, 0.5),
+       { type: "step", points: [[0, 0.3], [[[0.2, 1], [0.6, 2]], "linear"]] }),
+    JSON.stringify(U.sliceEnvArray({ type: "step", points: [[0, 0.3], S] }, 0.5)));
+  // Il gruppo di prima e' step, il globale lineare: dal suo ultimo punto il
+  // segmento esce lineare, 2 → 1 fra 0.2 e 0.6, quindi 1.25 al taglio (2 se
+  // valesse ancora la zona).
+  assert("…dopo un altro gruppo il segmento esce col globale, non con la zona di prima",
+    eq(U.sliceEnvArray([[[[0, 0], [0.2, 2]], "step"], S], 0.5),
+       [[0, 1.25], [[[0.2, 1], [0.6, 2]], "linear"]]),
+    JSON.stringify(U.sliceEnvArray([[[[0, 0], [0.2, 2]], "step"], S], 0.5)));
+  assert("…un gruppo primo item dopo il taglio non riceve un punto inventato",
+    eq(U.sliceEnvArray([S, [1, 3]], 0.5), [[[[0.2, 1], [0.6, 2]], "linear"], [1, 3]]),
+    JSON.stringify(U.sliceEnvArray([S, [1, 3]], 0.5)));
+}
+
 console.log("\n── sliceEnvArray ──");
 assert("l'origine si sposta sul taglio, il punto al taglio e' interpolato",
   eq(U.sliceEnvArray([[0, 0], [1, 1]], 0.5), [[0, 0.5], [1, 1]]),

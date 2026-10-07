@@ -165,9 +165,13 @@ assert("truncateEnvArray: gruppo troncato a 2 punti resta gruppo",
   eq(U.truncateEnvArray([[0, 0], [[[0.5, 1], [1.5, 2]], "cubic"]]),
      [[0, 0], [[[0.5, 1], [1, 1.5]], "cubic"]]),
   JSON.stringify(U.truncateEnvArray([[0, 0], [[[0.5, 1], [1.5, 2]], "cubic"]])));
+// Il valore diceva 1, il primo y del gruppo: ma il bordo cade sul segmento che
+// ENTRA nel gruppo, da [0, 0] a [1.2, 1], lineare (l'interp del punto prima,
+// non la zona), e il motore a x=1 suona 0.8333 (test-envelope-cut-parity.js).
+// La forma resta quella: il gruppo non sopravvive, il bordo e' un punto nudo.
 assert("truncateEnvArray: gruppo degenerato a 1 punto → breakpoint nudo",
   eq(U.truncateEnvArray([[0, 0], [[[1.2, 1], [1.5, 2]], "cubic"]]),
-     [[0, 0], [1, 1]]),
+     [[0, 0], [1, 0.8333]]),
   JSON.stringify(U.truncateEnvArray([[0, 0], [[[1.2, 1], [1.5, 2]], "cubic"]])));
 assert("envArrayWouldTruncate vede i punti del gruppo",
   U.envArrayWouldTruncate([ZONE_A], 3) === true &&

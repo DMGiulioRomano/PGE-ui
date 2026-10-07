@@ -16,7 +16,8 @@
  * Nessun valore atteso e' scritto di qua, tranne il presidio: per i corpi a
  * gradino il valore lineare che il taglio scriveva prima deve essere DIVERSO
  * da quello del motore al bordo, o il confronto sarebbe verde anche col
- * difetto rimesso.
+ * difetto rimesso. Lo stesso per il segmento che ENTRA in un BP group, dove il
+ * taglio scriveva (o il motore teneva) il primo y del gruppo.
  *
  * Run: node tests/parity/test-envelope-cut-parity.js
  * =========================================================================== */
@@ -51,8 +52,8 @@ const worst = (a, b) => {
    `{type: step, points: <raw>}`. */
 const asDirection = (raw) => ({ type: "step", points: raw });
 
-/* [etichetta, originale, tagliato, valore lineare che il taglio scriveva
-   prima (null dove non c'era difetto)] */
+/* [etichetta, originale, tagliato, valore che il taglio scriveva prima
+   (null dove non c'era difetto)] */
 const TRUNCATE = [
   ["{type: step}", { type: "step", points: [[0, 0], [0.5, 1], [1.5, 3]] }, null, 2],
   ["{type: step} con un tag linear che vince",
@@ -63,6 +64,13 @@ const TRUNCATE = [
   ["{type: step} dopo un blocco",
     { type: "step", points: [[[[0, 0], [100, 1]], 0.5, 2], [1.5, 3]] }, null, 2],
   ["lista lineare", [[0, 0], [1.5, 3]], null, null],
+  /* Il segmento tagliato ENTRA in un gruppo: il bordo cade fra un punto e il
+     primo punto di un gruppo che sta tutto oltre. Da dentro il gruppo quel
+     segmento non si vedeva, e il bordo si chiudeva sul primo y del gruppo. */
+  ["lista: il bordo cade sul segmento che entra in un gruppo",
+    [[0, 0], [[[1.2, 1], [1.5, 2]], "linear"]], null, 1],
+  ["{type: step}: il segmento che entra in un gruppo tiene il punto prima",
+    { type: "step", points: [[0, 0], [[[1.2, 1], [1.5, 2]], "linear"]] }, null, 1],
 ].map(([label, raw, , lin]) => [label, raw, U.truncateEnvArray(raw), lin]);
 {
   const rd = [[0, 1], [1.1, -1]];
@@ -75,6 +83,12 @@ const SLICE = [
   ["{type: step}", { type: "step", points: [[0, 0.2], [1, 1]] }, 0.6],
   ["BP group step", [[[[0, 1], [0.6, 3], [1, 0]], "step"]], 2.6667],
   ["lista lineare", [[0, 0], [1, 1]], null],
+  /* Lo stesso dal lato della coda: il taglio cade prima di un gruppo, e la coda
+     non si riapriva — il motore tiene il primo punto del gruppo fino a lui. */
+  ["lista: il taglio cade sul segmento che entra in un gruppo",
+    [[0, 0], [[[0.6, 1], [0.8, 2], [1, 0]], "cubic"]], 1],
+  ["{type: step}: il taglio prima di un gruppo riapre sul valore tenuto",
+    { type: "step", points: [[0, 0.3], [[[0.6, 1], [0.8, 2]], "linear"]] }, 1],
 ].map(([label, raw, lin]) => [label, raw, U.sliceEnvArray(raw, CUT), lin]);
 {
   const rd = [[0, -1], [1, 1]];
@@ -99,7 +113,7 @@ parity({
             // Il presidio: il valore che il taglio scriveva prima non e' quello
             // del motore al bordo (l'ultimo punto della griglia, t=1).
             const at1 = orig[i][GRID.length - 1];
-            assert(`${label}: il valore lineare di prima (${lin}) non era quello del motore (${at1})`,
+            assert(`${label}: il valore di prima (${lin}) non era quello del motore (${at1})`,
               Math.abs(at1 - lin) > TOL);
           }
         });
@@ -117,7 +131,7 @@ parity({
           assert(label, w.d <= TOL,
             `scarto ${w.d.toExponential(3)} a x'=${GRID[w.i]}; scritto ${JSON.stringify(t)}`);
           if (lin != null) {
-            assert(`${label}: il valore lineare di prima (${lin}) non era quello del motore (${orig[i][0]})`,
+            assert(`${label}: il valore di prima (${lin}) non era quello del motore (${orig[i][0]})`,
               Math.abs(orig[i][0] - lin) > TOL);
           }
         });

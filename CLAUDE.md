@@ -1816,6 +1816,17 @@ inherited one written on it would fill a dict with exceptions equal to its own
 envelope, evaluated on its grid, against the original at the same absolute
 instants, with a guard that the old linear value was not the engine's.
 
+**The segment being cut can *enter* a BP group**, and from inside the group it
+can't be seen. When the boundary falls between a point and the first point of a
+group that lies wholly past it, the walk used to descend into the group, where
+there is no previous point: the truncate closed on the group's first `y`, and
+the slice didn't reopen at all — so the engine held that first `y` back to the
+cut. The segment belongs to the point before it (its tag, or what it inherits),
+so both functions now place the computed point from outside, before descending
+into the group; a group that is the first item still gets none, since before
+its first point the engine holds that point anyway. The same parity suite has
+the two cases.
+
 `sliceStreamEnvelopes` / `sliceEnvArray` in `envelope-utils.js` (node-tested)
 are the tail's half of the freeze math: `x' = (x - cut) / (1 - cut)`, with an
 interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
