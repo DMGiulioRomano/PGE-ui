@@ -777,6 +777,20 @@ says they are equal, and in JS `4` and `4.0` are the same number — so the
 comparison lives in the bridge, between two YAML parses, where the types are
 the ones that were written.
 
+**One observable consequence of step 1, and it is the intended one:
+`# saved:` stops being refreshed on a write that changes nothing.**
+`serialize()` prepends `# project:` / `# saved: <ISO>` / `# editor:`, so every
+save and every render used to produce different bytes even for an unchanged
+document — which is precisely the noise that made the lab's guard shout. Now a
+save whose *document* is already on disk writes nothing and says so ("era gia'
+questo documento"), and the timestamp stays as it was. Nothing else is
+comment-only: `title`, `bpm`, `seed`, `duration` and the streams are all in the
+payload, and `project` tracks the filename rather than editable state, so step
+1 can only ever suppress a write whose sole difference is the header timestamp
+or someone else's formatting. Key order included: `same_document` compares dict
+keys as a set, so a hand-reordered file that parses the same is left alone —
+which is the same rule, not an extra one.
+
 **Two cases that are not a changed file**, and neither is a shortcut:
 
 | case | why it isn't |
