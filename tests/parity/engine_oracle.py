@@ -283,6 +283,7 @@ _OP_REQUIRES = {
     "constants": "pge.rendering.stream_cache_manager",
     "build_envelope": "pge.envelopes.envelope",
     "evaluate_envelope": "pge.envelopes.envelope",
+    "resolve_stream_files": "pge.engine.stream_files",
 }
 
 
@@ -341,6 +342,65 @@ def _op_fingerprint(args):
         return {"hex": mgr.compute_fingerprint(stream), "semantics": semantics}
     finally:
         scm.VARIATION_SEMANTICS_VERSION = previous
+
+
+# =============================================================================
+# OP — resolve_stream_files
+# =============================================================================
+
+@op("resolve_stream_files")
+def _op_resolve_stream_files(args):
+    """Le voci `file:` di un master risolte dal motore (PGE #290, PGE-ui #183).
+
+    E' `pge.engine.stream_files.resolve_stream_files`, importato — il modulo
+    non tira dentro numpy — seguito da `origins_by_id` per la regola 7 (gli
+    id duplicati), come fa `Generator.load_yaml`. Fra i due il motore valuta
+    le espressioni matematiche; qui no, ed e' dichiarato: i corpus della
+    parita' non ne contengono, e il math eval vive in `generator.py`.
+
+    args:
+        master       il documento del master, come lo da' `yaml.safe_load`
+        master_path  opzionale, il path del master: le voci `file:` sono
+                     relative alla sua cartella (default "configs/master.yml")
+        files        per ogni valore di `file:` COME E' SCRITTO nel master, il
+                     documento importato gia' parsato. Un valore assente dalla
+                     mappa e' un file che non c'e'.
+
+    La lettura e' l'unica parte non del motore: e' un parametro di
+    `resolve_stream_files` apposta (il Generator gli passa il proprio
+    `_read_document`), e qui legge dalla mappa invece che dal disco. Un file
+    mancante alza il `ConfigFileNotFoundError` del motore, cioe' cio' che
+    alzerebbe la lettura vera.
+
+    Returns:
+        {"streams": [...], "imported": [{"index", "file"}]} — la lista
+        `streams:` risolta e le voci importate, in ordine di master. Un errore
+        arriva come `Classe: messaggio` della classe del motore.
+    """
+    sf = ENGINE.module("pge.engine.stream_files")
+    exc = ENGINE.module("pge.shared.exceptions")
+    master = args.get("master")
+    master_path = args.get("master_path") or os.path.join("configs", "master.yml")
+    files = args.get("files") or {}
+    if not isinstance(files, dict):
+        raise OracleError("resolve_stream_files: 'files' deve essere un oggetto")
+    cartella = os.path.dirname(master_path)
+    by_path = {os.path.normpath(os.path.join(cartella, k)): v for k, v in files.items()}
+
+    def read(path):
+        key = os.path.normpath(path)
+        if key not in by_path:
+            raise exc.ConfigFileNotFoundError(path)
+        return by_path[key]
+
+    data, importati = sf.resolve_stream_files(master, master_path, read)
+    streams = data.get("streams") if isinstance(data, dict) else None
+    if importati and isinstance(streams, list):
+        sf.origins_by_id(master_path, streams, importati)
+    return {
+        "streams": streams,
+        "imported": [{"index": i.origin.index, "file": i.origin.file} for i in importati],
+    }
 
 
 # =============================================================================

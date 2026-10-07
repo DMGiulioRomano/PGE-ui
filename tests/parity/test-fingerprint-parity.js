@@ -115,6 +115,37 @@ function yamlDict(stream) {
   return window.jsyaml.load(serializeStream(stream));
 }
 
+/* ---------- lo stream come file (#183) ----------
+ * Un master con voci `file:` risolto dai due lati: dal motore con
+ * `resolve_stream_files` (l'op dell'oracolo lo importa), dalla UI con
+ * `PGEYaml.parse(..., {imports})`. I file importati sono dati come documenti;
+ * la UI li riceve come testo, come dal bridge. Nessuna regola di risoluzione
+ * e' scritta qui: il lato «scritto nel master» e' lo stream che il MOTORE ha
+ * risolto, rimesso inline e riletto dalla UI. */
+const MASTER_PATH = "configs/brano.yml";
+function uiResolve(master, files) {
+  const imports = {};
+  for (const [file, doc] of Object.entries(files)) {
+    imports[file] = { ok: true, text: window.jsyaml.dump(doc) };
+  }
+  return window.PGEYaml.parse(window.jsyaml.dump(master),
+    { project: "brano", master: "brano.yml", samples: [], imports });
+}
+function engineResolve(ask, master, files) {
+  return ask("resolve_stream_files", { master, master_path: MASTER_PATH, files });
+}
+// Lo stream della UI senza cio' che non e' contenuto: la provenienza e il
+// colore (che indicizza la posizione, ed e' fuori da entrambi gli hash).
+function uiContent(s) {
+  const { imported, color, ...rest } = s;
+  return rest;
+}
+const RISACCA_DOC = () => ({
+  seed: 1441, duration: 30, bpm: 60,
+  streams: [{ stream_id: "stream1", onset: 0, duration: 30, sample: "mare.wav",
+              density: 40, grain: { duration: 0.05 } }],
+});
+
 parity({
   suite: "fingerprint",
   why: "backend.fingerprintStream (FNV-1a, stato camelCase)  ↔  StreamCacheManager.compute_fingerprint (SHA-256, dict YAML)",
@@ -610,6 +641,183 @@ parity({
           }
         });
         assert(`stessi stream costruiti su ${sets.length} combinazioni`,
+          bad.length === 0, bad.join("\n      "));
+      },
+    },
+    {
+      /* Lo stream come file (#183): le regole di risoluzione della UI sono
+       * quelle del motore. Per ogni master del corpus, il motore risolve
+       * (`resolve_stream_files` + la regola 7) oppure rifiuta; la UI deve
+       * dire la stessa cosa — risolta, oppure una voce irrisolta — e, quando
+       * risolve, produrre gli stessi stream che il motore ha risolto, riletti
+       * come se fossero scritti nel master. Cosi' la regola non e' ricopiata
+       * qui: il «come dovrebbe venire» lo dice il motore, caso per caso. */
+      label: "stream come file: la UI risolve come il motore",
+      run: async (ask, assert) => {
+        const R = RISACCA_DOC;
+        const corpus = [
+          { label: "piazzamento dal master, stream_id dal nome del file",
+            master: { seed: 1441, streams: [{ file: "streams/risacca.yml", onset: 12.5, mute: true }] },
+            files: { "streams/risacca.yml": R() } },
+          { label: "onset assente, stream_id scritto",
+            master: { streams: [{ file: "streams/risacca.yml", stream_id: "onda" }] },
+            files: { "streams/risacca.yml": R() } },
+          { label: "stream_id: null vale come assente",
+            master: { streams: [{ file: "a.b.yml", stream_id: null, solo: true }] },
+            files: { "a.b.yml": R() } },
+          { label: "lo stream del file senza duration: vale quella dello stream, non quella top-level",
+            master: { streams: [{ file: "s.yml", onset: 1 }] },
+            files: { "s.yml": { duration: 99, streams: [{ stream_id: "x", duration: 4, sample: "a.wav" }] } } },
+          { label: "importati e scritti, mescolati",
+            master: { streams: [
+              { stream_id: "stream2", onset: 0, duration: 10, sample: "pino.wav", density: 20 },
+              { file: "streams/risacca.yml", onset: 3 },
+              { file: "streams/risacca.yml", stream_id: "risacca2", onset: 9 },
+            ] },
+            files: { "streams/risacca.yml": R() } },
+          // --- rifiuti -------------------------------------------------------
+          { label: "chiave non di piazzamento accanto a file:",
+            master: { streams: [{ file: "streams/risacca.yml", density: 80 }] },
+            files: { "streams/risacca.yml": R() } },
+          { label: "file mancante",
+            master: { streams: [{ file: "streams/manca.yml" }] }, files: {} },
+          { label: "due stream nel file",
+            master: { streams: [{ file: "due.yml" }] },
+            files: { "due.yml": { streams: [{ stream_id: "a", sample: "a.wav" }, { stream_id: "b", sample: "b.wav" }] } } },
+          { label: "nessuno stream nel file",
+            master: { streams: [{ file: "vuoto.yml" }] }, files: { "vuoto.yml": { seed: 3 } } },
+          { label: "una voce che non e' uno stream",
+            master: { streams: [{ file: "s.yml" }] }, files: { "s.yml": { streams: [3] } } },
+          { label: "catena",
+            master: { streams: [{ file: "c.yml" }] }, files: { "c.yml": { streams: [{ file: "altro.yml" }] } } },
+          { label: "file: che non e' un path",
+            master: { streams: [{ file: 3 }] }, files: {} },
+          { label: "stesso file due volte senza stream_id",
+            master: { streams: [{ file: "streams/risacca.yml" }, { file: "streams/risacca.yml", onset: 2 }] },
+            files: { "streams/risacca.yml": R() } },
+          { label: "id importato uguale a quello di uno stream scritto",
+            master: { streams: [{ stream_id: "risacca", duration: 2, sample: "a.wav" },
+                                { file: "streams/risacca.yml" }] },
+            files: { "streams/risacca.yml": R() } },
+        ];
+        const answers = await ask(corpus.map(c => ({
+          op: "resolve_stream_files", args: { master: c.master, master_path: MASTER_PATH, files: c.files } })));
+
+        const bad = [];
+        corpus.forEach((c, i) => {
+          const a = answers[i];
+          const ui = uiResolve(c.master, c.files);
+          const uiFailed = !!(ui.unresolvedImports && ui.unresolvedImports.length);
+          // Il motore rifiuta con un errore della sua famiglia: un'altra
+          // eccezione sarebbe un guasto dell'oracolo, non un verdetto.
+          const engFailed = !a.ok;
+          if (engFailed && !/^(StreamFile\w*Error|ConfigFileNotFoundError|InvalidFieldValueError):/.test(a.error)) {
+            bad.push(`${c.label}: il motore ha risposto con un errore inatteso — ${a.error}`);
+            return;
+          }
+          if (uiFailed !== engFailed) {
+            bad.push(`${c.label}: motore ${engFailed ? "rifiuta (" + a.error + ")" : "risolve"}, ` +
+              `UI ${uiFailed ? "rifiuta (" + ui.unresolvedImports[0].error + ")" : "risolve"}`);
+            return;
+          }
+          if (engFailed) return;
+          // Lo stesso stream, scritto nel master: cio' che il motore ha
+          // risolto, riletto dalla UI come voci normali.
+          const inline = window.PGEYaml.parse(window.jsyaml.dump({ streams: a.value.streams }), { samples: [] });
+          const got = ui.streams.map(uiContent), want = inline.streams.map(uiContent);
+          if (JSON.stringify(got) !== JSON.stringify(want)) {
+            bad.push(`${c.label}: stream diversi\n        UI     ${JSON.stringify(got)}\n        motore ${JSON.stringify(want)}`);
+            return;
+          }
+          ui.streams.forEach((s, k) => {
+            if (fingerprintStream(s, "wav") !== fingerprintStream(inline.streams[k], "wav")) {
+              bad.push(`${c.label}: ${s.id} importato e scritto hanno due hash della UI`);
+            }
+          });
+        });
+        assert(`${corpus.length} master: stesso verdetto, stessi stream`, bad.length === 0,
+          bad.join("\n      "));
+      },
+    },
+    {
+      /* Lo stesso stream, importato o scritto nel master, ha lo stesso hash
+       * da tutti e due i lati: il motore lo calcola sullo stream gia' risolto,
+       * quindi spostare uno stream dal master a un file non lo marca dirty —
+       * e la UI non deve marcarlo stale. «Scritto nel master» e' cio' che la
+       * UI scriverebbe (`serializeStream` dello stream che ha risolto). */
+      label: "stream come file: importato o scritto nel master, stesso hash",
+      run: async (ask, assert) => {
+        const master = { seed: 1441, streams: [{ file: "streams/risacca.yml", onset: 12.5 }] };
+        const files = { "streams/risacca.yml": RISACCA_DOC() };
+        const a = await engineResolve(ask, master, files);
+        if (!a.ok) throw new Error(`oracolo: ${a.error}`);
+        const imp = uiResolve(master, files).streams[0];
+        const written = yamlDict(imp);
+        const [fe, fw] = await ask([
+          { op: "fingerprint", args: { stream: a.value.streams[0] } },
+          { op: "fingerprint", args: { stream: written } },
+        ]);
+        if (!fe.ok || !fw.ok) throw new Error(fe.error || fw.error);
+        assert("motore: lo stream importato e lo stesso scritto nel master hanno lo stesso hash",
+          fe.value.hex === fw.value.hex, `${fe.value.hex} vs ${fw.value.hex}\n      ` +
+          `importato ${JSON.stringify(a.value.streams[0])}\n      scritto   ${JSON.stringify(written)}`);
+        const inl = window.PGEYaml.parse(window.jsyaml.dump({ streams: [written] }), { samples: [] }).streams[0];
+        assert("UI: idem", fingerprintStream(imp, "wav") === fingerprintStream(inl, "wav"));
+      },
+    },
+    {
+      /* La derivata, per uno stream importato: quali modifiche — al file, al
+       * master, al path — muovono i due hash. Il motore hasha lo stream che
+       * ha risolto lui; la UI quello che ha risolto lei. Le chiavi del file
+       * che il motore ignora (il suo stream_id, il suo onset, i top-level) non
+       * devono muovere niente, e il path di `file:` nemmeno, finche' non
+       * cambia l'id. La sola divergenza e' quella di sempre: `onset`. */
+      label: "stream come file: stessa derivata nei due hash",
+      run: async (ask, assert) => {
+        const F = "streams/risacca.yml";
+        const base = () => ({ master: { seed: 1441, streams: [{ file: F, onset: 12.5 }] },
+                              files: { [F]: RISACCA_DOC() } });
+        const st = (c) => c.files[F].streams[0];
+        const muts = [
+          { label: "density nel file", side: "both", mut: c => { st(c).density = 41; } },
+          { label: "sample nel file", side: "both", mut: c => { st(c).sample = "onda.wav"; } },
+          { label: "grain.duration nel file", side: "both", mut: c => { st(c).grain.duration = 0.1; } },
+          { label: "duration dello stream nel file", side: "both", mut: c => { st(c).duration = 20; } },
+          { label: "stream_id nel file (ignorato)", side: "neither", mut: c => { st(c).stream_id = "altro"; } },
+          { label: "onset nel file (ignorato)", side: "neither", mut: c => { st(c).onset = 7; } },
+          { label: "mute nel file (ignorato)", side: "neither", mut: c => { st(c).mute = true; } },
+          { label: "seed, duration, bpm top-level del file (ignorati)", side: "neither",
+            mut: c => { c.files[F].seed = 7; c.files[F].duration = 99; c.files[F].bpm = 90; } },
+          { label: "mute nel master", side: "neither", mut: c => { c.master.streams[0].mute = true; } },
+          { label: "stream_id scritto nel master", side: "both",
+            mut: c => { c.master.streams[0].stream_id = "onda"; } },
+          { label: "stesso nome del file, altra cartella", side: "neither",
+            mut: c => { c.files = { "altrove/risacca.yml": c.files[F] }; c.master.streams[0].file = "altrove/risacca.yml"; } },
+          { label: "altro nome del file (cambia l'id di default)", side: "both",
+            mut: c => { c.files = { "onda.yml": c.files[F] }; c.master.streams[0].file = "onda.yml"; } },
+          { label: "onset nel master", side: "engineOnly",
+            why: "la divergenza dichiarata di sempre: spostare una clip non cambia lo stem" ,
+            mut: c => { c.master.streams[0].onset = 3; } },
+        ];
+        const cases = [base()].concat(muts.map(m => { const c = base(); m.mut(c); return c; }));
+        const resolved = await ask(cases.map(c => ({ op: "resolve_stream_files",
+          args: { master: c.master, master_path: MASTER_PATH, files: c.files } })));
+        for (const r of resolved) if (!r.ok) throw new Error(`oracolo: ${r.error}`);
+        const fps = await ask(resolved.map(r => ({ op: "fingerprint", args: { stream: r.value.streams[0] } })));
+        for (const r of fps) if (!r.ok) throw new Error(`oracolo: ${r.error}`);
+        const ui = cases.map(c => fingerprintStream(uiResolve(c.master, c.files).streams[0], "wav"));
+
+        const bad = [];
+        muts.forEach((m, i) => {
+          const uiMoved = ui[i + 1] !== ui[0];
+          const engMoved = fps[i + 1].value.hex !== fps[0].value.hex;
+          const exp = { both: [true, true], neither: [false, false],
+                        engineOnly: [false, true], uiOnly: [true, false] }[m.side];
+          if (uiMoved !== exp[0] || engMoved !== exp[1]) {
+            bad.push(`${m.label}: atteso ui=${exp[0]}/motore=${exp[1]}, ottenuto ui=${uiMoved}/motore=${engMoved}`);
+          }
+        });
+        assert(`${muts.length} modifiche a uno stream importato, stesso verdetto sui due lati`,
           bad.length === 0, bad.join("\n      "));
       },
     },
