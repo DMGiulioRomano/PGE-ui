@@ -38,6 +38,7 @@ cautela di quanta ne richieda un repo con un boot verificato.
 | `browser.js` | la politica di rete: cosa la pagina puo' ottenere, e da dove. Piu' `verifyVendor()`, che confronta i byte serviti con l'`integrity` dell'HTML. |
 | `test-boot.js` | la suite. Verdetto in un handler `exit`, come tutte (`tests/node/test-suite-harness.js` lo verifica anche per questo file). |
 | `fixtures/PGE_smoke.yml` | il progetto che l'editor apre. Versionato qui: il test non dipende dal checkout del motore. |
+| `fixtures/PGE_smoke_file.yml` + `fixtures/streams/onda.yml` | un master che importa uno stream con `file:` (#183, #184). La suite lo apre dal browser dei progetti, salva senza toccare niente, poi modifica durata e onset e annulla, e legge ogni volta dal bridge cosa e' finito in quale file. |
 
 ## Decisioni deliberate
 

@@ -388,6 +388,130 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     assert("redo la rimanda avanti", redone === moved,
       `atteso ${moved}, letto ${redone}`);
 
+    /* ============================================================
+     * 5 — lo stream come file (#183, #184)
+     * ============================================================ */
+    console.log("\n── stream come file: master e file importato ──");
+
+    /* Un master con `- file: streams/onda.yml` (fixtures/PGE_smoke_file.yml).
+     * Il node copre le regole una per una (tests/node/test-stream-files.js);
+     * qui si guarda la strada intera, che in node non gira: il browser dei
+     * progetti, GET /import, Ctrl+S, POST /save, il ref del disco fuori dalla
+     * storia. Cio' che e' finito dove lo si chiede al bridge, cioe' al disco:
+     * GET /import per il file, GET /file per il master. */
+    const FILE = "streams/onda.yml";
+    const MASTER = "PGE_smoke_file.yml";
+    const importText = () => page.evaluate(async (f) => {
+      const r = await fetch(`/import?file=${encodeURIComponent(f)}`);
+      const j = await r.json();
+      return j && j.ok ? j.text : null;
+    }, FILE);
+    const masterText = () => page.evaluate(async (n) => {
+      const r = await fetch(`/file?kind=projects&name=${encodeURIComponent(n)}`);
+      return r.ok ? r.text() : null;
+    }, MASTER);
+    const yamlOf = (t) => page.evaluate((x) => window.jsyaml.load(x), t);
+    // Il salvataggio rigenera l'intestazione (`# saved:` porta l'ora), e i
+    // commenti della fixture non sopravvivono: il confronto e' sul resto.
+    const bodyOf = (t) => (t || "").split("\n").filter(l => !l.startsWith("#")).join("\n").trim();
+    const save = async () => { await page.keyboard.press("Control+s"); await wait(700); };
+
+    const file0 = await importText();
+    const master0 = await masterText();
+    assert("il bridge serve il file importato (GET /import)", typeof file0 === "string" && /stream_id: onda/.test(file0),
+      String(file0).slice(0, 120));
+
+    await page.click(".bw-tabs button:nth-child(2)");
+    const picked = await page.evaluate((n) => {
+      const it = [...document.querySelectorAll(".pge-browser .it.proj")]
+        .find(e => (e.querySelector(".nm") || {}).textContent === n);
+      if (it) it.click();
+      return !!it;
+    }, MASTER);
+    assert("il master compare fra i progetti, il file importato no",
+      picked && !(await page.evaluate(() =>
+        [...document.querySelectorAll(".pge-browser .it.proj .nm")].some(e => /onda/.test(e.textContent)))));
+    let opened2 = true;
+    try { await page.waitForSelector(".lane .clip .clip-file", { timeout: 10000 }); }
+    catch { opened2 = false; }
+    assert("lo stream importato e' in timeline, col nome del suo file", opened2);
+    const clips2 = await page.evaluate(() =>
+      [...document.querySelectorAll(".lane .clip .lbl")].map(e => e.textContent.trim()));
+    assert("due stream: l'importato (id = nome del file) e quello scritto dentro",
+      clips2.length === 2 && clips2.some(t => /^onda · streams\/onda\.yml/.test(t))
+        && clips2.some(t => /^riva /.test(t)), JSON.stringify(clips2));
+    const errToast = await page.evaluate(() =>
+      [...document.querySelectorAll(".pge-toast")].some(t => /stream importati/.test(t.textContent)));
+    assert("nessun errore sugli import", !errToast);
+
+    // Selezionare la clip importata e' anche cio' che toglie il fuoco a un
+    // campo dell'Inspector: con il fuoco in un input Ctrl+S non e' un
+    // salvataggio (app.jsx lascia la tastiera a chi scrive).
+    const importedClip = async () => {
+      await page.click(".lane .clip:has(.clip-file)");
+      await wait(200);
+    };
+    await importedClip();
+    // `i` apre e chiude: la sezione 3 l'ha gia' aperto, e cambiare progetto
+    // non lo richiude.
+    if (!(await page.$(".pge-inspector"))) await page.keyboard.press("i");
+    await wait(400);
+    const fileRow = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+        .find(p => (p.querySelector(".k") || {}).textContent === "file");
+      return r ? (r.querySelector(".v") || {}).textContent : null;
+    });
+    assert("l'Inspector dice da quale file viene lo stream", fileRow === FILE, JSON.stringify(fileRow));
+
+    // 1 — aprire e salvare senza toccare niente.
+    await importedClip();
+    await save();
+    const file1 = await importText(), master1 = await masterText();
+    assert("salvato senza modifiche, il file importato e' intatto, byte per byte",
+      file1 === file0, file1 === file0 ? "" : file1);
+    assert("...e il master torna identico, a parte l'intestazione",
+      bodyOf(master1) === bodyOf(master0), master1);
+
+    // 2 — una chiave di stream (la durata, Ctrl+⇧→ = +1 s): nel file.
+    const dur0 = (await yamlOf(file0)).streams[0].duration;
+    await importedClip();
+    await page.keyboard.press("Control+Shift+ArrowRight");
+    await wait(300);
+    await save();
+    const file2 = await importText(), master2 = await masterText();
+    const doc2 = await yamlOf(file2);
+    assert("la durata finisce nel file importato", doc2.streams[0].duration === dur0 + 1,
+      `${dur0} → ${doc2.streams[0].duration}`);
+    assert("...che resta un documento del laboratorio: seed, stream_id e onset del file",
+      doc2.seed === 1441 && doc2.streams[0].stream_id === "onda" && doc2.streams[0].onset === 0,
+      JSON.stringify([doc2.seed, doc2.streams[0].stream_id, doc2.streams[0].onset]));
+    const entry2 = (await yamlOf(master2)).streams[0];
+    assert("...e la voce del master non cambia", JSON.stringify(entry2) === JSON.stringify({ file: FILE, onset: 1 }),
+      JSON.stringify(entry2));
+
+    // 3 — una chiave di piazzamento (l'onset, ⇧→ = +1 s): nel master.
+    await importedClip();
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(300);
+    await save();
+    const file3 = await importText(), master3 = await masterText();
+    assert("l'onset finisce nel master", (await yamlOf(master3)).streams[0].onset === 2,
+      JSON.stringify((await yamlOf(master3)).streams[0]));
+    assert("...e il file importato non si tocca", file3 === file2);
+
+    // 4 — undo di entrambe, poi un salvataggio: il disco torna com'era.
+    await page.keyboard.press("Control+z");
+    await wait(300);
+    await page.keyboard.press("Control+z");
+    await wait(300);
+    await save();
+    const file4 = await importText(), master4 = await masterText();
+    assert("dopo l'undo il file importato torna com'era (riscritto, perche' su disco era cambiato)",
+      JSON.stringify(await yamlOf(file4)) === JSON.stringify(await yamlOf(file0)), file4);
+    assert("...e la voce del master pure",
+      JSON.stringify((await yamlOf(master4)).streams[0]) === JSON.stringify({ file: FILE, onset: 1 }),
+      JSON.stringify((await yamlOf(master4)).streams[0]));
+
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni
      * (un handler che esplode al primo click) e' esattamente quello che una
      * verifica fatta solo al boot non vedrebbe. */

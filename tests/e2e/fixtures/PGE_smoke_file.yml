@@ -1,0 +1,38 @@
+# Master di prova dello stream come file (#183, #184).
+#
+# Il primo stream e' importato: `streams/onda.yml` e' un documento del
+# laboratorio (seed dello studio, stream_id = nome del file, onset 0), e qui il
+# master ne decide solo il piazzamento. Il secondo e' scritto dentro, per
+# vedere che i due convivono.
+#
+# Il corpo e' scritto nella forma in cui il bridge lo riscrive (chiavi, ordine,
+# `duration` derivata dagli stream): cosi' test-boot.js puo' pretendere che
+# aprire e salvare senza toccare niente lo lasci identico, a parte queste righe
+# di commento e l'intestazione `# saved:` che il salvataggio rigenera.
+# `smoke.wav` non esiste, come per PGE_smoke.yml.
+
+title: smoke-file
+duration: 17
+bpm: 120
+seed: 1441
+streams:
+  - file: streams/onda.yml
+    onset: 1
+  - stream_id: riva
+    onset: 4
+    duration: 3
+    sample: smoke.wav
+    time_mode: normalized
+    density: 12
+    distribution: 0
+    grain:
+      duration: 0.05
+      envelope: hanning
+    pointer:
+      start: 0
+      speed_ratio: 1
+      loop_unit: normalized
+    pitch:
+      semitones: 0
+    pan: 0
+    volume: -6
