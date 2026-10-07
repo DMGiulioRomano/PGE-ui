@@ -24,6 +24,11 @@
  *                           una cornice vuota
  *   4. undo/redo          — un gesto, un passo indietro, un passo avanti, e
  *                           lo stato torna dov'era
+ *   5. stream come file   — un master con `file:` (#183), aperto dal browser
+ *                           dei progetti: lo stream importato in timeline e
+ *                           riconoscibile, la voce rotta nominata senza crash,
+ *                           il contenuto in sola lettura, e il salvataggio
+ *                           che riscrive le voci `file:` senza toccare il file
  *
  * Gli assert parlano di struttura (quanti breakpoint, quale stream, che
  * numero legge la riga `onset`), non di geometria: un assert sul pixel
@@ -387,6 +392,135 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     const redone = await onsetOf();
     assert("redo la rimanda avanti", redone === moved,
       `atteso ${moved}, letto ${redone}`);
+
+    /* ============================================================
+     * 5 — lo stream come file (#183)
+     * ============================================================ */
+    console.log("\n── stream come file: un master che importa ──");
+
+    /* Il gesto vero: il browser dei progetti, poi il master. Il bridge legge
+     * configs/streams/risacca.yml con GET /import, il parse risolve la voce;
+     * la seconda voce punta a un file che non c'e', e l'editor deve aprire il
+     * progetto lo stesso, nominandolo. */
+    await page.click(".pge-browser .bw-tabs button:nth-child(2)");
+    await page.waitForSelector(".pge-browser .it.proj");
+    const picked = await page.evaluate(() => {
+      const it = [...document.querySelectorAll(".pge-browser .it.proj")]
+        .find(e => (e.querySelector(".nm") || {}).textContent === "PGE_smoke_file.yml");
+      if (it) it.click();
+      return !!it;
+    });
+    assert("il master con file: e' nell'elenco dei progetti", picked);
+    let imported = true;
+    try { await page.waitForSelector(".lane .clip.imported", { timeout: 10000 }); }
+    catch { imported = false; }
+    assert("lo stream importato arriva in timeline", imported);
+    await wait(500);
+
+    const fshape = await page.evaluate(() => ({
+      clips: [...document.querySelectorAll(".lane .clip")].map(c => ({
+        id: ((c.querySelector(".lbl") || {}).textContent || "").split(" ")[0],
+        imported: c.classList.contains("imported"),
+        file: (c.querySelector(".clip-file") || {}).textContent || "",
+        handle: !!c.querySelector(".resize-handle"),
+      })),
+      projects: [...document.querySelectorAll(".pge-browser .it.proj .nm")].map(e => e.textContent),
+      toasts: [...document.querySelectorAll(".pge-toast")].map(t => t.textContent),
+    }));
+    assert("una clip sola: la voce rotta non si disegna",
+      fshape.clips.length === 1, JSON.stringify(fshape.clips));
+    const fc = fshape.clips[0] || {};
+    assert("lo stream si chiama come il file, non come lo stream1 del file",
+      fc.id === "risacca", JSON.stringify(fc));
+    assert("la clip si riconosce come importata e nomina il file",
+      fc.imported && /file: streams\/risacca\.yml/.test(fc.file), JSON.stringify(fc));
+    assert("senza maniglia di resize: la durata sta nel file", fc.handle === false,
+      JSON.stringify(fc));
+    assert("il file mancante e' nominato, e l'editor e' vivo",
+      fshape.toasts.some(t => /streams\/manca\.yml/.test(t)), JSON.stringify(fshape.toasts));
+    assert("i file importati non sono progetti",
+      !fshape.projects.some(n => /risacca/.test(n)), JSON.stringify(fshape.projects));
+
+    await page.click(".lane .clip.imported");
+    await wait(300);
+    const finsp = await page.evaluate(() => {
+      const el = document.querySelector(".pge-inspector");
+      if (!el) return null;
+      const row = (name) => {
+        const r = [...el.querySelectorAll(".pge-prow")]
+          .find(p => (p.querySelector(".k") || {}).textContent === name);
+        return r ? (r.querySelector(".v") || {}).textContent : null;
+      };
+      return { note: (el.querySelector(".pge-import-note") || {}).textContent || "",
+               onset: row("onset"), density: !!row("density") };
+    });
+    assert("l'Inspector dice da dove viene lo stream",
+      finsp && /configs\/streams\/risacca\.yml/.test(finsp.note), JSON.stringify(finsp));
+    assert("l'onset e' quello del master (2), non quello del file (0)",
+      finsp && /^2\s*s?$/.test((finsp.onset || "").trim()), JSON.stringify(finsp));
+
+    /* Il piazzamento si sposta: ⇧→ muove la clip, e undo la riporta. */
+    const fBefore = await page.evaluate(() => document.querySelector(".lane .clip.imported").style.left);
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(300);
+    const fMoved = await page.evaluate(() => document.querySelector(".lane .clip.imported").style.left);
+    assert("l'onset di uno stream importato si sposta (sta nel master)",
+      fMoved !== fBefore, `${fBefore} → ${fMoved}`);
+    await page.keyboard.press("Control+z");
+    await wait(300);
+
+    /* Un duplicato e' un file nuovo (#186): qui si rifiuta, con un avviso
+     * che nomina il file, e la timeline resta com'era. */
+    await page.click(".lane .clip.imported");
+    await page.keyboard.press("Control+c");
+    await page.keyboard.press("Control+v");
+    await wait(400);
+    const afterPaste = await page.evaluate(() => ({
+      clips: document.querySelectorAll(".lane .clip").length,
+      warned: [...document.querySelectorAll(".pge-toast")]
+        .some(t => /importato da streams\/risacca\.yml/.test(t.textContent)),
+    }));
+    assert("incollare uno stream importato si rifiuta, nominando il file",
+      afterPaste.clips === 1 && afterPaste.warned, JSON.stringify(afterPaste));
+
+    /* Il tab Raw lo mostra, risolto, e non lo apre in scrittura. */
+    const raw = await page.evaluate(() => {
+      const b = [...document.querySelectorAll(".pge-inspector .pge-seg button")]
+        .find(x => x.textContent.trim() === "Raw");
+      if (b) b.click();
+      return !!b;
+    });
+    await wait(300);
+    const rawState = await page.evaluate(() => {
+      const y = document.querySelector(".pge-yaml");
+      if (!y) return null;
+      return { text: y.textContent, edit: [...y.querySelectorAll(".yaml-btn")]
+        .some(b => /edit/.test(b.textContent)) };
+    });
+    assert("il tab Raw mostra lo stream del file, in sola lettura",
+      raw && rawState && /sample: smoke\.wav/.test(rawState.text) &&
+      /sola lettura/.test(rawState.text) && !rawState.edit, JSON.stringify(rawState && { edit: rawState.edit }));
+
+    /* Salvare non incorpora niente: il master riscrive le due voci `file:`
+     * col loro piazzamento — quella rotta compresa, com'era — e il file
+     * importato non si tocca. Letti dal bridge, come li leggerebbe il motore. */
+    await page.click(".lane .clip.imported");
+    await page.keyboard.press("Control+s");
+    await wait(600);
+    const bridge = `http://127.0.0.1:${session.port}`;
+    const savedText = await (await fetch(`${bridge}/file?kind=projects&name=PGE_smoke_file.yml`)).text();
+    const yaml = require("js-yaml");
+    const saved = yaml.load(savedText) || {};
+    assert("salvato: il master ha le due voci file:, col loro piazzamento",
+      JSON.stringify(saved.streams) === JSON.stringify([
+        { file: "streams/risacca.yml", onset: 2 }, { file: "streams/manca.yml", onset: 8 }]),
+      JSON.stringify(saved.streams));
+    assert("salvato: niente dello stream importato nel master",
+      !/smoke\.wav|density/.test(savedText), savedText);
+    const fixtureText = fs.readFileSync(path.join(__dirname, "fixtures", "streams", "risacca.yml"), "utf8");
+    const onDisk = await (await fetch(`${bridge}/import?path=streams/risacca.yml`)).json();
+    assert("il file importato e' intatto", onDisk.ok && onDisk.text === fixtureText,
+      JSON.stringify(onDisk).slice(0, 200));
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni
      * (un handler che esplode al primo click) e' esattamente quello che una

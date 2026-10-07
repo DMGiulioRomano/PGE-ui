@@ -1,0 +1,24 @@
+# Un documento del laboratorio: un solo stream, che si rende anche da solo.
+# Il suo `stream_id` e il suo `onset` li ignora il master che lo importa
+# (PGE #290, regola 5): nell'editor lo stream si chiama `risacca`, come il
+# file, e parte a 2 s, dove lo mette il master.
+seed: 1441
+duration: 4
+streams:
+  - stream_id: stream1
+    onset: 0
+    duration: 4
+    sample: smoke.wav
+    time_mode: normalized
+    density: [[0, 10], [1, 30]]
+    grain:
+      duration: 0.05
+      envelope: hanning
+    pointer:
+      start: 0
+      loop_unit: normalized
+      speed_ratio: 1
+    pitch:
+      semitones: 0
+    pan: 0
+    volume: -6

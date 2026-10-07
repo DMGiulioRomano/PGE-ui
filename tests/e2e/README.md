@@ -6,8 +6,9 @@ Questa cartella contiene un test solo, e risponde a una domanda sola:
 Non e' un test di regressione visiva. Non guarda un pixel, non confronta
 screenshot, non sa che aspetto ha un bottone. Guarda che il boot arrivi in
 fondo senza errori, che un progetto entri in timeline, che Inspector ed
-EnvelopeEditor si aprano disegnando qualcosa, e che un giro di undo/redo
-riporti lo stato dov'era.
+EnvelopeEditor si aprano disegnando qualcosa, che un giro di undo/redo
+riporti lo stato dov'era, e che un master con `file:` (#183) si apra, mostri lo
+stream importato e si salvi senza incorporarlo.
 
 ```bash
 cd tests/e2e
@@ -38,6 +39,7 @@ cautela di quanta ne richieda un repo con un boot verificato.
 | `browser.js` | la politica di rete: cosa la pagina puo' ottenere, e da dove. Piu' `verifyVendor()`, che confronta i byte serviti con l'`integrity` dell'HTML. |
 | `test-boot.js` | la suite. Verdetto in un handler `exit`, come tutte (`tests/node/test-suite-harness.js` lo verifica anche per questo file). |
 | `fixtures/PGE_smoke.yml` | il progetto che l'editor apre. Versionato qui: il test non dipende dal checkout del motore. |
+| `fixtures/PGE_smoke_file.yml`, `fixtures/streams/` | un master che importa uno stream con `file:` (#183) e il documento che importa, piu' una voce che punta a un file che non c'e'. `bridge.py` copia `streams/` in `configs/streams/`, dove il master lo cerca; li' non e' un progetto, e `/projects` non lo elenca. |
 
 ## Decisioni deliberate
 

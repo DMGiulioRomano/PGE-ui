@@ -86,6 +86,12 @@ def build_tree(base: Path) -> dict:
     configs.mkdir(parents=True)
     for src in sorted((HERE / "fixtures").glob("*.yml")):
         shutil.copy(src, configs / src.name)
+    # I documenti che un master importa con `file:` (#183), nella sottocartella
+    # dove il master li cerca. Copiati a parte e non con il glob qui sopra:
+    # sotto configs/streams/ non sono progetti, e /projects non li elenca.
+    streams = HERE / "fixtures" / "streams"
+    if streams.is_dir():
+        shutil.copytree(streams, configs / "streams")
     return {"root": root, "workspace": ws}
 
 

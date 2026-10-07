@@ -123,6 +123,11 @@ exists, the fourth only when a browser is installed):
   against temporary `BINDIR`s — with a space, with two, with a `~`, with one
   trailing slash, with three, with a slashed `HOME`, relative, empty, with no
   `HOME` at all and with no `realpath` on the `PATH`), and
+  `test-stream-files.js` (#183: the `file:` entries of a master —
+  `streamFileRefs`, the engine's resolution rules in `parse`, the master
+  rewritten as `file:` plus placement, the entries that don't resolve kept
+  verbatim with a message naming the file, `importEditError`, and
+  `backend.fs.readImport` over a fake `fetch`), and
   `test-tracks.js`
   (the track model: `deriveTracks`
   totality against hand-edited `ui_tracks`, `applyTracks` never rewriting a
@@ -191,7 +196,11 @@ exists, the fourth only when a browser is installed):
   fallback — `parse_magnify_spec`, `filter_solo_mute` — driven over stub
   engines of every vintage, each in its own process: the light module
   imported, the historic ast-slice, a module without the name, a module that
-  doesn't import), and `test_engine_render.py`
+  doesn't import), `test_stream_files.py` (#183: `safe_resolve_rel`, the
+  `GET /import` route and its `ok: false` answers, `/projects` not listing
+  `configs/streams/`, plus a real render of a master with `file:` through
+  `/render` — stem, `stream-done`, cached second pass, the imported file
+  untouched — that skips without the engine venv), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -387,7 +396,13 @@ and explode on its first render. That half is `tests/e2e/`.
 previously checked by hand: the page boots with **zero unhandled exceptions and
 zero console errors**, a project loads and reaches the timeline, the Inspector
 and the EnvelopeEditor open on a stream and the envelope *draws its
-breakpoints*, and one undo/redo round trip lands back where it started. The
+breakpoints*, and one undo/redo round trip lands back where it started. A
+fifth section opens a second fixture from the project browser, a master with
+`file:` entries (#183, `fixtures/PGE_smoke_file.yml` + `fixtures/streams/`, one
+entry deliberately pointing at a missing file): the imported clip is drawn and
+recognizable, the missing file is named in a toast with no console error, the
+content is read-only (paste refused, Raw tab without "edit"), and a save
+rewrites the two `file:` entries while the imported file stays byte-identical. The
 assertions are structural (how many breakpoints, which stream, what the `onset`
 row reads), never pixels: a pixel assert ages badly, a boot assert doesn't.
 
@@ -1609,7 +1624,10 @@ it is really in the hash — `parse_magnify_spec`,
 `build_envelope` — a real `Envelope`, which imports without numpy —,
 `evaluate_envelope` — what that same `Envelope` *plays* at the times asked, for
 the questions where the body stays valid and changes meaning (#189) —,
-`parameter_bounds`, `filter_solo_mute`, `constants` — the last one carrying the
+`parameter_bounds`, `filter_solo_mute`, `resolve_stream_files` — the
+engine's own resolution of a master's `file:` entries (#183), with the
+imported documents handed in as a map, since the reader is a parameter of the
+engine's function —, `constants` — the last one carrying the
 name registries and the constants the mirrors copy whole, `ENVELOPE_COLORS`
 included);
 `tests/parity/oracle.js` is the node client (one python process per suite);
@@ -1898,7 +1916,7 @@ identical one inside a list, up to the double click that used to eat it.
 
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) has **two** exclusion lists, and they don't have the same reach:
 
-- `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`.
+- `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`, `imported`.
 - `FP_IGNORE_DEEP` — excluded at **any** depth because it lives nested by construction: `_curveRaw` (under `grain.envelope`). It used to hold `statePositions` too; see below.
 
 Key non-obvious exclusions:
@@ -1906,6 +1924,7 @@ Key non-obvious exclusions:
 - `onset`: moving a clip on the timeline doesn't change the rendered audio.
 - `duration*` flags: provenance of the length, not the length itself.
 - `deviationProbabilityLegacy`: provenance (which spelling), not content — reopening a pre-v7 project shouldn't mark every stem stale.
+- `imported` (#183): provenance too — *where* the stream is written (the `file:` path of the master), not what it plays. The engine hashes the stream already resolved, so moving a stream from the master into a file leaves it clean, and here it must stay green. The parity suite asks the engine: same verdict and same streams on a corpus of masters, the same hash imported or written inline, and the same derivative on both sides (file content moves both, the file's ignored keys and its folder move neither, a new file name moves both because it changes the default id).
 - `_curveRaw`: it cannot move on its own. `parseGrainEnvelope` **derives** `curve` from it (`rescaleCurveY`, a linear `*(n-1)`), so a drift too small for `curveMatchesRaw`'s 1e-9 to notice — and therefore re-emitted verbatim into the YAML, moving the engine's hash — still lands in `curve`, which is hashed. That premise is what makes the exclusion safe, and it is pinned by a parity case (a reparse whose curve drifts must move **both** hashes) rather than asserted in a comment.
 
 **The criterion is not "editor-only field", it is "does it reach the YAML"** — which is a question for the *serializer*, not something a list of key names can answer, and getting it wrong cost a real green dot. `statePositions` was excluded on the same "they mirror the serialized states" reasoning, which is simply false for it: `serializeGrainEnvelope` splices it *into* `states` (`[[pos, name], …]`), so the engine hashes it, and its own comment in `yaml-bridge.js` says the positions are thresholds in value-space — i.e. they change the rendered audio. Edit them in the Raw tab (the only path that writes them; no component does) and `states` stays a list of the same names: the engine's hash moved, the UI's did not, 🟢 on a stem the engine was about to rewrite *differently*. It is hashed now. The cost is one extra render for every already-rendered multistate stem with non-uniform positions — the safe direction, self-clearing on the first pass, like the semantics axis. `tests/parity/test-fingerprint-parity.js` measures both halves against the engine; `tests/node/test-fingerprint.js` used to pin the wrong assumption (`ignores grain.envelope.statePositions`), which is exactly the internally-perfect-and-divergent mirror `tests/parity/` exists to close.
@@ -2105,6 +2124,92 @@ the point list and the interp string, `NaN` on both sides, every `NaN > 1e-9`
 false, so a group always "matched" and **an edit made inside a group was thrown
 away on save**. It is now the rescale taken back and compared in depth
 (`_nearlyEqual`: tolerance on numbers, exact on everything else).
+
+### Stream as a file: a master's `file:` entries (#183)
+
+Since PGE #290 an entry of `streams:` can be `- file: <path>`: the stream is
+written in another document — the mare-nostrum lab's, which renders on its own
+— and the master keeps **only its placement** (`stream_id`, `onset`, `mute`,
+`solo`). The engine resolves those entries in `Generator.load_yaml`, before
+anything else (`pge.engine.stream_files`); the bridge does the same, before
+`streamFromYaml`, so from there on an imported stream is a stream like the
+others — timeline, Inspector, EnvelopeEditor, fingerprint, render.
+
+**Reading.** The browser doesn't touch the disk: `onProjectSelect` asks
+`PGEYaml.streamFileRefs(text)` which files to read, reads each with
+`backend.fs.readImport(file)` (`GET /import?path=<as written>`, relative to
+`configs/`, every segment through `safe_resolve` — `safe_resolve_rel`), and
+hands the texts to `parse(text, {imports, master})`. The rules are the
+engine's: placement from the master, `stream_id` defaulting to the file name
+without its extension (`splitext`, leading-dot rule included; `stream_id:
+null` counts as absent), the imported stream's own placement keys and the
+file's top-level keys (`seed`, `bpm`, `duration`) ignored — the stream's own
+`duration` is what counts, and without one the sample's (PGE #205). The
+resolved stream carries `imported: {file, idAsWritten, onsetWritten}`, out of
+the fingerprint.
+
+`/import` answers **200 with `ok: false`** when the file can't be read
+(missing, not a file, not UTF-8, outside `configs/`), with a `reason` and a
+message naming the file: it is a fact about the master's entry, not a bad
+request, and a 4xx would print "Failed to load resource" in the browser console
+for a state the editor handles. Only a request without `path` is a 400. A path
+outside `configs/` (absolute, `..`) is refused even where the engine would read
+it — the bridge reads under its own folders only; the entry stays in the master
+and the render hands it to the engine. `/projects` lists top-level `.yml`
+only, so `configs/streams/*.yml` never shows up as a project (one imported
+from `configs/` itself does, and is a valid document on its own).
+
+**An entry that doesn't resolve never becomes a stream.** Missing or unreadable
+file, malformed YAML, zero or two streams, a chain (`file:` inside the imported
+stream), a key next to `file:` that isn't placement (rule 4: checked before
+reading, like the engine, and never incorporated), a non-path `file:`, a
+duplicate effective id (rule 7: every imported entry of the group, and nothing
+renamed — not even the stream written in the master, which the `#2` dedupe
+leaves alone since it stays alone). It goes into `data.unresolvedImports`
+(`{index, entry, error}`): document state, carried through undo, and put back
+verbatim at its master index by the serializer — so open-and-save keeps the
+master as written and a render gives the engine the entry to refuse with its
+own message. The load logs each error and raises one toast naming the file;
+the editor opens the project regardless. Two blind spots, both declared: the
+engine compares effective ids after its math eval (`01.yml` is stream `1`),
+here they are strings; and rule 6 (a file `seed` different from the master's)
+is not mirrored — the engine's `[SEED]` warning goes to stderr, which the
+bridge shows as a log line (#162).
+
+**Saving.** `streamsToYaml` writes an imported stream as `file:` plus its
+placement *as the master wrote it*: `stream_id` only when written or different
+from the default (the raw value back when it still matches), `onset` when
+written or non-zero, `mute`/`solo` when on — and nothing of its content. The
+imported file is not touched. A master written by PGE-ui is a fixed point of
+open-and-save, `# saved:` aside. `roundTripDiff(data, {imports})` re-parses
+with the same texts, or every import would read as a loss.
+`clearDeviationProbabilityLegacy` skips imported streams: saving the master
+doesn't rewrite their file, so the `dephase` migration hasn't happened.
+
+**Editing is #184, so until then the content is read-only.** A change to an
+imported stream's content would reach neither the file (not rewritten yet) nor
+— worse — the master. `PGEYaml.importEditError(prev, next)` decides it on the
+YAML criterion (#134): the content key is `streamToYaml` minus placement, and
+every imported stream that is a new object must consume a content the previous
+state had and the next one doesn't reuse as-is. So placement moves freely —
+onset, mute/solo, rename, lane moves, delete — while `edit` (Inspector,
+EnvelopeEditor, resize, Raw tab), `copy` (paste, duplicate, a split's tail:
+#186/#187) and `embed` (an imported stream turned into a written one) are
+refused. It runs in `setData`, the one choke point every editor write goes
+through, so no path needs listing; `updateStream` asks the same question
+*first*, because the freeze-on-resize gesture arms its truncate confirm before
+calling `setData`, and that confirm's Cancel calls `undo()` — which would undo
+the previous, unrelated step. `pasteStreams` and `splitAtPlayhead` refuse
+upfront for the same kind of reason (ids allocated, selection moved, toasts
+about a read position that won't be used). The UI says why before anyone
+tries: the clip carries a `file: <path>` line, a hatch and no resize handle,
+the Inspector a note above both tabs, and the Raw tab shows the resolved
+stream read-only.
+
+**Rendering** needs nothing: `/render` writes the master as it is, `file:`
+entries included, to `configs/<basename>.yml`, and the engine resolves them
+against that folder. Stems, `stream-done` and the cache key on the effective
+id, like a stream written in the master.
 
 ### EnvelopeEditor: the global `type` survives the commit (`wrapEnv`, #189)
 
@@ -2686,6 +2791,14 @@ nowhere else.
 ## Security stance of `server.py`
 
 Binds `127.0.0.1` by default. CORS wide-open — the editor is served by the bridge on its own origin (#166), but opening the HTML as `file://` stays possible and needs it. No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
+
+**`GET /import` reads, and only under `configs/`** (#183). The path is the
+`file:` value of a master, so it has slashes: `safe_resolve_rel` splits it and
+sends every segment through `safe_resolve` — no `..`, no hidden names, no
+backslash, no NUL, no absolute path — skipping only `.` and empty segments,
+which don't leave the folder. Nothing is written: rewriting an imported file is
+#184, and when it lands it is a second route that writes outside
+`configs/<basename>.yml`, which this paragraph will have to say.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check

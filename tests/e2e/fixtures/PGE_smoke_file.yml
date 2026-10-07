@@ -1,0 +1,21 @@
+# Un master che importa stream con `file:` (PGE #290, PGE-ui #183).
+#
+# Il boot apre PGE_smoke.yml (il primo in ordine); questo lo apre test-boot.js
+# dal browser dei progetti, che e' il gesto vero: il bridge legge
+# configs/streams/risacca.yml con GET /import e il parse risolve la voce.
+#
+# Due voci, e la seconda e' rotta di proposito: `streams/manca.yml` non esiste.
+# L'editor deve aprire il progetto lo stesso, dire quale file manca e non
+# disegnarne la clip — e al salvataggio la voce tornerebbe com'e' scritta.
+# Che il 404 di quel file non arrivi in console e' parte del test: il bridge
+# risponde 200 con `ok: false`, perche' e' un fatto della voce, non un errore
+# della richiesta.
+
+title: smoke_file
+duration: 16
+bpm: 120
+streams:
+  - file: streams/risacca.yml
+    onset: 2
+  - file: streams/manca.yml
+    onset: 8
