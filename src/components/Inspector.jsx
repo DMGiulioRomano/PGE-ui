@@ -961,6 +961,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
         <Seg value={tab} onChange={onTab} options={[{label:"Preview", value:"preview"},{label:"Raw", value:"raw"}]} />
         <button className="pge-icon-btn" onClick={onClose} title="Close inspector"><Icon name="x" size={14} /></button>
       </header>
+      {/* Lo stream come file (#183): sopra i due tab, perche' vale per
+          entrambi. I valori mostrati sono quelli del file; finche' la #184
+          non c'e', una modifica al contenuto si rifiuta (setData in app.jsx)
+          e questa riga dice perche' prima che qualcuno ci provi. */}
+      {stream.imported ? (
+        <div className="pge-import-note">
+          importato da <span className="mono">configs/{stream.imported.file}</span>
+          <span className="sub"> · il contenuto sta nel file e qui non si modifica ancora: si cambiano onset, mute, solo e stream_id</span>
+        </div>
+      ) : null}
 
       {tab === "preview" ? (
         <>

@@ -1133,7 +1133,7 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
               // a source and a target at once.
               const ghosting = dragIds && dragIds.includes(s.id) && dstLaneOf(s.id) !== i;
               return (
-              <div key={s.id} className={"clip" + (ghosting ? " ghosting" : "") + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "")}
+              <div key={s.id} className={"clip" + (ghosting ? " ghosting" : "") + (selected.includes(s.id) ? " selected" : "") + (s.error ? " error" : "") + (isEffMuted(s) ? " muted" : "") + (s.solo ? " soloed" : "") + (s.imported ? " imported" : "")}
             style={{ left: s.onset * PX_PER_S, width: s.duration * PX_PER_S, top, background: s.color, zIndex: selected.includes(s.id) ? 3 : 1 }}
             onPointerDown={(e) => onPointerDown(e, s, "drag")}
             onPointerMove={selected.includes(s.id) ? (e) => showReadout(e, s) : undefined}
@@ -1150,6 +1150,10 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
                 ) : null}
                 {showClipLabels !== false ? (<>
                 <div className="lbl">{s.id} · {s.sample}</div>
+                {/* Lo stream come file (#183): da dove viene si vede sulla
+                    clip, non solo nell'Inspector — e' cio' che dice perche'
+                    il suo contenuto qui non si modifica. */}
+                {s.imported ? <div className="clip-file" title={"importato da configs/" + s.imported.file}>file: {s.imported.file}</div> : null}
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?
@@ -1162,7 +1166,9 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
                 {showGrains && grainsFor && grainsFor(s.id) ?
               <ClipGrains data={grainsFor(s.id)} width={s.duration * PX_PER_S} height={clipH} /> :
               null}
-                <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />
+                {/* La durata di uno stream importato sta nel suo file (#184):
+                    senza maniglia, invece di un resize che si rifiuta. */}
+                {s.imported ? null : <div className="resize-handle" onPointerDown={(e) => onPointerDown(e, s, "resize")} />}
                 <div className="lane-resize" onPointerDown={(e) => startResizeLane(e, t.id)} title="drag to resize this track" />
               </div>
               );

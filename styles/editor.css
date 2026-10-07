@@ -260,6 +260,13 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip.muted { opacity: .35; }
 .clip.error { background: var(--status-error-bg) !important; outline: 1px solid var(--status-error); }
 .clip.error .lbl { color: var(--status-error); }
+/* Lo stream come file (#183): il bordo tratteggiato e la riga col path dicono
+ * che il contenuto della clip sta in un altro file. */
+.clip.imported { box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+/* Il colore della clip e' uno `background` inline, che toglierebbe un
+ * background-image messo qui: il tratteggio sta su un livello suo. */
+.clip.imported::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(135deg, rgba(255,255,255,.06) 0 6px, transparent 6px 12px); }
+.clip .clip-file { font-family: var(--font-mono); font-size: 9px; color: rgba(255,255,255,.75); padding: 0 6px 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .resize-handle { position: absolute; top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; }
 .resize-handle:hover { background: rgba(255,255,255,.10); }
 .playhead-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); pointer-events: none; z-index: 8; }
@@ -268,6 +275,9 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 /* ---------- Inspector (RIGHT-DOCKED, 380px) ---------- */
 .pge-inspector { background: var(--bg-panel); border-left: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; min-width: 0; width: 100%; height: 100%; flex: 1; overflow: hidden; container-type: inline-size; container-name: insp; }
 .pge-inspector.empty { align-items: center; justify-content: center; color: var(--fg-3); padding: 24px; text-align: center; }
+.pge-inspector .pge-import-note { padding: 6px 12px; font-size: 10px; line-height: 1.4; color: var(--fg-2); background: var(--bg-elevated); border-bottom: 1px solid var(--border-default); flex: 0 0 auto; }
+.pge-inspector .pge-import-note .mono { font-family: var(--font-mono); color: var(--accent); }
+.pge-inspector .pge-import-note .sub { color: var(--fg-3); }
 .pge-inspector .ihead { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--border-default); background: var(--bg-panel); flex: 0 0 auto; min-width: 0; flex-wrap: wrap; row-gap: 4px; }
 .pge-inspector .ihead .title { font-family: var(--font-ui); font-size: 13px; font-weight: 500; color: var(--fg-1); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pge-inspector .ihead .streamtag { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 2px; border: 1px solid; flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

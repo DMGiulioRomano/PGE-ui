@@ -140,9 +140,40 @@ function App() {
     _setDataRaw(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       if (next === prev) return prev;
+      // Lo stream come file (#183): finche' le modifiche a uno stream
+      // importato non si scrivono nel suo file (#184), il loro contenuto non
+      // si modifica in memoria — il salvataggio non lo scriverebbe da nessuna
+      // parte, e il render suonerebbe il file mentre la timeline mostra
+      // un'altra cosa. La regola sta in yaml-bridge.js (node-tested); qui c'e'
+      // la sola strettoia per cui passa ogni modifica dell'editor, quindi ogni
+      // strada — Inspector, EnvelopeEditor, tab Raw, timeline — e' coperta
+      // senza elencarle. Il piazzamento (onset, mute, solo, rename) passa.
+      const blocked = window.PGEYaml && window.PGEYaml.importEditError(prev, next);
+      if (blocked) {
+        // Fuori dall'updater: un setState dentro un altro non si fa, e
+        // l'avviso ha il suo rate limit (un drag rifiutato chiama a ogni frame).
+        setTimeout(() => notifyImportBlocked(blocked), 0);
+        return prev;
+      }
       if (HC.record(historyRef.current, prev)) setHistVer(v => v + 1);
       return next;
     });
+  }
+  // L'ultimo avviso di modifica rifiutata, per non ripeterlo a ogni frame.
+  const importBlockedAtRef = useRefApp(0);
+  function notifyImportBlocked(blocked) {
+    const now = Date.now();
+    if (now - importBlockedAtRef.current < 2500) return;
+    importBlockedAtRef.current = now;
+    const why = {
+      edit:  "il contenuto sta nel file importato e qui non si riscrive ancora: " +
+             "si cambiano solo onset, mute, solo e stream_id",
+      copy:  "duplicare, incollare o tagliare uno stream importato non si puo' ancora: " +
+             "ne nascera' un file nuovo",
+      embed: "il contenuto sta nel file importato: non diventa uno stream scritto nel master",
+    }[blocked.kind] || "il contenuto sta nel file importato";
+    pushToast({ kind: "warn", title: `${blocked.id} e' importato da ${blocked.file}`,
+                message: why, duration: 5000 });
   }
   function beginGesture() {
     HC.beginGesture(historyRef.current);
@@ -1139,6 +1170,14 @@ function App() {
   function pasteStreams() {
     const copied = clipboardRef.current;
     if (!copied.length) return;
+    // Una copia di uno stream importato e' un file nuovo (#186), e qui non si
+    // scrive: setData la rifiuterebbe comunque, ma dopo aver allocato gli id
+    // e cambiato la selezione su stream che non ci sono.
+    const imp = copied.find(s => s.imported);
+    if (imp) {
+      notifyImportBlocked({ kind: "copy", id: imp._srcId || imp.id, file: imp.imported.file });
+      return;
+    }
     const minOnset = Math.min(...copied.map(s => s.onset));
     const shift = Math.max(0, time) - minOnset;
     const newIds = [];
@@ -1199,6 +1238,14 @@ function App() {
     if (!targets.length) {
       pushToast({ kind: "warn", title: "Niente da tagliare",
                   message: "il cursore non attraversa nessuna clip selezionata", duration: 3000 });
+      return;
+    }
+    // La coda di uno stream importato e' un file nuovo (#187): fino ad allora
+    // lo split si rifiuta qui, prima di chiedere i grani e di avvisare su una
+    // posizione di lettura che non servira'.
+    const imp = targets.find(s => s.imported);
+    if (imp) {
+      notifyImportBlocked({ kind: "copy", id: imp.id, file: imp.imported.file });
       return;
     }
     const cuts = [];
@@ -1277,6 +1324,16 @@ function App() {
     }
   }
   function updateStream(id, patch) {
+    // Lo stream come file (#183): la stessa regola di setData, chiesta PRIMA.
+    // Il resize col freeze arma la conferma di troncamento prima di chiamare
+    // setData, e a fine gesto il suo «Annulla» chiama undo(): su un resize
+    // rifiutato disferebbe il passo precedente, che non c'entra.
+    const target = data.streams.find(s => s.id === id);
+    if (target && target.imported && window.PGEYaml) {
+      const blocked = window.PGEYaml.importEditError(
+        { streams: [target] }, { streams: [mergeStreamPatch(target, patch, mediaList.files)] });
+      if (blocked) { notifyImportBlocked(blocked); return; }
+    }
     if (freezeEnvOnResize && patch.duration != null) {
       const cur = data.streams.find(s => s.id === id);
       if (cur && patch.duration !== cur.duration) {
@@ -2031,8 +2088,22 @@ function App() {
       const yamlText = await backend.fs.readFile("projects", name);
       if (yamlText && window.PGEYaml) {
         const basename = name.replace(/\.yml$/, "");
+        // Lo stream come file (#183): le voci `file:` del master si risolvono
+        // al caricamento, come fa il motore. I testi li legge il bridge
+        // (`GET /import`, relativo a configs/); `readImport` non lancia, e un
+        // file che non si legge diventa un errore della sua voce, non del
+        // progetto.
+        const imports = {};
+        const refs = window.PGEYaml.streamFileRefs ? window.PGEYaml.streamFileRefs(yamlText) : [];
+        await Promise.all(refs.map(async (f) => {
+          imports[f] = backend.fs.readImport
+            ? await backend.fs.readImport(f)
+            : { ok: false, error: `questo backend non legge i file importati: '${f}'` };
+        }));
         const parsed = window.PGEYaml.parse(yamlText, {
           project: basename,
+          master: name,
+          imports,
           // dal ref, non dallo stato: la closure e' stata catturata prima
           // dell'await sopra, e la media list puo' essere atterrata nel mezzo.
           samples: mediaFilesRef.current || [],
@@ -2045,10 +2116,32 @@ function App() {
         setDirty(false);
         const ms = (performance.now() - t0).toFixed(0);
         logToTerminal(`[load] ${name} · ${parsed.streams.length} streams · ${parsed.duration}s · ${(yamlText.length/1024).toFixed(1)}kb · ${ms}ms`, "ok");
+        for (const s of parsed.streams) {
+          if (s.imported) logToTerminal(`[import] ${s.id} ← configs/${s.imported.file}`, "");
+        }
+        // Una voce `file:` che non si risolve non entra in memoria: resta nel
+        // master com'e' scritta, il render la consegna al motore (che la
+        // rifiuta col suo messaggio), e qui la si dice — nominando il file.
+        const unresolved = parsed.unresolvedImports || [];
+        const seenErr = new Set();
+        for (const u of unresolved) {
+          if (seenErr.has(u.error)) continue;
+          seenErr.add(u.error);
+          logToTerminal(`[ERROR] ${u.error}`, "err");
+        }
+        if (unresolved.length) {
+          pushToast({
+            kind: "err",
+            title: unresolved.length === 1 ? "uno stream importato non si risolve"
+                                           : `${unresolved.length} stream importati non si risolvono`,
+            message: unresolved[0].error, persistent: true,
+            action: { label: "show log", onClick: () => setTerminalOpen(true) },
+          });
+        }
         // Run a round-trip check — if the bridge would lose information on
         // save, surface it now while the user can decide what to do.
         try {
-          const diffs = window.PGEYaml.roundTripDiff(parsed);
+          const diffs = window.PGEYaml.roundTripDiff(parsed, { imports });
           if (diffs.length) {
             logToTerminal(`[warn] round-trip would lose ${diffs.length} field(s) on save — see console for paths`, "warn");
             console.warn(`[PGE] round-trip diffs for ${name}:`, diffs);

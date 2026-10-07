@@ -324,9 +324,16 @@ function YamlEditor({ stream, onChange, samples }) {
             {errCount > 0 ? <span className="err">● {errCount} error{errCount>1?"s":""}</span> :
              warnCount > 0 ? <span className="acc">{warnCount} warning{warnCount>1?"s":""}</span> :
              <span className="acc">valid</span>}
+            {/* Uno stream importato (#183) si mostra risolto — e' cio' che
+                suona — ma il suo YAML sta nel file: il tab Raw lo legge e
+                basta, finche' la #184 non lo riscrive li'. */}
+            {stream.imported ? (
+              <span className="t" title={"importato da configs/" + stream.imported.file}>sola lettura · file: {stream.imported.file}</span>
+            ) : (
             <button className="yaml-btn" onClick={() => { setDraft(generated); setMode("edit"); }} title="Edit YAML">
               <Icon name="edit" size={12} /> edit
             </button>
+            )}
           </>
         )}
       </div>
