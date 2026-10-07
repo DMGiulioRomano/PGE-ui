@@ -62,8 +62,10 @@
   }
 
   /* ---------- typed-envelope wrapper ----------
-     `{type, points}` è la forma "tipata" globale per envelope di soli BP.
-     Helpers per unwrappare a items[]/interp e ri-wrappare al commit.        */
+     `{type, points}` è la forma "tipata": il `type` vale per ogni segmento
+     che non ne dichiara uno sul punto, e `points` porta gli stessi item della
+     lista (3-tuple e BP group compresi, #189). Helpers per unwrappare a
+     items[]/interp e ri-wrappare al commit.                                 */
   function isTypedEnv(env) {
     return env && typeof env === "object" && !Array.isArray(env) &&
            Array.isArray(env.points) && typeof env.type === "string";
@@ -72,9 +74,10 @@
     if (isTypedEnv(env)) {
       return { interp: env.type || "linear", items: env.points.slice() };
     }
-    // Dict con `points` ma senza `type`: forma che l'editor non emette mai
-    // (wrapEnv scrive il dict solo per dire un interp non lineare) ma che il
-    // motore accetta — `is_envelope_like` guarda solo che `points` ci sia. Va
+    // Dict con `points` ma senza `type`: l'editor la scrive solo riscrivendo
+    // un dict che porta altre chiavi (`time_unit`, che wrapEnv conserva) con
+    // l'interp lineare; il motore la accetta comunque —
+    // `is_envelope_like` guarda solo che `points` ci sia. Va
     // letta qui, altrimenti chi la dichiara envelope a monte se la vede aprire
     // vuota, e un commit su quell'editor la svuoterebbe davvero.
     if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
