@@ -1278,7 +1278,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # pagina si ritroverebbe la firma di un documento che non ha — cioe'
         # una guardia che parla, o tace, sul file sbagliato. #185
         raw, sig = read_signed(path)
-        return Response(raw, mimetype="text/plain; charset=utf-8",
+        # `mimetype` vuole il tipo nudo: Flask ci attacca lui il charset, e un
+        # `charset` scritto qui ne produceva due nello stesso header. Il tipo
+        # cambia da `text/html` (il default di Flask per una `str` tornata
+        # dalla vista, che e' cio' che questa route faceva) a `text/plain`: un
+        # documento YAML non e' HTML, e chi lo legge fa `r.text()`, che del
+        # tipo non si cura.
+        return Response(raw, mimetype="text/plain",
                         headers={"X-PGE-Signature": sig})
 
     @app.put("/file")

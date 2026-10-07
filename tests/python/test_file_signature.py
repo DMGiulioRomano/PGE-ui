@@ -265,6 +265,21 @@ def test_get_file_manda_la_firma_dei_byte_che_manda(tmp_path):
     assert r.status_code == 200
     assert r.get_data() == b"a: 1\n"
     assert r.headers["X-PGE-Signature"] == fsig.signature_of(b"a: 1\n")
+    # Un charset solo: `mimetype` vuole il tipo nudo, e scriverci il charset
+    # dentro ne produceva due nello stesso header.
+    assert r.headers["Content-Type"] == "text/plain; charset=utf-8"
+
+
+def test_head_su_file_porta_la_firma_senza_il_corpo(tmp_path):
+    """`fs.fileExists` fa una HEAD su questa route: Flask la serve con la
+    stessa vista e il corpo tolto, quindi la firma c'e' e i byte no."""
+    app, ws = _app(tmp_path)
+    (ws / "configs").mkdir(exist_ok=True)
+    (ws / "configs" / "a.yml").write_bytes(b"a: 1\n")
+    r = app.test_client().head("/file?kind=projects&name=a.yml")
+    assert r.status_code == 200
+    assert r.headers["X-PGE-Signature"] == fsig.signature_of(b"a: 1\n")
+    assert r.get_data() == b""
 
 
 def test_la_firma_e_leggibile_anche_da_un_altra_origine(tmp_path):
