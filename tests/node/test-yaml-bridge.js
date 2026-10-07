@@ -1539,6 +1539,27 @@ assert("#42 presentation helpers loaded",
   const a4 = computeAnnotations(sPan, { name: "test.wav", duration: 5 });
   assert("#42 annotate pan env out of range", a4.byPath.get("pan") && a4.byPath.get("pan").kind === "warn",
     JSON.stringify([...a4.byPath]));
+
+  /* #189: wrapEnv scrive `{type, points}` per ogni interp globale non lineare,
+     eccezioni sul punto comprese — un pan ritoccato con setZoneInterp esce
+     dict, e il controllo guardava le sole liste. */
+  const sPanDict = streamOf(topLevelYaml(["pan: {type: cubic, points: [[0, 0], [2, 5000, linear], [5, 0]]}"]));
+  const a5 = computeAnnotations(sPanDict, { name: "test.wav", duration: 5 });
+  assert("#189 annotate pan env out of range anche nella forma {type, points}",
+    a5.byPath.get("pan") && a5.byPath.get("pan").kind === "warn", JSON.stringify([...a5.byPath]));
+  const sPanGroup = streamOf(topLevelYaml(["pan: [[0, 0], [[[1, 5000], [2, 0]], step], [5, 0]]"]));
+  const a6 = computeAnnotations(sPanGroup, { name: "test.wav", duration: 5 });
+  assert("#189 …e dentro un BP group",
+    a6.byPath.get("pan") && a6.byPath.get("pan").kind === "warn", JSON.stringify([...a6.byPath]));
+  // Le y del pattern di un blocco, lette senza espanderlo: prima il controllo
+  // confrontava l'end_time del blocco (il suo `[1]`).
+  const sPanLoop = streamOf(topLevelYaml(["pan: [[0, 0], [[[0, 0], [100, 5000]], 4, 1000000]]"]));
+  const a7 = computeAnnotations(sPanLoop, { name: "test.wav", duration: 5 });
+  assert("#189 …e nel pattern di un blocco compatto, senza espanderne i cicli",
+    a7.byPath.get("pan") && a7.byPath.get("pan").kind === "warn", JSON.stringify([...a7.byPath]));
+  const sPanOk = streamOf(topLevelYaml(["pan: {type: cubic, points: [[0, 0], [2, 90, linear], [5, 0]]}"]));
+  assert("#189 …e niente avviso quando il dict sta nel range",
+    !computeAnnotations(sPanOk, { name: "test.wav", duration: 5 }).byPath.has("pan"));
 }
 
 {

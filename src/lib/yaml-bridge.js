@@ -213,57 +213,85 @@
 
   /* ---------- envelope helpers ---------- */
 
-  // A grain-envelope blend curve is EITHER a plain breakpoint array [[t, v], …]
-  // OR the typed dict form {type, points} the editor emits (via wrapEnv) when
-  // the user picks a non-linear global interpolation (step/cubic). The helpers
-  // below normalize access so the multistate rescale below works on either
-  // shape — otherwise `.map` on the dict throws (the step/cubic crash).
-  function curvePoints(curve) {
-    if (Array.isArray(curve)) return curve;
-    if (curve && typeof curve === "object" && Array.isArray(curve.points)) return curve.points;
-    return null;
+  // A grain-envelope blend curve is any envelope the engine builds: the list
+  // of items, the {type, points} dict the editor emits (via wrapEnv) for a
+  // non-linear global interp, and the bare group or block that IS the value.
+  // The multistate branch below keeps it in two scales — the engine's [0, 1]
+  // and the editor's [0, n-1], one unit per state — and `rescaleCurveY` is the
+  // bridge between them, at parse and at serialize.
+  //
+  // It used to know only the points [t, v] / [t, v, interp]: a BP group, the
+  // pattern of a compact block, a {t, v} point and the bare spellings passed
+  // through as written, i.e. they reached the editor still in [0, 1] — drawn at
+  // half height with three states, and dragged from there in the wrong scale.
+  // The shape rules are the editor's (envelope-loops.js: isBPGroup,
+  // isCompactBlock), restated here because this module loads first and half
+  // the node suites load it alone; tests/node/test-bp-groups.js asks the two
+  // readings to agree by behaviour, graphy by graphy, through envSketch.
+  function _curveIsPts(a) {
+    return Array.isArray(a) && a.length > 0 && Array.isArray(a[0]) && a[0].length >= 2;
   }
-  // Rescale a curve's Y values by `factor`, preserving its shape: the {type,
-  // points} wrapper, plain [t, v] breakpoints, and per-point [t, v, interp]
-  // triples (the per-point interp is kept). Non-breakpoint entries (e.g. compact
-  // loop blocks) pass through verbatim.
+  function _curveIsGroup(it) {
+    return Array.isArray(it) && it.length === 2 && _curveIsPts(it[0]) && typeof it[1] === "string";
+  }
+  function _curveIsBlock(it) {
+    return Array.isArray(it) && it.length >= 3 && _curveIsPts(it[0]) &&
+           typeof it[1] === "number" && typeof it[2] === "number";
+  }
+  // Rescale a curve's Y values by `factor`, preserving its shape: the wrapper
+  // dict and its other keys, the per-point interp, a group's interp, a block's
+  // end_time / n_reps / interp / dist (the pattern x is a percentage of the
+  // cycle, not a value). Anything it doesn't recognize passes verbatim.
   function rescaleCurveY(curve, factor) {
-    const mapPts = (pts) => pts.map((pt) =>
-      (Array.isArray(pt) && typeof pt[0] === "number" && typeof pt[1] === "number")
-        ? (pt.length >= 3 ? [pt[0], pt[1] * factor, pt[2]] : [pt[0], pt[1] * factor])
-        : pt
-    );
-    if (Array.isArray(curve)) return mapPts(curve);
+    const pt = (p) => (Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number")
+      ? [p[0], p[1] * factor, ...p.slice(2)] : p;
+    const item = (it) => {
+      if (_curveIsGroup(it)) return [it[0].map(pt), it[1]];
+      if (_curveIsBlock(it)) return [it[0].map(pt), ...it.slice(1)];
+      if (it && typeof it === "object" && !Array.isArray(it) &&
+          typeof it.t === "number" && typeof it.v === "number") return { ...it, v: it.v * factor };
+      return pt(it);
+    };
+    const items = (v) => (_curveIsGroup(v) || _curveIsBlock(v)) ? item(v)
+      : (Array.isArray(v) ? v.map(item) : v);
+    if (Array.isArray(curve)) return items(curve);
     if (curve && typeof curve === "object" && Array.isArray(curve.points)) {
-      return { ...curve, points: mapPts(curve.points) };
+      return { ...curve, points: items(curve.points) };
     }
     return curve;
+  }
+
+  // Equal up to float tolerance on numbers, exactly everywhere else (strings,
+  // keys, lengths, shape).
+  function _nearlyEqual(a, b) {
+    if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= 1e-9;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+             a.every((x, i) => _nearlyEqual(x, b[i]));
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") {
+      const ka = Object.keys(a), kb = Object.keys(b);
+      return ka.length === kb.length &&
+             ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && _nearlyEqual(a[k], b[k]));
+    }
+    return a === b;
   }
 
   // True when the editor-space curve still maps back to the original engine
   // curve (within float tolerance) — i.e. the user hasn't edited it, so the
   // verbatim engine copy can be re-emitted unchanged instead of round-tripping
-  // through the lossy *(n-1) / /(n-1) rescale. Handles both the plain-array and
-  // the {type, points} dict shape, and compares the per-point interp. #59
+  // through the lossy *(n-1) / /(n-1) rescale. #59
+  // It is the rescale itself taken back, compared in depth: the hand-written
+  // comparison read `e[0]`/`e[1]` as a point's coordinates on every item, and on
+  // a BP group those are the point list and the interp string — `NaN` on both
+  // sides, and every `NaN > 1e-9` is false, so a group always "matched". An
+  // edit made inside a group was thrown away on save, the raw curve re-emitted
+  // over it.
   function curveMatchesRaw(editorCurve, rawCurve, n) {
-    const ePts = curvePoints(editorCurve), rPts = curvePoints(rawCurve);
-    if (!ePts || !rPts) return false;
-    const eType = Array.isArray(editorCurve) ? null : (editorCurve.type || null);
-    const rType = Array.isArray(rawCurve)    ? null : (rawCurve.type || null);
-    if (eType !== rType) return false; // global interp wrapper must match
-    if (ePts.length !== rPts.length) return false;
-    for (let i = 0; i < ePts.length; i++) {
-      const e = ePts[i], r = rPts[i];
-      if (!Array.isArray(e) || !Array.isArray(r) || e.length < 2 || r.length < 2) {
-        if (JSON.stringify(e) !== JSON.stringify(r)) return false;
-        continue;
-      }
-      if (Math.abs(e[0] - r[0]) > 1e-9) return false;
-      const engineY = n <= 1 ? 0 : e[1] / (n - 1);
-      if (Math.abs(engineY - r[1]) > 1e-9) return false;
-      if ((e[2] || null) !== (r[2] || null)) return false; // per-point interp
+    if (!Array.isArray(rawCurve) && !(rawCurve && typeof rawCurve === "object" && Array.isArray(rawCurve.points))) {
+      return false;
     }
-    return true;
+    return _nearlyEqual(rescaleCurveY(editorCurve, n <= 1 ? 0 : 1 / (n - 1)), rawCurve);
   }
 
   // Does `statePositions` reach the YAML? One spelling of the rule, two

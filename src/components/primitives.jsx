@@ -234,21 +234,23 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
 
 /* ---------- Parameter Row ---------- */
 function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, right, steps }) {
-  // Build polyline points from envValue (array of [x, y] OR mixed with compact blocks).
-  // For loops, expand via PGEEnv to the actual point sequence.
+  // Build polyline points from envValue, whatever its graphy.
   let pts = "0,12 25,9 50,4 75,7 100,11";
   let loopCount = 0;
   let expandedBPs = [];
-  if (envValue && envValue.length) {
-    const hasLoop = window.PGEEnv && window.PGEEnv.envHasLoop(envValue);
-    const hasGroup = window.PGEEnv && window.PGEEnv.envHasGroup(envValue);
-    if (hasLoop || hasGroup) {
-      const exp = window.PGEEnv.expandMixed(envValue);
-      expandedBPs = exp.points;
-      loopCount = exp.blocks.length;
-    } else {
-      expandedBPs = envValue;
-    }
+  let envCount = 0;   // gli elementi scritti: per il dict, i suoi points
+  if (envValue && window.PGEEnv) {
+    /* La strada dell'EnvelopeEditor, per ogni grafia (envSketch: unwrapEnv,
+       desugar, expandMixed). Il cancello era `envValue.length`, e il dict
+       `{type, points}` una lunghezza non ce l'ha: la riga mostrava il
+       segnaposto al posto della curva. Da #189 wrapEnv scrive il dict per
+       ogni interp globale non lineare, eccezioni sul punto comprese — curve
+       che prima uscivano liste — quindi il segnaposto avrebbe preso proprio
+       le curve appena ritoccate con setZoneInterp. */
+    const sk = window.PGEEnv.envSketch(envValue);
+    envCount = sk.count;
+    expandedBPs = sk.points;
+    loopCount = sk.loops;
     if (expandedBPs.length) {
       const xs = expandedBPs.map((p) => p[0]);
       const ys = expandedBPs.map((p) => p[1]);
@@ -318,7 +320,7 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
           </span>
           <span className="env-label">
             {loopCount > 0 ? <span style={{color:"#FFB07A"}}>↻{loopCount} · </span> : null}
-            {envValue.length} {envValue.length === 1 ? "el" : (loopCount > 0 ? "el" : "bp")}
+            {envCount} {envCount === 1 ? "el" : (loopCount > 0 ? "el" : "bp")}
           </span>
         </span>
       }

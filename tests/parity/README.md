@@ -68,6 +68,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
 | `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
+| `evaluate_envelope` | quanto vale l'`Envelope` vero ai tempi chiesti (`Envelope.evaluate`). Dove `build_envelope` dice *se* il motore costruisce un corpo, questa dice *cosa ne suona*: serve alle riscritture che lasciano il corpo valido e ne cambiano il senso. I due termini di ogni confronto sono risposte del motore, nessun valore atteso è scritto di qua. Con `duration` e `time_mode` il corpo si costruisce come lo costruisce uno stream (`create_scaled_envelope`), l'unica strada che legge `time_unit` | `window.PGEEnv.wrapEnv` (#189, e le chiavi del dict come `time_unit`); `PGEEnvUtils.truncateEnvArray` / `sliceEnvArray` (il punto calcolato al taglio, suite `envelope-cut`) |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `filter_solo_mute` | gli `stream_id` che `pge.engine.solo_mute.filter_solo_mute` tiene — importata, da PGE #246 | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
 | `constants` | i registri di nomi e le costanti che i mirror ricopiano interi (`ENVELOPE_COLORS` e `PLOT_ENVELOPE_KEYS` compresi, importati: `envelope_extractor` e' matplotlib-free; `LOOP_UNITS` sia importato da `pge.parameters.loop_unit` (PGE #246) sia dall'AST del bridge, vedi sotto; i backend audio da `pge.api.renderer_types()` e dall'AST del bridge, #150; `RANGE_UNITS` e `RELATIVE_RANGE_BOUNDS` di PGE #267 sia importati sia dall'AST del bridge, #163) | tutti |
@@ -226,6 +227,11 @@ arriva lo hasha il motore.
   verbatim, muovendo l'hash del motore — finisce comunque in `curve`, che e'
   hashata. Resta escluso, e la premessa e' un caso di parita' invece che un
   commento: se il parse smettesse di derivare `curve`, il test parla.
+  `curveMatchesRaw` e' il rescale ripercorso all'indietro e confrontato in
+  profondita': la versione scritta a mano leggeva `e[0]`/`e[1]` come
+  coordinate su ogni item, e su un BP group davano `NaN` dalle due parti —
+  ogni gruppo «combaciava», e una modifica fatta dentro un gruppo si perdeva
+  al salvataggio (coperto in `tests/node/test-bp-groups.js`).
 
 Il criterio, preso alla lettera, e' una domanda per il **serializer**, non una
 terza lista di nomi: la stessa chiave, nello stesso posto, a volte esce e a
@@ -337,6 +343,7 @@ commento.
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
+| envelope-wrap | un `{type: T, points}` con un blocco compatto fra gli item perde `T` al primo commit | `wrapEnv` scrive la lista piatta, dove il motore prende come tipo globale l'interp del primo blocco (`extract_interp_type`); nel dict quell'interp e' ignorato. L'editor lo disegna per blocco, e tenere il dict renderebbe falso il disegno del blocco appena aggiunto con "add loop": la decisione e' sul modello, PGE-ui #191. La suite pretende la divergenza (il motore suona diverso il dict e la lista scritta) |
 | envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus. In `exponential` la banda non viene dalla lettura intera (con `rate < 1` i pesi sono sempre float) ma da un pareggio: a `rate: 0.5` la somma dei pesi è `2**1024 - 1` e `1024·log10(2)` è esattamente `log10(MAX)`, su cui la disuguaglianza stretta tace. In `power` la somma si stima per difetto (PGE #293): la soglia della UI può solo arrivare dopo quella del motore |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |

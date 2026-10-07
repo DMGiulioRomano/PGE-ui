@@ -551,9 +551,9 @@ console.log("\n── i due Seg: il no-op e la y del primo breakpoint ──");
     const dIsEnv = D.isEnvValue(d);
     const dScalar = typeof d === "boolean" ? 1 : d;
     const mode = new Function("dIsEnv", dModeSrc + "\nreturn dMode;")(dIsEnv);
-    // value={dIsEnv ? "—" : dScalar} · envValue={dIsEnv ? desugar(unwrap(d)) : null}
+    // value={dIsEnv ? "—" : dScalar} · envValue={dIsEnv ? d : null}
     const value = dIsEnv ? "\u2014" : dScalar;
-    const envValue = dIsEnv ? window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(d).items) : null;
+    const envValue = dIsEnv ? d : null;
     const fire = (m) => {
       let out;
       new Function("m", "d", "dIsEnv", "dScalar", "dMode", "PGEEnv", "onChange",
@@ -567,7 +567,7 @@ console.log("\n── i due Seg: il no-op e la y del primo breakpoint ──");
   };
   const runPer = (val) => {
     const isEnv = D.isEnvValue(val);
-    const items = isEnv ? window.PGEEnv.desugarBPGroups(window.PGEEnv.unwrapEnv(val).items) : null;
+    const items = isEnv ? window.PGEEnv.envSketch(val).points : null;
     const mode = new Function("isEnv", pModeSrc + "\nreturn pMode;")(isEnv);
     const fire = (m) => {
       let out;
