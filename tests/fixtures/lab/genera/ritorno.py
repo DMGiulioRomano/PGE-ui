@@ -21,7 +21,9 @@ del laboratorio lo apre (`carica`, col path `streams/<nome>.yml`) e si chiede:
 Non e' un test di CI: mare-nostrum non e' un checkout fratello di PGE-ui. Il
 corredo della pagina e' quello di `genera.py` (lo `study.yml` di 001-41, le
 finestre e i default dell'engine), con i sample che le fixture nominano.
-Esce 0 se tutto torna.
+Servono il submodule `engine/` di mare-nostrum popolato, come per
+`genera.py`, e `npm install` in `tests/node/` di qui: `scrivi-pgeui.js` usa
+il js-yaml dei test node. Esce 0 se tutto torna.
 """
 import json
 import os
@@ -35,6 +37,8 @@ STREAMS = os.path.join(os.path.dirname(QUI), "streams")
 
 def main(mn):
     mn = os.path.abspath(mn)
+    if not os.path.isdir(os.path.join(mn, "engine", "src", "pge")):
+        sys.exit(f"{mn}/engine/src non c'e': `git submodule update --init` in mare-nostrum")
     sys.path.insert(0, os.path.join(mn, "src"))
     import yaml
     from granstudies import bounds, engine_bridge
@@ -47,7 +51,8 @@ def main(mn):
     esito = True
     with tempfile.TemporaryDirectory() as tmp:
         uscita = os.path.join(tmp, "pgeui")
-        subprocess.run(["node", os.path.join(QUI, "scrivi-pgeui.js"), uscita], check=True)
+        if subprocess.run(["node", os.path.join(QUI, "scrivi-pgeui.js"), uscita]).returncode:
+            sys.exit("scrivi-pgeui.js non ha scritto i file di PGE-ui (il motivo e' qui sopra)")
         pagina = os.path.join(tmp, "graph.html")
         with open(pagina, "w") as fh:
             fh.write(build_html("001-41", lab_completo(

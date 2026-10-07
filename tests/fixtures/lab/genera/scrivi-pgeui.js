@@ -11,7 +11,16 @@ const REPO = path.join(__dirname, "../../../..");
 const LAB = path.join(REPO, "tests/fixtures/lab");
 const out = process.argv[2];
 if (!out) { console.error("uso: scrivi-pgeui.js <cartella di uscita>"); process.exit(2); }
-global.window = { jsyaml: require(path.join(REPO, "tests/node/node_modules/js-yaml")) };
+// Lo stesso js-yaml dei test node: senza `npm install` in tests/node non c'e',
+// e lo si dice invece di uno stack di `Cannot find module`.
+let jsyaml;
+try {
+  jsyaml = require(path.join(REPO, "tests/node/node_modules/js-yaml"));
+} catch (e) {
+  console.error("js-yaml non c'e' in tests/node/node_modules: `cd tests/node && npm install` (o `make tests-node`)");
+  process.exit(2);
+}
+global.window = { jsyaml };
 eval(fs.readFileSync(path.join(REPO, "src/lib/yaml-bridge.js"), "utf8"));
 const Y = window.PGEYaml;
 

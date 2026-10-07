@@ -2231,8 +2231,9 @@ import at all (the "disk" is the re-serialization), but the first touch to an
 imported stream — any key — rewrites its **whole** file from the state, so
 everything the bridge can't carry is lost on an edit that had nothing to do
 with it. `tests/fixtures/lab/` holds five documents the lab's own page wrote
-(`genera/genera.py` drives it in node; regenerate, never hand-edit) and a
-master importing them. Three readers, three questions:
+and a master importing them: four come out of `genera/genera.py`, which
+drives the page in node (regenerate, never hand-edit), and `risacca.yml` is
+mare-nostrum's own fixture, copied as is. Three readers, three questions:
 `tests/node/test-lab-roundtrip.js` (what the editor would write of each file is
 already the lab's document, YAML for YAML; `volume` touched rewrites that file
 only, and there only `volume`), `tests/parity/test-lab-roundtrip-parity.js`

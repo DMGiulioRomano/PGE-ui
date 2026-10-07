@@ -67,3 +67,7 @@ python3 tests/fixtures/lab/genera/genera.py /path/to/mare-nostrum
   ```bash
   python3 tests/fixtures/lab/genera/ritorno.py /path/to/mare-nostrum
   ```
+
+  (serve il submodule `engine/` di mare-nostrum popolato, come per
+  `genera.py`, e `npm install` in `tests/node/`: `scrivi-pgeui.js` scrive i
+  file col js-yaml dei test node).
