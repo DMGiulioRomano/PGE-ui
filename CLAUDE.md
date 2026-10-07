@@ -153,7 +153,14 @@ exists, the fourth only when a browser is installed):
   origin when served over http, the `:7878` fallback only on `file://` — run
   on the backend created at load, plus a census that the fallback literal
   exists once in `src/` and every `tweaks.serverUrl ||` falls back on the
-  rule).
+  rule), and `test-file-guard.js` (#185: `window.PGEFileGuard` — reread /
+  ask / stop decided file by file, the `plan` over N files with its two
+  precedences, `ownChanges` comparing documents without the `# saved:` header,
+  `attempt` driven with injected writes and rereads; then the real backend over
+  a fake disk — the signature read from the header, sent on `PUT /file`,
+  `POST /save` and `POST /render`, never adopted from a refusal, replaced by the one the write
+  returns, dropped by an older bridge and by a workspace switch — plus source
+  guards on the app.jsx wiring and on the three-answer `Toast`).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -207,7 +214,13 @@ exists, the fourth only when a browser is installed):
   `GET /import`, `POST /save` and `/render` with `imports` — everything
   validated before anything is written, the imports on disk when the engine
   starts, measured by a fake engine that looks, and the project list that
-  doesn't list `configs/streams/`), and `test_engine_render.py`
+  doesn't list `configs/streams/`), `test_file_signature.py` (#185: the
+  signature convention shared with the lab, `same_document` with types,
+  `write_guarded`'s three steps in their order, and the HTTP round on
+  `GET`/`PUT /file`, `POST /save` and `POST /render` — a refusal leaves the
+  other editor's bytes untouched, the imported files of the same request
+  included, a document already on disk is not rewritten, `overwrite` is read
+  strictly), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -220,7 +233,8 @@ exists, the fourth only when a browser is installed):
   checkout nor its venv) — `tests/e2e/test-boot.js`, the headless boot. See
   "Headless boot" below. It is the only suite that shows a component *works*
   rather than merely parsing, and the only one that runs the bridge over a real
-  socket.
+  socket. Since #185 it also plays the lab: it rewrites the open project on the
+  bridge's disk and checks what the editor does (see "Two editors, one file").
 
 All four **accumulate** failures rather than stopping at the first red: with
 twenty-odd suites, `|| exit 1` meant seeing one failure per run instead of the
@@ -349,7 +363,12 @@ from prose needs a code-shaped needle (`opts.get("bw"`, not `bw`).
 scanners, and a census over `src/lib/`, `src/components/` and the bridge's
 `.py` where no line that *starts* with its language's comment marker may
 survive `codeOf`, and both readings must keep the file's length (the premise of
-`depthAt`, which walks the mask at offsets found on the code).
+`depthAt`, which walks the mask at offsets found on the code). The bridge's
+`.py` are **read from the repo root**, not listed: the hand-written list had
+four, and the fifth helper (`file_signature.py`, #185) would have stayed out of
+the census with nothing saying so. The read has its own assert (it must find
+`server.py` and at least five files), because a glob that finds nothing accuses
+nothing.
 
 **And the verdict has to be delivered, not only printed.** `Oracle.close()`
 kills the python if it doesn't leave on its own — `stdin.end()` + `unref()` was
@@ -403,14 +422,29 @@ and explode on its first render. That half is `tests/e2e/`.
 previously checked by hand: the page boots with **zero unhandled exceptions and
 zero console errors**, a project loads and reaches the timeline, the Inspector
 and the EnvelopeEditor open on a stream and the envelope *draws its
-breakpoints*, and one undo/redo round trip lands back where it started. The
+breakpoints*, and one undo/redo round trip lands back where it started. And,
+since #185, the scenario of "Two editors, one file": the test rewrites
+`configs/PGE_smoke.yml` on the bridge's disk (with its own dumper and a comment,
+i.e. different bytes, like the lab) while the editor holds it open — without own
+changes the editor rereads (title and timeline follow, the file stays the lab's
+byte for byte, undo is cleared), with own changes it asks, and each of the three
+answers is played for the save; for the render the question, then «ricarica»
+resuming it, then a reread-and-render. Whether the bridge refused or started a
+render is read off the `/render` **responses** (409 / 200), never off the
+terminal: closed, it draws no lines, and "no `$ ` line" there was green by
+blindness the first time it was written. The 409s the test provokes show up as
+console errors ("Failed to load resource"), and are **counted** — one per
+expected refusal — rather than filtered out. The
 assertions are structural (how many breakpoints, which stream, what the `onset`
 row reads), never pixels: a pixel assert ages badly, a boot assert doesn't.
 Since #183/#184 a fifth: a master with `- file:` (`fixtures/PGE_smoke_file.yml`
 plus `fixtures/streams/onda.yml`) opened from the project list, saved untouched,
 then edited in each of its two homes and undone — what landed where is read
 back from the bridge (`GET /import`, `GET /file`), i.e. from the disk. See "The
-stream as a file".
+stream as a file". Its last step is where the two features meet: an unsaved
+edit inside the imported stream, the lab rewriting the master, and a save that
+must **ask** rather than reread — a reread reopens the whole project and would
+drop the edit, which the master's own serialization can't see.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -732,9 +766,162 @@ all disk access. Contract is documented at the top of `backend.js`. If
 `server.py` isn't running the editor flags `serverDown` (there is no in-browser
 fallback).
 
+### Two editors, one file (#185)
+
+The same `configs/<piece>.yml` can be open here and in mare-nostrum's lab. Each
+editor remembers what the file was when it read it and, before writing, checks
+that the disk still holds that: whoever saved second used to take the other's
+work away, silently. The convention is the lab's (DMGiulioRomano/mare-nostrum#15)
+and is computed identically here — not because signatures travel between the
+two (each compares its own reads) but because the **question** must be the same,
+i.e. both editors must speak up in the same cases:
+
+- **`sha256:<hex>` of the file's BYTES** (`file_signature.py`, `ALGO` declared
+  once and read by `hashlib.new`). Not the parse: the two editors write the same
+  document with different bytes, and a change the parse can't see (a comment,
+  key order) is still a different file. Not the mtime: an mtime says somebody
+  wrote, not that the file differs.
+- **Two cases are not a changed file**: no signature read (the editor never read
+  it), and a file that no longer exists ("ricarica" couldn't reread it, and
+  writing it is exactly what was asked).
+- **`write_guarded`, three steps in this order**: (1) the file already holds the
+  document → not written, the signature isn't even looked at, the disk's
+  signature comes back as if just written; (2) read signature ≠ disk and no
+  `overwrite` → refused, *without* the disk's signature (adopting it would mean
+  having read the other editor's document without loading it); (3) write, in
+  binary utf-8, returning the signature of the bytes written. Step 1 is what
+  keeps the render — which rewrites the config every time — from rewriting a
+  file the lab just wrote with the same document: without it the lab's guard
+  would cry "changed" on every PGE-ui render, and lose its formatting and
+  comments. "Same document" is **with types** (`same_document`: `4` vs `4.0`,
+  `1` vs `true` differ — an `n_reps` float is an engine error since PGE #211),
+  compared in the bridge between two PyYAML parses, because in JS `4` and `4.0`
+  are one number. Step 1 applies to YAML names only.
+
+On the wire: `GET /file` reads text and signature from **one** read
+(`read_signed`) and sends the signature in `X-PGE-Signature` — a header, because
+the body *is* the document; `CORS(..., expose_headers=[...])` is load-bearing,
+since the `file://` page is cross-origin and without it would read `null` and
+stay unguarded. `PUT /file` takes `&signature=` and `&overwrite=` (only `1` /
+`true`: `bool("false")` is `True`); `POST /save` — the editor's save since
+#184, master and changed imports in one request — and `POST /render` take
+`signature` and `overwrite` in the JSON body (only a JSON `true`, one reading
+for both: `_master_verdict`). The signature is the **master's**, and on those
+two routes the verdict is decided **before any file is written**
+(`check_guarded`, then `apply_guarded` after the imports): a refusal leaves
+the imported files untouched too, because writing them and then refusing the
+master would be the half piece `plan_import_writes` exists to prevent. The
+render refuses before the venv and the stream as well. The refusal is a 409 with `changed` as a field
+of its own and `name` saying which file — never an error to recognize from its
+text.
+
+`backend.js` owns the signatures (in memory, per `(kind, name)`, never
+persisted: after a reload that read never happened, and a persisted signature
+that happens to match is a write that passes with nobody looking). The one
+written replaces the one read (from the `PUT` body, from the `file-signature`
+event); a refusal doesn't touch it; a bridge that sends none (older than #185)
+drops it, so the guard falls silent instead of refusing writes that bridge can't
+refuse; a 404 drops it; a workspace switch drops them all (two folders can hold
+a same-named project, and the inherited signature might *match*). A refused
+`writeFile` / `fs.save` / `render.run` **returns** `{ok:false, changed:true, files}` — not a
+throw, which would arrive as "Save failed" / "Render failed", i.e. the question
+never asked — and the refused render emits no `done` (it is the event of a
+render that finished; the engine never started).
+
+The decision is `src/lib/file-guard.js` (`window.PGEFileGuard`, pure,
+node-tested), **file by file from day one**: today the guard watches one file,
+the master — imported streams (#184) are written beside it but not signed yet,
+see the declared limits below — and with them a clean imported file is reread
+even while the master has something to ask.
+
+- `decide`: a file already reread once → `stop` (it is changing *now*; chasing
+  it never ends — `MAX_REREADS = 1`, the lab's number); otherwise own changes →
+  `ask`, none → `reread`. Only an explicit `false` counts as none: the safe
+  direction of "don't know" is the question.
+- `plan` over N files: `stop` beats `ask` (answering is useless, the next round
+  comes back to the refusal of the file still changing, and on a stop nothing is
+  reread — a reread is a change to the editor's state that no write would
+  follow); `ask` doesn't stop the rereads of the clean files. A refusal naming no
+  file stops.
+- `attempt(hooks, state)`: write → on refusal, ask `ownChanges` of every file
+  *before* rereading any (a reread changes the editor's state) → reread the clean
+  ones → retry, or return `asked` / `stopped` / `reread-failed`. It terminates:
+  each file is reread at most once, an overwritten file isn't refused again.
+  `state.doc` carries the reread document into the retry, because React state
+  isn't synchronous — retrying with the closure's `data` would send the bridge
+  exactly what it just refused. `afterOverwrite` clears it: «sovrascrivi» writes
+  what the user has in front of them *now*, edits made while the question was
+  open included.
+
+`app.jsx` is the glue, and the two things only it can say:
+
+- **"Own changes" is not `dirty`.** It is `FG.ownChanges(serialize(now),
+  syncedDocRef[name])`: the document this editor would write now against the one
+  it would have written at the last alignment with the file — a read
+  (`onProjectSelect`), a successful save, a render whose config was written or
+  found written. Two serializations of the same serializer, so the other
+  editor's formatting doesn't enter, and the `# saved:` header is stripped
+  (`documentBody`). `dirty` would be wrong both ways: it stays on after a render,
+  which did rewrite the file (every render after a lab save would ask instead of
+  rereading), and after an undo back to the saved state. It is read from
+  `dataRef` — the `data` of *now*, after the refusal's network round trip.
+- **«ricarica» is an "open" of the same file**: `rereadProject` →
+  `onProjectSelect`, which now **returns the parsed document** (`null` on the
+  fallback — then the write stops: retrying would write the blank fallback over
+  the other editor's file) and calls `resetHistory()` — the issue's criterion:
+  an undo would bring back a version no longer on disk, and the next write would
+  write it over the other editor's. The reread document is also the new
+  alignment, so the retry finds it already on disk and leaves the lab's bytes.
+
+The question is a persistent toast **per file** with three answers —
+«ricarica», «sovrascrivi», and the × (write nothing) — so `Toast` grew `actions`
+(plural): with those the surface is not clickable (with `action` singular the
+whole toast is the button, and a stray click would become an answer that
+writes), each answer has its button, and the × calls `onClose`. The write
+resumes when every file has its answer. The answers go through `latestRef`
+(this render's `answerFileQuestion` / `saveProject` / `renderAgain`), because
+the question doesn't freeze the keyboard. Any new write replaces the question
+(`closeFileQuestion` at the top of `saveProject` and `runRender`), and so do
+opening a project (`openProject`, the UI's door — not `onProjectSelect`, which is
+also the reread and with N files must not close the others' questions) and a
+workspace switch (which also empties `syncedDocRef`).
+
+The render goes through the same `FG.attempt`, and **a refused render is not a
+failed render**: the status goes off and the guard reports, no "Render failed".
+`onRender` stays the UI's zero-argument entry (it goes to `onClick`, which would
+pass a `MouseEvent`); `renderAgain(state)` is where the answers re-enter, behind
+the same `renderingRef` guard. Inside `runRender` the document and its
+fingerprints are fixed **per attempt** (`yamlOfThisRun`, `fpsOfThisRun`): the
+`stream-done` handler records `fpsOfThisRun[id]`, not the closure's `currentFps`,
+for `semOfThisRun`'s reason — after a reread the closure remembers the refused
+document. Save As and New project pass `overwrite: true`: a name just typed, not
+the open file, so there is no read of *that* file behind the document (the lab's
+`salva con nome` rule).
+
+Declared limits: the window between check and write is that of any
+check-then-write on a filesystem (the guard catches the real case, two editors
+open for minutes); a reread whose document PGE-ui doesn't round-trip identically
+(top-level `duration` is recomputed from the streams, `computeDuration`) is
+rewritten by the retry — legitimate, it is what this editor writes, and the lab's
+guard will then ask or reread on its side. **Imported streams (#184) are
+written but not guarded**: `GET /import` sends no signature, so a lab that
+rewrites `streams/x.yml` while it is open here is not noticed, and the next
+save or render that touches that file overwrites it. `file-signature` is one
+event per file and `plan` already takes N, so signing them is a matter of
+calling the same pieces, not rewriting them. What #184 did change is what
+counts as **own changes on the master**: a reread is an "open" of the whole
+project, imported files included, and an edit inside an imported stream
+doesn't move the master's serialization (the master holds its placement only).
+So `fileHasOwnChanges` also asks `changedImports` against `importDiskRef` (and
+a conflict between two copies of one file counts): without it a lab save of the
+master would reread away unsaved edits made in an imported stream, without
+asking. In a render, each attempt marks its imports written and, when the bridge
+refused (`configWritten === false`), gives the claim back **inside** the attempt
+(`releaseImports`), so the question that follows a refusal sees them unwritten.
+
 ### NDJSON render protocol
 
-`POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`. `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
+`POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`, and — first, when the request carried a document — `file-signature` (`{kind, name, signature, written}`, #185: the signature of the config this render wrote or found already written; one event per file, so the N files of #184 don't change its shape). A config changed on disk since the editor read it is not a stream at all: a JSON 409 before any of this (see "Two editors, one file"). `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
 
 **Not every `[CACHE]` line is a stream, and the shape doesn't say which.** The
 engine prints `[CACHE] Manifest: <path>` on every `--cache` render and
@@ -2671,7 +2858,7 @@ The pure stack mechanics live in `history-core.js` (`window.PGEHistoryCore`, nod
 
 ## File layout & load order (matters)
 
-Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
+Sources live under `src/lib/` (`.js` logic — `window.*` globals, no modules), `src/components/` (`.jsx` UI), and `styles/` (`.css`). `PGE Editor.html` and the Python bridge (`server.py` + helpers: `audio_pipeline.py`, `render_pipeline.py`, `engine_introspect.py`, `file_signature.py`) stay in the repo root. `server.py` serves the editor and these subdirectories via its static catch-all.
 
 `bin/pge-ui` (#164) is the one thing in the repo that is neither editor nor
 bridge: a four-line `sh` launcher that `make install-cli` symlinks onto `$PATH`,
@@ -2826,7 +3013,7 @@ needs its control: with a `PATH` that narrow, *any* failure would keep a
 `status !== 0` assert green, so the same `PATH` with `realpath` back in it must
 succeed.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/renderer-choice.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/renderer-choice.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → `src/lib/file-guard.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a
@@ -2840,6 +3027,12 @@ nowhere else.
 ## Security stance of `server.py`
 
 Binds `127.0.0.1` by default. CORS wide-open — the editor is served by the bridge on its own origin (#166), but opening the HTML as `file://` stays possible and needs it. No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
+
+**A write can be refused** (#185): `PUT /file`, `POST /save` and the config
+write of `POST /render` answer 409 `{changed}` when the file's signature on disk isn't
+the one the editor read (see "Two editors, one file"). It is a guard between two
+cooperating editors on one machine, not an access control: a client that omits
+the signature writes as before.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check
@@ -2878,4 +3071,5 @@ document in `configs/streams/` is imported, not opened as a piece
 - Stem filenames: `<basename>__<streamId>.<ext>` (double underscore separator); `<ext>` follows the Settings output format (`tweaks.outputFormat`, default `wav` → `.wav`; `aiff` → `.aif`, `flac` → `.flac`).
 - Cache manifests: `cache/<basename>.json`, one file per project. Keyed by the YAML basename — `/render` writes the editor state to the stable `configs/<basename>.yml` (never a temp file) so the manifest persists across renders and incremental caching works.
 - Editor served by the bridge (`GET /`), which opens the browser on it — there is no separate dev server for the frontend. `file://` works as a fallback that only finds a bridge on `:7878`.
-- `requirements.txt` is for the bridge only. The engine has its own (and its own venv).
+- `requirements.txt` is for the bridge only. The engine has its own (and its own venv). Since #185 it includes PyYAML (`file_signature.py`'s document comparison), and **every** `pip install` of the bridge in CI reads it — the e2e job's transcribed `flask flask-cors` would have lost it, the third time that shape bit after #153 and #166 (`test_launch.py` guards every such step).
+- File signatures: `sha256:<hex>` of the bytes on disk, in the `X-PGE-Signature` header of `GET /file`; the convention is shared with mare-nostrum's lab and must move on both sides at once.

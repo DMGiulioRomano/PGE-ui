@@ -115,22 +115,43 @@ function Terminal({ open, lines, onClose, onClear, status, onCopyAll, height = 2
   );
 }
 
+/* `action` (una) rende il toast intero un bottone: un click ovunque la esegue.
+   `actions` (piu' di una) no — un toast con due risposte e' una domanda, e un
+   click a caso su una domanda non deve diventare una delle risposte. Li' la
+   superficie non e' cliccabile, ogni risposta ha il suo bottone, e la × e' la
+   risposta "nessuna delle due" (`onClose`), che non costa un click in piu'.
+   Nato per la domanda del file cambiato su disco (#185): ricarica, sovrascrivi,
+   o non scrivere niente. */
 function Toast({ toasts, onDismiss }) {
   if (!toasts || toasts.length === 0) return null;
   return (
     <div className="pge-toasts">
-      {toasts.map((t) => (
-        <div key={t.id} className={"pge-toast " + (t.kind || "info")} style={t.action ? {cursor:"pointer"} : {}} onClick={() => { if (t.action) { t.action.onClick(); } onDismiss(t.id); }}>
+      {toasts.map((t) => {
+        const clickable = !!(t.action && !t.actions);
+        return (
+        <div key={t.id} className={"pge-toast " + (t.kind || "info") + (t.actions ? " ask" : "")} style={clickable ? {cursor:"pointer"} : {}} onClick={() => { if (t.action && !t.actions) { t.action.onClick(); onDismiss(t.id); } else if (!t.actions) { onDismiss(t.id); } }}>
           <span className="tt-dot" />
           <div className="tt-body">
             <div className="tt-title">{t.title}</div>
             {t.message ? <div className="tt-msg mono">{t.message}</div> : null}
+            {t.actions ? (
+              <div className="tt-acts">
+                {t.actions.map((a) => (
+                  <button key={a.label} className="tt-act" onClick={(e) => { e.stopPropagation(); a.onClick(); onDismiss(t.id); }}>{a.label}</button>
+                ))}
+              </div>
+            ) : null}
           </div>
-          {t.action ? (
+          {clickable ? (
             <button className="tt-act" onClick={(e) => { e.stopPropagation(); t.action.onClick(); onDismiss(t.id); }}>{t.action.label}</button>
           ) : null}
+          {t.actions ? (
+            <button className="tt-x" title="non scrivere niente" aria-label="chiudi"
+                    onClick={(e) => { e.stopPropagation(); if (t.onClose) t.onClose(); onDismiss(t.id); }}>×</button>
+          ) : null}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -645,8 +645,18 @@ console.log("\n── la catena dal motore al pallino ──");
    *   - lo stato deve alzarsi PRIMA dell'attesa, o l'utente non vede niente
    *     (log, toast, bottone) finche' il bridge non risponde. */
   {
-    const entry = appSrc.slice(appSrc.indexOf("async function onRender()"),
-                               appSrc.indexOf("async function runRender()"));
+    /* Ancorate sul NOME, non sulla lista dei parametri: `runRender` ha preso lo
+     * stato del giro della guardia di #185, e una guardia ancorata su
+     * `runRender()` mandava `indexOf` a -1 — cioe' gridava sull'unica modifica
+     * che non e' il suo difetto. In mezzo ai due c'e' anche `renderAgain`, la
+     * strada delle risposte alla domanda del file cambiato: la guardia di
+     * rientro e' sua, e `onRender` la attraversa. */
+    const entry = appSrc.slice(appSrc.indexOf("async function onRender("),
+                               appSrc.indexOf("async function runRender("));
+    assert("i due ingressi del render si trovano", entry.length > 0 &&
+      appSrc.indexOf("async function runRender(") > appSrc.indexOf("async function onRender("));
+    assert("onRender non prende argomenti: va a onClick, che le passerebbe un MouseEvent",
+      /async function onRender\(\)/.test(appSrc));
     assert("la guardia di rientro del render si alza su un ref, prima di ogni await",
       /renderingRef\.current\) return;/.test(entry) &&
       entry.indexOf("renderingRef.current = true") < entry.indexOf("await"),
@@ -654,7 +664,7 @@ console.log("\n── la catena dal motore al pallino ──");
     assert("...e si riabbassa in un finally",
       /finally\s*\{\s*renderingRef\.current = false;/.test(entry), entry);
 
-    const body = appSrc.slice(appSrc.indexOf("async function runRender()"));
+    const body = appSrc.slice(appSrc.indexOf("async function runRender("));
     const raise = body.indexOf("setRenderStatus({ running: true");
     const wait  = body.indexOf("await refreshEngineSem()");
     assert("lo stato di render si alza prima dell'attesa, non dopo",

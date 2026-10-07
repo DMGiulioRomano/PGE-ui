@@ -642,6 +642,21 @@ body.pge-resizing-scope * { cursor: ns-resize !important; user-select: none !imp
   flex-shrink: 0;
 }
 .pge-toast .tt-act:hover { border-color: var(--accent); color: var(--accent); }
+/* Il toast-domanda (`actions`, #185): non e' cliccabile, il messaggio va a
+   capo — e' la spiegazione delle risposte, troncarla a una riga la toglie — e
+   la × e' la terza risposta. */
+.pge-toast.ask { cursor: default; }
+.pge-toast.ask .tt-msg { white-space: normal; }
+.pge-toast .tt-acts { display: flex; gap: 6px; margin-top: 6px; }
+.pge-toast .tt-x {
+  appearance: none; background: transparent; border: 0;
+  padding: 0 2px; margin-top: -2px;
+  color: var(--fg-3);
+  font-size: 13px; line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pge-toast .tt-x:hover { color: var(--fg-1); }
 
 /* ---------- Settings Panel ---------- */
 .sp-overlay {

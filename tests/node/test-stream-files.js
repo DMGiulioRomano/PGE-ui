@@ -478,18 +478,25 @@ console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardi
     /importRefs\(/.test(app) && /readImport\(/.test(app) && /imports\s*[:,]/.test(app));
   assert("il salvataggio scrive master e file cambiati in un colpo (fs.save)",
     /backend\.fs\.save\(/.test(app) && /changedImports\(/.test(app));
+  /* Dal merge con #185 il render passa dal giro della guardia (`FG.attempt`),
+     e ogni tentativo ha il suo documento — dopo una rilettura, quello riletto —
+     quindi il piano degli import (`plan`) si fa dentro il tentativo, e il
+     corpo del POST lo riceve da li' (`optsFor(doc, st, plan.texts)`). */
   assert("il render manda i file cambiati, cosi' sono su disco prima del motore",
-    /imports:\s*changedForRender/.test(app));
+    /imports:\s*importTexts/.test(app) && /optsFor\(doc, st, plan\.texts\)/.test(app));
   {
     const rr = app.slice(app.indexOf("async function runRender("));
-    const claim = rr.indexOf("markImportsWritten(importPlan.bodies)");
+    const claim = rr.indexOf("markImportsWritten(plan.bodies)");
     const run = rr.indexOf(".render.run(");
     assert("il render reclama i suoi file PRIMA di run(), non a render finito",
       claim > 0 && run > 0 && claim < run, `claim@${claim} run@${run}`);
+    /* ...e li rende dentro il tentativo, prima di tornare il risultato al
+       giro: la domanda "modifiche proprie?" che segue un rifiuto (#185) deve
+       vedere non scritti gli import che il bridge non ha scritto. */
     assert("...e li rende con releaseImports se il bridge non li ha scritti",
-      /if \(result\.configWritten === false && window\.PGEYaml\)\s*\{\s*importDiskRef\.current\s*=\s*window\.PGEYaml\.releaseImports\(/.test(rr));
+      /if \(r && r\.configWritten === false && window\.PGEYaml\)\s*\{\s*importDiskRef\.current\s*=\s*window\.PGEYaml\.releaseImports\([^;]*;\s*\}\s*return r;/.test(rr));
     assert("...e non li segna una seconda volta dopo run()",
-      (rr.match(/markImportsWritten\(importPlan\.bodies\)/g) || []).length === 1);
+      (rr.match(/markImportsWritten\(/g) || []).length === 1);
   }
   const detach = app.match(/detachImport\(/g) || [];
   assert("incolla e split staccano la provenienza (finche' #186/#187 non danno un file nuovo)",

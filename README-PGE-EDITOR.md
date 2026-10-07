@@ -104,8 +104,12 @@ GET  /diagnose                   — system checks (sox, soxi, numpy, venv, …)
 # listing + file I/O
 GET  /media                      — list refs/ ({ path, files:[{name,duration?}] })
 GET  /projects                   — list configs/*.yml
-GET  /file?kind=…&name=…         — read a file
-PUT  /file?kind=…&name=…         — write a file
+GET  /file?kind=…&name=…         — read a file; its signature (sha256 of the
+                                   bytes) in the X-PGE-Signature header
+PUT  /file?kind=…&name=…         — write a file; with &signature=<the one read>
+                                   it answers 409 {changed} if the file changed
+                                   on disk since (another editor, #185), and
+                                   &overwrite=1 writes anyway
 GET  /stems/<base>               — stream IDs with a rendered stem on disk
 GET  /cache_manifest/<base>      — read cache/<base>.json
 

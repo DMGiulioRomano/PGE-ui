@@ -24,6 +24,11 @@
  *                           una cornice vuota
  *   4. undo/redo          — un gesto, un passo indietro, un passo avanti, e
  *                           lo stato torna dov'era
+ *   5. due editor, un file (#185) — il laboratorio riscrive il progetto sul
+ *                           disco mentre l'editor e' aperto: senza modifiche
+ *                           proprie l'editor rilegge, con modifiche chiede, e
+ *                           nessuna delle due strade si porta via il file
+ *                           dell'altro senza una risposta
  *
  * Gli assert parlano di struttura (quanti breakpoint, quale stream, che
  * numero legge la riga `onset`), non di geometria: un assert sul pixel
@@ -388,129 +393,352 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     assert("redo la rimanda avanti", redone === moved,
       `atteso ${moved}, letto ${redone}`);
 
-    /* ============================================================
-     * 5 — lo stream come file (#183, #184)
-     * ============================================================ */
-    console.log("\n── stream come file: master e file importato ──");
+    {
+      /* ============================================================
+       * 5 — due editor, un file (#185)
+       * ============================================================ */
+      console.log("\n── due editor, un file: il laboratorio riscrive il progetto ──");
 
-    /* Un master con `- file: streams/onda.yml` (fixtures/PGE_smoke_file.yml).
-     * Il node copre le regole una per una (tests/node/test-stream-files.js);
-     * qui si guarda la strada intera, che in node non gira: il browser dei
-     * progetti, GET /import, Ctrl+S, POST /save, il ref del disco fuori dalla
-     * storia. Cio' che e' finito dove lo si chiede al bridge, cioe' al disco:
-     * GET /import per il file, GET /file per il master. */
-    const FILE = "streams/onda.yml";
-    const MASTER = "PGE_smoke_file.yml";
-    const importText = () => page.evaluate(async (f) => {
-      const r = await fetch(`/import?file=${encodeURIComponent(f)}`);
-      const j = await r.json();
-      return j && j.ok ? j.text : null;
-    }, FILE);
-    const masterText = () => page.evaluate(async (n) => {
-      const r = await fetch(`/file?kind=projects&name=${encodeURIComponent(n)}`);
-      return r.ok ? r.text() : null;
-    }, MASTER);
-    const yamlOf = (t) => page.evaluate((x) => window.jsyaml.load(x), t);
-    // Il salvataggio rigenera l'intestazione (`# saved:` porta l'ora), e i
-    // commenti della fixture non sopravvivono: il confronto e' sul resto.
-    const bodyOf = (t) => (t || "").split("\n").filter(l => !l.startsWith("#")).join("\n").trim();
-    const save = async () => { await page.keyboard.press("Control+s"); await wait(700); };
+      /* Il "laboratorio" e' questo test che scrive sul disco del workspace,
+       * col suo dumper e un commento suo: byte diversi da quelli di PGE-ui
+       * anche a documento identico, che e' esattamente il caso vero. */
+      const yaml = require("js-yaml");
+      const cfg = path.join(session.paths.workspace, "configs", "PGE_smoke.yml");
+      const labWrites = (mutate) => {
+        const doc = yaml.load(fs.readFileSync(cfg, "utf8"));
+        mutate(doc);
+        fs.writeFileSync(cfg, "# scritto dal laboratorio\n" + yaml.dump(doc, { flowLevel: 3 }));
+        return fs.readFileSync(cfg, "utf8");
+      };
+      const titleShown = () => page.evaluate(() =>
+        ((document.querySelector(".pge-topbar .proj .meta") || {}).textContent || ""));
+      const questions = () => page.evaluate(() =>
+        [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+          title: (t.querySelector(".tt-title") || {}).textContent || "",
+          acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+          x: !!t.querySelector(".tt-x"),
+        })));
+      const toastTitles = () => page.evaluate(() =>
+        [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+      const canUndo = () => page.evaluate(() => window.PGEHistory && window.PGEHistory.canUndo);
+      const stream2Onset = () => page.evaluate(() => {
+        const c = [...document.querySelectorAll(".lane .clip")]
+          .find(e => /^stream2\b/.test((e.querySelector(".lbl") || {}).textContent || ""));
+        return c ? c.style.left : null;
+      });
+      // Le risposte 409 del bridge: il browser le scrive in console come risorsa
+      // fallita. Sono provocate da questo test — il laboratorio che riscrive —
+      // e si contano, una per rifiuto atteso, invece di sparire in un filtro.
+      let expected409 = 0;
+      const save = async () => { await page.keyboard.press("Control+s"); await wait(700); };
+      // Le risposte di POST /render, in ordine: e' cio' che dice se il bridge ha
+      // rifiutato (409) o ha fatto partire lo stream del render (200). Il log del
+      // terminale no: chiuso, non disegna righe, e un "nessuna riga $" li'
+      // sarebbe verde per cecita'.
+      const renders = [];
+      page.on("response", (r) => {
+        if (new URL(r.url()).pathname === "/render") renders.push(r.status());
+      });
 
-    const file0 = await importText();
-    const master0 = await masterText();
-    assert("il bridge serve il file importato (GET /import)", typeof file0 === "string" && /stream_id: onda/.test(file0),
-      String(file0).slice(0, 120));
+      // (a) allineati: un salvataggio, e il disco e' il documento dell'editor.
+      await page.click(".lane .clip");
+      await save();
+      assert("il salvataggio di partenza va", (await toastTitles()).includes("Saved"),
+        JSON.stringify(await toastTitles()));
 
-    await page.click(".bw-tabs button:nth-child(2)");
-    const picked = await page.evaluate((n) => {
-      const it = [...document.querySelectorAll(".pge-browser .it.proj")]
-        .find(e => (e.querySelector(".nm") || {}).textContent === n);
-      if (it) it.click();
-      return !!it;
-    }, MASTER);
-    assert("il master compare fra i progetti, il file importato no",
-      picked && !(await page.evaluate(() =>
-        [...document.querySelectorAll(".pge-browser .it.proj .nm")].some(e => /onda/.test(e.textContent)))));
-    let opened2 = true;
-    try { await page.waitForSelector(".lane .clip .clip-file", { timeout: 10000 }); }
-    catch { opened2 = false; }
-    assert("lo stream importato e' in timeline, col nome del suo file", opened2);
-    const clips2 = await page.evaluate(() =>
-      [...document.querySelectorAll(".lane .clip .lbl")].map(e => e.textContent.trim()));
-    assert("due stream: l'importato (id = nome del file) e quello scritto dentro",
-      clips2.length === 2 && clips2.some(t => /^onda · streams\/onda\.yml/.test(t))
-        && clips2.some(t => /^riva /.test(t)), JSON.stringify(clips2));
-    const errToast = await page.evaluate(() =>
-      [...document.querySelectorAll(".pge-toast")].some(t => /stream importati/.test(t.textContent)));
-    assert("nessun errore sugli import", !errToast);
+      // (b) il laboratorio cambia il titolo e accorcia stream3; l'editor non ha
+      // modifiche proprie.
+      /* stream2 e non stream3: accorciare l'ultima clip sposterebbe la durata
+         del brano, che l'editor ricalcola dagli stream (`computeDuration`) — il
+         documento riletto non sarebbe piu' quello del laboratorio, e la riprova
+         lo riscriverebbe. Legittimo (e' cio' che l'editor scriverebbe), ma qui
+         si verifica l'altro caso. */
+      const widthOf2 = () => page.evaluate(() => {
+        const c = [...document.querySelectorAll(".lane .clip")]
+          .find(e => /^stream2\b/.test((e.querySelector(".lbl") || {}).textContent || ""));
+        return c ? c.getBoundingClientRect().width : null;
+      });
+      const w2 = await widthOf2();
+      const labA = labWrites(d => { d.title = "dal laboratorio"; d.streams[1].duration = 2; });
+      expected409++;
+      await save();
+      assert("senza modifiche proprie non si chiede niente", (await questions()).length === 0,
+        JSON.stringify(await questions()));
+      assert("...si rilegge: il titolo del laboratorio arriva nell'editor",
+        /dal laboratorio/.test(await titleShown()), await titleShown());
+      assert("...e la timeline lo disegna: stream2 e' lunga la meta'",
+        Math.abs((await widthOf2()) - w2 / 2) < 2, `${w2} → ${await widthOf2()}`);
+      assert("...e lo dice", (await toastTitles()).some(t => /riletto/.test(t)),
+        JSON.stringify(await toastTitles()));
+      /* Il documento riletto e' gia' su disco: la riprova non lo riscrive, e il
+         file resta del laboratorio byte per byte, commento compreso. Senza, al
+         giro dopo la guardia del laboratorio direbbe "cambiato" su niente. */
+      assert("...il file resta quello del laboratorio, byte per byte",
+        fs.readFileSync(cfg, "utf8") === labA);
+      assert("...e la rilettura azzera la storia", (await canUndo()) === false);
 
-    // Selezionare la clip importata e' anche cio' che toglie il fuoco a un
-    // campo dell'Inspector: con il fuoco in un input Ctrl+S non e' un
-    // salvataggio (app.jsx lascia la tastiera a chi scrive).
-    const importedClip = async () => {
-      await page.click(".lane .clip:has(.clip-file)");
-      await wait(200);
-    };
-    await importedClip();
-    // `i` apre e chiude: la sezione 3 l'ha gia' aperto, e cambiare progetto
-    // non lo richiude.
-    if (!(await page.$(".pge-inspector"))) await page.keyboard.press("i");
-    await wait(400);
-    const fileRow = await page.evaluate(() => {
-      const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
-        .find(p => (p.querySelector(".k") || {}).textContent === "file");
-      return r ? (r.querySelector(".v") || {}).textContent : null;
-    });
-    assert("l'Inspector dice da quale file viene lo stream", fileRow === FILE, JSON.stringify(fileRow));
+      // (c) modifiche proprie, e il laboratorio riscrive ancora.
+      await page.click(".lane .clip");
+      const onsetBefore = await stream2Onset();
+      await page.keyboard.press("Shift+ArrowRight");
+      await wait(300);
+      assert("una modifica propria (⇧→)", (await canUndo()) === true);
+      const labB = labWrites(d => { d.title = "laboratorio, due"; });
+      expected409++;
+      await save();
+      const q1 = await questions();
+      assert("con modifiche proprie si chiede", q1.length === 1, JSON.stringify(q1));
+      assert("...con tre risposte: ricarica, sovrascrivi, ×",
+        q1.length === 1 && q1[0].acts.join(",") === "ricarica,sovrascrivi" && q1[0].x,
+        JSON.stringify(q1));
+      assert("...e intanto il file resta del laboratorio", fs.readFileSync(cfg, "utf8") === labB);
 
-    // 1 — aprire e salvare senza toccare niente.
-    await importedClip();
-    await save();
-    const file1 = await importText(), master1 = await masterText();
-    assert("salvato senza modifiche, il file importato e' intatto, byte per byte",
-      file1 === file0, file1 === file0 ? "" : file1);
-    assert("...e il master torna identico, a parte l'intestazione",
-      bodyOf(master1) === bodyOf(master0), master1);
+      // «ricarica»: un "apri" dello stesso file.
+      await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+      await wait(800);
+      assert("ricarica: la domanda si chiude", (await questions()).length === 0);
+      assert("...il documento e' quello del laboratorio", /laboratorio, due/.test(await titleShown()),
+        await titleShown());
+      /* Il criterio dell'issue: un undo riporterebbe una versione che su disco
+         non c'e' piu', e la scrittura dopo la riscriverebbe. */
+      assert("...e l'undo non riporta la versione vecchia", (await canUndo()) === false);
+      assert("...la modifica propria e' andata (era la scelta)",
+        (await stream2Onset()) === onsetBefore, `${onsetBefore} → ${await stream2Onset()}`);
+      assert("...e il file non e' stato riscritto", fs.readFileSync(cfg, "utf8") === labB);
 
-    // 2 — una chiave di stream (la durata, Ctrl+⇧→ = +1 s): nel file.
-    const dur0 = (await yamlOf(file0)).streams[0].duration;
-    await importedClip();
-    await page.keyboard.press("Control+Shift+ArrowRight");
-    await wait(300);
-    await save();
-    const file2 = await importText(), master2 = await masterText();
-    const doc2 = await yamlOf(file2);
-    assert("la durata finisce nel file importato", doc2.streams[0].duration === dur0 + 1,
-      `${dur0} → ${doc2.streams[0].duration}`);
-    assert("...che resta un documento del laboratorio: seed, stream_id e onset del file",
-      doc2.seed === 1441 && doc2.streams[0].stream_id === "onda" && doc2.streams[0].onset === 0,
-      JSON.stringify([doc2.seed, doc2.streams[0].stream_id, doc2.streams[0].onset]));
-    const entry2 = (await yamlOf(master2)).streams[0];
-    assert("...e la voce del master non cambia", JSON.stringify(entry2) === JSON.stringify({ file: FILE, onset: 1 }),
-      JSON.stringify(entry2));
+      // «sovrascrivi»: si scrive la versione dell'editor.
+      await page.click(".lane .clip");
+      await page.keyboard.press("Shift+ArrowRight");
+      await wait(300);
+      const onsetMine = await stream2Onset();
+      labWrites(d => { d.title = "laboratorio, tre"; });
+      expected409++;
+      await save();
+      assert("ancora modifiche proprie: si chiede", (await questions()).length === 1);
+      await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+      await wait(800);
+      const afterOverwrite = yaml.load(fs.readFileSync(cfg, "utf8"));
+      assert("sovrascrivi: su disco c'e' la versione dell'editor",
+        afterOverwrite.title === "laboratorio, due" &&
+        !fs.readFileSync(cfg, "utf8").startsWith("# scritto dal laboratorio"),
+        String(afterOverwrite.title));
+      assert("...con la modifica propria", (await stream2Onset()) === onsetMine);
+      assert("...e il salvataggio lo dice", (await toastTitles()).includes("Saved"));
 
-    // 3 — una chiave di piazzamento (l'onset, ⇧→ = +1 s): nel master.
-    await importedClip();
-    await page.keyboard.press("Shift+ArrowRight");
-    await wait(300);
-    await save();
-    const file3 = await importText(), master3 = await masterText();
-    assert("l'onset finisce nel master", (await yamlOf(master3)).streams[0].onset === 2,
-      JSON.stringify((await yamlOf(master3)).streams[0]));
-    assert("...e il file importato non si tocca", file3 === file2);
+      // ×: non si scrive niente.
+      await page.click(".lane .clip");
+      await page.keyboard.press("Shift+ArrowRight");
+      await wait(300);
+      const labD = labWrites(d => { d.title = "laboratorio, quattro"; });
+      expected409++;
+      await save();
+      await page.click(".pge-toast.ask .tt-x");
+      await wait(300);
+      assert("×: la domanda si chiude", (await questions()).length === 0);
+      assert("...e il file resta del laboratorio", fs.readFileSync(cfg, "utf8") === labD);
 
-    // 4 — undo di entrambe, poi un salvataggio: il disco torna com'era.
-    await page.keyboard.press("Control+z");
-    await wait(300);
-    await page.keyboard.press("Control+z");
-    await wait(300);
-    await save();
-    const file4 = await importText(), master4 = await masterText();
-    assert("dopo l'undo il file importato torna com'era (riscritto, perche' su disco era cambiato)",
-      JSON.stringify(await yamlOf(file4)) === JSON.stringify(await yamlOf(file0)), file4);
-    assert("...e la voce del master pure",
-      JSON.stringify((await yamlOf(master4)).streams[0]) === JSON.stringify({ file: FILE, onset: 1 }),
-      JSON.stringify((await yamlOf(master4)).streams[0]));
+      /* Il render passa dalla stessa guardia, prima di scrivere il config: con
+         modifiche proprie chiede, e il motore non parte finche' non si risponde.
+         (Il motore qui e' finto: partisse, la riga `$ …` lo direbbe nel log.) */
+      expected409++;
+      await page.keyboard.press("r");
+      await wait(800);
+      const q2 = await questions();
+      assert("il render su un file cambiato, con modifiche proprie: si chiede",
+        q2.length === 1 && /cambiato su disco/.test(q2[0].title), JSON.stringify(q2));
+      assert("...e il bridge l'ha rifiutato prima di partire", renders.join(",") === "409",
+        `risposte di /render: ${renders.join(",")}`);
+      assert("...ne' il config viene riscritto", fs.readFileSync(cfg, "utf8") === labD);
+      assert("...ne' si annuncia un render fallito", !(await toastTitles()).includes("Render failed"),
+        JSON.stringify(await toastTitles()));
+
+      /* «ricarica» riprende il render, sul documento riletto: e' quello che
+         l'altro editor ha appena scritto, cioe' quello che si vuole sentire. Il
+         config e' gia' su disco, quindi il render non lo riscrive. */
+      await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+      await wait(1500);
+      assert("ricarica, nel render: il render riparte e il bridge lo accetta",
+        renders.join(",") === "409,200", `risposte di /render: ${renders.join(",")}`);
+      // Il motore qui e' finto (un `python` non eseguibile): che il render
+      // "fallisca" e' la prova che e' partito davvero, fino allo spawn.
+      assert("...fino al motore", (await toastTitles()).includes("Render failed"),
+        JSON.stringify(await toastTitles()));
+      assert("...sul documento del laboratorio", /laboratorio, quattro/.test(await titleShown()));
+      assert("...senza riscrivere il config", fs.readFileSync(cfg, "utf8") === labD);
+
+      /* Senza modifiche proprie il render non chiede: rilegge e rende. */
+      const labE = labWrites(d => { d.title = "laboratorio, cinque"; });
+      expected409++;
+      await page.keyboard.press("r");
+      await wait(1500);
+      assert("render senza modifiche proprie: nessuna domanda", (await questions()).length === 0);
+      assert("...rilegge", /laboratorio, cinque/.test(await titleShown()), await titleShown());
+      assert("...e rende: un rifiuto, una rilettura, una riprova accettata",
+        renders.slice(2).join(",") === "409,200", `risposte di /render: ${renders.join(",")}`);
+      assert("...lasciando il config al laboratorio", fs.readFileSync(cfg, "utf8") === labE);
+
+      const refused = seen.errors.filter(e => / 409 /.test(e) && /\/(file|save|render)\b/.test(e));
+      assert(`i rifiuti in console sono quelli provocati dal test (${expected409})`,
+        refused.length === expected409, refused.join("\n      "));
+      seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused.includes(e)));
+    }
+
+    {
+      /* ============================================================
+       * 6 — lo stream come file (#183, #184)
+       * ============================================================ */
+      console.log("\n── stream come file: master e file importato ──");
+
+      /* Un master con `- file: streams/onda.yml` (fixtures/PGE_smoke_file.yml).
+       * Il node copre le regole una per una (tests/node/test-stream-files.js);
+       * qui si guarda la strada intera, che in node non gira: il browser dei
+       * progetti, GET /import, Ctrl+S, POST /save, il ref del disco fuori dalla
+       * storia. Cio' che e' finito dove lo si chiede al bridge, cioe' al disco:
+       * GET /import per il file, GET /file per il master. */
+      const FILE = "streams/onda.yml";
+      const MASTER = "PGE_smoke_file.yml";
+      const importText = () => page.evaluate(async (f) => {
+        const r = await fetch(`/import?file=${encodeURIComponent(f)}`);
+        const j = await r.json();
+        return j && j.ok ? j.text : null;
+      }, FILE);
+      const masterText = () => page.evaluate(async (n) => {
+        const r = await fetch(`/file?kind=projects&name=${encodeURIComponent(n)}`);
+        return r.ok ? r.text() : null;
+      }, MASTER);
+      const yamlOf = (t) => page.evaluate((x) => window.jsyaml.load(x), t);
+      // Il salvataggio rigenera l'intestazione (`# saved:` porta l'ora), e i
+      // commenti della fixture non sopravvivono: il confronto e' sul resto.
+      const bodyOf = (t) => (t || "").split("\n").filter(l => !l.startsWith("#")).join("\n").trim();
+      const save = async () => { await page.keyboard.press("Control+s"); await wait(700); };
+
+      const file0 = await importText();
+      const master0 = await masterText();
+      assert("il bridge serve il file importato (GET /import)", typeof file0 === "string" && /stream_id: onda/.test(file0),
+        String(file0).slice(0, 120));
+
+      await page.click(".bw-tabs button:nth-child(2)");
+      const picked = await page.evaluate((n) => {
+        const it = [...document.querySelectorAll(".pge-browser .it.proj")]
+          .find(e => (e.querySelector(".nm") || {}).textContent === n);
+        if (it) it.click();
+        return !!it;
+      }, MASTER);
+      assert("il master compare fra i progetti, il file importato no",
+        picked && !(await page.evaluate(() =>
+          [...document.querySelectorAll(".pge-browser .it.proj .nm")].some(e => /onda/.test(e.textContent)))));
+      let opened2 = true;
+      try { await page.waitForSelector(".lane .clip .clip-file", { timeout: 10000 }); }
+      catch { opened2 = false; }
+      assert("lo stream importato e' in timeline, col nome del suo file", opened2);
+      const clips2 = await page.evaluate(() =>
+        [...document.querySelectorAll(".lane .clip .lbl")].map(e => e.textContent.trim()));
+      assert("due stream: l'importato (id = nome del file) e quello scritto dentro",
+        clips2.length === 2 && clips2.some(t => /^onda · streams\/onda\.yml/.test(t))
+          && clips2.some(t => /^riva /.test(t)), JSON.stringify(clips2));
+      const errToast = await page.evaluate(() =>
+        [...document.querySelectorAll(".pge-toast")].some(t => /stream importati/.test(t.textContent)));
+      assert("nessun errore sugli import", !errToast);
+
+      // Selezionare la clip importata e' anche cio' che toglie il fuoco a un
+      // campo dell'Inspector: con il fuoco in un input Ctrl+S non e' un
+      // salvataggio (app.jsx lascia la tastiera a chi scrive).
+      const importedClip = async () => {
+        await page.click(".lane .clip:has(.clip-file)");
+        await wait(200);
+      };
+      await importedClip();
+      // `i` apre e chiude: la sezione 3 l'ha gia' aperto, e cambiare progetto
+      // non lo richiude.
+      if (!(await page.$(".pge-inspector"))) await page.keyboard.press("i");
+      await wait(400);
+      const fileRow = await page.evaluate(() => {
+        const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+          .find(p => (p.querySelector(".k") || {}).textContent === "file");
+        return r ? (r.querySelector(".v") || {}).textContent : null;
+      });
+      assert("l'Inspector dice da quale file viene lo stream", fileRow === FILE, JSON.stringify(fileRow));
+
+      // 1 — aprire e salvare senza toccare niente.
+      await importedClip();
+      await save();
+      const file1 = await importText(), master1 = await masterText();
+      assert("salvato senza modifiche, il file importato e' intatto, byte per byte",
+        file1 === file0, file1 === file0 ? "" : file1);
+      assert("...e il master torna identico, a parte l'intestazione",
+        bodyOf(master1) === bodyOf(master0), master1);
+
+      // 2 — una chiave di stream (la durata, Ctrl+⇧→ = +1 s): nel file.
+      const dur0 = (await yamlOf(file0)).streams[0].duration;
+      await importedClip();
+      await page.keyboard.press("Control+Shift+ArrowRight");
+      await wait(300);
+      await save();
+      const file2 = await importText(), master2 = await masterText();
+      const doc2 = await yamlOf(file2);
+      assert("la durata finisce nel file importato", doc2.streams[0].duration === dur0 + 1,
+        `${dur0} → ${doc2.streams[0].duration}`);
+      assert("...che resta un documento del laboratorio: seed, stream_id e onset del file",
+        doc2.seed === 1441 && doc2.streams[0].stream_id === "onda" && doc2.streams[0].onset === 0,
+        JSON.stringify([doc2.seed, doc2.streams[0].stream_id, doc2.streams[0].onset]));
+      const entry2 = (await yamlOf(master2)).streams[0];
+      assert("...e la voce del master non cambia", JSON.stringify(entry2) === JSON.stringify({ file: FILE, onset: 1 }),
+        JSON.stringify(entry2));
+
+      // 3 — una chiave di piazzamento (l'onset, ⇧→ = +1 s): nel master.
+      await importedClip();
+      await page.keyboard.press("Shift+ArrowRight");
+      await wait(300);
+      await save();
+      const file3 = await importText(), master3 = await masterText();
+      assert("l'onset finisce nel master", (await yamlOf(master3)).streams[0].onset === 2,
+        JSON.stringify((await yamlOf(master3)).streams[0]));
+      assert("...e il file importato non si tocca", file3 === file2);
+
+      // 4 — undo di entrambe, poi un salvataggio: il disco torna com'era.
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      const file4 = await importText(), master4 = await masterText();
+      assert("dopo l'undo il file importato torna com'era (riscritto, perche' su disco era cambiato)",
+        JSON.stringify(await yamlOf(file4)) === JSON.stringify(await yamlOf(file0)), file4);
+      assert("...e la voce del master pure",
+        JSON.stringify((await yamlOf(master4)).streams[0]) === JSON.stringify({ file: FILE, onset: 1 }),
+        JSON.stringify((await yamlOf(master4)).streams[0]));
+
+      // 5 — due editor, un file (#185) su un brano con import. Una modifica
+      // dentro lo stream importato non muove il master, che ne tiene solo il
+      // piazzamento; ma e' lavoro proprio, e la rilettura — un "apri" del
+      // progetto intero, file importati compresi — la butterebbe via senza
+      // chiedere. Quindi: il laboratorio riscrive il master, e il salvataggio
+      // chiede invece di rileggere.
+      const jsy = require("js-yaml");
+      const masterPath = path.join(session.paths.workspace, "configs", MASTER);
+      const filePath = path.join(session.paths.workspace, "configs", FILE);
+      await importedClip();
+      await page.keyboard.press("Control+Shift+ArrowRight");
+      await wait(300);
+      const file5 = fs.readFileSync(filePath, "utf8");
+      const m5 = jsy.load(fs.readFileSync(masterPath, "utf8"));
+      m5.title = "dal laboratorio";
+      const labMaster = "# scritto dal laboratorio\n" + jsy.dump(m5, { flowLevel: 3 });
+      fs.writeFileSync(masterPath, labMaster);
+      await save();
+      const asks5 = await page.evaluate(() => document.querySelectorAll(".pge-toast.ask").length);
+      assert("una modifica dentro lo stream importato e' lavoro proprio: si chiede, non si rilegge",
+        asks5 === 1, `${asks5} domande`);
+      assert("...e niente e' scritto: ne' il master del laboratorio ne' il file importato",
+        fs.readFileSync(masterPath, "utf8") === labMaster && fs.readFileSync(filePath, "utf8") === file5);
+      await page.click(".pge-toast.ask .tt-x");
+      await wait(300);
+      // Il 409 di POST /save e' provocato dal test: si conta, come nella
+      // sezione 5, invece di sparire in un filtro.
+      const refused6 = seen.errors.filter(e => / 409 /.test(e) && /\/save\b/.test(e));
+      assert("...un rifiuto, in console", refused6.length === 1, refused6.join("\n      "));
+      seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused6.includes(e)));
+    }
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni
      * (un handler che esplode al primo click) e' esattamente quello che una

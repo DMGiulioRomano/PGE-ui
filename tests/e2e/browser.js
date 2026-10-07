@@ -165,7 +165,10 @@ function pickPython() {
   return fs.existsSync(venv) ? venv : "python3";
 }
 
-/** Avvia bridge.py su una porta scelta dal kernel; risolve { proc, port }. */
+/** Avvia bridge.py su una porta scelta dal kernel; risolve { proc, port, paths }.
+ *  `paths` e' la riga JSON che bridge.py stampa dopo la porta ({root,
+ *  workspace}): il test di #185 scrive sul disco del workspace, come farebbe
+ *  il laboratorio, mentre l'editor lo tiene aperto. */
 function startBridge({ timeoutMs = 20000 } = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(pickPython(), [path.join(HERE, "bridge.py")],
@@ -181,7 +184,8 @@ function startBridge({ timeoutMs = 20000 } = {}) {
     proc.stdout.on("data", d => {
       out += d;
       const m = out.match(/PGE_E2E_PORT (\d+)/);
-      if (m) done(resolve, { proc, port: Number(m[1]) });
+      const j = out.match(/^\{.*"workspace".*\}$/m);
+      if (m && j) done(resolve, { proc, port: Number(m[1]), paths: JSON.parse(j[0]) });
     });
     proc.stderr.on("data", d => { err += d; });
     proc.on("exit", code => done(reject, new Error(
@@ -196,7 +200,7 @@ function startBridge({ timeoutMs = 20000 } = {}) {
 
 /**
  * Avvia bridge + browser e apre l'editor. Restituisce
- *   { page, port, close(), net }
+ *   { page, port, paths, close(), net }
  * dove `net` accumula cio' che la politica di rete ha deciso:
  *   net.blocked    — URL bloccati perche' dichiarati (i font)
  *   net.unexpected — URL verso l'esterno che nessuno ha dichiarato: sono un
@@ -210,7 +214,7 @@ async function open({ chromium, headless = true } = {}) {
   const fonts = new Set(cssFontUrls());
   const vendorByUrl = new Map(VENDOR.map(v => [v.url, v]));
 
-  const { proc, port } = await startBridge();
+  const { proc, port, paths } = await startBridge();
   const bridgeOrigin = `http://127.0.0.1:${port}`;
 
   let browser;
@@ -246,7 +250,7 @@ async function open({ chromium, headless = true } = {}) {
 
     const page = await ctx.newPage();
     return {
-      page, port, net,
+      page, port, net, paths,
       fonts: [...fonts],
       async close() {
         await browser.close().catch(() => {});

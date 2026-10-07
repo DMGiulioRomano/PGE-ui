@@ -207,13 +207,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Solo flask + flask-cors: numpy e soundfile servono a /peaks e
-      # /spectrogram, che senza stem sul disco nessuno chiama. /diagnose li
-      # segnala mancanti e va bene — e' un check giallo nel log di boot, non
-      # un errore in console, ed e' esattamente lo stato in cui il test deve
-      # restare verde.
+      # Da requirements.txt, non una lista trascritta. Questa era
+      # `pip install flask flask-cors`, giusta il giorno in cui e' stata
+      # scritta: con #185 il bridge importa PyYAML (`file_signature`, il
+      # confronto per documento), e la lista l'avrebbe perso — il bridge
+      # sarebbe uscito prima di annunciare la porta. E' la forma che la #153
+      # (numpy, soundfile) e la #166 (gunicorn) hanno gia' pagato nel job
+      # python; numpy e soundfile qui non servono a niente (/peaks e
+      # /spectrogram, senza stem sul disco, non li chiama nessuno), ma
+      # installarli costa meno di una seconda copia della lista.
+      # test_launch.py guarda che ogni `pip install` della CI che porta su il
+      # bridge legga il file.
       - name: install bridge deps
-        run: pip install flask flask-cors
+        run: pip install -r requirements.txt
       - name: install e2e deps
         working-directory: tests/e2e
         run: npm install
