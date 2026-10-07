@@ -645,8 +645,22 @@ console.log("\n── la catena dal motore al pallino ──");
    *   - lo stato deve alzarsi PRIMA dell'attesa, o l'utente non vede niente
    *     (log, toast, bottone) finche' il bridge non risponde. */
   {
-    const entry = appSrc.slice(appSrc.indexOf("async function onRender()"),
-                               appSrc.indexOf("async function runRender()"));
+    /* Gli ancoraggi sono `async function X(`, senza la lista dei parametri:
+       la guardia legge QUELLA funzione, non "quella funzione con zero
+       argomenti". Scritta `runRender()`, un parametro aggiunto (il documento
+       della rilettura di #185) mandava `indexOf` a -1, la fetta diventava
+       tutt'altro e la guardia gridava sulla sola modifica che non era il suo
+       difetto. */
+    const at = (name) => appSrc.indexOf(`async function ${name}(`);
+    /* La guardia di rientro sta in `renderAgain`, che e' l'ingresso vero:
+       `onRender` e' quella che la UI passa a `onClick`, e prende zero
+       argomenti di proposito — un MouseEvent non e' un'opzione (#185). */
+    assert("onRender non legge argomenti e delega",
+      /async function onRender\(\)\s*\{\s*return renderAgain\(\);\s*\}/.test(appSrc),
+      "passata a onClick riceverebbe un MouseEvent: le opzioni della guardia " +
+      "entrano da renderAgain, o i nomi delle loro chiavi diventano un patto " +
+      "implicito con quelle che un evento del DOM non ha");
+    const entry = appSrc.slice(at("renderAgain"), at("runRender"));
     assert("la guardia di rientro del render si alza su un ref, prima di ogni await",
       /renderingRef\.current\) return;/.test(entry) &&
       entry.indexOf("renderingRef.current = true") < entry.indexOf("await"),
@@ -654,7 +668,7 @@ console.log("\n── la catena dal motore al pallino ──");
     assert("...e si riabbassa in un finally",
       /finally\s*\{\s*renderingRef\.current = false;/.test(entry), entry);
 
-    const body = appSrc.slice(appSrc.indexOf("async function runRender()"));
+    const body = appSrc.slice(at("runRender"));
     const raise = body.indexOf("setRenderStatus({ running: true");
     const wait  = body.indexOf("await refreshEngineSem()");
     assert("lo stato di render si alza prima dell'attesa, non dopo",

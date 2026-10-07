@@ -115,22 +115,41 @@ function Terminal({ open, lines, onClose, onClear, status, onCopyAll, height = 2
   );
 }
 
+/* `action` al singolare: la superficie del toast E' il bottone, e un click
+   qualsiasi lo esegue. `actions` al plurale e' per le domande con piu' di una
+   risposta, e li' quella regola non vale piu': le scelte di «il file e'
+   cambiato su disco» sono TRE — ricarica, sovrascrivi, e non scrivere niente —
+   e la terza non deve costare un click ne' stare sotto la stessa superficie di
+   una che perde lavoro (#185). Con `actions` la superficie non e' cliccabile e
+   compare una × che e' la terza risposta: chiudere senza scrivere. */
 function Toast({ toasts, onDismiss }) {
   if (!toasts || toasts.length === 0) return null;
   return (
     <div className="pge-toasts">
-      {toasts.map((t) => (
-        <div key={t.id} className={"pge-toast " + (t.kind || "info")} style={t.action ? {cursor:"pointer"} : {}} onClick={() => { if (t.action) { t.action.onClick(); } onDismiss(t.id); }}>
+      {toasts.map((t) => {
+        const many = Array.isArray(t.actions) && t.actions.length > 0;
+        return (
+        <div key={t.id} className={"pge-toast " + (t.kind || "info")}
+             style={t.action && !many ? {cursor:"pointer"} : {}}
+             onClick={many ? undefined : () => { if (t.action) { t.action.onClick(); } onDismiss(t.id); }}>
           <span className="tt-dot" />
           <div className="tt-body">
             <div className="tt-title">{t.title}</div>
             {t.message ? <div className="tt-msg mono">{t.message}</div> : null}
           </div>
-          {t.action ? (
+          {many ? t.actions.map((a, i) => (
+            <button key={i} className={"tt-act" + (a.kind ? " " + a.kind : "")}
+                    onClick={(e) => { e.stopPropagation(); a.onClick(); onDismiss(t.id); }}>{a.label}</button>
+          )) : t.action ? (
             <button className="tt-act" onClick={(e) => { e.stopPropagation(); t.action.onClick(); onDismiss(t.id); }}>{t.action.label}</button>
           ) : null}
+          {many ? (
+            <button className="tt-close" title="non scrivere niente"
+                    onClick={(e) => { e.stopPropagation(); if (t.onCancel) t.onCancel(); onDismiss(t.id); }}>×</button>
+          ) : null}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

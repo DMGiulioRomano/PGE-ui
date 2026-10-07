@@ -597,9 +597,23 @@ console.log("\n── source-guard: il sorgente resta leggibile come codice ─�
     // commento li' comincia per `#`, e la docstring e' una stringa — che
     // sopravvive, come una stringa JS: si censiscono solo le righe che
     // COMINCIANO per `#`, e una dentro una docstring non e' una di quelle.
-    ["server.py", "render_pipeline.py", "audio_pipeline.py", "engine_introspect.py"]
-      .map((f) => path.join(repoRoot, f)).filter((f) => fs.existsSync(f)));
+    //
+    // I nomi si leggono dalla radice del repo, non da una lista scritta qui:
+    // la lista era una seconda copia della verita', e chi aggiunge un helper
+    // del bridge non e' chi si ricorda di aggiornarla — sarebbe diventata muta
+    // esattamente sul file appena nato (`file_signature.py` di #185 era il
+    // quinto). I `.py` del bridge stanno tutti in radice, per convenzione
+    // dichiarata nel CLAUDE.md: i test stanno sotto `tests/`.
+    fs.readdirSync(repoRoot).filter((f) => /\.py$/.test(f))
+      .map((f) => path.join(repoRoot, f)));
   assert("ci sono sorgenti da censire", srcFiles.length > 0);
+  // La lettura dei `.py` ha il suo assert, come ogni lettura che costruisce un
+  // censimento: una glob che non trova niente non accusa niente, ed e' il modo
+  // silenzioso in cui questa meta' della guardia potrebbe sparire.
+  assert("...e i .py del bridge sono fra loro",
+    srcFiles.filter((f) => /\.py$/.test(f)).length >= 4 &&
+    srcFiles.some((f) => path.basename(f) === "server.py"),
+    "trovati: " + srcFiles.filter((f) => /\.py$/.test(f)).map((f) => path.basename(f)).join(", "));
   const leaky = [];
   const skewed = [];
   for (const file of srcFiles) {

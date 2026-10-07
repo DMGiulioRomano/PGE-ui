@@ -1620,27 +1620,179 @@ function App() {
   }
   function selected() { return data.streams.find(s => s.id === selectedId); }
 
+  /* ============ Due editor, un file (#185) ============ */
+
+  /* Lo stesso file puo' stare aperto qui e nel laboratorio di mare-nostrum
+     (regola 7 del piano `stream-come-file.md`). Il bridge tiene la firma di
+     cio' che si e' letto e rifiuta di scrivere su un file che nel frattempo e'
+     cambiato (`file_signature.py`); `PGEFileGuard` decide, file per file, se
+     quel rifiuto si risolve rileggendo o chiedendo; qui c'e' la terza parte,
+     quella che non si puo' decidere altrove: la domanda, e il lavoro proprio
+     che la rende necessaria.
+
+     Oggi il file e' UNO — il master in `configs/<basename>.yml`, l'unico che
+     questo bridge scrive — e `refusedFiles` ne torna uno. Con gli stream
+     importati (#184) ne tornera' N e nient'altro cambia: la decisione e' gia'
+     per-file. */
+
+  function masterFile() { return activeProject.replace(/\.yml$/, "") + ".yml"; }
+
+  /* I file che il bridge ha rifiutato. `POST /render` nomina il suo
+     (`name`), `PUT /file` no — li' il file e' quello che si stava scrivendo. */
+  function refusedFiles(res) {
+    const n = res && res.name;
+    return n ? [n] : [masterFile()];
+  }
+
+  /* C'e' lavoro proprio da perdere su questo file? Oggi la risposta e' il
+     flag del progetto, perche' il file e' uno e tutte le modifiche sono sue.
+     Con #184 diventa per-file, ed e' per questo che e' una funzione del nome
+     invece di essere `dirty` letto sul posto. */
+  function dirtyOfFile(_name) { return dirty; }
+
+  /* La domanda. Tre risposte e non due, per cui non e' un `confirm`:
+     `ricarica`, `sovrascrivi`, e non scrivere niente — che e' la × del toast,
+     non deve costare un click in piu' ne' stare sotto la stessa superficie di
+     una che perde lavoro. Persistente perche' il render non riparte finche'
+     non ha avuto risposta. */
+  function askChangedOnDisk(names, onReload, onOverwrite) {
+    pushToast({
+      kind: "warn", persistent: true,
+      title: names.length > 1
+        ? `${names.length} file cambiati su disco`
+        : `${names[0]} e' cambiato su disco`,
+      message: "l'ha riscritto un altro editor, e qui ci sono modifiche non salvate",
+      actions: [
+        { label: "ricarica", onClick: onReload },
+        { label: "sovrascrivi", kind: "danger", onClick: onOverwrite },
+      ],
+    });
+  }
+
+  /* Rilegge i file che la guardia ha detto di rileggere, e torna il documento
+     del master — che e' quello che chi riprova deve ri-serializzare.
+
+     La rilettura del master E' `onProjectSelect`, cioe' un `apri` dello stesso
+     file: `_setDataRaw` + `resetHistory` + `setDirty(false)`. La storia
+     azzerata non e' un effetto collaterale, e' il criterio: senza, un undo
+     riporterebbe indietro una versione che su disco non c'e' piu', e il
+     salvataggio dopo la riscriverebbe sopra quella dell'altro editor. */
+  async function rereadFiles(names) {
+    let master = null;
+    for (const name of names) {
+      if (name === masterFile()) master = await onProjectSelect(activeProject);
+      // #184: gli altri nomi sono i file-stream importati, che qui non
+      // esistono ancora. `refusedFiles` ne torna uno solo, quindi questo ramo
+      // non e' raggiungibile: quando lo sara', sara' perche' c'e' qualcosa da
+      // rileggere.
+    }
+    return master;
+  }
+
+  /* Prova a scrivere e, sul rifiuto della guardia, applica la decisione.
+     `attempt({overwrite, doc})` e' la scrittura — il salva o la POST del
+     render — e torna il suo risultato.
+
+     Il ciclo e' quello del laboratorio: rilegge, riprova, e se il file cambia
+     ancora lo dice invece di rincorrerlo (`PGEFileGuard.MAX_REREAD`). Chi
+     chiede si ferma qui e riprende dalla risposta, perche' la risposta e' di
+     chi guarda. */
+  async function writeWithGuard(attempt, label) {
+    const G = window.PGEFileGuard;
+    let doc = null, attempts = 0, dirtyNow = dirty;
+    for (;;) {
+      const res = await attempt({ overwrite: false, doc });
+      if (!res || !res.changed) return res;
+      const names = refusedFiles(res);
+      const plan = G.plan(names.map(name => ({
+        name, changed: true,
+        // Dopo una rilettura il lavoro proprio non c'e' piu': l'ha scartato la
+        // rilettura stessa. Si tiene qui e non in `dirty`, che e' stato React
+        // e a questo punto della closure e' ancora quello di prima.
+        dirty: attempts === 0 ? dirtyOfFile(name) : dirtyNow,
+        attempts,
+      })));
+      if (plan.reread.length) {
+        const fresh = await rereadFiles(plan.reread);
+        attempts += 1;
+        dirtyNow = false;
+        if (plan.action === "reread") {
+          if (!fresh) {
+            // Il file non si e' letto (vuoto, illeggibile): riprovare
+            // scriverebbe il progetto di ripiego sopra quello dell'altro
+            // editor. Si dice, e si lascia il disco com'e'.
+            pushToast({ kind: "err", persistent: true,
+                        title: `${label} fermo`,
+                        message: `${names.join(", ")}: non si rilegge — niente scritto` });
+            return res;
+          }
+          doc = fresh;
+          logToTerminal(`[reread] ${names.join(", ")} · ripreso dalla versione su disco`, "warn");
+          continue;
+        }
+      }
+      if (plan.action === "ask") {
+        askChangedOnDisk(plan.ask,
+          () => { rereadFiles(plan.ask); },
+          () => { attempt({ overwrite: true, doc }); });
+        // `pending`: la scrittura non e' avvenuta e non e' nemmeno fallita —
+        // aspetta una risposta. Chi chiama non deve ne' festeggiare ne'
+        // mostrare un errore.
+        return { ...res, pending: true };
+      }
+      // "stop": niente da chiedere, e si e' gia' riletto una volta. Dirlo,
+      // invece di rincorrere un file che qualcuno sta scrivendo adesso.
+      pushToast({ kind: "err", persistent: true,
+                  title: `${label} fermo`,
+                  message: `${names.join(", ")} continua a cambiare su disco — niente scritto` });
+      return res;
+    }
+  }
+
   /* ============ Save / SaveAs ============ */
   async function onSave() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
-    const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
-      `# (yaml bridge not loaded — save skipped)\n# project: ${data.project}\n`;
     try {
-      await backend.fs.writeFile("projects", basename + ".yml", yaml);
-      setDirty(false);
-      // Il file appena scritto porta `deviation_probability`: la migrazione da
-      // `dephase` e' compiuta, e l'avviso in Inspector deve tacere. _setDataRaw
-      // e non setData — spegnere un flag di provenienza dopo un salvataggio non
-      // e' una modifica dell'autore: non sporca il progetto e non e' un passo
-      // di undo, come l'arrivo tardivo dei media. Solo qui e non in onSaveAs:
-      // quello scrive un altro file, l'originale porta ancora la chiave morta.
-      _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
-      pushToast({ kind: "ok", title: "Saved", message: `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb`, duration: 2200 });
-      refreshProjects();
+      const res = await writeWithGuard(({ overwrite, doc }) => {
+        const d = doc || data;
+        const yaml = window.PGEYaml ? window.PGEYaml.serialize(d) :
+          `# (yaml bridge not loaded — save skipped)\n# project: ${d.project}\n`;
+        return _saveWritten(backend, basename, yaml, overwrite);
+      }, "Save");
+      if (!res || !res.ok) return;     // rifiutato, in attesa, o fermo: l'ha gia' detto
     } catch (e) {
       pushToast({ kind: "err", title: "Save failed", message: e.message, persistent: true });
     }
+  }
+
+  /* La scrittura vera, piu' cio' che segue un salvataggio riuscito. Separata
+     perche' la chiamano due strade — il primo tentativo e il `sovrascrivi` —
+     e cio' che un salvataggio lascia dietro (flag, migrazione, toast) non deve
+     dipendere da quale delle due e' passata. */
+  async function _saveWritten(backend, basename, yaml, overwrite) {
+    const res = await backend.fs.writeFile("projects", basename + ".yml", yaml,
+                                           { overwrite });
+    if (!res || !res.ok) return res;
+    setDirty(false);
+    // Il file appena scritto porta `deviation_probability`: la migrazione da
+    // `dephase` e' compiuta, e l'avviso in Inspector deve tacere. _setDataRaw
+    // e non setData — spegnere un flag di provenienza dopo un salvataggio non
+    // e' una modifica dell'autore: non sporca il progetto e non e' un passo
+    // di undo, come l'arrivo tardivo dei media. Solo qui e non in onSaveAs:
+    // quello scrive un altro file, l'originale porta ancora la chiave morta.
+    _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
+    // `written: false` non e' un salvataggio mancato: il file conteneva gia'
+    // QUESTO documento, byte a parte (#185). Dirlo vuol dire dire anche che la
+    // formattazione e i commenti dell'altro editor sono ancora li', che e' il
+    // motivo per cui il bridge non ha scritto.
+    pushToast({ kind: "ok", title: "Saved",
+                message: res.written === false
+                  ? `configs/${basename}.yml · era gia' questo documento`
+                  : `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb`,
+                duration: 2200 });
+    refreshProjects();
+    return res;
   }
   async function onSaveAs() {
     const name = prompt("Save a copy as…", activeProject.replace(/\.yml$/, "_copy.yml"));
@@ -1650,7 +1802,23 @@ function App() {
     const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
       `# saved-as ${fullName}\n# from: ${activeProject}\n`;
     try {
-      await backend.fs.writeFile("projects", fullName, yaml);
+      /* `overwrite` qui, e la guardia di #185 non c'entra: questo scrive un
+         file che non e' quello aperto, su un nome che l'utente ha appena
+         scritto. E' la regola del laboratorio per il suo `salva con nome` —
+         non si manda nessuna firma, perche' dietro al documento che si scrive
+         non c'e' una lettura di QUEL file. (Di la' della sovrascrittura chiede
+         il pannello nativo di macOS; qui c'e' un `prompt`, che non chiede
+         niente: e' il comportamento di prima di questa issue, e cambiarlo e'
+         un'altra decisione.) Senza, un nome gia' aperto in questa sessione
+         avrebbe la sua firma registrata e il 409 sarebbe arrivato a un
+         chiamante che annuncia "Saved as" comunque. */
+      const res = await backend.fs.writeFile("projects", fullName, yaml,
+                                             { overwrite: true });
+      if (!res || !res.ok) {
+        pushToast({ kind: "err", title: "Save As failed",
+                    message: (res && res.error) || "rifiutato", persistent: true });
+        return;
+      }
       pushToast({ kind: "ok", title: "Saved as", message: `configs/${fullName}`, duration: 2500 });
       refreshProjects();
     } catch (e) {
@@ -1667,7 +1835,16 @@ function App() {
                                  : { project: basename, title: "", duration: 10, streams: [], samples: [] };
     const backend = window.PGEBackend.current;
     try {
-      await backend.fs.writeFile("projects", fullName, window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n");
+      // `overwrite` per la ragione di onSaveAs: un nome appena scritto
+      // dall'utente, dietro al quale non c'e' nessuna lettura di quel file.
+      const res = await backend.fs.writeFile("projects", fullName,
+        window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n",
+        { overwrite: true });
+      if (!res || !res.ok) {
+        pushToast({ kind: "err", title: "Couldn't create project",
+                    message: (res && res.error) || "rifiutato", persistent: true });
+        return;
+      }
       pushToast({ kind: "ok", title: "Project created", message: `configs/${fullName}`, duration: 2200 });
       await refreshProjects();
       onProjectSelect(fullName);
@@ -1729,19 +1906,45 @@ function App() {
      backend.js e' UNA variabile di chiusura, riassegnata a ogni `run()`, quindi
      il secondo giro sovrascriveva quella del primo e Cancel ne uccideva uno
      solo — l'altro restava a scrivere sul disco senza piu' un modo di fermarlo. */
-  async function onRender() {
+  /* L'ingresso della UI, e prende zero argomenti di proposito: e' passata a
+     `onClick`, che le consegnerebbe un MouseEvent. Le opzioni della guardia
+     di #185 entrano da `renderAgain`, cosi' non c'e' nessun patto implicito
+     fra i nomi delle sue chiavi e quelli che un evento del DOM non ha. */
+  async function onRender() { return renderAgain(); }
+
+  async function renderAgain(opts = {}) {
     if (renderStatus.running || renderingRef.current) return;
     renderingRef.current = true;
     try {
-      await runRender();
+      /* Le due risposte alla domanda di #185 rientrano da qui, e non da
+         `runRender`, perche' la guardia della rientranza e' di questa
+         funzione: la domanda resta in piedi mentre la tastiera e' libera, e
+         un `r` premuto nel frattempo non deve diventare un secondo render.
+         `reread` e' la risposta `ricarica`: si rilegge, e si rende la versione
+         su disco. */
+      let doc = opts.doc || null;
+      if (opts.reread) {
+        doc = await rereadFiles(opts.reread);
+        if (!doc) {
+          pushToast({ kind: "err", persistent: true, title: "Render fermo",
+                      message: `${opts.reread.join(", ")}: non si rilegge` });
+          return;
+        }
+      }
+      await runRender({ doc, overwrite: opts.overwrite });
     } finally {
       renderingRef.current = false;
     }
   }
 
-  async function runRender() {
+  /* `opts.doc` e' il documento da rendere, e `opts.overwrite` la decisione
+     presa sulla domanda di #185: le passa la guardia quando il render
+     riparte dopo una rilettura o un `sovrascrivi`. Senza, e' la `data` dello
+     stato e nessuna decisione — cioe' il render di sempre. */
+  async function runRender(opts0 = {}) {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
+    const doc = opts0.doc || data;
 
     /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
        `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
@@ -1749,9 +1952,9 @@ function App() {
        bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
        e poi il render partiva lo stesso. */
     setLogLines([]);
-    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
+    setRenderStatus({ running: true, total: doc.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
-      pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
+      pushToast({ kind: "info", title: "Rendering started", message: `${doc.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
 
     // Terza (e ultima utile) occasione per la versione di semantica: qui il
@@ -1787,7 +1990,7 @@ function App() {
 
     const opts = {
       yamlBasename: basename,
-      yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
+      yamlContent: window.PGEYaml ? window.PGEYaml.serialize(doc) : null,
       renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
@@ -1814,9 +2017,14 @@ function App() {
         && magnifySpecToSend(renderOptions.magnifyAt)) || undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
-      streams: data.streams,
+      streams: doc.streams,
       outputFormat: tweaks.outputFormat || "wav",
       semanticsVersion: semOfThisRun,
+      // La decisione presa sulla domanda di #185. La firma NO: la manda
+      // backend.js da quella che ha registrato leggendo, che e' la lettura da
+      // cui questo documento viene — tenerla in due posti vorrebbe dire
+      // poterle far dire due cose.
+      overwrite: opts0.overwrite || undefined,
     };
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
@@ -1897,6 +2105,46 @@ function App() {
       ...s, running: false, currentStreamId: null,
       lastOk: !!result.ok, lastGenerated: (result.generated || []).length,
     }));
+
+    /* Due editor, un file (#185). Il bridge ha RIFIUTATO di scrivere il config
+       e il motore non e' nemmeno partito: non e' un render fallito, e dirlo
+       "Render failed" manderebbe chi guarda a cercare un errore nel log che
+       non c'e'. La decisione e' la stessa del salva, perche' e' la stessa
+       guardia sullo stesso file.
+
+       La rilettura riparte dal render, col documento appena letto: «il render
+       prosegue sulla versione su disco», che e' quella che l'altro editor ha
+       appena scritto, cioe' quella che si vuole sentire. Il `sovrascrivi`
+       riparte uguale, con la decisione in mano.
+
+       `configWritten` resta false su questo ramo (lo dice backend.js), quindi
+       la migrazione di `dephase` non si spegne: il file non e' stato scritto. */
+    if (result.changed) {
+      const names = refusedFiles(result);
+      const plan = window.PGEFileGuard.plan(names.map(name => ({
+        name, changed: true, dirty: dirtyOfFile(name),
+        attempts: opts0.attempts || 0,
+      })));
+      if (plan.action === "reread") {
+        const fresh = await rereadFiles(plan.reread);
+        if (fresh) {
+          logToTerminal(`[reread] ${names.join(", ")} · render ripreso dalla versione su disco`, "warn");
+          return await runRender({ doc: fresh, attempts: (opts0.attempts || 0) + 1 });
+        }
+        pushToast({ kind: "err", persistent: true, title: "Render fermo",
+                    message: `${names.join(", ")}: non si rilegge — niente scritto, niente reso` });
+        return;
+      }
+      if (plan.action === "ask") {
+        askChangedOnDisk(plan.ask,
+          () => { renderAgain({ reread: plan.ask }); },
+          () => { renderAgain({ overwrite: true, doc }); });
+        return;
+      }
+      pushToast({ kind: "err", persistent: true, title: "Render fermo",
+                  message: `${names.join(", ")} continua a cambiare su disco — niente reso` });
+      return;
+    }
 
     // Come dopo un Save, e per la stessa ragione: server.py scrive yamlContent
     // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
@@ -2063,7 +2311,14 @@ function App() {
         pushToast({ kind: "info", title: `loaded ${name}`, message: `${parsed.streams.length} streams · ${parsed.duration}s`, duration: 2000 });
         // also invalidate audio buffers — new project has different streams
         if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
-        return;
+        /* Il documento letto torna al chiamante, e serve a uno solo: la
+           rilettura della guardia di #185, che subito dopo deve ri-serializzare
+           cio' che ha appena letto. Lo stato React non e' disponibile in modo
+           sincrono — `_setDataRaw` qui sopra non ha ancora cambiato la `data`
+           della closure che sta scrivendo — e rileggere "e poi riprovare col
+           documento di prima" rimanderebbe al bridge esattamente cio' che ha
+           appena rifiutato. */
+        return parsed;
       }
       logToTerminal(`[load] ${name} · empty file or yaml bridge unavailable — fallback`, "warn");
     } catch (e) {
@@ -2077,6 +2332,10 @@ function App() {
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
+    // Niente da tornare: qui il file non si e' letto. Chi rilegge per la
+    // guardia (#185) lo distingue da un documento vero e si fermera' invece di
+    // riprovare a scrivere un progetto vuoto sopra quello dell'altro editor.
+    return null;
   }
 
   /* Cambio di workspace (#147): la cartella con configs/ output/ cache/.

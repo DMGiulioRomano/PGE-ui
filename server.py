@@ -93,6 +93,12 @@ from render_pipeline import (
     RenderState, render_events, merged_output, build_render_command,
     start_watchdog, renderer_availability,
 )
+# Due editor, un file (#185): la firma di cio' che si e' letto, e la regola in
+# tre passi che decide se scrivere. In un modulo suo perche' la convenzione e'
+# condivisa col laboratorio di mare-nostrum (serve.py) e perche' le due route
+# che scrivono — PUT /file e POST /render — devono passare dalla STESSA regola:
+# in questo repo una regola scritta due volte e' gia' divergita.
+from file_signature import guard as signature_guard, read_signed
 
 
 # -------------------------------------------------------------------------
@@ -248,6 +254,19 @@ def _declared(value):
         return None
     value = str(value).strip()
     return value or None
+
+
+def _flag(value) -> bool:
+    """Un flag in una query string: ``1``/``true``/``yes``/``on`` e' acceso.
+
+    La presenza da sola non basta come criterio: `?overwrite=0` e
+    `?overwrite=false` sono il modo in cui un client dice *no*, e letti come
+    "c'e', quindi si'" sarebbero una sovrascrittura chiesta da nessuno — che
+    e' esattamente il lavoro perso che la guardia di #185 esiste per evitare.
+    Il verso di default e' quello sicuro: tutto cio' che non si riconosce e'
+    spento.
+    """
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _as_path(value, base=None) -> Path:
@@ -872,7 +891,18 @@ def make_app(root: Path, render_timeout: float = 600.0,
 
     app = Flask(__name__)
     # CORS open — the browser is on the same machine, no security risk.
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    #
+    # `expose_headers` non e' ornamentale: di default il browser NON lascia
+    # leggere a `fetch()` un header di risposta che non sia uno dei sei
+    # "safelisted", e `GET /file` manda la firma del file li' dentro (#185) —
+    # il corpo e' il testo del documento, e un secondo giro per la firma
+    # sarebbe una seconda lettura del disco, cioe' una firma che puo' non
+    # essere di cio' che e' tornato. Senza questa riga l'editor aperto come
+    # `file://` (origine "null", quindi cross-origin verso il bridge) leggeva
+    # `null` e la guardia restava disarmata proprio li': la pagina servita dal
+    # bridge e' same-origin e non se ne sarebbe accorta.
+    CORS(app, resources={r"/*": {"origins": "*"}},
+         expose_headers=["X-PGE-Signature"])
 
     # State for the running render (only one at a time); the shared lock
     # serializes /render and /render/cancel. render_timeout is the hard cap
@@ -1242,7 +1272,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
         path = safe_resolve(base, name)
         if not path or not path.exists():
             abort(404)
-        return path.read_text(encoding="utf-8")
+        # La firma viaggia in un header perche' il corpo E' il documento, e si
+        # calcola sugli STESSI byte che tornano: `read_signed` legge una volta
+        # sola. Con due accessi al disco il file puo' cambiare nel mezzo, e la
+        # pagina si ritroverebbe la firma di un documento che non ha — cioe'
+        # una guardia che parla, o tace, sul file sbagliato. #185
+        raw, sig = read_signed(path)
+        return Response(raw, mimetype="text/plain; charset=utf-8",
+                        headers={"X-PGE-Signature": sig})
 
     @app.put("/file")
     def put_file():
@@ -1252,9 +1289,21 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if not base: abort(400, "bad kind")
         path = safe_resolve(base, name)
         if not path: abort(400, "bad name")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(request.get_data(as_text=True), encoding="utf-8")
-        return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size})
+        # Due editor, un file (#185). `signature` e' com'era il file quando la
+        # pagina l'ha letto, `overwrite` la decisione presa sulla domanda. La
+        # regola in tre passi — documento gia' su disco, guardia, scrittura —
+        # sta in `file_signature.guard`, la stessa che usa /render: scritta due
+        # volte divergerebbe, e la divergenza qui si vede come lavoro perso.
+        res = signature_guard(path, request.get_data(as_text=True),
+                              request.args.get("signature", ""),
+                              _flag(request.args.get("overwrite")))
+        if not res.get("ok"):
+            # 409 Conflict, e `changed` resta un campo a parte: la pagina lo
+            # deve distinguere da un errore vero senza riconoscerlo dal testo
+            # (la forma del laboratorio). Non si e' scritto niente.
+            return jsonify({**res, "path": str(path)}), 409
+        return jsonify({**res, "path": str(path),
+                        "bytes": path.stat().st_size if path.exists() else 0})
 
     # --------- rendered audio playback ---------
 
@@ -1589,8 +1638,36 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # (cache/<basename>.json), so a random temp name would orphan the manifest
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
+        #
+        # Due editor, un file (#185). Questo e' il secondo dei due punti in cui
+        # il bridge scrive, e il «al salvataggio o al render» dell'issue: la
+        # guardia va QUI, prima della scrittura, non dopo — e prima del venv e
+        # dello stream, che sono minuti in cui il file sarebbe gia' quello
+        # nuovo. Stessa `guard()` di PUT /file, cosi' le due route non possono
+        # divergere su quando parlare.
+        #
+        # Il primo passo della regola (`already_on_disk`) conta soprattutto
+        # qui: `/render` riscrive il config a ogni giro, anche su un documento
+        # che nessuno ha toccato, e scriverlo a modo proprio farebbe dire
+        # «cambiato su disco» alla guardia del laboratorio dopo ogni render di
+        # PGE-ui — su un documento identico, portandosi via la sua
+        # formattazione e i suoi commenti.
+        file_signatures = {}
         if yaml_content:
-            yml.write_text(yaml_content, encoding="utf-8")
+            res = signature_guard(yml, yaml_content,
+                                  opts.get("signature") or "",
+                                  # `_flag` e non `bool`: la decisione arriva
+                                  # da due strade (query string e JSON) e la
+                                  # lettura e' una. `bool("false")` e' True,
+                                  # cioe' una sovrascrittura chiesta da
+                                  # nessuno.
+                                  _flag(opts.get("overwrite")))
+            if not res.get("ok"):
+                # Niente stream, niente motore, niente scrittura: il render non
+                # parte finche' la domanda non ha avuto risposta, ed e' la
+                # pagina a decidere (rileggere o sovrascrivere).
+                return jsonify({**res, "name": yml.name}), 409
+            file_signatures[yml.name] = res["signature"]
         elif not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
@@ -1632,6 +1709,16 @@ def make_app(root: Path, render_timeout: float = 600.0,
             # tutta la vita del bridge. #147
             rs.enter()
             try:
+                # Le firme di cio' che si e' appena scritto, PRIMA di ogni
+                # altra cosa: prendono il posto di quelle lette, o il
+                # salvataggio dopo manderebbe la firma di prima e si
+                # rifiuterebbe da se'. Una mappa per nome e non un campo solo
+                # perche' i file di un render saranno N (il master piu' gli
+                # stream importati, #184): il giorno che ce n'e' piu' d'uno
+                # l'evento non cambia forma. #185
+                if file_signatures:
+                    yield json.dumps({"type": "file-signatures",
+                                      "signatures": file_signatures}) + "\n"
                 # Ensure engine venv exists before running main.py.
                 venv_py = root / ".venv" / "bin" / "python"
                 if not venv_py.exists():

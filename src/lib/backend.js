@@ -24,11 +24,32 @@
  *                                   invalido / render in corso). "" torna al --root
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
  *   fs.chooseDir(kind)            → Promise<{ path } | null>
- *   fs.readFile(kind, name)       → Promise<string>
- *   fs.writeFile(kind, name, str) → Promise<void>
+ *   fs.readFile(kind, name)       → Promise<string>. Registra la FIRMA del file
+ *                                   letto (#185): la manda `writeFile` e la
+ *                                   manda `run()`, e il bridge rifiuta la
+ *                                   scrittura se su disco non e' piu' quella
+ *   fs.writeFile(kind, name, str, opts?) → Promise<{ok, written, changed?,
+ *                                   signature?, error?}>. `changed` e' il
+ *                                   rifiuto della guardia, non un guasto:
+ *                                   NON lancia, perche' chi chiama deve poter
+ *                                   chiedere (file-guard.js). `written:false`
+ *                                   con `ok:true` e' il file che conteneva
+ *                                   gia' quel documento. `opts.overwrite`
+ *                                   e' la decisione presa sulla domanda
+ *   fs.fileSignature(kind, name)  → string: la firma registrata per quel file,
+ *                                   "" se non lo si e' mai letto ne' scritto
+ *   fs.forgetFileSignature(kind, name?) → la butta (senza `name`, tutte).
+ *                                   Una firma e' un'affermazione su un file
+ *                                   che SI E' letto: ereditarla da una
+ *                                   cartella diversa la rende una coincidenza
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
+ *     `opts.signature` e `opts.overwrite` sono la meta' render della guardia
+ *     di #185: il bridge scrive `configs/<basename>.yml` PRIMA di lanciare il
+ *     motore, quindi li' la scrittura e' da guardare come quella del salva.
+ *     Un rifiuto torna `{ok:false, changed:true, configWritten:false}` senza
+ *     lanciare e senza evento `done`: il render non e' partito.
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
@@ -299,8 +320,55 @@
         headers: { "Content-Type": "text/plain" },
         body,
       });
+      /* Il 409 e' la guardia di #185, non un guasto: il bridge ha RIFIUTATO di
+         scrivere perche' il file su disco non e' quello che si era letto, e il
+         corpo lo dice in un campo (`changed`) invece che nel testo di un
+         errore. Lanciare lo farebbe arrivare al chiamante come un
+         `Save failed`, cioe' la domanda «ricarica o sovrascrivi?» mai posta e
+         il lavoro dell'altro editor sovrascritto o il proprio perso a seconda
+         di chi riprova. Si torna il corpo, e chi chiama decide. */
+      if (r.status === 409) return await r.json().catch(() => ({
+        ok: false, changed: true, error: "HTTP 409" }));
       if (!r.ok) throw new Error(`PUT ${path} → HTTP ${r.status}`);
       return await r.json();
+    }
+
+    /* Due editor, un file (#185): com'era ogni file quando l'ho letto.
+     *
+     * Chiavato `<kind>:<name>`, cioe' come il bridge lo risolve: due `kind`
+     * possono avere un file omonimo, e la firma e' di UN file sul disco.
+     *
+     * Vive in memoria e non in localStorage, deliberatamente. Una firma dice
+     * "questo file l'ho letto e conteneva questi byte": dopo un reload della
+     * pagina quella lettura non c'e' piu' stata, e l'editor rilegge il
+     * progetto (`onProjectSelect` al boot) rifirmandolo. Persisterla
+     * affermerebbe una lettura che nessuno ha fatto in questa sessione — e nel
+     * verso peggiore, perche' una firma che per caso combacia e' una
+     * scrittura che passa senza che la guardia abbia guardato niente.
+     *
+     * Il registro sta QUI e non nella pagina perche' qui sta l'unico posto che
+     * legge e scrive: cosi' «la firma di cio' che si e' appena scritto prende
+     * il posto di quella letta» e' un'invariante del modulo, non un patto fra
+     * `app.jsx` e il bridge tenuto dalla prosa. Alla pagina resta la domanda,
+     * che e' la parte che non si puo' decidere qui (vedi file-guard.js). */
+    let fileSignatures = {};
+    const _sigKey = (kind, name) => `${kind}:${name}`;
+    function fileSignature(kind, name) {
+      return fileSignatures[_sigKey(kind, name)] || "";
+    }
+    function forgetFileSignature(kind, name) {
+      if (name === undefined) { fileSignatures = {}; return; }
+      delete fileSignatures[_sigKey(kind, name)];
+    }
+    function _rememberSignature(kind, name, sig) {
+      /* Una firma ignota non prende il posto di quella letta: si butta. Un
+         bridge che non la manda (piu' vecchio di #185, o una risposta a cui
+         l'header non e' arrivato) non e' un bridge che afferma "il file e'
+         cambiato" — e tenere quella di prima dopo una scrittura la farebbe
+         rifiutare da se' al giro dopo. Senza firma la guardia tace, che e' il
+         comportamento di prima della issue. */
+      if (typeof sig === "string" && sig) fileSignatures[_sigKey(kind, name)] = sig;
+      else delete fileSignatures[_sigKey(kind, name)];
     }
     async function getText(path) {
       const r = await fetchWithTimeout(baseUrl + path);
@@ -342,10 +410,38 @@
         return cachedConfig[key] || null;
       },
       async readFile(kind, name) {
-        return await getText(`/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`);
+        /* La firma viaggia in un header perche' il corpo E' il documento, e il
+           bridge la calcola sugli STESSI byte che manda (una lettura sola del
+           disco: con due, il file puo' cambiare nel mezzo e la firma sarebbe
+           di un documento che qui non e' mai arrivato). CORS la lascia leggere
+           solo perche' server.py la dichiara in `expose_headers` — senza, su
+           `file://` (origine "null", quindi cross-origin) qui tornava `null`
+           e la guardia restava disarmata proprio li'. #185 */
+        const r = await fetchWithTimeout(
+          baseUrl + `/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`);
+        if (!r.ok) throw new Error(`GET /file?kind=${kind}&name=${name} → HTTP ${r.status}`);
+        const text = await r.text();
+        _rememberSignature(kind, name, r.headers.get("X-PGE-Signature"));
+        return text;
       },
-      async writeFile(kind, name, str) {
-        await jput(`/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, str);
+      async writeFile(kind, name, str, opts = {}) {
+        const q = `/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`
+                + (fileSignature(kind, name)
+                   ? `&signature=${encodeURIComponent(fileSignature(kind, name))}` : "")
+                + (opts.overwrite ? "&overwrite=1" : "");
+        const res = await jput(q, str) || {};
+        /* La firma di cio' che si e' appena scritto prende il posto di quella
+           letta — e torna anche quando il bridge non ha scritto perche' il
+           file conteneva gia' quel documento (`written:false`): e' la firma di
+           cio' che c'e' su disco, che e' esattamente la domanda a cui serve
+           rispondere al giro dopo.
+           Su un RIFIUTO no: la firma che torna li' e' quella del file
+           dell'altro editor, e prenderla per buona vorrebbe dire aver letto il
+           suo documento senza averlo caricato — la prossima scrittura
+           passerebbe la guardia e se lo porterebbe via. Quella versione si
+           adotta rileggendo, che e' una delle due risposte alla domanda. */
+        if (res.ok) _rememberSignature(kind, name, res.signature);
+        return res;
       },
       async fileExists(kind, name) {
         try {
@@ -353,6 +449,8 @@
           return r.ok;
         } catch { return false; }
       },
+      fileSignature,
+      forgetFileSignature,
     };
 
     // local stem index — populated as renders complete or restored from
@@ -554,12 +652,38 @@
         // una misura del file come la durata: vedi `stems-resync` in fondo.
         const resyncIds = [];
         try {
+          /* Due editor, un file (#185). Il bridge scrive
+             `configs/<basename>.yml` prima di lanciare il motore, quindi
+             questa POST e' una scrittura come quella del salva e vuole la
+             stessa firma. Si manda quella REGISTRATA, non una passata dal
+             chiamante: e' la firma della lettura che ha prodotto il documento
+             che si sta per mandare, e tenerla in due posti vorrebbe dire
+             poterle far dire due cose. `opts.overwrite` resta del chiamante,
+             perche' e' una risposta a una domanda che solo lui ha posto. */
+          const cfgName = opts.yamlBasename + ".yml";
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(opts),
+            body: JSON.stringify({
+              ...opts,
+              signature: fileSignature("projects", cfgName),
+            }),
             signal: cancelAbort.signal,
           });
+          /* Il 409 della guardia non e' un guasto e NON ha scritto niente: il
+             render non e' partito, e il file su disco e' ancora quello
+             dell'altro editor. Torna invece di lanciare, come il rifiuto di
+             rientranza qui sopra e per le stesse due ragioni — il chiamante
+             non ha try/catch, e `done` e' l'evento di un render FINITO.
+             `configWritten: false` e' la verita' su questa chiamata: nessuna
+             scrittura, quindi la migrazione di `dephase` non e' avvenuta. */
+          if (res.status === 409) {
+            const body = await res.json().catch(() => null);
+            const msg = (body && body.error) || "il file e' cambiato su disco";
+            onEvent && onEvent({ type: "log", line: `[ABORT] ${msg}` });
+            return { ...(body || {}), ok: false, changed: true,
+                     error: msg, configWritten: false };
+          }
           configWritten = res.ok;
           if (!res.ok || !res.body) {
             const txt = await res.text().catch(() => "");
@@ -580,6 +704,18 @@
               try {
                 const ev = JSON.parse(line);
                 onEvent && onEvent(ev);
+                /* Le firme di cio' che il bridge ha appena scritto, primo
+                   evento dello stream: prendono il posto di quelle lette, o il
+                   salvataggio dopo manderebbe la firma di prima e si
+                   rifiuterebbe da se'. Le registra QUESTO modulo e non la
+                   pagina, come per `writeFile`: il registro ha un solo
+                   proprietario. Una mappa per nome perche' i file di un render
+                   saranno N (#184); oggi ce n'e' uno. #185 */
+                if (ev.type === "file-signatures") {
+                  for (const [nm, sig] of Object.entries(ev.signatures || {})) {
+                    _rememberSignature("projects", nm, sig);
+                  }
+                }
                 if (ev.type === "done") {
                   lastResult = ev;
                   // Fallback: emit synthetic stream-done for any generated stem
@@ -1007,6 +1143,15 @@
       // cui l'asse e' stato aggiunto (#133). Senza record il pallino e' giallo
       // — "stem di cui non so la lettura" — e si spegne al primo giro, anche a
       // vuoto. Un render di troppo, mai uno di meno.
+      // E le firme (#185), per la ragione dell'indice un gradino piu' su:
+      // dicono "questo file l'ho letto e conteneva questi byte", e i file erano
+      // quelli della cartella di prima. Due cartelle possono avere un progetto
+      // omonimo: ereditata, quella firma non sarebbe scaduta — sarebbe di
+      // un'altra cosa, e nel caso peggiore combacerebbe, cioe' una scrittura
+      // che passa la guardia senza che la guardia abbia guardato niente. Chi le
+      // rifa' e' la rilettura del progetto che il cambio di workspace fa subito
+      // dopo (`onProjectSelect` in app.jsx).
+      forgetFileSignature();
       stemIndex = {};
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();

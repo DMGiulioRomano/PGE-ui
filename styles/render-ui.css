@@ -642,6 +642,18 @@ body.pge-resizing-scope * { cursor: ns-resize !important; user-select: none !imp
   flex-shrink: 0;
 }
 .pge-toast .tt-act:hover { border-color: var(--accent); color: var(--accent); }
+/* La risposta che perde il lavoro dell'altro editor si vede che e' quella:
+   accanto a `ricarica` un `sovrascrivi` dello stesso colore e' una moneta. */
+.pge-toast .tt-act.danger { border-color: #E5484D; color: #E5484D; }
+.pge-toast .tt-act.danger:hover { background: #E5484D; color: #fff; }
+/* La terza risposta — non scrivere niente — e' una ×, non un bottone in fila:
+   non deve costare un click in piu' ne' somigliare alle altre due. */
+.pge-toast .tt-close {
+  appearance: none; background: transparent; border: none;
+  color: var(--fg-2); font-size: 14px; line-height: 1;
+  padding: 0 2px; cursor: pointer; flex-shrink: 0;
+}
+.pge-toast .tt-close:hover { color: var(--fg-0); }
 
 /* ---------- Settings Panel ---------- */
 .sp-overlay {
