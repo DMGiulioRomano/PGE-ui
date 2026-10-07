@@ -1,0 +1,24 @@
+seed: 1441
+duration: 3
+bpm: 120
+streams:
+- stream_id: onda
+  onset: 0
+  duration: 3
+  sample: smoke.wav
+  time_mode: normalized
+  fill_factor:
+    type: cubic
+    points: [[0, 2], [0.5, 3], [1, 1.5]]
+  distribution: 0.5
+  grain:
+    duration: [[0, 0.03], [0.5, 0.05, step], [1, 0.02]]
+    envelope: hanning
+  pointer:
+    start: 0
+    speed_ratio: 0.5
+    loop_unit: normalized
+  pitch:
+    ratio: 0.8
+  pan: 0
+  volume: -6

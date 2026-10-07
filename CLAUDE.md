@@ -130,7 +130,13 @@ exists, the fourth only when a browser is installed):
   guards on the Timeline/app wiring), and `test-workspace.js` (the
   workspace switch: a successful one empties the stem index — it describes the
   previous `output/` — a refused one changes nothing, plus source guards on the
-  server routes and the app/Settings wiring), and `test-sources.js` (the static
+  server routes and the app/Settings wiring), and `test-stream-files.js`
+  (#183, #184: the stream as a file — `importRefs`, the resolution `parse` does
+  with `imports`, the messages that name an import which doesn't resolve, every
+  key's one home between master and file, the file staying a lab document,
+  `changedImports` against the disk rather than history, the conflict of one
+  file imported twice, `detachImport`, plus source guards on where app.jsx
+  keeps the disk and on the paste/split/Raw-tab wiring), and `test-sources.js` (the static
   gate on the editor's own sources: every `src/lib/*.js` and
   `src/components/*.jsx` parses in the dialect the browser gets, the census
   between `PGE Editor.html` and the filesystem closes in both directions, the
@@ -191,7 +197,11 @@ exists, the fourth only when a browser is installed):
   fallback — `parse_magnify_spec`, `filter_solo_mute` — driven over stub
   engines of every vintage, each in its own process: the light module
   imported, the historic ast-slice, a module without the name, a module that
-  doesn't import), and `test_engine_render.py`
+  doesn't import), `test_stream_files.py` (#183, #184: `safe_resolve_import`,
+  `GET /import`, `POST /save` and `/render` with `imports` — everything
+  validated before anything is written, the imports on disk when the engine
+  starts, measured by a fake engine that looks, and the project list that
+  doesn't list `configs/streams/`), and `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -390,6 +400,11 @@ and the EnvelopeEditor open on a stream and the envelope *draws its
 breakpoints*, and one undo/redo round trip lands back where it started. The
 assertions are structural (how many breakpoints, which stream, what the `onset`
 row reads), never pixels: a pixel assert ages badly, a boot assert doesn't.
+Since #183/#184 a fifth: a master with `- file:` (`fixtures/PGE_smoke_file.yml`
+plus `fixtures/streams/onda.yml`) opened from the project list, saved untouched,
+then edited in each of its two homes and undone — what landed where is read
+back from the bridge (`GET /import`, `GET /file`), i.e. from the disk. See "The
+stream as a file".
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -1028,7 +1043,7 @@ the flag goes out with no version gate, and what watches it is
 `tests/node/test-score-options.js`: the chain by source guard, the engine's
 spelling by canary, the body → argv half in `tests/python/test_render_pipeline.py`.
 
-The request body carries `yamlContent`. `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* a throwaway temp file. A temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY, defeating incremental caching. Writing the stable basename keeps the manifest persistent. Consequence: a render persists the editor state to the source config even if the user never hit Save. **Git is the rollback mechanism** (`git checkout -- configs/<basename>.yml`).
+The request body carries `yamlContent`. `server.py` writes it **to the canonical `configs/<basename>.yml`** before invoking the engine — *not* a throwaway temp file. A temp name like `tmpXXXX.yml` would produce a fresh `cache/tmpXXXX.json` every run and mark **all** streams DIRTY, defeating incremental caching. Writing the stable basename keeps the manifest persistent. Consequence: a render persists the editor state to the source config even if the user never hit Save. **Git is the rollback mechanism** (`git checkout -- configs/<basename>.yml`). Since #184 the body also carries `imports`, the imported files (`file:`) that changed against the disk: the bridge writes them before the master, so the engine — which re-reads them from disk — finds them there, and the same consequence holds for them (`git checkout -- configs/streams/`).
 
 ### YAML bodies that can kill a render
 
@@ -1898,7 +1913,7 @@ identical one inside a list, up to the double click that used to eat it.
 
 The backend computes per-stream fingerprints to drive the `🟢 rendered / 🟡 stale / ⚪ never` dots. The JS side (`fingerprintStream` in `backend.js`, FNV-1a over canonical JSON with recursively sorted keys) has **two** exclusion lists, and they don't have the same reach:
 
-- `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`.
+- `FP_IGNORE_TOP` — per-stream fields, excluded at the **first YAML level only**: `color`, `mute`, `solo`, `onset`, `durationImplicit`, `durationUnresolved`, `deviationProbabilityLegacy`, `_import` (the provenance of a stream imported with `file:`, #183 — the engine hashes the resolved stream).
 - `FP_IGNORE_DEEP` — excluded at **any** depth because it lives nested by construction: `_curveRaw` (under `grain.envelope`). It used to hold `statePositions` too; see below.
 
 Key non-obvious exclusions:
@@ -2105,6 +2120,112 @@ the point list and the interp string, `NaN` on both sides, every `NaN > 1e-9`
 false, so a group always "matched" and **an edit made inside a group was thrown
 away on save**. It is now the rescale taken back and compared in depth
 (`_nearlyEqual`: tolerance on numbers, exact on everything else).
+
+### The stream as a file (`file:`, #183, #184)
+
+Since PythonGranularEngine#290 a `streams:` entry of the master can be
+`- file: streams/risacca.yml`: the stream is written in another document — a
+lab document, which opens and renders on its own — and the master keeps only
+its **placement**. The path is relative to the master's folder, i.e.
+`configs/`. The engine's rules are the reference (its `docs/reference/yaml.md`,
+"Stream come file"), and the bridge mirrors them in `yaml-bridge.js`:
+
+- **Reading** is two steps, because the browser doesn't touch the disk:
+  `importRefs(text)` lists the files the master imports, `app.jsx` reads each
+  through `GET /import` (`backend.fs.readImport`, which never throws), and
+  `parse(text, {imports})` resolves them like `resolve_stream_files`:
+  placement from the master (`PLACEMENT_KEYS` = the engine's
+  `CHIAVI_DI_PIAZZAMENTO`, `stream_id onset mute solo`), `stream_id` defaulting
+  to the file name without extension (`importDefaultId`, `os.path.splitext`'s
+  rule), and from the imported file the stream alone — its own placement keys
+  and the top level (`seed`, `duration`, `bpm`) are ignored.
+- **In memory** an imported stream is a stream like any other plus its
+  provenance in `_import`: the file, the master entry as written, the file's
+  top level and the placement the stream has *inside* the file. `_import` is
+  in `FP_IGNORE_TOP`: the engine fingerprints the resolved stream, so the same
+  stream imported or written in the master is the same hash, and moving it into
+  a file doesn't make it stale. `tests/parity/test-fingerprint-parity.js` asks
+  the engine — the oracle's `resolve_stream_files` resolves the documents the
+  UI would write, so the resolution rules are never copied into the test.
+- **Every key has one home.** `serialize` writes the master entry as
+  `- file:` plus the placement and nothing else (`importEntryToYaml`), with
+  every key the state didn't change re-emitted as written (an `onset`
+  expression, a `mute: false` that the engine reads as muted). Everything else
+  — `duration` included — goes to the imported file (`serializeImports`), which
+  stays a lab document: its `seed`, its `stream_id`, its `onset: 0` and its
+  `mute` are the file's, because in the piece the engine ignores them and alone
+  the lab uses them. The one top-level key that follows the state is
+  `duration`, as in the lab: it is the length of the file's solo render, and a
+  stream lengthened under a frozen head would be cut. It follows only when the
+  stream's duration is declared and differs from the one read; an implicit one
+  (PGE #205) is not materialized. The master's own top-level `duration` is the
+  piece's length, derived from the streams like always — not a stream key.
+  A rename is placement: `stream_id` goes in the master and the file name
+  doesn't change — the sound changes, as on every rename, and the dot goes
+  yellow.
+- **What gets written is decided against the disk, not against history.**
+  `serializeImports(data).files` is how each file would read now (no header, so
+  two calls on one state give one string); `changedImports(files, disk)` is the
+  ones that differ from what is known to be on disk. That "disk" is
+  `importDiskRef` in `app.jsx`, **outside `data`**: inside, an undo snapshot
+  would carry the old "disk" back with it, and a file saved with an edit and
+  then undone would read "unchanged" and stay edited. Outside, an undo changes
+  the state and not the disk, and the next save writes the file back as it was.
+  It is filled at load (the serialization of the state just read — so opening
+  and saving touches no imported file) and after each write. A render's
+  write is marked **before** `run()`, not after it: the bridge writes the
+  imports when the POST arrives, so marking them at the end overwrote what a
+  save made *during* the render had written — the "disk" went back to the
+  render's older text, and an undo to that text then wrote nothing. If the
+  bridge wrote nothing (`configWritten === false`), `releaseImports` gives the
+  claim back, file by file, only where the map still holds the render's text:
+  a save in between keeps the last word. One deliberate
+  exception: a file still carrying the dead `dephase` spelling is left out of
+  the disk map, so the first save migrates it — the same rewrite the master
+  gets, after which the Inspector's notice goes quiet.
+- **Save and render write master and changed files together.** `onSave` /
+  `onSaveAs` go through `POST /save` (`backend.fs.save`), and `runRender` puts
+  the changed files in the POST body as `imports`: the engine re-reads the
+  imports from disk, so they are on disk before it starts. Save As writes the
+  changed imports too — the copy imports the same files (paths are relative to
+  `configs/`), so without them the copy wouldn't say what the editor shows. The
+  same file imported by two entries (the engine allows it with two
+  `stream_id`s) is one file: as long as both copies say the same thing it is
+  written once, when they diverge it is a `conflict` and save and render
+  refuse rather than pick one.
+- **Errors name the master and the file, and the editor doesn't crash.** A file
+  that is missing, unreadable, malformed, holds no stream or more than one, or
+  chains another `file:` leaves its entry unresolved: it is not a timeline
+  stream, but it is kept in `data._unresolvedImports` and the save puts it back
+  at its position, as written. A key beside `file:` that isn't placement is an
+  error like in the engine (`StreamFileKeyError`) and is **not** folded into
+  the stream; the stream still resolves (the error is in the master), and the
+  key stays in the entry where the author wrote it. A duplicate effective id
+  involving an import (the engine's rule 7) is reported too. All of them land
+  in `data.importErrors`, which `onProjectSelect` logs and toasts.
+- **Copy and split detach.** A paste of an imported stream, and the tail of a
+  split, are written in full in the master (`detachImport`): with the
+  original's provenance they would write into *its* file. A new file for the
+  copy is #186, `<name>-2.yml` for the tail is #187; the split's head keeps its
+  file and is shortened there.
+- **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
+  edit there lands in the file; the timeline shows the file name beside the
+  id, and the Inspector has a `file` row.
+
+`roundTripDiff` ignores `_import` (the master entry is rewritten from the state
+and, re-read, says what was just written) and compares the imported files
+instead, text against text. `tests/node/test-stream-files.js` pins the rules one
+by one; `tests/e2e/test-boot.js` walks the whole road in a browser — open from
+the project list, save untouched (file byte-identical, master identical but for
+the header), a resize into the file, an onset into the master, two undos and a
+save that writes the file back.
+
+Two limits, declared. The bridge reads and writes imports only **under
+`configs/`** (`safe_resolve_import`, see "Security stance"): an absolute path or
+a `..`, which the engine accepts, opens with the error that names the file —
+the engine still renders it. And the editor reads the id as written, without
+the engine's math eval: a file `01.yml` imported without `stream_id` is stream
+`01` here and stream `1` there.
 
 ### EnvelopeEditor: the global `type` survives the commit (`wrapEnv`, #189)
 
@@ -2695,6 +2816,29 @@ inline — weaker, and already divergent: no `\`, no leading dot, and a NUL gave
 all of them. Both this and the `--plot-envelopes` name filter (whose valid set
 lives in engine source, hence server-side) now have tests: sabotaging either
 used to leave the suite green.
+
+**Since #183/#184 the bridge writes files that are not `configs/<basename>.yml`:**
+the streams a master imports with `file:` (PythonGranularEngine#290). They are
+read by `GET /import?file=` and written by `POST /save` and `POST /render`
+(`imports: {path: text}`), and the one path rule for them is
+`safe_resolve_import` (`audio_pipeline.py`): every segment through
+`safe_resolve` — so no traversal, no `\`, no leading dot, no NUL, and an empty
+segment (`a//b`, a leading `/`, a trailing one) is a bad name like any other —
+plus `.yml`/`.yaml` only, always under `configs/`. The extension is the rule of
+its own: these are routes that *write*, and any extension would make the bridge
+a way to write arbitrary files under `configs/`. `plan_import_writes` (server.py)
+validates **all** of them before writing **any** — master included, and the
+master itself is refused as an import (a second door to rewrite it with a text
+other than `yamlContent`) — so a bad path is a 400 with the disk untouched,
+never half a piece. The imports go before the master, the render's order, and
+a disk error while writing them (`OSError`) is a JSON 500 naming it on both
+routes, with the master left as it was.
+`/file` was left as it was, one segment: widening it would have widened every
+`kind`. Symlinks are not resolved, like everywhere else in the bridge: one
+inside `configs/` is the local user's own doing, since no route creates one.
+`/projects` still lists only the `.yml` directly in `configs/`, so a lab
+document in `configs/streams/` is imported, not opened as a piece
+(`tests/python/test_stream_files.py`).
 
 ## Conventions
 

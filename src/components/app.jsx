@@ -247,6 +247,17 @@ function App() {
   // verrebbe parsato con quella vuota — durate sul fallback e nessun evento
   // successivo che le ripari, perche' `mediaList` non cambia piu'.
   const mediaFilesRef = useRefApp([]);
+  /* I file importati con `file:` (#183, #184) come si sa che sono SU DISCO:
+     `{[file]: testo}`, il testo che `PGEYaml.serializeImports` darebbe dello
+     stato letto o appena scritto. Salvataggio e render scrivono solo i file il
+     cui testo di adesso e' diverso da questo (`changedImports`).
+     E' un ref e non un campo di `data` perche' il disco non si annulla: dentro
+     `data` finirebbe negli snapshot della storia, e un undo dopo un salvataggio
+     riporterebbe indietro anche il "disco" — il file salvato con la modifica
+     risulterebbe "non cambiato" e resterebbe com'era, cioe' con la modifica
+     annullata. Fuori dalla storia, l'undo cambia lo stato e non il disco, e il
+     salvataggio successivo riscrive il file com'era. */
+  const importDiskRef = useRefApp({});
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
 
   /* ============ Render state ============ */
@@ -1152,7 +1163,12 @@ function App() {
         // `_srcId` is clipboard bookkeeping, not stream data: it must not reach
         // the model, or it would sit inside the stem fingerprint.
         const { _srcId, _srcProject, ...body } = JSON.parse(JSON.stringify(s));
-        return { ...body, id: ids[i], onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+        // La copia di uno stream importato (#184) si scrive per intero nel
+        // master: con la provenienza dell'originale scriverebbe nel SUO file, e
+        // due voci che importano lo stesso file sono un file solo. Un file
+        // nuovo per la copia e' la #186; finche' non c'e', la copia e' dentro.
+        return { ...window.PGEYaml.detachImport(body), id: ids[i],
+                 onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
       const withPaste = { ...d, streams: [...d.streams, ...pasted] };
       // The copy joins the lane its original sits in (#141) — no similarity
@@ -1236,8 +1252,12 @@ function App() {
       };
       const sliced = sliceStreamEnvelopes(s, cutNorm);
       skipped += sliced.skipped;
+      // La testa di uno stream importato resta nel suo file, accorciata (la
+      // modifica va li', #184). La coda no: con la provenienza della testa
+      // scriverebbe nello stesso file, e il file e' uno. La coda in un file
+      // suo (`<nome>-2.yml`) e' la #187; finche' non c'e', sta nel master.
       const tail = {
-        ...sliced.stream,
+        ...window.PGEYaml.detachImport(sliced.stream),
         onset: R(t), duration: R(s.duration - cutRel),
         durationImplicit: false, durationUnresolved: false,
         pointer: { ...(s.pointer || {}), start },
@@ -1621,13 +1641,48 @@ function App() {
   function selected() { return data.streams.find(s => s.id === selectedId); }
 
   /* ============ Save / SaveAs ============ */
+  /* I file importati con `file:` da scrivere per lo stato `d` (#184): quelli
+     il cui testo di adesso non e' quello che si sa essere su disco
+     (`importDiskRef`). `bodies` e' cio' che si confronta — il testo senza
+     intestazione, uguale fra due chiamate sullo stesso stato — `texts` cio' che
+     va sul disco, con l'intestazione. Lo stesso file importato da due voci con
+     modifiche diverse non ha un testo solo: e' un rifiuto, non una scelta. */
+  function importWrites(d) {
+    const PY = window.PGEYaml;
+    const imp = PY.serializeImports(d);
+    if (imp.conflicts.length) {
+      return { error: `lo stesso file importato da piu' stream con modifiche diverse: ${imp.conflicts.join(", ")} — ` +
+                      `rendile uguali, o stacca uno degli stream dal file` };
+    }
+    const bodies = PY.changedImports(imp.files, importDiskRef.current);
+    const texts = {};
+    for (const f of Object.keys(bodies)) texts[f] = PY.importedFileText(f, bodies[f]);
+    return { bodies, texts };
+  }
+  // Scritti: adesso il disco e' questo.
+  function markImportsWritten(bodies) {
+    importDiskRef.current = { ...importDiskRef.current, ...bodies };
+  }
+  const importCount = (n) => n ? ` + ${n} file importat${n === 1 ? "o" : "i"}` : "";
+
   async function onSave() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
-    const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
-      `# (yaml bridge not loaded — save skipped)\n# project: ${data.project}\n`;
+    if (!window.PGEYaml) {
+      pushToast({ kind: "err", title: "Save failed", message: "yaml bridge not loaded — save skipped", persistent: true });
+      return;
+    }
+    const yaml = window.PGEYaml.serialize(data);
+    const imp = importWrites(data);
+    if (imp.error) {
+      pushToast({ kind: "err", title: "Save refused", message: imp.error, persistent: true });
+      return;
+    }
     try {
-      await backend.fs.writeFile("projects", basename + ".yml", yaml);
+      // Master e file importati cambiati in una richiesta: il bridge li
+      // valida tutti prima di scriverne uno (POST /save).
+      await backend.fs.save(basename, yaml, imp.texts);
+      markImportsWritten(imp.bodies);
       setDirty(false);
       // Il file appena scritto porta `deviation_probability`: la migrazione da
       // `dephase` e' compiuta, e l'avviso in Inspector deve tacere. _setDataRaw
@@ -1636,22 +1691,36 @@ function App() {
       // di undo, come l'arrivo tardivo dei media. Solo qui e non in onSaveAs:
       // quello scrive un altro file, l'originale porta ancora la chiave morta.
       _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
-      pushToast({ kind: "ok", title: "Saved", message: `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb`, duration: 2200 });
+      pushToast({ kind: "ok", title: "Saved", message: `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb${importCount(Object.keys(imp.bodies).length)}`, duration: 2200 });
       refreshProjects();
     } catch (e) {
       pushToast({ kind: "err", title: "Save failed", message: e.message, persistent: true });
     }
   }
+  /* La copia del master importa gli STESSI file dell'originale: i path sono
+     relativi a configs/, e la copia sta li'. Quindi le modifiche non salvate a
+     uno stream importato si scrivono nel suo file anche qui — senza, la copia
+     appena salvata non direbbe cio' che l'editor mostra. Il file e' uno, per
+     entrambi i master: e' la regola 4, non una scelta di Save As. */
   async function onSaveAs() {
     const name = prompt("Save a copy as…", activeProject.replace(/\.yml$/, "_copy.yml"));
     if (!name) return;
     const fullName = name.endsWith(".yml") ? name : name + ".yml";
     const backend = window.PGEBackend.current;
-    const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
-      `# saved-as ${fullName}\n# from: ${activeProject}\n`;
+    if (!window.PGEYaml) {
+      pushToast({ kind: "err", title: "Save As failed", message: "yaml bridge not loaded", persistent: true });
+      return;
+    }
+    const yaml = window.PGEYaml.serialize(data);
+    const imp = importWrites(data);
+    if (imp.error) {
+      pushToast({ kind: "err", title: "Save As refused", message: imp.error, persistent: true });
+      return;
+    }
     try {
-      await backend.fs.writeFile("projects", fullName, yaml);
-      pushToast({ kind: "ok", title: "Saved as", message: `configs/${fullName}`, duration: 2500 });
+      await backend.fs.save(fullName.replace(/\.yml$/, ""), yaml, imp.texts);
+      markImportsWritten(imp.bodies);
+      pushToast({ kind: "ok", title: "Saved as", message: `configs/${fullName}${importCount(Object.keys(imp.bodies).length)}`, duration: 2500 });
       refreshProjects();
     } catch (e) {
       pushToast({ kind: "err", title: "Save As failed", message: e.message, persistent: true });
@@ -1743,6 +1812,19 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
 
+    /* I file importati cambiati partono col POST (#184): il motore li rilegge
+       dal disco, e il bridge li scrive prima del master e prima di lanciarlo.
+       Un conflitto (lo stesso file da due stream con modifiche diverse) ferma
+       il render qui, prima di toccare lo stato: non c'e' un testo giusto da
+       mandare. Sincrono, quindi la regola qui sotto dell'"alzare lo stato
+       prima di ogni attesa" non perde niente. */
+    const importPlan = window.PGEYaml ? importWrites(data) : { bodies: {}, texts: {} };
+    if (importPlan.error) {
+      pushToast({ kind: "err", title: "Render refused", message: importPlan.error, persistent: true });
+      return;
+    }
+    const changedForRender = importPlan.texts;
+
     /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
        `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
        Render non produceva niente di visibile — log non svuotato, nessun toast,
@@ -1788,6 +1870,7 @@ function App() {
     const opts = {
       yamlBasename: basename,
       yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
+      imports: changedForRender,
       renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
@@ -1818,6 +1901,14 @@ function App() {
       outputFormat: tweaks.outputFormat || "wav",
       semanticsVersion: semOfThisRun,
     };
+    /* I file importati che questo render manda sono su disco dall'arrivo del
+       POST, non dalla fine del render: si segnano adesso. Segnati in fondo,
+       sovrascrivevano cio' che un salvataggio fatto NEL MEZZO aveva scritto, e
+       il "disco" tornava al testo del render, piu' vecchio — un undo verso quel
+       testo non avrebbe riscritto il file. Se il bridge non li ha scritti
+       (`configWritten === false`) si rendono qui sotto, `releaseImports`. */
+    const importDiskBefore = importDiskRef.current;
+    markImportsWritten(importPlan.bodies);
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
@@ -1902,12 +1993,18 @@ function App() {
     // su configs/<basename>.yml PRIMA di lanciare il motore, quindi la
     // migrazione di `dephase` e' avvenuta anche se poi il render fallisce —
     // percio' qui, non dentro `result.ok`. Ma non quando il file non e' stato
-    // scritto affatto (server down, o uno dei quattro rifiuti 400 che precedono la
+    // scritto affatto (server down, o uno dei cinque rifiuti 400 che precedono la
     // scrittura): li' la riscrittura e' ancora da fare e l'avviso deve restare.
     // `!== false` e non truthiness: sul percorso buono il campo non c'e', e
     // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
     if (result.configWritten !== false) {
       _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
+    }
+    // I file importati vanno col master: il bridge li scrive prima di lui e
+    // rifiuta (400, niente scritto) prima di entrambi. Non scritti, il disco
+    // torna quello di prima — tranne dove un salvataggio nel mezzo ha scritto.
+    if (result.configWritten === false && window.PGEYaml) {
+      importDiskRef.current = window.PGEYaml.releaseImports(importDiskRef.current, importPlan.bodies, importDiskBefore);
     }
 
     if (result.ok) {
@@ -2031,11 +2128,21 @@ function App() {
       const yamlText = await backend.fs.readFile("projects", name);
       if (yamlText && window.PGEYaml) {
         const basename = name.replace(/\.yml$/, "");
+        // Gli stream importati con `file:` (#183): il browser non tocca il
+        // disco, i file li legge il bridge (GET /import), relativi a configs/.
+        // Uno che non si legge entra nella mappa con il suo errore, e il parse
+        // ne fa un messaggio che lo nomina invece di un'apertura fallita.
+        const imports = {};
+        await Promise.all(window.PGEYaml.importRefs(yamlText).map(async (f) => {
+          const r = await backend.fs.readImport(f);
+          imports[f] = r.ok ? { text: r.text } : { error: r.error };
+        }));
         const parsed = window.PGEYaml.parse(yamlText, {
           project: basename,
           // dal ref, non dallo stato: la closure e' stata catturata prima
           // dell'await sopra, e la media list puo' essere atterrata nel mezzo.
           samples: mediaFilesRef.current || [],
+          imports,
         });
         // Intentional _setDataRaw (bypasses history): loading a project is an
         // atomic action, not an undoable edit — resetHistory() clears the stack
@@ -2043,8 +2150,35 @@ function App() {
         _setDataRaw(parsed);
         resetHistory();
         setDirty(false);
+        // Il disco dei file importati e' quello appena letto (#184), nella
+        // forma in cui il bridge lo riscriverebbe: aprire e salvare senza
+        // toccare niente non riscrive nessun file importato. Con un'eccezione,
+        // la stessa del master: un file che porta ancora la grafia morta
+        // `dephase` si riscrive al primo salvataggio, perche' la migrazione e'
+        // proprio quella riscrittura e l'avviso dell'Inspector si spegne dopo.
+        {
+          const disk = window.PGEYaml.serializeImports(parsed).files;
+          for (const st of parsed.streams) {
+            if (st._import && st.deviationProbabilityLegacy) delete disk[st._import.file];
+          }
+          importDiskRef.current = disk;
+        }
         const ms = (performance.now() - t0).toFixed(0);
-        logToTerminal(`[load] ${name} · ${parsed.streams.length} streams · ${parsed.duration}s · ${(yamlText.length/1024).toFixed(1)}kb · ${ms}ms`, "ok");
+        const nImported = parsed.streams.filter(st => st._import).length;
+        logToTerminal(`[load] ${name} · ${parsed.streams.length} streams${nImported ? ` (${nImported} importati con file:)` : ""} · ${parsed.duration}s · ${(yamlText.length/1024).toFixed(1)}kb · ${ms}ms`, "ok");
+        // Un import che non si risolve, o una voce `file:` che il motore
+        // rifiuterebbe: lo si dice adesso, col master e il file nominati, e
+        // l'editor resta aperto sul resto del brano.
+        if (parsed.importErrors && parsed.importErrors.length) {
+          for (const er of parsed.importErrors) logToTerminal(`[ERROR] ${er.message}`, "err");
+          const n = parsed.importErrors.length;
+          pushToast({
+            kind: "err", title: "stream importati",
+            message: parsed.importErrors[0].message + (n > 1 ? ` (+${n - 1})` : ""),
+            duration: 10000,
+            action: { label: "show log", onClick: () => setTerminalOpen(true) },
+          });
+        }
         // Run a round-trip check — if the bridge would lose information on
         // save, surface it now while the user can decide what to do.
         try {
@@ -2074,7 +2208,10 @@ function App() {
     // Same as above: intentional _setDataRaw + resetHistory (atomic load, not
     // an undoable edit). #44
     const meta = { project: name.replace(/\.yml$/, ""), title: "", duration: 10 };
-    _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
+    // Le voci `file:` irrisolte del progetto di prima non sono di questo.
+    _setDataRaw(({ _unresolvedImports, importErrors, ...d }) =>
+      ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
+    importDiskRef.current = {};
     resetHistory();
     setDirty(false);
   }
@@ -2113,6 +2250,13 @@ function App() {
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};
+    // Il disco dei file importati (#184) e' quello della cartella di prima.
+    // Se nella nuova non c'e' un progetto da aprire, quello in memoria resta
+    // ed e' cio' che un Salva porta qui: con il disco di prima i file
+    // importati non cambiati non si scriverebbero, e il master copiato
+    // nominerebbe file che qui non esistono. Vuoto, si scrivono tutti; se un
+    // progetto si apre, onProjectSelect lo riempie con quello appena letto.
+    importDiskRef.current = {};
     if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
 
     // I campi informativi in Settings vanno riscritti a forza: qui le path

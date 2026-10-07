@@ -242,6 +242,13 @@ function YamlEditor({ stream, onChange, samples }) {
         // Provenienza sintetizzata dal parse, come color/id: la regola sta nel
         // bridge (una sola copia, testata direttamente li').
         deviationProbabilityLegacy: window.PGEYaml.mergeDeviationProbabilityLegacy(parsed, stream),
+        // La provenienza di uno stream importato con `file:` (#183): il tab
+        // mostra lo stream risolto, e il testo riscritto qui deve finire nel
+        // SUO file (#184), non diventare uno stream scritto nel master. Non e'
+        // nello YAML del tab, quindi viene dallo stream vivo come color e id;
+        // `undefined` su uno stream che non e' importato, e applyStreamPatch
+        // toglie la chiave invece di lasciarla vuota.
+        _import: stream._import,
       });
       setParseErr(null);
       setMode("view");

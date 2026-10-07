@@ -86,7 +86,7 @@ except ImportError:
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
-    safe_resolve, audio_duration, _resolve_audio, PEAK_BUCKETS,
+    safe_resolve, safe_resolve_import, audio_duration, _resolve_audio, PEAK_BUCKETS,
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
@@ -117,6 +117,51 @@ from engine_introspect import (engine_envelope_keys, engine_output_sr,
                               engine_renderer_types,
                               engine_sc_synthdef, engine_semantics_version,
                               engine_supports_samples_dir)
+
+
+def plan_import_writes(base: Path, imports, master: Path):
+    """I file importati da scrivere accanto al master (PGE-ui #184), validati
+    TUTTI prima che se ne scriva uno: `([(rel, path, testo)], None)` oppure
+    `(None, messaggio)`.
+
+    Lo usano `/save` e `/render`, e in entrambi la risposta a un path cattivo
+    e' un 400 a disco intatto — master compreso. Scrivere i buoni e fermarsi
+    al primo cattivo lascerebbe sul disco un brano a meta': un file importato
+    nuovo accanto a un master vecchio, o il contrario.
+
+    Ogni path passa da `safe_resolve_import`, cioe' da `safe_resolve` segmento
+    per segmento, sotto `base` (la cartella del master, `configs/`). Il master
+    stesso non e' un import: una seconda porta per riscriverlo, con un testo
+    diverso da `yamlContent`, deciderebbe l'ordine delle scritture al posto
+    dell'autore."""
+    if imports is None:
+        return [], None
+    if not isinstance(imports, dict):
+        return None, "imports: atteso un oggetto {path: testo}"
+    plan = []
+    for rel, text in imports.items():
+        path = safe_resolve_import(base, rel)
+        if path is None:
+            return None, (f"file importato {rel!r}: path non valido — relativo alla "
+                          f"cartella del master, senza '..', senza segmenti nascosti, .yml/.yaml")
+        if path == master:
+            return None, f"file importato {rel!r}: e' il master stesso"
+        if not isinstance(text, str):
+            return None, f"file importato {rel!r}: il testo non e' una stringa"
+        plan.append((rel, path, text))
+    return plan, None
+
+
+def write_import_plan(plan):
+    """Scrive il piano di `plan_import_writes`. Le sottocartelle si creano (un
+    file nuovo in `streams/`, #186), sempre sotto la cartella del master: il
+    path e' gia' passato dalla validazione."""
+    written = []
+    for rel, path, text in plan:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        written.append(rel)
+    return written
 
 
 def _ensure_venv_events(root: Path):
@@ -1256,6 +1301,66 @@ def make_app(root: Path, render_timeout: float = 600.0,
         path.write_text(request.get_data(as_text=True), encoding="utf-8")
         return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size})
 
+    # --------- lo stream come file (PythonGranularEngine#290) ---------
+    #
+    # Un master puo' importare stream da altri file (`- file: streams/x.yml`),
+    # con il path relativo alla sua cartella: `configs/`. Il browser non tocca
+    # il disco, quindi quei file li legge e li scrive il bridge — per la prima
+    # volta file che non sono `configs/<basename>.yml`, e mai fuori da
+    # `configs/` (`safe_resolve_import`). `/file` resta com'era, a un segmento:
+    # allargarlo avrebbe allargato ogni `kind`.
+
+    @app.get("/import")
+    def get_import():
+        """Il testo di un file importato, per il parse del browser (#183).
+        Risponde sempre JSON: chi apre il master deve poter nominare il file che
+        manca o non si legge, non ricevere una pagina d'errore."""
+        rel = request.args.get("file", "")
+        path = safe_resolve_import(configs, rel)
+        if path is None:
+            return jsonify({"ok": False,
+                            "error": f"path non valido: {rel!r} — il bridge legge solo "
+                                     f".yml/.yaml sotto la cartella del master"}), 400
+        if not path.is_file():
+            return jsonify({"ok": False, "error": f"{configs.name}/{rel} non esiste"}), 404
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            return jsonify({"ok": False,
+                            "error": f"{configs.name}/{rel} non si legge: {type(e).__name__}: {e}"}), 422
+        return jsonify({"ok": True, "file": rel, "path": str(path), "text": text})
+
+    @app.post("/save")
+    def save_project():
+        """Il master e i file importati cambiati, in un colpo solo (#184).
+
+        Il browser manda solo i file importati che sono cambiati rispetto a cio'
+        che sa essere su disco; il bridge scrive quelli e il master, e nient'
+        altro. Tutto si valida prima di scrivere: un path cattivo e' un 400 a
+        disco intatto. I file importati vanno prima del master, che e' l'ordine
+        del render: un master che nomina un file non ancora scritto e' il brano
+        a meta' che si vuole evitare."""
+        opts = request.get_json(force=True, silent=True) or {}
+        basename = opts.get("basename")
+        yml = safe_resolve(configs, f"{basename}.yml") \
+            if isinstance(basename, str) and basename else None
+        if yml is None:
+            return jsonify({"ok": False, "error": f"bad basename: {basename!r}"}), 400
+        content = opts.get("yamlContent")
+        if not isinstance(content, str):
+            return jsonify({"ok": False, "error": "yamlContent required"}), 400
+        plan, err = plan_import_writes(configs, opts.get("imports"), yml)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        try:
+            written = write_import_plan(plan)
+            yml.parent.mkdir(parents=True, exist_ok=True)
+            yml.write_text(content, encoding="utf-8")
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        return jsonify({"ok": True, "path": str(yml),
+                        "written": written + [yml.name]})
+
     # --------- rendered audio playback ---------
 
     @app.get("/output/<path:fname>")
@@ -1583,17 +1688,31 @@ def make_app(root: Path, render_timeout: float = 600.0,
         _EXT = {"aiff": ".aif", "wav": ".wav", "flac": ".flac"}
         out_ext = _EXT[fmt]
 
+        # I file importati cambiati (PGE-ui #184): il motore li rilegge dal
+        # disco, quindi devono essere li' prima che parta. Si validano qui,
+        # insieme agli altri rifiuti che precedono la scrittura del config, e
+        # si scrivono prima del master — vedi /save.
+        import_plan, import_err = plan_import_writes(configs, opts.get("imports"), yml)
+        if import_err:
+            return jsonify({"ok": False, "error": import_err}), 400
+
         yaml_content = opts.get("yamlContent")
         # Write the editor state to the canonical config (never a temp file): the
         # engine's per-stream cache manifest is keyed by the YAML basename
         # (cache/<basename>.json), so a random temp name would orphan the manifest
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
-        if yaml_content:
-            yml.write_text(yaml_content, encoding="utf-8")
-        elif not yml.exists():
+        if not yaml_content and not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
+        # Come /save: un errore del disco e' un JSON col messaggio, non una
+        # traceback HTML, e il master non si scrive dopo un import fallito.
+        try:
+            write_import_plan(import_plan)
+            if yaml_content:
+                yml.write_text(yaml_content, encoding="utf-8")
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
         output_stem = output / f"{basename}{out_ext}"
 

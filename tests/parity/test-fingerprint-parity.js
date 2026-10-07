@@ -572,6 +572,126 @@ parity({
       },
     },
     {
+      /* Lo stream come file (PythonGranularEngine#290, PGE-ui #183/#184).
+       *
+       * Il motore calcola il fingerprint sullo stream gia' risolto: importato
+       * con `file:` o scritto nel master e' lo stesso dict, quindi lo stesso
+       * hash. La UI risolve per conto suo (`parse` con `imports`, il mirror di
+       * `resolve_stream_files`) e riscrive per conto suo (`serialize` per il
+       * master, `serializeImports` per il file) — due specchi.
+       *
+       * Qui le regole di risoluzione non si ricopiano: i documenti che la UI
+       * scriverebbe li risolve il MOTORE (op `resolve_stream_files`), e si
+       * confronta. Tre cose:
+       *   - lo stream che la UI crede di avere e' quello che il motore rende
+       *     (stesso hash del motore fra il risolto dal motore e lo stream della
+       *     UI scritto dentro);
+       *   - aprire e riscrivere non sposta niente;
+       *   - la derivata: una modifica, passata dalla strada di scrittura vera
+       *     (master + file), muove i due hash come li muove sullo stream scritto
+       *     dentro — onset compreso, l'unica divergenza dichiarata. */
+      label: "lo stream importato con file: e' lo stream scritto dentro, per entrambi gli hash",
+      run: async (ask, assert) => {
+        const c = (await ask("constants", {})).value;
+        assert("le chiavi di piazzamento sono quelle del motore",
+          JSON.stringify(c.stream_file_placement_keys) === JSON.stringify(window.PGEYaml.PLACEMENT_KEYS),
+          `motore ${JSON.stringify(c.stream_file_placement_keys)} ` +
+          `${c.stream_file_placement_keys_error || ""} ui ${JSON.stringify(window.PGEYaml.PLACEMENT_KEYS)}`);
+
+        const FILE = "streams/risacca.yml";
+        // Il documento del laboratorio della fixture di mare-nostrum: lo
+        // stream_id, l'onset e il mute del file sono quelli che il motore
+        // ignora quando il master lo importa.
+        const RISACCA = [
+          "seed: 1441", "duration: 4", "bpm: 120", "streams:",
+          "- stream_id: risacca", "  onset: 12.5", "  mute: true", "  duration: 4",
+          "  sample: x.wav", "  time_mode: normalized", "  density: 20",
+          "  grain: {duration: [[0, 0.03], [0.5, 0.05, step], [1, 0.02]], envelope: hanning}",
+          "  pointer: {speed_ratio: 0.5}", "  pitch: {ratio: 0.8}", "  pan: 0", "  volume: -6",
+        ].join("\n") + "\n";
+        const MASTER = `seed: 1441\nstreams:\n  - file: ${FILE}\n    onset: 2.5\n`;
+        const { parse, serialize, serializeImports } = window.PGEYaml;
+        const ui = (data) => parse(data.master, {
+          project: "brano", samples: [],
+          imports: Object.fromEntries(Object.entries(data.files).map(([f, t]) => [f, { text: t }])) });
+        // Il motore risolve i documenti CHE LA UI SCRIVEREBBE.
+        const written = (d) => ({ master: serialize(d), files: serializeImports(d).files });
+        const engineOf = async (docs) => {
+          const r = await ask("resolve_stream_files", {
+            master: window.jsyaml.load(docs.master),
+            files: Object.fromEntries(Object.entries(docs.files).map(([f, t]) => [f, window.jsyaml.load(t)])) });
+          if (!r.ok) throw new Error(`resolve_stream_files: ${r.error}`);
+          return r.value.streams[0];
+        };
+        const engHex = async (stream) => {
+          const r = await ask("fingerprint", { stream });
+          if (!r.ok) throw new Error(`fingerprint: ${r.error}`);
+          return r.value.hex;
+        };
+
+        const orig = { master: MASTER, files: { [FILE]: RISACCA } };
+        const d0 = ui(orig);
+        assert("la UI risolve il master senza errori", !d0.importErrors && d0.streams.length === 1,
+          JSON.stringify(d0.importErrors));
+        const s0 = d0.streams[0];
+
+        const resolved = await engineOf(orig);
+        const hexResolved = await engHex(resolved);
+        assert("lo stream della UI e' quello che il motore rende (stesso hash del motore)",
+          hexResolved === await engHex(yamlDict(s0)),
+          `motore: ${JSON.stringify(resolved)}\n      ui:     ${JSON.stringify(yamlDict(s0))}`);
+        assert("aprire e riscrivere (master + file) non sposta l'hash del motore",
+          hexResolved === await engHex(await engineOf(written(d0))));
+        /* `mute` e `solo` l'hash non li vede (FINGERPRINT_IGNORE_KEYS), quindi
+           l'uguaglianza qui sopra non dice niente di loro: e sono proprio le
+           chiavi che il file del laboratorio porta (`mute: true`) e il motore
+           butta. Il piazzamento si confronta a parte, nella forma in cui il
+           motore lo legge — la presenza, per mute e solo. */
+        const place = (y) => JSON.stringify({ stream_id: String(y.stream_id), onset: y.onset ?? 0,
+                                              mute: "mute" in y, solo: "solo" in y });
+        assert("il piazzamento della UI e' quello del motore, mute e solo compresi",
+          place(yamlDict(s0)) === place(resolved), `ui ${place(yamlDict(s0))} motore ${place(resolved)}`);
+
+        // Lo stesso stream scritto dentro il master: per la UI e' lo stesso.
+        const inline = parse(`streams:\n  - ${serializeStream(s0).split("\n").join("\n    ")}\n`,
+          { project: "brano", samples: [] }).streams[0];
+        assert("...e la UI lo vede come lo stesso stream scritto dentro",
+          fingerprintStream(s0, "wav") === fingerprintStream(inline, "wav"),
+          `${fingerprintStream(s0, "wav")} vs ${fingerprintStream(inline, "wav")}`);
+
+        // La derivata, passando dalla strada di scrittura vera.
+        const muts = [
+          { label: "density (nel file)", side: "both", mut: s => ({ ...s, density: 21 }) },
+          { label: "duration (nel file)", side: "both", mut: s => ({ ...s, duration: 6 }) },
+          { label: "grain.duration (nel file)", side: "both",
+            mut: s => ({ ...s, grain: { ...s.grain, durationEnv: [[0, 0.03], [1, 0.09]] } }) },
+          { label: "stream_id (nel master)", side: "both", mut: s => ({ ...s, id: "onda" }) },
+          { label: "mute (nel master)", side: "neither", mut: s => ({ ...s, mute: true }) },
+          { label: "solo (nel master)", side: "neither", mut: s => ({ ...s, solo: true }) },
+          { label: "onset (nel master)", side: "engineOnly", mut: s => ({ ...s, onset: 9 }) },
+          { label: "il file spostato in un'altra cartella, stesso nome", side: "neither",
+            mut: s => ({ ...s, _import: { ...s._import, file: "altrove/risacca.yml" } }) },
+        ];
+        const bad = [];
+        for (const m of muts) {
+          const sm = m.mut(s0);
+          const docs = written({ ...d0, streams: [sm] });
+          const res = await engineOf(docs);
+          if (place(yamlDict(sm)) !== place(res)) {
+            bad.push(`${m.label}: piazzamento ui ${place(yamlDict(sm))} motore ${place(res)}`);
+          }
+          const engMoved = (await engHex(res)) !== hexResolved;
+          const uiMoved = fingerprintStream(sm, "wav") !== fingerprintStream(s0, "wav");
+          const exp = { both: [true, true], neither: [false, false], engineOnly: [false, true] }[m.side];
+          if (uiMoved !== exp[0] || engMoved !== exp[1]) {
+            bad.push(`${m.label}: atteso ui=${exp[0]}/motore=${exp[1]}, ottenuto ui=${uiMoved}/motore=${engMoved}`);
+          }
+        }
+        assert(`${muts.length} modifiche scritte in master + file, stesso verdetto su entrambi i lati`,
+          bad.length === 0, bad.join("\n      "));
+      },
+    },
+    {
       /* Chi reclama uno stem deve sapere quali stream il motore ha COSTRUITO.
        *
        * Il fallback di `done` in `run()` scorre `generated`, che e' il disco e

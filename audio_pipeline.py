@@ -37,6 +37,38 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
+_CONFIG_EXTS = (".yml", ".yaml")
+
+
+def safe_resolve_import(base: Path, rel) -> "Path | None":
+    """Il path di un file importato con `file:` (PythonGranularEngine#290),
+    relativo alla cartella del master: `streams/risacca.yml` sotto `configs/`.
+
+    E' l'unico path del bridge con piu' di un segmento, e non per questo una
+    regola nuova: ogni segmento passa da `safe_resolve`, cioe' dalle stesse
+    esclusioni di ogni altro nome (traversal, separatore di Windows, punto
+    iniziale, NUL, vuoto), e un segmento vuoto — `a//b`, la `/` in testa di un
+    path assoluto, quella in coda — e' un nome cattivo come gli altri. Piu' una
+    sola regola sua: dev'essere un documento YAML. E' il confine di una route
+    che SCRIVE (`/save`, `/render`), e un'estensione qualunque farebbe del
+    bridge un modo di scrivere file arbitrari sotto `configs/`.
+
+    Il motore accetta anche path assoluti e `..`; il bridge no, e lo dichiara:
+    legge e scrive soltanto sotto la cartella del master. Un master che importa
+    da fuori si apre con l'errore che nomina il file, e il motore lo rende lo
+    stesso."""
+    if not isinstance(rel, str) or not rel:
+        return None
+    path = base
+    for seg in rel.split("/"):
+        path = safe_resolve(path, seg)
+        if path is None:
+            return None
+    if path.suffix.lower() not in _CONFIG_EXTS:
+        return None
+    return path
+
+
 _AUDIO_EXTS = (".aif", ".aiff", ".wav", ".flac", ".mp3")
 
 
