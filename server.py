@@ -55,6 +55,8 @@ Endpoints:
     GET  /projects              — list configs/*.yml
     GET  /file?kind=…&name=…    — read a file (kind: projects|media|cache|output)
     PUT  /file?kind=…&name=…    — write a file
+    GET  /import?path=…         — read a stream file a master imports with
+                                  `file:`, relative to configs/ (#183)
     GET  /cache_manifest/<basename>  — read cache/<basename>.json
     POST /render                — run main.py, stream NDJSON events
     POST /render/cancel         — terminate the running render
@@ -86,7 +88,7 @@ except ImportError:
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
-    safe_resolve, audio_duration, _resolve_audio, PEAK_BUCKETS,
+    safe_resolve, safe_resolve_rel, audio_duration, _resolve_audio, PEAK_BUCKETS,
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
@@ -1255,6 +1257,57 @@ def make_app(root: Path, render_timeout: float = 600.0,
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(request.get_data(as_text=True), encoding="utf-8")
         return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size})
+
+    # --------- stream come file (#183) ---------
+
+    @app.get("/import")
+    def read_import():
+        """Il testo di un file importato con `file:` da un master (PGE #290).
+
+        `path` e' il valore di `file:` come e' scritto nel master, e si risolve
+        sulla cartella del master — `configs/`, dove stanno tutti i progetti —
+        come fa il motore. Solo in lettura: il file importato e' un documento a
+        se' (quello del laboratorio), e questa slice non lo riscrive.
+
+        Un file che non si legge e' una risposta 200 con `ok: false`, non un
+        4xx: e' un fatto della voce del master — l'editor lo mostra accanto a
+        lei e apre il progetto lo stesso — non una richiesta sbagliata, e un
+        4xx stamperebbe "Failed to load resource" nella console del browser per
+        uno stato che l'editor gestisce. `reason` dice quale dei casi, il
+        messaggio nomina il file. Il 400 resta per la richiesta senza `path`.
+
+        Un path fuori da `configs/` (assoluto, con `..`) non si legge anche
+        dove il motore lo leggerebbe: il bridge legge solo sotto le sue
+        cartelle (`safe_resolve`, un segmento alla volta). La voce resta nel
+        master com'e' scritta, e il render la consegna al motore.
+        """
+        rel = request.args.get("path")
+        if not rel:
+            return jsonify({"ok": False, "file": "", "reason": "no-path",
+                            "error": "'path' mancante: il valore di 'file:' del "
+                                     f"master, relativo a {configs.name}/"}), 400
+        where = f"{configs.name}/{rel}"
+
+        def no(reason, msg):
+            return jsonify({"ok": False, "file": rel, "reason": reason, "error": msg})
+
+        path = safe_resolve_rel(configs, rel)
+        if path is None:
+            return no("outside", f"path non leggibile dal bridge: '{rel}' — il "
+                                 f"bridge legge solo sotto {configs.name}/ (niente "
+                                 "'..', path assoluti o nomi nascosti)")
+        if not path.exists():
+            return no("missing", f"file importato non trovato: {where}")
+        if not path.is_file():
+            return no("not-file", f"il file importato non e' un file: {where}")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return no("not-utf8", f"il file importato non e' testo UTF-8: {where}")
+        except OSError as e:
+            return no("unreadable", f"il file importato non si legge: {where} "
+                                    f"({e.strerror or e})")
+        return jsonify({"ok": True, "file": rel, "path": str(path), "text": text})
 
     # --------- rendered audio playback ---------
 

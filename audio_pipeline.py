@@ -37,6 +37,29 @@ def safe_resolve(base: Path, name: str) -> "Path | None":
     return base / name
 
 
+def safe_resolve_rel(base: Path, rel) -> "Path | None":
+    """`base/rel` per un path relativo con le barre, o None.
+
+    Serve ai file importati con `file:` (PGE-ui #183): il motore li risolve
+    sulla cartella del master, e il master li scrive in sottocartelle
+    (`streams/risacca.yml`). Non e' una seconda regola: ogni segmento passa da
+    `safe_resolve`, quindi niente `..`, niente nomi nascosti, niente
+    backslash, niente NUL — e per costruzione il risultato sta sotto `base`.
+    `.` e i segmenti vuoti (`./a.yml`, `a//b.yml`) si saltano: il motore li
+    legge con `os.path.join`, e non escono dalla cartella. Un path assoluto,
+    o uno che si riduce a `base` stessa, e' None."""
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel:
+        return None
+    path = base
+    for seg in rel.split("/"):
+        if seg in ("", "."):
+            continue
+        path = safe_resolve(path, seg)
+        if path is None:
+            return None
+    return None if path == base else path
+
+
 _AUDIO_EXTS = (".aif", ".aiff", ".wav", ".flac", ".mp3")
 
 
