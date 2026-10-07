@@ -1,0 +1,53 @@
+# Master di prova del round-trip inverso (#188, passo 4 del piano
+# DMGiulioRomano/mare-nostrum `docs/plans/stream-come-file.md`).
+#
+# Importa i cinque documenti del laboratorio di `streams/` (vedi
+# tests/fixtures/lab/README.md) e ne decide il piazzamento, con le regole del
+# motore (PythonGranularEngine#290): accanto a `file:` stanno solo `onset`,
+# `mute`, `solo` e `stream_id`, che di default e' il nome del file.
+#
+# Le voci mettono alla prova le case delle chiavi:
+#   - voci.yml entra come `coro`: lo stream_id del master non e' quello del file;
+#   - tipo-sul-punto.yml e' muto nel master e non nel file;
+#   - risacca.yml nel file e' a 12.5 e muto, qui a 2.5 e suona: decide il master.
+# `riva` e' scritta dentro, come gli stream di oggi, per vedere che i due
+# convivono. `duration` e' quella che PGE-ui calcola dagli stream
+# (`computeDuration`: l'estremo piu' lontano piu' 10 s), cosi' un salvataggio
+# che non tocca niente la riscrive uguale.
+duration: 32
+bpm: 120
+seed: 1441
+streams:
+  - file: streams/finestra.yml
+    onset: 0
+  - file: streams/progressione.yml
+    onset: 6
+  - file: streams/voci.yml
+    stream_id: coro
+    onset: 3
+  - file: streams/tipo-sul-punto.yml
+    onset: 1.5
+    mute: true
+  - file: streams/risacca.yml
+    onset: 2.5
+  - stream_id: riva
+    onset: 0
+    duration: 3
+    sample: onda.wav
+    time_mode: normalized
+    density: 40
+    distribution: 0.5
+    grain:
+      duration: 0.04
+      duration_range: 0.01
+      envelope: hanning
+    pointer:
+      start: 0
+      speed_ratio: 1
+      offset_range: 0.05
+    pitch:
+      ratio: 1
+      range: 0.1
+    pan: 0
+    pan_range: 180
+    volume: -9

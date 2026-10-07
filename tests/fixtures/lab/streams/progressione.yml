@@ -1,0 +1,32 @@
+seed: 1441
+duration: 16
+bpm: 120
+streams:
+- stream_id: progressione
+  onset: 0
+  duration: 16
+  sample: 001-41_5-5_5.wav
+  time_mode: normalized
+  distribution_mode: uniform
+  grain:
+    duration: 0.064
+    envelope: gaussian
+    duration_range: 0
+  pointer:
+    speed_ratio: 1
+    offset_range: 0
+  pitch:
+    ratio: 1
+    range: 0
+  pan: 0
+  volume: 0
+  voices:
+    pitch:
+      strategy: chord_progression
+      voice_leading: positional
+      progression: [[0, maj7], [0.6, min7, 1], [1, dom9, 2]]
+      interp: cubic
+    num_voices: 4
+  fill_factor: 2
+  distribution: 0
+  pan_range: 0
