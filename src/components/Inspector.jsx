@@ -144,7 +144,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
     if (mode === "off")       return <span className="mono" style={{color:"var(--fg-3)"}}>off</span>;
     if (mode === "implicit")  return <span className="mono" style={{color:"var(--fg-3)"}}>implicit · 1%</span>;
     if (mode === "global")    {
-      if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items).length} bp</span>;
+      if (dIsEnv) return <span className="mono" style={{color:"var(--accent)"}}>env · {PGEEnv.envCount(d)} bp</span>;
       return <span className="mono" style={{color:"var(--accent)"}}>{dScalar}%</span>;
     }
     const n = Object.keys(d || {}).length;
@@ -226,7 +226,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                   value={dIsEnv ? "—" : dScalar}
                   unit={dIsEnv ? "" : "%"}
                   accent={dIsEnv}
-                  envValue={dIsEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(d).items) : null}
+                  envValue={dIsEnv ? d : null}
                   onEditEnv={onFocusEnvParam ? () => onFocusEnvParam("deviation_probability") : undefined}
                   onValue={(v) => onChange({deviationProbability: v})} />
       ) : null}
@@ -235,10 +235,13 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
         <>
           {DEVIATION_PROB_PARAMS.filter(p => (d && d[p.key] != null)).map(p => {
             const val = d[p.key];
-            // Same typed-env handling per parameter: a per-param value can also
-            // take the {type, points} form (cubic on a per-param envelope).
+            // A per-param value is an envelope in any graphy too ({type, points}
+            // included): read it the editor's way, like ParamRow — the items
+            // read as [t, v] put NaN in the polyline on a compact block or a
+            // {t, v} point, and their count expanded a BP group into its points.
             const isEnv = PGEDeviationProb.isEnvValue(val);
-            const items = isEnv ? PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(val).items) : null;
+            const sk = isEnv ? PGEEnv.envSketch(val) : null;
+            const items = sk ? sk.points : null;
             // Il bottone acceso, che e' anche la condizione del no-op qui sotto.
             const pMode = isEnv ? "env" : "scalar";
             return (
@@ -265,7 +268,7 @@ function DeviationProbabilitySection({ stream, onChange, onFocusEnvParam }) {
                 {isEnv ? (
                   <span className="v env" onClick={onFocusEnvParam ? () => onFocusEnvParam("deviation_probability_" + p.key) : undefined} style={onFocusEnvParam ? {cursor:"pointer"} : undefined}>
                     <span className="env-mini"><svg viewBox="0 0 100 16" preserveAspectRatio="none"><polyline fill="none" stroke="#FF8C42" strokeWidth="1.2" points={items.map((q,i) => `${(q[0]/(items[items.length-1][0]||1)*100).toFixed(1)},${(14 - q[1]/100*12).toFixed(1)}`).join(" ")} /></svg></span>
-                    <span className="env-label">{items.length} bp</span>
+                    <span className="env-label">{sk.count} bp</span>
                   </span>
                 ) : (
                   <span className="v"><NumberField value={val} unit="%" width={70}

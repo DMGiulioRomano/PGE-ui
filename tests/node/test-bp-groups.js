@@ -537,6 +537,20 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
       new RegExp(`PGEEnv\\.envCount\\(\\s*[\\w.]*\\b${k}\\s*\\)`).test(inspSrc))
       && !/unwrapEnv\([^)]*Env\)\.items\.length/.test(inspSrc),
     (inspSrc.match(/[\w.]*Env\)\.items\.length/g) || []).join(", "));
+  /* E deviation_probability, che il guard qui sopra non vedeva perche' il suo
+     valore non si chiama `…Env`: il badge globale e le righe per-parametro
+     contavano gli item DESUGARATI (un gruppo di tre punti «3 bp», dove
+     fill_factor dice «1 el»), la riga globale passava a ParamRow la lista
+     desugarata, e lo schizzo per-parametro leggeva `q[0]`/`q[1]` su ogni item:
+     su un blocco compatto o su un punto `{t, v}` NaN nella polyline. */
+  assert("deviation_probability: il badge globale conta con envCount",
+    /PGEEnv\.envCount\(d\)/.test(inspSrc)
+      && !/desugarBPGroups\(PGEEnv\.unwrapEnv\(d\)\.items\)\.length/.test(inspSrc));
+  assert("deviation_probability: la riga globale passa il valore a ParamRow, non la lista desugarata",
+    /envValue=\{dIsEnv \? d : null\}/.test(inspSrc));
+  assert("deviation_probability: le righe per-parametro leggono per envSketch",
+    /PGEEnv\.envSketch\(val\)/.test(inspSrc)
+      && !/desugarBPGroups\(PGEEnv\.unwrapEnv\(val\)\.items\)/.test(inspSrc));
 }
 
 /* ── wrapEnv: le altre chiavi del dict sopravvivono al commit ────────────────

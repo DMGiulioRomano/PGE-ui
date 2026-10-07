@@ -2166,7 +2166,12 @@ and the sketch loses the very `type` this section is about. Its `count` is
 `PGEEnv.envCount`, which the Inspector badges read too: written elements, with
 a **bare** block or group (the whole value, or a dict's `points`) counting as
 one, not as the three or two fields `unwrapEnv` hands back — `↻1 · 3 el` on an
-envelope made of one block. The warning goes
+envelope made of one block. The `deviation_probability` rows of the Inspector
+read the same way (`envCount` for the global badge, the value itself for its
+`ParamRow`, `envSketch` for the per-param rows): they counted the *desugared*
+items, a BP group as its points, and the per-param sketch read `[t, v]` off
+every item, `NaN` on a compact block or a `{t, v}` point. The guard on the
+three badges couldn't see them, since that value isn't named `…Env`. The warning goes
 through the same first two steps and then the
 *written* y's — points, groups, and a block's pattern, never its expansion, which
 would cost `n_reps` cycles on every keystroke of the Raw tab (and the old check
