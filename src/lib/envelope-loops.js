@@ -400,10 +400,12 @@
   //   "param"    → il parametro esiste ma è fuori dal bound del costruttore, o è
   //                estraneo al tipo (il costruttore lo rifiuterebbe come kwarg
   //                inatteso).
-  //   "overflow" → parametro e n_reps sono entrambi legittimi da soli, ma la
-  //                potenza che la distribuzione calcola con quella coppia non
-  //                sta in un float (vedi _overflowError). Riportato solo se
-  //                `nReps` è noto. Puro, node-testabile.
+  //   "overflow" → parametro e n_reps sono entrambi legittimi da soli, ma il
+  //                conto che la distribuzione fa con quella coppia non dà un
+  //                numero finito — e il conto è la SOMMA dei pesi, non solo il
+  //                più grande, da quando il motore guarda quella (PGE #293;
+  //                vedi _overflowError). Riportato solo se `nReps` è noto.
+  //                Puro, node-testabile.
   function timeDistError(dist, nReps) {
     if (dist == null) return null;
     if (typeof dist !== "string" && typeof dist !== "object") return { kind: "name" };
@@ -523,6 +525,26 @@
     }
     return null; // linear e logarithmic non elevano niente a potenza
   }
+
+  /* Cosa si è misurato, nelle parole del motore (PGE #293, #219).
+
+     L'hint del motore diceva «il risultato non sta in un float», e il
+     messaggio del pannello lo ripeteva — parola per parola, perché l'avviso e
+     l'errore del render sono lo stesso guasto detto due volte a un lettore
+     solo. Non lo dice più: da quando la guardia sulla somma prende
+     anche le somme `nan` (un parametro `.nan`/`.inf`, che nessun bound
+     rifiuta) quella frase era falsa di metà dei casi — un `nan` in un float ci
+     sta benissimo — e il motore dice ora ciò che ha misurato. Questo lato
+     deve dirlo con le stesse parole: chi legge l'avviso nell'editor e poi
+     l'errore del render fallito deve riconoscere lo stesso guasto, e non due.
+
+     La frase sta qui, e non dentro la stringa del pannello, perché è testo del
+     motore: `test-time-dist-parity.js` la chiede all'hint vero, come già fa
+     per ogni altra costante che questo repo rispecchia. Lo stesso vale per
+     TIME_DIST_OVERFLOW_FIX qui sotto, che è l'altra metà della stessa frase
+     (`_RIMEDI_OVERFLOW` nel motore) e fino a quel patto era una trascrizione
+     verificata solo contro se stessa. */
+  const TIME_DIST_OVERFLOW_WHY = "il risultato non è un numero finito";
 
   // Il rimedio dipende dal parametro, non dalla distribuzione (PGE #216):
   // `ratio` e `rate` sono fattori di una progressione, e verso 1 la
@@ -1314,7 +1336,7 @@
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv,
     computeCycleDurations, isPreviewFallback, expandMixed, envSketch, envCount,
-    TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX,
+    TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX, TIME_DIST_OVERFLOW_WHY,
     INTERP_TYPES, envShapeError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
     parseEnvLiteral, normalizeEnv, defaultCompactBlock,
