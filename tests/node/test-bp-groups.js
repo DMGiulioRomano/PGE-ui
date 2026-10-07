@@ -603,6 +603,78 @@ console.log("\n── wrapEnv: le altre chiavi del dict (time_unit) restano ─�
     calls.length === 5 && calls.every((n) => n === 3), JSON.stringify(calls));
 }
 
+/* ── la curva di blend multistate: ogni grafia cambia scala ──────────────────
+   `grain.envelope: {states, curve}` vive in due scale: il motore legge la curva
+   in [0, 1], l'editor la mostra in [0, n-1] (uno stato per unita').
+   `rescaleCurveY` (yaml-bridge.js) porta le y da una scala all'altra, al parse
+   e al serialize, ma riconosceva solo i punti `[t, v]` / `[t, v, interp]`: un
+   BP group, il pattern di un blocco, un punto `{t, v}` e le grafie nude
+   passavano com'erano, e con tre stati arrivavano all'editor ancora in [0, 1]
+   — disegnati a meta' altezza, e trascinati da li' nella scala sbagliata. La
+   domanda si fa all'editor, non a una lista di numeri: lo schizzo della curva
+   aperta (envSketch, la strada dell'EnvelopeEditor) deve essere quello della
+   curva scritta con le y per n-1, tempi e tag uguali. */
+console.log("\n── rescaleCurveY: la curva multistate cambia scala in ogni grafia ──");
+{
+  const Y = window.PGEYaml;
+  const SAMPLES = { samples: [{ name: "a.wav", duration: 4 }] };
+  const yamlOf = (curve, nStates) => {
+    const states = Array.from({ length: nStates }, (_, i) =>
+      `[${nStates === 1 ? 0 : i / (nStates - 1)}, ${["hanning", "bartlett", "gaussian", "blackman"][i]}]`);
+    return "streams:\n  - stream_id: s\n    sample: a.wav\n    duration: 4\n    grain:\n" +
+      "      envelope:\n        states: [" + states.join(", ") + "]\n" +
+      "        curve: " + JSON.stringify(curve) + "\n";
+  };
+  const CURVE = {
+    "un gruppo nella lista": [[0, 0], [[[0.3, 0.5], [0.6, 1]], "step"], [1, 0]],
+    "un blocco nella lista": [[0, 0], [[[0, 0.5], [100, 1]], 0.8, 2], [1, 0]],
+    "il dict con un gruppo": { type: "cubic", points: [[0, 0], [[[0.3, 0.5], [0.6, 1]], "step"], [1, 0]] },
+    "i punti {t, v}": [{ t: 0, v: 0.5 }, { t: 1, v: 1 }],
+    "un gruppo nudo": [[[0, 0], [0.5, 1], [1, 0.5]], "step"],
+    "un blocco nudo": [[[0, 0.25], [100, 1]], 1, 2],
+    "il dict i cui points sono un blocco nudo": { type: "step", points: [[[0, 0.25], [100, 1]], 1, 2] },
+    "i punti [t, v] (il caso che c'era gia')": [[0, 0], [0.5, 1, "step"], [1, 0.5]],
+  };
+  // envSketch legge i punti {t, v} come l'editor, cioe' non li disegna: per
+  // loro la domanda e' sulla forma scritta.
+  const ys = (c) => E.envSketch(c).points;
+  for (const [nome, curve] of Object.entries(CURVE)) {
+    const d = Y.parse(yamlOf(curve, 3), SAMPLES);
+    const ed = d.streams[0].grain.envelope.curve;
+    const atteso = ys(curve).map((p) => [p[0], p[1] * 2, p[2]]);
+    const dict = Array.isArray(curve) && curve.every((p) => p && !Array.isArray(p));
+    assert(`multistate a tre stati, ${nome}: l'editor vede la curva in [0, 2]`,
+      dict ? eq(ed, curve.map((p) => ({ ...p, v: p.v * 2 })))
+           : eq(ys(ed).map((p) => [p[0], +p[1].toFixed(12), p[2]]),
+                atteso.map((p) => [p[0], +p[1].toFixed(12), p[2]])),
+      `${JSON.stringify(ed)} contro ${JSON.stringify(atteso)}`);
+    // Salvato senza toccarlo, esce com'era scritto, byte per byte (#59).
+    const back = Y.parse(Y.serialize(d), SAMPLES).streams[0].grain.envelope._curveRaw;
+    assert(`…${nome}: il salvataggio senza modifiche la riscrive identica`,
+      eq(back, curve), JSON.stringify(back));
+  }
+  /* Il ritorno dopo una modifica vera: la curva si riporta in [0, 1] per la
+     stessa strada, gruppi e blocchi compresi. */
+  {
+    const d = Y.parse(yamlOf(CURVE["un gruppo nella lista"], 3), SAMPLES);
+    const env = d.streams[0].grain.envelope;
+    env.curve = [[0, 0], [[[0.3, 1.5], [0.6, 2]], "step"], [1, 0]];   // 0.5→1.5 in scala editor
+    const out = Y.parse(Y.serialize(d), SAMPLES).streams[0].grain.envelope._curveRaw;
+    assert("una modifica dentro il gruppo torna in [0, 1]",
+      eq(out, [[0, 0], [[[0.3, 0.75], [0.6, 1]], "step"], [1, 0]]), JSON.stringify(out));
+  }
+  /* curveMatchesRaw riconosce come intatta una curva il cui ritorno in scala
+     non e' esatto in virgola mobile (0.1·3/3): senza, un salvataggio che non
+     ha toccato niente riscriverebbe 0.10000000000000002. */
+  {
+    const curve = [[0, 0], [[[0.2, 0.1], [0.7, 0.4]], "step"], [1, 0.1]];
+    const d = Y.parse(yamlOf(curve, 4), SAMPLES);
+    const out = window.jsyaml.load(Y.serialize(d)).streams[0].grain.envelope.curve;
+    assert("quattro stati: il salvataggio senza modifiche non introduce deriva",
+      eq(out, curve), JSON.stringify(out));
+  }
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

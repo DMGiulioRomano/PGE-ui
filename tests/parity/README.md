@@ -227,6 +227,11 @@ arriva lo hasha il motore.
   verbatim, muovendo l'hash del motore — finisce comunque in `curve`, che e'
   hashata. Resta escluso, e la premessa e' un caso di parita' invece che un
   commento: se il parse smettesse di derivare `curve`, il test parla.
+  `curveMatchesRaw` e' il rescale ripercorso all'indietro e confrontato in
+  profondita': la versione scritta a mano leggeva `e[0]`/`e[1]` come
+  coordinate su ogni item, e su un BP group davano `NaN` dalle due parti —
+  ogni gruppo «combaciava», e una modifica fatta dentro un gruppo si perdeva
+  al salvataggio (coperto in `tests/node/test-bp-groups.js`).
 
 Il criterio, preso alla lettera, e' una domanda per il **serializer**, non una
 terza lista di nomi: la stessa chiave, nello stesso posto, a volte esce e a

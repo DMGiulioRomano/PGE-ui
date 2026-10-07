@@ -2076,6 +2076,25 @@ Stream `duration` is **optional** (PGE #205): absent or `null` means "as long as
 
 The EnvelopeEditor Y window auto-fits point values (`computeYFit` in `envelope-utils.js`, node-tested): fits min..max + 10% margin, clamped into `[hardMin,hardMax]`. Frozen during drag (a `useRef` snapshot) so the grabbed point can't slide under a rescaling axis.
 
+**The multistate blend curve lives in two scales, and every graphy crosses
+between them.** `grain.envelope: {states, curve}` is read by the engine in
+`[0, 1]` and shown by the editor in `[0, n-1]`, one unit per state;
+`rescaleCurveY` is the bridge, at parse (`× (n-1)`) and at serialize
+(`÷ (n-1)`). It knew only the points `[t, v]` / `[t, v, interp]`, so a BP
+group, a compact block's pattern, a `{t, v}` point and the bare group or block
+crossed unscaled — with three states, drawn at half height in the editor and
+dragged from there in the wrong scale. It walks every graphy now, with the
+editor's shape rules restated (`_curveIsGroup` / `_curveIsBlock`) because this
+module loads first and half the node suites load it alone;
+`tests/node/test-bp-groups.js` asks the two readings to agree by behaviour,
+through `envSketch`. Its partner `curveMatchesRaw` — "is the editor curve still
+the raw one?", which decides whether a save re-emits `_curveRaw` verbatim
+(#59) — read `e[0]`/`e[1]` as coordinates on every item: on a group those are
+the point list and the interp string, `NaN` on both sides, every `NaN > 1e-9`
+false, so a group always "matched" and **an edit made inside a group was thrown
+away on save**. It is now the rescale taken back and compared in depth
+(`_nearlyEqual`: tolerance on numbers, exact on everything else).
+
 ### EnvelopeEditor: the global `type` survives the commit (`wrapEnv`, #189)
 
 Every envelope the EnvelopeEditor writes goes out through one door:
