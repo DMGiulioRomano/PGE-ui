@@ -290,3 +290,43 @@ def test_render_follows_the_workspace(tmp_path):
     r.get_data()
     assert (ws / "configs" / "streams" / "risacca.yml").exists()
     assert not (root / "configs" / "streams").exists()
+
+
+# ---------------------------------------------------------------------------
+# Un errore del disco e' un JSON con il messaggio, non una pagina d'errore
+# ---------------------------------------------------------------------------
+#
+# `configs/streams` occupato da un FILE: la cartella non si crea, e la
+# scrittura dell'import fallisce con un OSError dopo che la validazione e'
+# passata. Il browser legge il corpo come JSON (`backend.fs.save`, e `run()`
+# che mostra `HTTP <status> <testo>`): una traceback HTML non dice all'autore
+# quale file non si e' scritto. E il master resta com'era — gli import vanno
+# prima, e il master non si scrive su un brano a meta'.
+
+def _blocked_streams(root):
+    (root / "configs" / "streams").write_text("non sono una cartella\n")
+    (root / "configs" / "brano.yml").write_text("streams: []\n")
+
+
+def test_save_disk_error_is_json_and_spares_the_master(tmp_path):
+    root = _root(tmp_path)
+    _blocked_streams(root)
+    r = _client(root).post("/save", json={
+        "basename": "brano", "yamlContent": "streams:\n  - file: streams/x.yml\n",
+        "imports": {"streams/x.yml": "streams: []\n"}})
+    assert r.status_code == 500
+    body = r.get_json()
+    assert body and body["ok"] is False and "streams" in body["error"]
+    assert (root / "configs" / "brano.yml").read_text() == "streams: []\n"
+
+
+def test_render_disk_error_is_json_and_spares_the_master(tmp_path):
+    root = _root(tmp_path, fake_python=True)
+    _blocked_streams(root)
+    r = _client(root).post("/render", json={
+        "yamlBasename": "brano", "yamlContent": "streams:\n  - file: streams/x.yml\n",
+        "imports": {"streams/x.yml": "streams: []\n"}})
+    assert r.status_code == 500
+    body = r.get_json()
+    assert body and body["ok"] is False and "streams" in body["error"]
+    assert (root / "configs" / "brano.yml").read_text() == "streams: []\n"

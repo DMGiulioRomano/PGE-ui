@@ -968,6 +968,22 @@
     return out;
   }
 
+  /* Il disco dopo un render che i file NON li ha scritti (`configWritten:
+   * false`: rifiuto 400, bridge giu'). Il render li reclama prima di partire —
+   * il bridge li scrive all'arrivo del POST, non alla fine — e qui li rende:
+   * ogni file torna a cio' che si sapeva prima (`before`), ma solo se e' ancora
+   * al testo del render. Un salvataggio fatto nel mezzo ha scritto davvero, e
+   * resta. Non tocca `disk`: ne ritorna una copia. */
+  function releaseImports(disk, bodies, before) {
+    const out = { ...(disk || {}) };
+    for (const f of Object.keys(bodies || {})) {
+      if (out[f] !== bodies[f]) continue;
+      if (before && Object.prototype.hasOwnProperty.call(before, f)) out[f] = before[f];
+      else delete out[f];
+    }
+    return out;
+  }
+
   // Il testo che va su disco: l'intestazione del master (chi, quando), poi il
   // documento. Fuori dal confronto col disco, perche' `# saved:` cambia sempre.
   function importedFileText(file, body) {
@@ -1681,6 +1697,7 @@
     importDefaultId,
     serializeImports,
     changedImports,
+    releaseImports,
     importedFileText,
     detachImport,
   };

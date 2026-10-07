@@ -439,6 +439,33 @@ console.log("\n── l'intestazione del file riscritto ──");
   assert("e sotto c'e' il documento intero", sameDoc(jsyaml.load(t), fileDoc(open())));
 }
 
+console.log("\n── il render reclama i file prima di partire, e li rende se non li ha scritti ──");
+{
+  // Il bridge scrive gli import all'arrivo del POST, non alla fine del render.
+  // Segnarli "su disco" solo a render finito sovrascriveva cio' che un
+  // salvataggio fatto NEL MEZZO aveva scritto: il "disco" tornava al testo del
+  // render, piu' vecchio, e un undo verso quel testo non riscriveva il file.
+  // Quindi si reclamano prima di `run()`, e se il bridge non ha scritto niente
+  // (`configWritten === false`) `releaseImports` li rende — ma solo quelli
+  // ancora al testo del render: un salvataggio nel mezzo ha l'ultima parola.
+  const A = "streams: [A]\n", B = "streams: [B]\n", OLD = "streams: [old]\n";
+  const before = { [FILE]: OLD, "altro.yml": "x\n" };
+  const claimed = { ...before, [FILE]: A, "nuovo.yml": A };
+  const bodies = { [FILE]: A, "nuovo.yml": A };
+  assert("rifiutato e niente nel mezzo: il disco torna quello di prima",
+    eq(Y.releaseImports(claimed, bodies, before), before),
+    JSON.stringify(Y.releaseImports(claimed, bodies, before)));
+  const savedMeanwhile = { ...claimed, [FILE]: B };
+  const r = Y.releaseImports(savedMeanwhile, bodies, before);
+  assert("un salvataggio nel mezzo non si annulla", r[FILE] === B && !("nuovo.yml" in r) && r["altro.yml"] === "x\n",
+    JSON.stringify(r));
+  assert("releaseImports non tocca la mappa che riceve", savedMeanwhile[FILE] === B && "nuovo.yml" in savedMeanwhile);
+  // La strada intera: dopo il salvataggio nel mezzo, un undo verso il testo del
+  // render e' un file da scrivere — il disco dice B.
+  assert("...e dopo, tornare al testo del render e' un file da scrivere",
+    FILE in Y.changedImports({ [FILE]: A }, savedMeanwhile));
+}
+
 console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardie sorgente) ──");
 {
   const app = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));
@@ -453,6 +480,17 @@ console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardi
     /backend\.fs\.save\(/.test(app) && /changedImports\(/.test(app));
   assert("il render manda i file cambiati, cosi' sono su disco prima del motore",
     /imports:\s*changedForRender/.test(app));
+  {
+    const rr = app.slice(app.indexOf("async function runRender("));
+    const claim = rr.indexOf("markImportsWritten(importPlan.bodies)");
+    const run = rr.indexOf(".render.run(");
+    assert("il render reclama i suoi file PRIMA di run(), non a render finito",
+      claim > 0 && run > 0 && claim < run, `claim@${claim} run@${run}`);
+    assert("...e li rende con releaseImports se il bridge non li ha scritti",
+      /if \(result\.configWritten === false && window\.PGEYaml\)\s*\{\s*importDiskRef\.current\s*=\s*window\.PGEYaml\.releaseImports\(/.test(rr));
+    assert("...e non li segna una seconda volta dopo run()",
+      (rr.match(/markImportsWritten\(importPlan\.bodies\)/g) || []).length === 1);
+  }
   const detach = app.match(/detachImport\(/g) || [];
   assert("incolla e split staccano la provenienza (finche' #186/#187 non danno un file nuovo)",
     detach.length >= 2, `${detach.length} chiamate`);

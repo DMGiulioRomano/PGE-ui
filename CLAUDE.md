@@ -2172,7 +2172,14 @@ its **placement**. The path is relative to the master's folder, i.e.
   then undone would read "unchanged" and stay edited. Outside, an undo changes
   the state and not the disk, and the next save writes the file back as it was.
   It is filled at load (the serialization of the state just read — so opening
-  and saving touches no imported file) and after each write. One deliberate
+  and saving touches no imported file) and after each write. A render's
+  write is marked **before** `run()`, not after it: the bridge writes the
+  imports when the POST arrives, so marking them at the end overwrote what a
+  save made *during* the render had written — the "disk" went back to the
+  render's older text, and an undo to that text then wrote nothing. If the
+  bridge wrote nothing (`configWritten === false`), `releaseImports` gives the
+  claim back, file by file, only where the map still holds the render's text:
+  a save in between keeps the last word. One deliberate
   exception: a file still carrying the dead `dephase` spelling is left out of
   the disk map, so the first save migrates it — the same rewrite the master
   gets, after which the Inspector's notice goes quiet.
@@ -2823,7 +2830,9 @@ a way to write arbitrary files under `configs/`. `plan_import_writes` (server.py
 validates **all** of them before writing **any** — master included, and the
 master itself is refused as an import (a second door to rewrite it with a text
 other than `yamlContent`) — so a bad path is a 400 with the disk untouched,
-never half a piece. The imports go before the master, the render's order.
+never half a piece. The imports go before the master, the render's order, and
+a disk error while writing them (`OSError`) is a JSON 500 naming it on both
+routes, with the master left as it was.
 `/file` was left as it was, one segment: widening it would have widened every
 `kind`. Symlinks are not resolved, like everywhere else in the bridge: one
 inside `configs/` is the local user's own doing, since no route creates one.

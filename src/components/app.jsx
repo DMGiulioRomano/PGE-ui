@@ -1901,6 +1901,14 @@ function App() {
       outputFormat: tweaks.outputFormat || "wav",
       semanticsVersion: semOfThisRun,
     };
+    /* I file importati che questo render manda sono su disco dall'arrivo del
+       POST, non dalla fine del render: si segnano adesso. Segnati in fondo,
+       sovrascrivevano cio' che un salvataggio fatto NEL MEZZO aveva scritto, e
+       il "disco" tornava al testo del render, piu' vecchio — un undo verso quel
+       testo non avrebbe riscritto il file. Se il bridge non li ha scritti
+       (`configWritten === false`) si rendono qui sotto, `releaseImports`. */
+    const importDiskBefore = importDiskRef.current;
+    markImportsWritten(importPlan.bodies);
     const result = await backend.render.run(opts, (e) => {
       if (e.type === "log") {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
@@ -1991,9 +1999,12 @@ function App() {
     // solo un "so che non e' stato scritto" esplicito spegne lo spegnimento.
     if (result.configWritten !== false) {
       _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
-      // ...e i file importati sono scritti con lui: il bridge li scrive prima
-      // del master e rifiuta (400, niente scritto) prima di entrambi.
-      markImportsWritten(importPlan.bodies);
+    }
+    // I file importati vanno col master: il bridge li scrive prima di lui e
+    // rifiuta (400, niente scritto) prima di entrambi. Non scritti, il disco
+    // torna quello di prima — tranne dove un salvataggio nel mezzo ha scritto.
+    if (result.configWritten === false && window.PGEYaml) {
+      importDiskRef.current = window.PGEYaml.releaseImports(importDiskRef.current, importPlan.bodies, importDiskBefore);
     }
 
     if (result.ok) {

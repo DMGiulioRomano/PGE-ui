@@ -1705,9 +1705,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if not yaml_content and not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
-        write_import_plan(import_plan)
-        if yaml_content:
-            yml.write_text(yaml_content, encoding="utf-8")
+        # Come /save: un errore del disco e' un JSON col messaggio, non una
+        # traceback HTML, e il master non si scrive dopo un import fallito.
+        try:
+            write_import_plan(import_plan)
+            if yaml_content:
+                yml.write_text(yaml_content, encoding="utf-8")
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
         output_stem = output / f"{basename}{out_ext}"
 
