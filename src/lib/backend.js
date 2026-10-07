@@ -27,6 +27,10 @@
  *   fs.readFile(kind, name)       → Promise<string>
  *   fs.writeFile(kind, name, str) → Promise<void>
  *   fs.fileExists(kind, name)     → Promise<boolean>
+ *   fs.readImport(file)           → Promise<{ ok:true, text } | { ok:false, error }>: un
+ *                                   file importato con `file:` dal master, relativo a
+ *                                   configs/ (GET /import, #183). Non lancia: l'errore
+ *                                   e' della voce, e nomina il file
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
@@ -134,9 +138,15 @@
   // quella di `states`) non ci arrivano, e infatti non si hashano — vedi
   // `positionsAreDropped` qui sotto. Una lista di chiavi non puo' rispondere:
   // la stessa chiave, nello stesso posto, a volte esce e a volte no.
+  //
+  // `imported` (#183) e' provenienza, come la durata implicita: dice DOVE lo
+  // stream e' scritto — il path di `file:` nel master — non che cosa suona. Il
+  // motore hasha lo stream gia' risolto (`resolve_stream_files` gira prima di
+  // tutto), quindi uno stream spostato dal master a un file resta fresco, e
+  // qui deve restare verde: la parity lo chiede al motore.
   const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
                                   "durationImplicit", "durationUnresolved",
-                                  "deviationProbabilityLegacy"]);
+                                  "deviationProbabilityLegacy", "imported"]);
   const FP_IGNORE_DEEP = new Set(["_curveRaw"]);
 
   /* Il criterio «arriva nello YAML» ha un caso in cui `statePositions` NON ci
@@ -346,6 +356,24 @@
       },
       async writeFile(kind, name, str) {
         await jput(`/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, str);
+      },
+      /* Un file importato con `file:` da un master (#183), letto dal bridge
+         (`GET /import`) relativo a configs/. Non lancia mai: un file che non
+         si legge e' un errore della VOCE, non del progetto, e il parse lo
+         mette accanto a lei (`data.unresolvedImports`). Il messaggio del
+         bridge nomina il file; un bridge giu' o uno senza la rotta (404 non
+         JSON) diventa un messaggio che lo nomina lo stesso. */
+      async readImport(file) {
+        try {
+          const r = await fetchWithTimeout(baseUrl + `/import?path=${encodeURIComponent(file)}`);
+          let body = null;
+          try { body = await r.json(); } catch { body = null; }
+          if (body && body.ok === true && typeof body.text === "string") return { ok: true, text: body.text };
+          if (body && typeof body.error === "string") return { ok: false, error: body.error };
+          return { ok: false, error: `il bridge non ha letto il file importato '${file}' (HTTP ${r.status})` };
+        } catch (e) {
+          return { ok: false, error: `il bridge non ha letto il file importato '${file}' (${e.message || e})` };
+        }
       },
       async fileExists(kind, name) {
         try {
