@@ -9,7 +9,8 @@ riscrive", che viene prima della firma.
 
 Qui si verifica il lato del bridge, in due strati: il modulo puro
 (`file_signature`) e il giro HTTP vero sulle tre route che leggono o scrivono
-un progetto — `GET /file`, `PUT /file`, `POST /render`.
+un progetto — `GET /file`, `PUT /file`, `POST /save` (il salvataggio
+dell'editor dalla #184, master e file importati insieme), `POST /render`.
 """
 
 import hashlib
@@ -267,6 +268,39 @@ def test_written_bytes_are_utf8_without_newline_translation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+def test_check_guarded_decides_without_writing(tmp_path):
+    """I passi 1 e 2 senza il 3: chi scrive piu' file in una richiesta
+    (`/save`, `/render` con gli import) decide il master PRIMA di toccare il
+    disco. Il verdetto non scrive in nessuno dei tre casi."""
+    p = tmp_path / "a.yml"
+    p.write_text(DOC)
+    read = fsig.signature(p)
+    assert fsig.check_guarded(p, DOC_CHANGED, read_signature=read) == {"ok": True, "write": True}
+    assert p.read_text() == DOC
+    p.write_text(DOC_OTHER_SPELLING)
+    assert fsig.check_guarded(p, DOC, read_signature=read) == \
+        {"ok": True, "write": False, "signature": fsig.signature(p)}
+    p.write_text(DOC_OTHER_SPELLING.replace("4", "9"))
+    before = p.read_bytes()
+    assert fsig.check_guarded(p, DOC_CHANGED, read_signature=read) == {"ok": False, "changed": True}
+    assert p.read_bytes() == before
+
+
+def test_apply_guarded_follows_the_verdict(tmp_path):
+    """Il passo 3 sul verdetto: scrive solo se il verdetto lo dice, e torna la
+    forma di `write_guarded` — che e' la loro composizione."""
+    p = tmp_path / "a.yml"
+    p.write_text(DOC_OTHER_SPELLING)
+    v = fsig.check_guarded(p, DOC)
+    assert fsig.apply_guarded(p, DOC, v) == {"ok": True, "written": False, "signature": fsig.signature(p)}
+    assert p.read_text() == DOC_OTHER_SPELLING
+    assert fsig.apply_guarded(p, DOC_CHANGED, {"ok": False, "changed": True}) == {"ok": False, "changed": True}
+    assert p.read_text() == DOC_OTHER_SPELLING
+    r = fsig.apply_guarded(p, DOC_CHANGED, fsig.check_guarded(p, DOC_CHANGED))
+    assert r == {"ok": True, "written": True, "signature": fsig.signature(p)}
+    assert p.read_text() == DOC_CHANGED
+
+
 # Il giro HTTP vero.
 # ---------------------------------------------------------------------------
 
@@ -411,6 +445,98 @@ def test_put_file_still_rejects_a_bad_name(tmp_path):
     assert _put(_client(root), "..%2Fevil.yml", DOC).status_code == 400
 
 
+def _save(c, **body):
+    return c.post("/save", json={"basename": "a", **body})
+
+
+IMPORTED = "streams/onda.yml"
+IMPORTED_DOC = "seed: 1\nstreams:\n  - stream_id: onda\n    duration: 2\n"
+
+
+def test_save_refuses_a_master_changed_since_it_was_read(tmp_path):
+    """Dalla #184 il salvataggio dell'editor e' POST /save, non PUT /file: la
+    guardia del master sta qui. E viene PRIMA di ogni scrittura: un rifiuto
+    lascia intatti anche i file importati della stessa richiesta — scriverli e
+    poi rifiutare il master sarebbe il brano a meta' che `plan_import_writes`
+    esiste per non lasciare."""
+    import server
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC)
+    imported = root / "configs" / IMPORTED
+    imported.parent.mkdir()
+    imported.write_text(IMPORTED_DOC)
+    c = _client(root)
+    read = c.get("/file?kind=projects&name=a.yml").headers[server.SIGNATURE_HEADER]
+    p.write_text(DOC_OTHER_SPELLING.replace("4", "9"))
+    before = p.read_bytes()
+    r = _save(c, yamlContent=DOC_CHANGED, signature=read,
+              imports={IMPORTED: IMPORTED_DOC.replace("2", "3")})
+    assert r.status_code == 409
+    body = r.get_json()
+    assert body["changed"] is True and body["name"] == "a.yml"
+    assert p.read_bytes() == before
+    assert imported.read_text() == IMPORTED_DOC, "un rifiuto non scrive gli import"
+
+
+def test_save_writes_and_returns_the_signature_of_the_master(tmp_path):
+    import server
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC)
+    c = _client(root)
+    read = c.get("/file?kind=projects&name=a.yml").headers[server.SIGNATURE_HEADER]
+    r = _save(c, yamlContent=DOC_CHANGED, signature=read,
+              imports={IMPORTED: IMPORTED_DOC})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["written"] == [IMPORTED, "a.yml"]
+    assert body["signature"] == fsig.signature(p)
+    assert p.read_text() == DOC_CHANGED
+    assert (root / "configs" / IMPORTED).read_text() == IMPORTED_DOC
+    # ...e quella firma e' cio' che il salvataggio dopo deve mandare.
+    again = _save(c, yamlContent=DOC_CHANGED.replace("6", "7"), signature=body["signature"])
+    assert again.status_code == 200 and again.get_json()["written"] == ["a.yml"]
+
+
+def test_save_overwrite_writes_and_must_be_a_json_true(tmp_path):
+    import server
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC)
+    c = _client(root)
+    read = c.get("/file?kind=projects&name=a.yml").headers[server.SIGNATURE_HEADER]
+    p.write_text(DOC_OTHER_SPELLING.replace("4", "9"))
+    for flag in ("true", 1, "1", "yes"):
+        assert _save(c, yamlContent=DOC_CHANGED, signature=read, overwrite=flag).status_code == 409
+    r = _save(c, yamlContent=DOC_CHANGED, signature=read, overwrite=True)
+    assert r.status_code == 200 and p.read_text() == DOC_CHANGED
+
+
+def test_save_of_a_document_already_on_disk_leaves_the_master_alone(tmp_path):
+    """Il passo 1 anche qui: il master del laboratorio con lo stesso documento
+    resta suo, byte per byte, e `written` non lo elenca — ma la firma torna,
+    ed e' quella del disco."""
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC_OTHER_SPELLING)
+    r = _save(_client(root), yamlContent=DOC, signature="sha256:" + "0" * 64,
+              imports={IMPORTED: IMPORTED_DOC})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["written"] == [IMPORTED]
+    assert body["signature"] == fsig.signature(p)
+    assert p.read_text() == DOC_OTHER_SPELLING
+
+
+def test_save_without_signature_behaves_as_before(tmp_path):
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC_OTHER_SPELLING.replace("4", "9"))
+    r = _save(_client(root), yamlContent=DOC_CHANGED)
+    assert r.status_code == 200 and p.read_text() == DOC_CHANGED
+
+
 def _render(c, **body):
     return c.post("/render", json={"yamlBasename": "a", **body})
 
@@ -432,6 +558,27 @@ def test_render_refuses_before_writing_and_before_the_engine(tmp_path):
     body = r.get_json()
     assert body["changed"] is True and body["name"] == "a.yml"
     assert p.read_bytes() == before
+    assert not (root / ".venv").exists()
+
+
+def test_render_refusal_leaves_the_imported_files_untouched(tmp_path):
+    """Il render scrive gli import prima del master (#184): la guardia del
+    master si decide prima di entrambi, o un rifiuto lascerebbe sul disco gli
+    import nuovi accanto al master dell'altro editor."""
+    import server
+    root = _root(tmp_path)
+    p = root / "configs" / "a.yml"
+    p.write_text(DOC)
+    imported = root / "configs" / IMPORTED
+    imported.parent.mkdir()
+    imported.write_text(IMPORTED_DOC)
+    c = _client(root)
+    read = c.get("/file?kind=projects&name=a.yml").headers[server.SIGNATURE_HEADER]
+    p.write_text(DOC_OTHER_SPELLING.replace("4", "9"))
+    r = _render(c, yamlContent=DOC_CHANGED, signature=read,
+                imports={IMPORTED: IMPORTED_DOC.replace("2", "3")})
+    assert r.status_code == 409
+    assert imported.read_text() == IMPORTED_DOC
     assert not (root / ".venv").exists()
 
 

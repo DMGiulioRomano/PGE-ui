@@ -93,7 +93,7 @@ except ImportError:
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
-    safe_resolve, audio_duration, _resolve_audio, PEAK_BUCKETS,
+    safe_resolve, safe_resolve_import, audio_duration, _resolve_audio, PEAK_BUCKETS,
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
@@ -101,7 +101,8 @@ from render_pipeline import (
     start_watchdog, renderer_availability,
 )
 # Due editor, un file (#185): la firma e la scrittura che la rispetta.
-from file_signature import read_signed, write_guarded, is_yaml_name
+from file_signature import (read_signed, write_guarded, check_guarded,
+                            apply_guarded, is_yaml_name)
 
 # L'header che porta la firma di cio' che GET /file ha letto. Un header e non
 # il corpo, perche' il corpo E' il documento.
@@ -130,6 +131,51 @@ from engine_introspect import (engine_envelope_keys, engine_output_sr,
                               engine_renderer_types,
                               engine_sc_synthdef, engine_semantics_version,
                               engine_supports_samples_dir)
+
+
+def plan_import_writes(base: Path, imports, master: Path):
+    """I file importati da scrivere accanto al master (PGE-ui #184), validati
+    TUTTI prima che se ne scriva uno: `([(rel, path, testo)], None)` oppure
+    `(None, messaggio)`.
+
+    Lo usano `/save` e `/render`, e in entrambi la risposta a un path cattivo
+    e' un 400 a disco intatto — master compreso. Scrivere i buoni e fermarsi
+    al primo cattivo lascerebbe sul disco un brano a meta': un file importato
+    nuovo accanto a un master vecchio, o il contrario.
+
+    Ogni path passa da `safe_resolve_import`, cioe' da `safe_resolve` segmento
+    per segmento, sotto `base` (la cartella del master, `configs/`). Il master
+    stesso non e' un import: una seconda porta per riscriverlo, con un testo
+    diverso da `yamlContent`, deciderebbe l'ordine delle scritture al posto
+    dell'autore."""
+    if imports is None:
+        return [], None
+    if not isinstance(imports, dict):
+        return None, "imports: atteso un oggetto {path: testo}"
+    plan = []
+    for rel, text in imports.items():
+        path = safe_resolve_import(base, rel)
+        if path is None:
+            return None, (f"file importato {rel!r}: path non valido — relativo alla "
+                          f"cartella del master, senza '..', senza segmenti nascosti, .yml/.yaml")
+        if path == master:
+            return None, f"file importato {rel!r}: e' il master stesso"
+        if not isinstance(text, str):
+            return None, f"file importato {rel!r}: il testo non e' una stringa"
+        plan.append((rel, path, text))
+    return plan, None
+
+
+def write_import_plan(plan):
+    """Scrive il piano di `plan_import_writes`. Le sottocartelle si creano (un
+    file nuovo in `streams/`, #186), sempre sotto la cartella del master: il
+    path e' gia' passato dalla validazione."""
+    written = []
+    for rel, path, text in plan:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        written.append(rel)
+    return written
 
 
 def _ensure_venv_events(root: Path):
@@ -1248,6 +1294,18 @@ def make_app(root: Path, render_timeout: float = 600.0,
         nessuno ha chiesto."""
         return str(value).strip().lower() in ("1", "true")
 
+    def _master_verdict(yml, text, opts):
+        """La guardia di #185 sul master di una richiesta JSON (`/save`,
+        `/render`), decisa PRIMA di toccare il disco: i file importati (#184)
+        si scrivono prima del master, e un rifiuto che arrivasse dopo di loro
+        lascerebbe un brano a meta'. Una lettura sola dei due campi per le due
+        route: `signature` solo se stringa, `overwrite` solo come `true` JSON —
+        `bool("false")` e' True, una sovrascrittura chiesta da nessuno."""
+        read_sig = opts.get("signature")
+        return check_guarded(yml, text,
+                             read_signature=read_sig if isinstance(read_sig, str) else "",
+                             overwrite=opts.get("overwrite") is True)
+
     def _changed_payload(name):
         # La forma del rifiuto (#185): `changed` e' un campo a parte, non un
         # errore da riconoscere dal testo; `name` dice QUALE file, perche' i
@@ -1306,6 +1364,75 @@ def make_app(root: Path, render_timeout: float = 600.0,
             return jsonify(_changed_payload(name)), 409
         return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size,
                         "written": res["written"], "signature": res["signature"]})
+
+    # --------- lo stream come file (PythonGranularEngine#290) ---------
+    #
+    # Un master puo' importare stream da altri file (`- file: streams/x.yml`),
+    # con il path relativo alla sua cartella: `configs/`. Il browser non tocca
+    # il disco, quindi quei file li legge e li scrive il bridge — per la prima
+    # volta file che non sono `configs/<basename>.yml`, e mai fuori da
+    # `configs/` (`safe_resolve_import`). `/file` resta com'era, a un segmento:
+    # allargarlo avrebbe allargato ogni `kind`.
+
+    @app.get("/import")
+    def get_import():
+        """Il testo di un file importato, per il parse del browser (#183).
+        Risponde sempre JSON: chi apre il master deve poter nominare il file che
+        manca o non si legge, non ricevere una pagina d'errore."""
+        rel = request.args.get("file", "")
+        path = safe_resolve_import(configs, rel)
+        if path is None:
+            return jsonify({"ok": False,
+                            "error": f"path non valido: {rel!r} — il bridge legge solo "
+                                     f".yml/.yaml sotto la cartella del master"}), 400
+        if not path.is_file():
+            return jsonify({"ok": False, "error": f"{configs.name}/{rel} non esiste"}), 404
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            return jsonify({"ok": False,
+                            "error": f"{configs.name}/{rel} non si legge: {type(e).__name__}: {e}"}), 422
+        return jsonify({"ok": True, "file": rel, "path": str(path), "text": text})
+
+    @app.post("/save")
+    def save_project():
+        """Il master e i file importati cambiati, in un colpo solo (#184).
+
+        Il browser manda solo i file importati che sono cambiati rispetto a cio'
+        che sa essere su disco; il bridge scrive quelli e il master, e nient'
+        altro. Tutto si valida prima di scrivere: un path cattivo e' un 400 a
+        disco intatto. I file importati vanno prima del master, che e' l'ordine
+        del render: un master che nomina un file non ancora scritto e' il brano
+        a meta' che si vuole evitare."""
+        opts = request.get_json(force=True, silent=True) or {}
+        basename = opts.get("basename")
+        yml = safe_resolve(configs, f"{basename}.yml") \
+            if isinstance(basename, str) and basename else None
+        if yml is None:
+            return jsonify({"ok": False, "error": f"bad basename: {basename!r}"}), 400
+        content = opts.get("yamlContent")
+        if not isinstance(content, str):
+            return jsonify({"ok": False, "error": "yamlContent required"}), 400
+        plan, err = plan_import_writes(configs, opts.get("imports"), yml)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        # Due editor, un file (#185): il master si decide qui, prima di ogni
+        # scrittura — un rifiuto e' un 409 a disco intatto, file importati
+        # compresi, come un path cattivo e' un 400 a disco intatto.
+        verdict = _master_verdict(yml, content, opts)
+        if not verdict["ok"]:
+            return jsonify(_changed_payload(yml.name)), 409
+        try:
+            written = write_import_plan(plan)
+            res = apply_guarded(yml, content, verdict)
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        # `written` elenca i file davvero scritti: il master manca quando
+        # conteneva gia' questo documento (passo 1), e la firma torna lo stesso
+        # — e' quella che prende il posto della letta.
+        return jsonify({"ok": True, "path": str(yml),
+                        "written": written + ([yml.name] if res["written"] else []),
+                        "signature": res["signature"]})
 
     # --------- rendered audio playback ---------
 
@@ -1634,6 +1761,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
         _EXT = {"aiff": ".aif", "wav": ".wav", "flac": ".flac"}
         out_ext = _EXT[fmt]
 
+        # I file importati cambiati (PGE-ui #184): il motore li rilegge dal
+        # disco, quindi devono essere li' prima che parta. Si validano qui,
+        # insieme agli altri rifiuti che precedono la scrittura del config, e
+        # si scrivono prima del master — vedi /save.
+        import_plan, import_err = plan_import_writes(configs, opts.get("imports"), yml)
+        if import_err:
+            return jsonify({"ok": False, "error": import_err}), 400
+
         yaml_content = opts.get("yamlContent")
         # Write the editor state to the canonical config (never a temp file): the
         # engine's per-stream cache manifest is keyed by the YAML basename
@@ -1641,30 +1776,35 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
         #
-        # ...e la scrittura passa dalla stessa guardia di PUT /file (#185), qui
-        # PRIMA di scrivere: il motore rilegge il file da disco, quindi un render
-        # sopra un file che l'altro editor ha cambiato se lo porterebbe via come
-        # un salvataggio. Il rifiuto precede venv, stream e motore, ed e' JSON
-        # come gli altri rifiuti di questa route. `overwrite` vale solo come
-        # `true` JSON: `bool("false")` e' True, una sovrascrittura chiesta da
-        # nessuno.
+        # ...e la scrittura del master passa dalla stessa guardia di /save
+        # (#185), decisa PRIMA di scrivere qualunque file: il motore rilegge il
+        # config da disco, quindi un render sopra un file che l'altro editor ha
+        # cambiato se lo porterebbe via come un salvataggio, e un rifiuto dopo
+        # gli import lascerebbe un brano a meta'. Il rifiuto precede venv,
+        # stream e motore, ed e' JSON come gli altri rifiuti di questa route.
         # Un documento che il file ha gia' non si riscrive (passo 1): il caso
         # vero e' il render subito dopo una rilettura, dove riscriverlo col
         # nostro serializzatore farebbe dire "cambiato" al laboratorio al giro
         # dopo, su un documento che nessuno ha cambiato.
-        signed = None
+        verdict = None
         if yaml_content:
-            read_sig = opts.get("signature")
-            res = write_guarded(yml, yaml_content,
-                                read_signature=read_sig if isinstance(read_sig, str) else "",
-                                overwrite=opts.get("overwrite") is True)
-            if not res["ok"]:
+            verdict = _master_verdict(yml, yaml_content, opts)
+            if not verdict["ok"]:
                 return jsonify(_changed_payload(yml.name)), 409
-            signed = {"type": "file-signature", "kind": "projects", "name": yml.name,
-                      "signature": res["signature"], "written": res["written"]}
         elif not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
+        # Come /save: un errore del disco e' un JSON col messaggio, non una
+        # traceback HTML, e il master non si scrive dopo un import fallito.
+        signed = None
+        try:
+            write_import_plan(import_plan)
+            if verdict is not None:
+                res = apply_guarded(yml, yaml_content, verdict)
+                signed = {"type": "file-signature", "kind": "projects", "name": yml.name,
+                          "signature": res["signature"], "written": res["written"]}
+        except OSError as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
         output_stem = output / f"{basename}{out_ext}"
 

@@ -34,6 +34,18 @@
  *                                   un'eccezione. Lancia sugli altri errori
  *   fs.signature(kind, name)      → la firma ricordata di quel file, o null
  *   fs.fileExists(kind, name)     → Promise<boolean>
+ *   fs.readImport(file)           → Promise<{ ok, text } | { ok:false, error }>: un file
+ *                                   importato con `file:` (#183), relativo a configs/.
+ *                                   Non lancia: l'errore e' un messaggio per l'autore
+ *   fs.save(basename, yaml, imports, {overwrite}?)
+ *                                 → Promise<{ ok:true, written:[nomi], signature }>:
+ *                                   il master e i file importati cambiati
+ *                                   ({path: testo}), in un colpo solo (#184). Porta
+ *                                   la firma letta del master (#185): su un master
+ *                                   cambiato su disco torna, come writeFile,
+ *                                   { ok:false, changed:true, files:[name], error }
+ *                                   e non scrive niente, import compresi. Lancia
+ *                                   col messaggio del bridge sugli altri errori
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
  *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml`; con
@@ -149,9 +161,15 @@
   // quella di `states`) non ci arrivano, e infatti non si hashano — vedi
   // `positionsAreDropped` qui sotto. Una lista di chiavi non puo' rispondere:
   // la stessa chiave, nello stesso posto, a volte esce e a volte no.
+  //
+  // `_import` (PGE-ui #183) e' la provenienza di uno stream importato con
+  // `file:`: il path del file e come lo stream era scritto li' e nel master.
+  // Il motore calcola il fingerprint sullo stream gia' risolto (PGE #290,
+  // regola 1), quindi lo stesso stream importato o scritto nel master e' lo
+  // stesso hash, e spostarlo in un file non lo marca dirty. Qui uguale.
   const FP_IGNORE_TOP  = new Set(["color", "mute", "solo", "onset",
                                   "durationImplicit", "durationUnresolved",
-                                  "deviationProbabilityLegacy"]);
+                                  "deviationProbabilityLegacy", "_import"]);
   const FP_IGNORE_DEEP = new Set(["_curveRaw"]);
 
   /* Il criterio «arriva nello YAML» ha un caso in cui `statePositions` NON ci
@@ -418,6 +436,51 @@
           return r.ok;
         } catch { return false; }
       },
+      // Un file importato da un master con `file:` (#183), relativo alla
+      // cartella del master. Non lancia: l'esito e' la mappa che
+      // `PGEYaml.parse` legge (`opts.imports`), e un file che manca e' un
+      // messaggio da dare all'autore, non un'apertura fallita.
+      async readImport(file) {
+        try {
+          const r = await fetchWithTimeout(baseUrl + `/import?file=${encodeURIComponent(file)}`);
+          const body = await r.json().catch(() => null);
+          if (r.ok && body && body.ok === true && typeof body.text === "string") {
+            return { ok: true, text: body.text };
+          }
+          return { ok: false, error: (body && body.error) || `HTTP ${r.status}` };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+      // Il master e i file importati cambiati, in una richiesta (#184): il
+      // bridge li valida tutti prima di scriverne uno. La firma e' quella del
+      // master (#185), con le regole di writeFile: un 409 `changed` torna come
+      // risposta e non aggiorna la firma, una scrittura riuscita la rimpiazza
+      // con quella dei byte scritti (o trovati gia' scritti).
+      async save(basename, yamlContent, imports, opts = {}) {
+        const name = `${basename}.yml`;
+        const sig = signatures.get(sigKey("projects", name));
+        const r = await fetchWithTimeout(baseUrl + "/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            basename, yamlContent, imports: imports || {},
+            signature: sig || undefined,
+            overwrite: opts.overwrite ? true : undefined,
+          }),
+        });
+        const body = await r.json().catch(() => null);
+        if (r.status === 409 && body && body.changed) {
+          return { ok: false, changed: true, files: [body.name || name],
+                   error: body.error || `${name} changed on disk` };
+        }
+        if (!r.ok || !body || body.ok !== true) {
+          throw new Error((body && body.error) || `POST /save → HTTP ${r.status}`);
+        }
+        _rememberSignature("projects", name, body.signature);
+        return { ...body, written: Array.isArray(body.written) ? body.written : [],
+                 signature: body.signature || null };
+      },
     };
 
     // local stem index — populated as renders complete or restored from
@@ -590,9 +653,10 @@
           _persistStemIndex();
         }
         // Il server scrive lo YAML su configs/<basename>.yml PRIMA di costruire
-        // lo stream di eventi, e i suoi quattro rifiuti 400 (basename mancante,
-        // con traversal, backend che il motore non offre, formato ignoto)
-        // precedono quella scrittura. Quindi una
+        // lo stream di eventi, e i suoi cinque rifiuti 400 (basename mancante,
+        // con traversal, backend che il motore non offre, formato ignoto, un
+        // file importato con un path che non sta sotto configs/, #184)
+        // precedono quella scrittura — e quella dei file importati. Quindi una
         // risposta buona implica il file scritto, e un fallimento prima di qui
         // implica il contrario: e' quello che il chiamante deve sapere per
         // decidere se la migrazione di `dephase` e' avvenuta.

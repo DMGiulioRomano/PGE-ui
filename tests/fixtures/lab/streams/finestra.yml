@@ -1,0 +1,29 @@
+seed: 1441
+duration: 12
+bpm: 120
+streams:
+- stream_id: finestra
+  onset: 0
+  duration: 12
+  sample: 001-41_5-5_5.wav
+  time_mode: normalized
+  distribution_mode: uniform
+  grain:
+    duration: 0.02
+    envelope:
+      states: [[0, hanning], [0.3333333333333333, bartlett], [0.6666666666666666,
+          gaussian], [1, hanning]]
+      curve: [[0, 0, step], [0.3, 0.3333333333333333, cubic], [0.6, 0.6666666666666666],
+        [1, 1]]
+    duration_range: 0
+  pointer:
+    speed_ratio: 1
+    offset_range: 0
+  pitch:
+    ratio: 1
+    range: 0
+  pan: 0
+  volume: 0
+  fill_factor: 2
+  distribution: 0
+  pan_range: 0

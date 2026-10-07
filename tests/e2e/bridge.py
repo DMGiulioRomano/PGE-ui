@@ -84,8 +84,15 @@ def build_tree(base: Path) -> dict:
     ws = base / "workspace"
     configs = ws / "configs"
     configs.mkdir(parents=True)
-    for src in sorted((HERE / "fixtures").glob("*.yml")):
-        shutil.copy(src, configs / src.name)
+    # Anche le sottocartelle: `streams/onda.yml` e' lo stream che
+    # PGE_smoke_file.yml importa con `file:` (#183), e il path e' relativo
+    # alla cartella del master. Non compare fra i progetti: /projects elenca
+    # i soli .yml direttamente in configs/.
+    fixtures = HERE / "fixtures"
+    for src in sorted(fixtures.rglob("*.yml")):
+        dst = configs / src.relative_to(fixtures)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dst)
     return {"root": root, "workspace": ws}
 
 

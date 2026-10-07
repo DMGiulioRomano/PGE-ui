@@ -1,0 +1,25 @@
+seed: 1441
+duration: 20
+bpm: 120
+streams:
+- stream_id: tipo-sul-punto
+  onset: 0
+  duration: 20
+  sample: 001-41_5-5_5.wav
+  time_mode: normalized
+  distribution_mode: uniform
+  grain:
+    duration: [[0, 0.001, cubic], [0.4, 0.008, cubic], [1, 0.016]]
+    envelope: gaussian
+    duration_range: 0
+  pointer:
+    speed_ratio: 1
+    offset_range: 0
+  pitch:
+    ratio: [[0, 1], [0.4, 0.5, step], [1, 1]]
+    range: 0
+  pan: [[0, -30, cubic], [0.4, 0], [1, 45]]
+  volume: [[0, -6, step], [0.4, -3], [1, -12]]
+  fill_factor: [[0, 2, step], [0.4, 4], [1, 1.5]]
+  distribution: 0
+  pan_range: 0

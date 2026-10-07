@@ -283,6 +283,7 @@ _OP_REQUIRES = {
     "constants": "pge.rendering.stream_cache_manager",
     "build_envelope": "pge.envelopes.envelope",
     "evaluate_envelope": "pge.envelopes.envelope",
+    "resolve_stream_files": "pge.engine.stream_files",
 }
 
 
@@ -967,6 +968,52 @@ def _op_evaluate_envelope(args):
 
 
 # =============================================================================
+# OP — resolve_stream_files
+# =============================================================================
+
+@op("resolve_stream_files")
+def _op_resolve_stream_files(args):
+    """La lista `streams:` del master con le voci `file:` risolte dal MOTORE
+    (PythonGranularEngine#290, `pge.engine.stream_files.resolve_stream_files`).
+
+    E' la domanda che il mirror di `yaml-bridge.js` non puo' farsi da solo:
+    piazzamento dal master, `stream_id` di default dal nome del file, le chiavi
+    di piazzamento dello stream importato buttate. La suite confronta lo stream
+    che la UI crede di avere con quello che il motore rende, invece di
+    ricopiare le regole nel test.
+
+    args:
+        master  dict del master come lo darebbe `yaml.safe_load`
+        files   {path relativo alla cartella del master: dict del documento}
+
+    Niente disco: `read` e' una funzione sui documenti passati, che e' cio'
+    che `resolve_stream_files` riceve anche dal Generator (lo stesso loader
+    del master). La cartella del master e' virtuale e non viene mai aperta;
+    un `file:` che non e' fra quelli passati e' un errore dell'op, non un
+    file cercato altrove.
+
+    Il modulo importa solo `pge.shared.exceptions`: niente numpy, quindi gira
+    anche nel job node della CI."""
+    sf = ENGINE.module("pge.engine.stream_files")
+    master = args.get("master")
+    files = args.get("files") or {}
+    if not isinstance(master, dict) or not isinstance(files, dict):
+        raise OracleError("resolve_stream_files: 'master' e 'files' devono essere dict")
+    base = os.path.join(os.sep, "pge-parity-virtual")
+    master_path = os.path.join(base, "master.yml")
+
+    def read(path):
+        rel = os.path.relpath(path, base).replace(os.sep, "/")
+        if rel not in files:
+            raise OracleError(f"resolve_stream_files: '{rel}' non fra i file passati")
+        return files[rel]
+
+    data, importati = sf.resolve_stream_files(master, master_path, read)
+    return {"streams": data.get("streams") if isinstance(data, dict) else None,
+            "imported": [i.origin.file for i in importati]}
+
+
+# =============================================================================
 # OP — parameter_bounds
 # =============================================================================
 
@@ -1055,6 +1102,16 @@ def _op_constants(args):
     scm = ENGINE.module("pge.rendering.stream_cache_manager")
     out["fingerprint_ignore_keys"] = sorted(scm.FINGERPRINT_IGNORE_KEYS)
     out["variation_semantics_version"] = scm.VARIATION_SEMANTICS_VERSION
+
+    # Le chiavi che il master tiene accanto a `file:` (PythonGranularEngine
+    # #290): `PGEYaml.PLACEMENT_KEYS` le ricopia, nell'ordine del motore. Su un
+    # motore senza `file:` il modulo non c'e', e la voce lo dice.
+    try:
+        sf = ENGINE.module("pge.engine.stream_files")
+        out["stream_file_placement_keys"] = list(sf.CHIAVI_DI_PIAZZAMENTO)
+    except (OracleError, AttributeError) as exc:
+        out["stream_file_placement_keys"] = None
+        out["stream_file_placement_keys_error"] = str(exc)
 
     # Lo stesso numero, ma letto come lo legge il bridge: AST del sorgente,
     # senza importare niente del motore. E' l'unica via per cui quel numero

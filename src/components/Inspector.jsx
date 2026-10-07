@@ -1007,6 +1007,16 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                 <span />
               </div>
               ) : null}
+              {stream._import ? (
+              /* Lo stream importato con `file:` (#183): dove e' scritto. Le
+                 modifiche vanno li' (#184), tranne il piazzamento — stream_id,
+                 onset, mute, solo — che resta nel master. */
+              <div className="pge-prow">
+                <span className="k" title="importato con `file:` dal master: stream_id, onset, mute e solo si scrivono nel master, tutto il resto in questo file">file</span><span />
+                <span className="v mono" style={{color:"var(--fg-2)"}}>{stream._import.file}</span>
+                <span />
+              </div>
+              ) : null}
               <ParamRow name="onset" mode="scalar" value={stream.onset} unit="s"
                 onSelect={() => setSelRow("onset")} selected={selRow==="onset"}
                 onValue={(v) => onChange({onset: v})} />

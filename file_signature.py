@@ -111,6 +111,41 @@ def already_on_disk(path, text: str) -> str:
     return signature_of(raw) if same_document(on_disk, wanted) else ""
 
 
+def check_guarded(path, text: str, read_signature="", overwrite=False,
+                  yaml_document=True) -> dict:
+    """I passi 1 e 2 di `write_guarded`, senza scrivere niente.
+
+    Torna il rifiuto `{"ok": False, "changed": True}`, il documento gia' su
+    disco `{"ok": True, "write": False, "signature": <firma del disco>}`, o il
+    via libera `{"ok": True, "write": True}`. Serve a chi scrive PIU' file in
+    una richiesta (`/save` e `/render` con gli import di #184): il master si
+    decide prima di toccare il disco, cosi' un rifiuto lascia intatti anche i
+    file importati — scriverli e poi rifiutare il master sarebbe il brano a
+    meta' che `plan_import_writes` esiste per non lasciare."""
+    path = Path(path)
+    if yaml_document:
+        sig = already_on_disk(path, text)
+        if sig:
+            return {"ok": True, "write": False, "signature": sig}
+    if not overwrite and changed_on_disk(path, read_signature):
+        return {"ok": False, "changed": True}
+    return {"ok": True, "write": True}
+
+
+def apply_guarded(path, text: str, verdict: dict) -> dict:
+    """Il passo 3 di `write_guarded` su un verdetto di `check_guarded`: scrive
+    solo se il verdetto lo dice, e torna la forma di `write_guarded`."""
+    if not verdict.get("ok"):
+        return {"ok": False, "changed": True}
+    if not verdict.get("write"):
+        return {"ok": True, "written": False, "signature": verdict["signature"]}
+    raw = text.encode("utf-8")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    return {"ok": True, "written": True, "signature": signature_of(raw)}
+
+
 def write_guarded(path, text: str, read_signature="", overwrite=False,
                   yaml_document=True) -> dict:
     """Scrive `text` su `path` rispettando la lettura dell'editor. Tre passi,
@@ -137,17 +172,8 @@ def write_guarded(path, text: str, read_signature="", overwrite=False,
     controllo-poi-scrivi su un filesystem, la stessa che ha il laboratorio:
     la guardia prende il caso vero (due editor aperti per minuti), non una
     corsa di millisecondi."""
-    path = Path(path)
-    if yaml_document:
-        sig = already_on_disk(path, text)
-        if sig:
-            return {"ok": True, "written": False, "signature": sig}
-    if not overwrite and changed_on_disk(path, read_signature):
-        return {"ok": False, "changed": True}
-    raw = text.encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(raw)
-    return {"ok": True, "written": True, "signature": signature_of(raw)}
+    verdict = check_guarded(path, text, read_signature, overwrite, yaml_document)
+    return apply_guarded(path, text, verdict)
 
 
 def is_yaml_name(name: str) -> bool:

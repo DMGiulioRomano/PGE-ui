@@ -52,6 +52,7 @@ const DISK = {};               // configs/: nome → testo
 let HEADER_ON = true;          // un bridge piu' vecchio di #185 non manda la firma
 let SIG_IN_PUT = true;         // ...ne' la rimanda dopo una scrittura
 const PUTS = [];               // le richieste PUT /file viste
+const SAVES = [];              // i corpi di POST /save visti (#184)
 const RENDERS = [];            // i corpi di POST /render visti
 const sigOf = (t) => "sha256:" + crypto.createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 
@@ -99,6 +100,20 @@ global.fetch = (url, init = {}) => {
       return jsonRes(200, { ok: true, written: true, bytes: init.body.length,
                             ...(SIG_IN_PUT ? { signature: sigOf(init.body) } : {}) });
     }
+  }
+  /* POST /save (#184): master e import cambiati in una richiesta. La guardia
+     e' quella del master, decisa prima di scrivere qualunque file: un rifiuto
+     lascia intatti anche gli import (il bridge vero lo verifica pytest). */
+  if (u.pathname === "/save") {
+    const body = JSON.parse(init.body);
+    SAVES.push(body);
+    const name = `${body.basename}.yml`;
+    if (refused(name, body.signature, body.overwrite === true))
+      return jsonRes(409, { ok: false, changed: true, name, error: `${name} e' cambiato su disco` });
+    for (const [f, t] of Object.entries(body.imports || {})) DISK[f] = t;
+    DISK[name] = body.yamlContent;
+    return jsonRes(200, { ok: true, written: [...Object.keys(body.imports || {}), name],
+                          ...(SIG_IN_PUT ? { signature: sigOf(body.yamlContent) } : {}) });
   }
   if (u.pathname === "/render") {
     const body = JSON.parse(init.body);
@@ -396,6 +411,42 @@ console.log("\n── backend: la firma letta, mandata, rimpiazzata ──");
     be.fs.signature("projects", "b.yml") === null && be.fs.signature("media", "a.yml") === null);
 }
 
+console.log("\n── backend: il salvataggio (POST /save) porta la firma del master ──");
+{
+  /* Dalla #184 il salvataggio dell'editor non e' PUT /file ma POST /save:
+     master e import cambiati in una richiesta. La firma e' quella del master,
+     con le regole di writeFile. */
+  const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
+  DISK["m.yml"] = "title: m\n";
+  await be.fs.readFile("projects", "m.yml");
+
+  const s1 = await be.fs.save("m", "title: m2\n", { "streams/x.yml": "x: 1\n" });
+  assert("il salvataggio manda la firma letta del master", SAVES.at(-1).signature === sigOf("title: m\n"),
+    JSON.stringify(SAVES.at(-1).signature));
+  assert("...senza chiedere di sovrascrivere", SAVES.at(-1).overwrite === undefined);
+  assert("...con gli import nella stessa richiesta", eq(SAVES.at(-1).imports, { "streams/x.yml": "x: 1\n" }));
+  assert("...scrive, e dice cosa", s1.ok === true && eq(s1.written, ["streams/x.yml", "m.yml"]), JSON.stringify(s1));
+  assert("...e la firma del master scritto prende il posto di quella letta",
+    be.fs.signature("projects", "m.yml") === sigOf("title: m2\n"));
+
+  DISK["m.yml"] = "title: dal laboratorio\n";
+  const s2 = await be.fs.save("m", "title: m3\n", { "streams/x.yml": "x: 2\n" });
+  assert("un master cambiato sotto: rifiuto, che e' una risposta e non un'eccezione",
+    s2.ok === false && s2.changed === true && eq(s2.files, ["m.yml"]), JSON.stringify(s2));
+  assert("...il master dell'altro editor resta", DISK["m.yml"] === "title: dal laboratorio\n");
+  assert("...e la firma letta NON cambia", be.fs.signature("projects", "m.yml") === sigOf("title: m2\n"));
+
+  const s3 = await be.fs.save("m", "title: m3\n", {}, { overwrite: true });
+  assert("sovrascrivi: il POST lo dice come booleano", SAVES.at(-1).overwrite === true);
+  assert("...e scrive", s3.ok === true && DISK["m.yml"] === "title: m3\n");
+
+  SIG_IN_PUT = false;
+  await be.fs.save("m", "title: m4\n", {});
+  assert("salvataggio senza firma di ritorno: quella letta si butta",
+    be.fs.signature("projects", "m.yml") === null);
+  SIG_IN_PUT = true;
+}
+
 console.log("\n── backend: il render porta la firma, e la riceve ──");
 {
   const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
@@ -482,7 +533,34 @@ console.log("\n── app.jsx: le catene ──");
   /* Save As e New project scrivono un nome appena digitato, non il file
      aperto: dietro al documento non c'e' una lettura di QUEL file. */
   assert("Save As e New project sovrascrivono per costruzione",
-    (APP_SRC.match(/writeFile\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 2);
+    (APP_SRC.match(/fs\.save\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 1 &&
+    (APP_SRC.match(/writeFile\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 1);
+  /* Dalla #184 il salvataggio e' POST /save, master e import insieme: la
+     guardia deve viaggiare li', non su un PUT /file che il salvataggio non
+     usa piu'. */
+  assert("il salvataggio passa da fs.save con la risposta alla domanda",
+    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\) \}\)/.test(APP_SRC));
+  /* La rilettura riapre il progetto intero, file importati compresi: una
+     modifica dentro uno stream importato e' lavoro proprio anche se il master
+     (che ne tiene solo il piazzamento) non si muove. */
+  {
+    // Solo il corpo della funzione: `importWrites`, piu' sotto, chiama la
+    // stessa cosa, e una regex libera di scavalcare la chiusa la troverebbe li'.
+    const at = APP_SRC.indexOf("function fileHasOwnChanges(");
+    const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n  }\n", at));
+    assert("\"modifiche proprie\" conta anche gli stream importati",
+      /return Object\.keys\(PY\.changedImports\(imp\.files, importDiskRef\.current\)\)\.length > 0;/.test(body),
+      body.slice(0, 200));
+  }
+  /* Un render rifiutato non ha scritto gli import: la presa sul "disco" si
+     rende DENTRO il tentativo, prima che il giro chieda "modifiche proprie?". */
+  {
+    // Il corpo di `write` del render, dalla marcatura alla chiusa della funzione.
+    const at = APP_SRC.indexOf("markImportsWritten(plan.bodies)");
+    const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n      },", at));
+    assert("il render rende gli import non scritti dentro il tentativo",
+      /configWritten === false[\s\S]*releaseImports\([\s\S]*return r;\s*$/.test(body), body.slice(0, 300));
+  }
   assert("le risposte alla domanda passano dal ref, cioe' dalle funzioni di adesso",
     /latestRef\.current\.answerFileQuestion\(/.test(APP_SRC));
   assert("ogni scrittura nuova chiude la domanda in attesa",
