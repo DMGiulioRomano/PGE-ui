@@ -462,10 +462,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
       const PGEEnv = window.PGEEnv;
-      const curWrap = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      const curRaw = getNested(stream, e2.path) || [];
+      const curWrap = PGEEnv.unwrapEnv(curRaw);
       const cur = PGEEnv.desugarBPGroups(curWrap.items);
       const commitCur = (next) => onChange(patchForPath(stream, e2.path,
-        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, curWrap.interp || "linear"), curWrap.interp)));
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, curWrap.interp || "linear"), curWrap.interp, curRaw)));
       e.preventDefault();
       if (selectedPattern != null) {
         // Delete a single pattern point inside a loop block. Refuse to drop
@@ -559,7 +560,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const envs = listEnvelopes(stream, sampleDur);
       const e2 = envs.find((x) => x.key === selectedKey) || envs[0];
       if (!e2) return;
-      const _w = PGEEnv.unwrapEnv(getNested(stream, e2.path) || []);
+      const _raw = getNested(stream, e2.path) || [];
+      const _w = PGEEnv.unwrapEnv(_raw);
       const items = PGEEnv.desugarBPGroups(_w.items);
       const interp = _w.interp;
       if (!PGEEnv.isBreakpoint(items[selectedBP])) return;
@@ -583,7 +585,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         if (window.PGEHistory) window.PGEHistory.beginGesture();
       }
       onChange(patchForPath(stream, e2.path,
-        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, interp || "linear"), interp)));
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, interp || "linear"), interp, _raw)));
     }
     function onKeyUp(e) {
       if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") &&
@@ -716,8 +718,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (!envClipboard) return;
     const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
     const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
+    // Le chiavi del dict (time_unit) vengono dalla SORGENTE: sono i suoi
+    // punti, e i loro tempi sono nella sua unita'.
     const next = window.PGEEnv.wrapEnv(
-      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp);
+      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp,
+      envClipboard.rawEnv);
     // Quinta via per scrivere `[]` su un envelope: handleCopyEnv accetta un
     // `rawEnv` vuoto (un array e' truthy), quindi il paste puo' propagare un
     // vuoto gia' esistente. Non ne crea mai uno, ma lo stesso guard vale.
@@ -844,11 +849,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   /* ============ Interactions ============ */
   function commit(next) {
     const resugared = PGEEnv.resugarBPGroups(next, globalInterp || "linear");
-    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, globalInterp)));
+    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, globalInterp, rawEnvRaw)));
   }
   function commitWithInterp(nextItems, nextInterp) {
     const resugared = PGEEnv.resugarBPGroups(nextItems, nextInterp || "linear");
-    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, nextInterp)));
+    onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, nextInterp, rawEnvRaw)));
   }
   function beginDragHistory() {if (window.PGEHistory) window.PGEHistory.beginGesture();}
   function endDragHistory() {if (window.PGEHistory) window.PGEHistory.endGesture();}

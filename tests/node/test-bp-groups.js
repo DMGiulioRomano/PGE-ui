@@ -535,6 +535,74 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
     (inspSrc.match(/[\w.]*Env\)\.items\.length/g) || []).join(", "));
 }
 
+/* ── wrapEnv: le altre chiavi del dict sopravvivono al commit ────────────────
+   `wrapEnv` ricostruiva il dict con le sole `type` e `points`, e senza `type`
+   scriveva la lista: ogni altra chiave spariva al primo commit. La prima e'
+   `time_unit`, che per il motore prevale sul `time_mode` dello stream
+   (`create_scaled_envelope`: `raw_data.get('time_unit', time_mode)`), quindi
+   perderla rilegge i tempi in un'altra unita' senza nessun segno. Che il
+   motore suoni lo stesso lo chiede test-envelope-wrap-parity.js; qui la forma.
+   Con chiavi in piu' la lista non e' una scrittura possibile: il dict e'
+   obbligato, anche con un interp lineare e anche con un blocco fra gli item. */
+console.log("\n── wrapEnv: le altre chiavi del dict (time_unit) restano ──");
+{
+  const commitPath = (items, interp, like) =>
+    E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp, like);
+  const roundTrip = (x) => {
+    const w = E.unwrapEnv(x);
+    return commitPath(E.desugarBPGroups(w.items), w.interp, x);
+  };
+  const CON_UNITA = { type: "cubic", time_unit: "absolute", points: [[0, 0], [2, 1, "step"], [4, 0]] };
+  assert("time_unit: il round-trip del commit rende il dict identico",
+    eq(roundTrip(CON_UNITA), CON_UNITA), JSON.stringify(roundTrip(CON_UNITA)));
+  const SENZA_TYPE = { time_unit: "normalized", points: [[0, 0], [0.5, 1], [1, 0]] };
+  assert("…anche senza `type`, dove l'interp e' lineare: resta dict, non diventa lista",
+    eq(roundTrip(SENZA_TYPE), SENZA_TYPE), JSON.stringify(roundTrip(SENZA_TYPE)));
+  const CON_GRUPPO = { time_unit: "absolute", type: "cubic", points: [[0, 0], [[[1, 2], [2, 3]], "step"], [4, 0]] };
+  assert("…con un gruppo fra gli item: le chiavi e il loro ordine restano",
+    eq(Object.keys(roundTrip(CON_GRUPPO)), ["time_unit", "type", "points"])
+      && roundTrip(CON_GRUPPO).time_unit === "absolute",
+    JSON.stringify(roundTrip(CON_GRUPPO)));
+  // Il selettore dell'interp globale in testata (commitWithInterp): cambia il
+  // tipo, non l'unita' dei tempi.
+  const linear = commitPath(E.desugarBPGroups(CON_UNITA.points), "linear", CON_UNITA);
+  assert("interp globale portato a linear: time_unit resta, e il type dice linear",
+    eq(linear, { type: "linear", time_unit: "absolute", points: [[0, 0], [2, 1, "step"], [4, 0]] }),
+    JSON.stringify(linear));
+  const SENZA_T_CUBIC = commitPath(E.desugarBPGroups(SENZA_TYPE.points), "cubic", SENZA_TYPE);
+  assert("…e un dict senza `type` che diventa cubic prende il `type` prima dei points",
+    eq(SENZA_T_CUBIC, { time_unit: "normalized", type: "cubic", points: SENZA_TYPE.points }),
+    JSON.stringify(SENZA_T_CUBIC));
+  const CON_BLOCCO = { type: "cubic", time_unit: "absolute", points: [[0, 0], [[[0, 0], [100, 1]], 3, 2]] };
+  assert("con un blocco compatto il dict e' obbligato: la lista perderebbe time_unit",
+    eq(roundTrip(CON_BLOCCO), CON_BLOCCO), JSON.stringify(roundTrip(CON_BLOCCO)));
+  // I confini: senza chiavi in piu' wrapEnv fa quello che faceva.
+  assert("senza chiavi in piu' la forma non cambia: il dict lineare torna lista",
+    eq(E.wrapEnv([[0, 0], [1, 1]], "linear", { type: "linear", points: [[0, 0], [1, 1]] }), [[0, 0], [1, 1]]));
+  assert("…e un `like` che e' una lista non porta niente",
+    eq(E.wrapEnv([[0, 0], [1, 1]], "cubic", [[0, 0], [1, 1]]), { type: "cubic", points: [[0, 0], [1, 1]] }));
+
+  /* Ogni commit dell'EnvelopeEditor passa a wrapEnv il valore da cui gli item
+     vengono: senza, la chiave si perde da quella porta. Le porte sono cinque
+     (commit, commitWithInterp, il Delete, le frecce, il paste) e il guard le
+     conta tutte: ogni chiamata ha tre argomenti. */
+  const SG = require("./source-guard.js");
+  const eeMask = SG.maskOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  const calls = [];
+  for (const m of eeMask.matchAll(/(?<![\w])wrapEnv\(/g)) {
+    let depth = 0, args = 1, i = m.index + m[0].length - 1;
+    for (; i < eeMask.length; i++) {
+      const ch = eeMask[i];
+      if ("([{".includes(ch)) depth++;
+      else if (")]}".includes(ch)) { depth--; if (depth === 0) break; }
+      else if (ch === "," && depth === 1) args++;
+    }
+    calls.push(args);
+  }
+  assert("le cinque porte di scrittura dell'EnvelopeEditor passano il valore d'origine a wrapEnv",
+    calls.length === 5 && calls.every((n) => n === 3), JSON.stringify(calls));
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

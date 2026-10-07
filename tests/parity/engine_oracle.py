@@ -920,9 +920,17 @@ def _op_evaluate_envelope(args):
     Stesso modulo di `build_envelope`, quindi niente numpy: gira nel job node
     della CI.
 
+    Con `duration` e `time_mode` il corpo si costruisce come lo costruisce
+    uno stream, `create_scaled_envelope` (stesso modulo): e' l'unica strada
+    che legge `time_unit`, che `Envelope` da solo ignora — la domanda di
+    `wrapEnv` che lo perdeva al primo commit.
+
     args:
-        raw    il valore come sta nello YAML: una lista, o un dict con `points`
-        times  lista di tempi (numeri), nell'unita' dei breakpoint
+        raw        il valore come sta nello YAML: una lista, o un dict con `points`
+        times      lista di tempi (numeri), nell'unita' dei breakpoint; con
+                   `duration` e `time_mode`, in secondi
+        duration   facoltativo: la durata dello stream, in secondi
+        time_mode  facoltativo, con `duration`: `absolute` o `normalized`
 
     return:
         ok      True se l'Envelope si costruisce e si valuta
@@ -937,12 +945,20 @@ def _op_evaluate_envelope(args):
             or not all(isinstance(t, (int, float)) and not isinstance(t, bool)
                        for t in times)):
         raise OracleError("evaluate_envelope: 'times' deve essere una lista di numeri")
+    scaled = "duration" in args or "time_mode" in args
+    if scaled:
+        duration, time_mode = args.get("duration"), args.get("time_mode")
+        if (not isinstance(duration, (int, float)) or isinstance(duration, bool)
+                or time_mode not in ("absolute", "normalized")):
+            raise OracleError("evaluate_envelope: 'duration' numero e 'time_mode' "
+                              "absolute|normalized, insieme")
     out = {"ok": True, "values": None, "error": None}
     try:
         # Il clip logger annuncia il proprio file la prima volta: vedi
         # build_envelope.
         with contextlib.redirect_stdout(io.StringIO()):
-            env = env_mod.Envelope(args["raw"])
+            env = (env_mod.create_scaled_envelope(args["raw"], duration, time_mode)
+                   if scaled else env_mod.Envelope(args["raw"]))
             out["values"] = [float(env.evaluate(t)) for t in times]
     except Exception as exc:
         out["ok"] = False

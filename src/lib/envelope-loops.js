@@ -102,9 +102,37 @@
      blocco. Il dict renderebbe identico il valore per il motore e falso il
      disegno del blocco appena aggiunto con "add loop": la decisione sta nella
      issue #191, e la divergenza e' asserita in
-     tests/parity/test-envelope-wrap-parity.js. */
-  function wrapEnv(items, interp) {
-    if (!interp || interp === "linear") return items;
+     tests/parity/test-envelope-wrap-parity.js.
+
+     `like` e' il valore da cui gli item vengono (facoltativo). Il dict non ha
+     solo `type` e `points`: `time_unit` per il motore prevale sul `time_mode`
+     dello stream (`create_scaled_envelope`), e ricostruire il dict con le sole
+     due chiavi — o scrivere la lista, che non ne porta nessuna — la perdeva al
+     primo commit, rileggendo i tempi in un'altra unita'. Con chiavi in piu' il
+     dict e' quindi OBBLIGATO, con l'interp lineare e anche con un blocco fra
+     gli item: le chiavi restano nel loro ordine, `points` sono gli item nuovi,
+     `type` dice l'interp (e se non c'era, si aggiunge davanti a `points` solo
+     quando non e' lineare). */
+  function wrapEnv(items, interp, like) {
+    const extra = (like && typeof like === "object" && !Array.isArray(like))
+      ? Object.keys(like).filter((k) => k !== "type" && k !== "points") : [];
+    const nonLinear = !!interp && interp !== "linear";
+    if (extra.length) {
+      const out = {};
+      for (const k of Object.keys(like)) {
+        if (k === "type") out.type = interp || "linear";
+        else if (k === "points") {
+          if (!("type" in like) && nonLinear) out.type = interp;
+          out.points = items.slice();
+        } else out[k] = like[k];
+      }
+      if (!("points" in out)) {
+        if (!("type" in out) && nonLinear) out.type = interp;
+        out.points = items.slice();
+      }
+      return out;
+    }
+    if (!nonLinear) return items;
     if (items.some(isCompactBlock)) return items;
     return { type: interp, points: items.slice() };
   }

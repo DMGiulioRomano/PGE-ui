@@ -32,11 +32,11 @@ const TOL = 1e-9;
    criterion della issue; `roundTrip` e' il percorso vero di ogni commit
    (EnvelopeEditor.jsx: commit, commitCur, le frecce, il paste) — desugar per
    lavorare sugli indici piatti, resugar + wrap per scrivere. */
-const rewrap = (x) => { const w = E.unwrapEnv(x); return E.wrapEnv(w.items, w.interp); };
-const commitPath = (items, interp) => E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp);
+const rewrap = (x) => { const w = E.unwrapEnv(x); return E.wrapEnv(w.items, w.interp, x); };
+const commitPath = (items, interp, like) => E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp, like);
 const roundTrip = (x) => {
   const w = E.unwrapEnv(x);
-  return commitPath(E.desugarBPGroups(w.items), w.interp);
+  return commitPath(E.desugarBPGroups(w.items), w.interp, x);
 };
 
 // fill_factor di stream4 in mare-nostrum.yml: il {type: cubic} della issue.
@@ -59,21 +59,28 @@ const CORPUS = [
   ["soli breakpoint nudi (il caso che c'era gia')", FF, true],
 ];
 
-const evaluate = async (ask, bodies) => {
-  const answers = await ask(bodies.map((raw) => ({ op: "evaluate_envelope", args: { raw, times: TIMES } })));
+/* `scaled` (facoltativo) e' lo stream che legge l'envelope — `{duration,
+   time_mode}` — e il motore lo costruisce allora come lo costruisce uno
+   stream (`create_scaled_envelope`), cioe' leggendo anche `time_unit`, che
+   `Envelope` da solo ignora. I tempi sono quelli dell'envelope letto: secondi. */
+const evaluate = async (ask, bodies, scaled = null, times = TIMES) => {
+  const answers = await ask(bodies.map((raw) => ({
+    op: "evaluate_envelope", args: { raw, times, ...(scaled || {}) } })));
   return answers.map((r, i) => {
     if (!r.ok) throw new Error(`oracolo: ${r.error}`);
     if (!r.value.ok) throw new Error(`il motore non valuta ${JSON.stringify(bodies[i])}: ${r.value.error}`);
     return r.value.values;
   });
 };
-const worst = (a, b) => {
+const worst = (a, b, times = TIMES) => {
   let w = { d: 0, t: null };
-  a.forEach((v, i) => { const d = Math.abs(v - b[i]); if (d > w.d) w = { d, t: TIMES[i] }; });
+  a.forEach((v, i) => { const d = Math.abs(v - b[i]); if (d > w.d) w = { d, t: times[i] }; });
   return w;
 };
 const same = (a, b) => worst(a, b).d <= TOL;
-const fmtWorst = (a, b) => { const w = worst(a, b); return `scarto massimo ${w.d.toExponential(3)} a t=${w.t}`; };
+const fmtWorst = (a, b, times = TIMES) => {
+  const w = worst(a, b, times); return `scarto massimo ${w.d.toExponential(3)} a t=${w.t}`;
+};
 
 parity({
   suite: "envelope-wrap",
@@ -135,6 +142,41 @@ parity({
           `${fmtWorst(v, s)}; scritto ${JSON.stringify(scritto)}`);
         assert("…e la lista piatta che si scriveva prima di #189 no: il caso discrimina",
           !same(v, piatto), fmtWorst(v, piatto));
+      },
+    },
+    {
+      label: "time_unit sopravvive al commit: il motore legge i tempi nella stessa unita'",
+      run: async (ask, assert) => {
+        /* `wrapEnv` ricostruiva il dict con le sole `type` e `points`, e senza
+           `type` scriveva la lista: `time_unit` spariva al primo commit. Per il
+           motore prevale sul `time_mode` dello stream (`create_scaled_envelope`),
+           quindi qui lo stream e' `normalized` e l'envelope dichiara secondi
+           assoluti: perso, i tempi si rileggono come frazioni e si moltiplicano
+           per la durata. */
+        const STREAM = { duration: 4, time_mode: "normalized" };
+        const SECS = [];
+        for (let i = -4; i <= 84; i++) SECS.push(+(i / 20).toFixed(6));
+        const BODIES = [
+          ["type cubic, un'eccezione step",
+            { type: "cubic", time_unit: "absolute", points: [[0, 0], [1, 2, "step"], [3, 1], [4, 0]] }],
+          ["senza type (interp lineare)",
+            { time_unit: "absolute", points: [[0, 0], [1, 2], [3, 1], [4, 0]] }],
+          ["con un gruppo",
+            { time_unit: "absolute", type: "cubic", points: [[0, 0], [[[1, 2], [2, 3]], "step"], [4, 0]] }],
+        ];
+        const raws = BODIES.map(([, x]) => x);
+        const orig = await evaluate(ask, raws, STREAM, SECS);
+        const out = await evaluate(ask, raws.map(roundTrip), STREAM, SECS);
+        // Il presidio: senza time_unit lo stesso corpo suona diverso, o il
+        // confronto sarebbe verde anche col difetto rimesso.
+        const stripped = raws.map((x) => { const { time_unit, ...rest } = x; return rest; });
+        const senza = await evaluate(ask, stripped, STREAM, SECS);
+        BODIES.forEach(([label, x], i) => {
+          assert(`${label}: il commit suona come l'originale`, same(orig[i], out[i]),
+            `${fmtWorst(orig[i], out[i], SECS)}; scritto ${JSON.stringify(roundTrip(x))}`);
+          assert(`${label}: …e senza time_unit no (il caso discrimina)`, !same(orig[i], senza[i]),
+            fmtWorst(orig[i], senza[i], SECS));
+        });
       },
     },
     {

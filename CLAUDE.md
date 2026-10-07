@@ -2138,6 +2138,26 @@ discriminates (the flat list of the same items must play differently), and the
 loop case asserted as a divergence, so the day #191 is decided that suite
 speaks.
 
+**The other keys of the dict survive too** (`wrapEnv(items, interp, like)`).
+`wrapEnv` rebuilt the dict out of `type` and `points` alone, and without a
+non-linear `type` wrote the list, which carries no key at all: everything else
+went at the first commit. The first such key is `time_unit`, which for the
+engine **overrides the stream's `time_mode`** (`create_scaled_envelope`:
+`raw_data.get('time_unit', time_mode)`), so losing it re-read the times in
+another unit with no sign. `like` is the value the items came from — the five
+write doors of the EnvelopeEditor pass it (`commit`, `commitWithInterp`, the
+Delete, the arrow nudge, and the paste, which passes the *clipboard's* raw:
+the pasted points' times are in the source's unit) — and with keys beyond
+`type`/`points` the dict is **forced**, with a linear interp and with a block
+among the items alike (the list being no option there, #191's choice doesn't
+apply): the keys keep their order, `points` are the new items, `type` states
+the interp (added before `points` only when not linear and not there before).
+A source guard counts the five call sites and requires three arguments on each;
+the parity suite asks the engine through `evaluate_envelope` with
+`duration`/`time_mode`, i.e. built as a stream builds it — `Envelope` alone
+ignores `time_unit`. The editor still *draws* such an envelope in the stream's
+`time_mode`: what this fixes is the write, not the reading.
+
 One consequence outside this repo: mare-nostrum's lab writes a touched
 `{type, points}` with mixed types as its own list with the type on each point,
 *not* as the mixed form, because PGE-ui used to lose the global type on re-read
