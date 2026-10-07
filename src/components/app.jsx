@@ -607,6 +607,9 @@ function App() {
     if (!toast.persistent) {
       setTimeout(() => setToasts(ts => ts.filter(x => x.id !== id)), toast.duration || 4000);
     }
+    // L'id torna a chi deve poterlo togliere da se': la domanda di #185, che
+    // una domanda nuova o un `apri` rendono superata (`dropChangedQuestion`).
+    return id;
   }
   function dismissToast(id) { setToasts(ts => ts.filter(x => x.id !== id)); }
   function dismissErrToasts() { setToasts(ts => ts.filter(x => x.kind !== "err")); }
@@ -1644,11 +1647,56 @@ function App() {
     return n ? [n] : [masterFile()];
   }
 
-  /* C'e' lavoro proprio da perdere su questo file? Oggi la risposta e' il
-     flag del progetto, perche' il file e' uno e tutte le modifiche sono sue.
-     Con #184 diventa per-file, ed e' per questo che e' una funzione del nome
-     invece di essere `dirty` letto sul posto. */
-  function dirtyOfFile(_name) { return dirty; }
+  /* Il documento che il master contiene, per quanto ne sa questo editor:
+     quello letto (`onProjectSelect`), quello salvato, quello che un render ha
+     appena scritto (l'evento `file-signatures`). E' l'altra meta' di
+     `dirtyOfFile`, e serve per il render: `/render` SCRIVE il config, ma non
+     tocca `dirty`, che dice «non salvato» e resta acceso fino al prossimo
+     Salva. Letto da solo, dopo il primo render ogni modifica del laboratorio
+     diventava una domanda — «qui ci sono modifiche non salvate» su un file
+     che conteneva esattamente il documento a schermo — e la rilettura, che e'
+     lo scenario dell'issue, nel giro di lavoro di PGE-ui (modifica, rendi,
+     ascolta) non arrivava mai. Per identita': lo stato e' immutabile, e la
+     storia dell'undo rimette gli stessi oggetti, quindi un undo che torna al
+     documento scritto e' di nuovo «niente da perdere», che e' vero. */
+  const fileDocRef = useRefApp(null);
+
+  /* C'e' lavoro proprio da perdere su questo file? Il flag del progetto,
+     perche' il file e' uno e tutte le modifiche sono sue — tranne quando il
+     documento che si scrive e' proprio quello che il file contiene (vedi
+     `fileDocRef`). `doc` e' quel documento: di solito la `data`, ma dopo una
+     rilettura e' quello appena letto, e allora la risposta e' «niente» senza
+     dover chiedere niente al `dirty` di una chiusura che la rilettura ha gia'
+     reso vecchia. Con #184 diventa per-file, ed e' per questo che e' una
+     funzione del nome invece di essere `dirty` letto sul posto. */
+  function dirtyOfFile(_name, doc = data) { return dirty && doc !== fileDocRef.current; }
+
+  /* Lo stato di ADESSO, per le risposte alla domanda. Il toast vive piu' a
+     lungo del render che l'ha creato — e' persistente, e la tastiera resta
+     libera — quindi una risposta che chiudesse sulle variabili del momento in
+     cui e' stata posta lavorerebbe su un editor che non c'e' piu': il
+     `sovrascrivi` del Salva scriveva il documento di quando si era premuto
+     Salva e poi spegneva `dirty`, cioe' «salvato» su modifiche fatte dopo e
+     mai scritte — e alla prossima modifica del laboratorio la guardia, con
+     `dirty` falso, le avrebbe rilette via senza chiedere. Il `sovrascrivi`
+     del render rendeva quel documento col backend e le opzioni di allora.
+     Riassegnato a ogni render: e' il valore, non un effetto. */
+  const guardLatestRef = useRefApp(null);
+  guardLatestRef.current = { data, renderAgain };
+
+  /* Una domanda alla volta, come nel laboratorio («ogni scrittura nuova
+     sostituisce la domanda in attesa»). Senza, due Salva — o un Salva e un
+     render — impilavano due toast con due `sovrascrivi`, e quello rimasto
+     indietro scriveva ancora. E un `apri` (anche quello della `ricarica`, o
+     del cambio di workspace) la rende superata: la domanda e' su un file che
+     non e' piu' il documento aperto, e un `sovrascrivi` ci scriverebbe sopra
+     il progetto aperto dopo. */
+  const changedQuestionRef = useRefApp(null);
+  function dropChangedQuestion() {
+    const id = changedQuestionRef.current;
+    changedQuestionRef.current = null;
+    if (id != null) dismissToast(id);
+  }
 
   /* La domanda. Tre risposte e non due, per cui non e' un `confirm`:
      `ricarica`, `sovrascrivi`, e non scrivere niente — che e' la × del toast,
@@ -1656,17 +1704,25 @@ function App() {
      una che perde lavoro. Persistente perche' il render non riparte finche'
      non ha avuto risposta. */
   function askChangedOnDisk(names, onReload, onOverwrite) {
-    pushToast({
+    dropChangedQuestion();
+    let id = null;
+    const answered = (fn) => () => {
+      if (changedQuestionRef.current === id) changedQuestionRef.current = null;
+      if (fn) fn();
+    };
+    id = pushToast({
       kind: "warn", persistent: true,
       title: names.length > 1
         ? `${names.length} file cambiati su disco`
         : `${names[0]} e' cambiato su disco`,
       message: "l'ha riscritto un altro editor, e qui ci sono modifiche non salvate",
       actions: [
-        { label: "ricarica", onClick: onReload },
-        { label: "sovrascrivi", kind: "danger", onClick: onOverwrite },
+        { label: "ricarica", onClick: answered(onReload) },
+        { label: "sovrascrivi", kind: "danger", onClick: answered(onOverwrite) },
       ],
+      onCancel: answered(null),
     });
+    changedQuestionRef.current = id;
   }
 
   /* Rilegge i file che la guardia ha detto di rileggere, e torna il documento
@@ -1746,7 +1802,9 @@ function App() {
              messaggio. */
           () => { rereadFiles(plan.ask).catch(() => {}); },
           () => {
-            Promise.resolve(attempt({ overwrite: true, doc })).catch((e) =>
+            // `doc: null`: qui non si e' riletto niente (la domanda arriva
+            // solo al primo tentativo), e `attempt` prende lo stato di adesso.
+            Promise.resolve(attempt({ overwrite: true, doc: null })).catch((e) =>
               pushToast({ kind: "err", title: `${label} failed`,
                           message: e.message, persistent: true }));
           });
@@ -1769,11 +1827,19 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
     try {
-      const res = await writeWithGuard(({ overwrite, doc }) => {
-        const d = doc || data;
+      const res = await writeWithGuard(async ({ overwrite, doc }) => {
+        /* `guardLatestRef` e non `data`: questa funzione la richiama anche il
+           `sovrascrivi`, dal toast, magari minuti dopo — e quello che si
+           sovrascrive e' il documento di ADESSO. Con la `data` di quando si
+           era premuto Salva, le modifiche fatte nel frattempo restavano fuori
+           dal file mentre `_saveWritten` spegneva `dirty`: «salvato» su lavoro
+           mai scritto. Al primo tentativo le due cose coincidono. */
+        const d = doc || guardLatestRef.current.data;
         const yaml = window.PGEYaml ? window.PGEYaml.serialize(d) :
           `# (yaml bridge not loaded — save skipped)\n# project: ${d.project}\n`;
-        return _saveWritten(backend, basename, yaml, overwrite);
+        const r = await _saveWritten(backend, basename, yaml, overwrite);
+        if (r && r.ok) fileDocRef.current = d;
+        return r;
       }, "Save");
       if (!res || !res.ok) return;     // rifiutato, in attesa, o fermo: l'ha gia' detto
     } catch (e) {
@@ -1960,13 +2026,27 @@ function App() {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
     const doc = opts0.doc || data;
+    /* Le impronte del documento che si RENDE, che dopo una rilettura non e'
+       la `data` di questa chiusura: e' quello appena letto dal disco, e
+       `currentFps` descrive ancora la versione di prima. Scritte nel record
+       dello `stream-done`, le impronte di prima marcavano giallo uno stem
+       appena rifatto (la `data` passa alla versione letta subito dopo) — e
+       verde quello di uno stream riportato a mano alla versione di prima, su
+       un audio reso dall'altra. backend.js le calcola gia' da `opts.streams`,
+       quindi qui si allineano i due lati. #185 */
+    const fpsOfThisRun = doc === data ? currentFps
+      : window.PGERenderStatus.fingerprintAll(doc.streams, tweaks.outputFormat || "wav");
 
     /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
        `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
        Render non produceva niente di visibile — log non svuotato, nessun toast,
        bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
        e poi il render partiva lo stesso. */
-    setLogLines([]);
+    // Il log si azzera al render chiesto, non al nuovo tentativo dopo una
+    // rilettura (#185): quello e' lo stesso render, e azzerarlo cancellava la
+    // riga `[reread]` appena scritta — cioe' l'unica traccia del perche' il
+    // progetto si era appena ricaricato da solo.
+    if (!opts0.attempts) setLogLines([]);
     setRenderStatus({ running: true, total: doc.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
       pushToast({ kind: "info", title: "Rendering started", message: `${doc.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
@@ -2042,6 +2122,12 @@ function App() {
       overwrite: opts0.overwrite || undefined,
     };
     const result = await backend.render.run(opts, (e) => {
+      // Il bridge ha scritto (o trovato gia' scritto) il config: da qui il
+      // master contiene QUESTO documento, che e' cio' che `dirtyOfFile`
+      // confronta. La firma la registra backend.js; qui c'e' l'altra meta'.
+      if (e.type === "file-signatures" && e.signatures && masterFile() in e.signatures) {
+        fileDocRef.current = doc;
+      }
       if (e.type === "log") {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
       } else if (e.type === "stream-start") {
@@ -2060,7 +2146,7 @@ function App() {
         }
         setRenderStatus(s => ({ ...s, done: s.done + 1 }));
         // bump fp for this stream (so UI marks it fresh)
-        setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
+        setLastRenderedFps(fps => ({ ...fps, [e.streamId]: fpsOfThisRun[e.streamId] }));
         // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
         // riga lo stem resterebbe marcato con quella del render precedente e
         // tornerebbe giallo subito dopo essere stato rifatto. La persistenza su
@@ -2137,7 +2223,12 @@ function App() {
     if (result.changed) {
       const names = refusedFiles(result);
       const plan = window.PGEFileGuard.plan(names.map(name => ({
-        name, changed: true, dirty: dirtyOfFile(name),
+        name, changed: true,
+        // `doc` e non la `data` di questa chiusura: dopo una rilettura (il nuovo
+        // tentativo qui sotto, o la `ricarica`) si rende il documento appena
+        // letto, il lavoro proprio l'ha scartato la rilettura stessa, e la
+        // `data` e il `dirty` di qui sono ancora quelli di prima.
+        dirty: dirtyOfFile(name, doc),
         attempts: opts0.attempts || 0,
       })));
       if (plan.action === "reread") {
@@ -2153,10 +2244,13 @@ function App() {
       if (plan.action === "ask") {
         if (plan.reread.length) await rereadFiles(plan.reread);
         // Le due risposte girano dal click sul toast, fuori da qui: la coda si
-        // chiude, o una promise rifiutata diventa una unhandled rejection.
+        // chiude, o una promise rifiutata diventa una unhandled rejection. E
+        // passano da `guardLatestRef`, cioe' dal `renderAgain` di ADESSO: quello
+        // di questa chiusura renderebbe il documento, il backend e le opzioni
+        // di quando la domanda e' stata posta, non di quando ha risposta.
         askChangedOnDisk(plan.ask,
-          () => { renderAgain({ reread: plan.ask }).catch(() => {}); },
-          () => { renderAgain({ overwrite: true, doc }).catch(() => {}); });
+          () => { guardLatestRef.current.renderAgain({ reread: plan.ask }).catch(() => {}); },
+          () => { guardLatestRef.current.renderAgain({ overwrite: true }).catch(() => {}); });
         return;
       }
       pushToast({ kind: "err", persistent: true, title: "Render fermo",
@@ -2290,6 +2384,10 @@ function App() {
 
   async function onProjectSelect(name) {
     const backend = window.PGEBackend.current;
+    // Un `apri` rende superata la domanda di #185, se ce n'e' una in piedi: era
+    // su un file che da qui non e' piu' il documento aperto, e un suo
+    // `sovrascrivi` ci scriverebbe sopra cio' che si apre adesso.
+    dropChangedQuestion();
     setActiveProject(name);
     setTweak("activeProject", name);
     const t0 = performance.now();
@@ -2309,6 +2407,8 @@ function App() {
         _setDataRaw(parsed);
         resetHistory();
         setDirty(false);
+        // Cio' che il file contiene, per `dirtyOfFile` (#185).
+        fileDocRef.current = parsed;
         const ms = (performance.now() - t0).toFixed(0);
         logToTerminal(`[load] ${name} · ${parsed.streams.length} streams · ${parsed.duration}s · ${(yamlText.length/1024).toFixed(1)}kb · ${ms}ms`, "ok");
         // Run a round-trip check — if the bridge would lose information on
@@ -2350,6 +2450,7 @@ function App() {
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
+    fileDocRef.current = null;
     // Niente da tornare: qui il file non si e' letto. Chi rilegge per la
     // guardia (#185) lo distingue da un documento vero e si fermera' invece di
     // riprovare a scrivere un progetto vuoto sopra quello dell'altro editor.
@@ -2371,6 +2472,13 @@ function App() {
     }
     const res = await backend.setWorkspace(path);
     if (!res || res.ok !== true) return res || { ok: false, error: "cambio rifiutato" };
+
+    // La domanda di #185 era su un file della cartella di prima. Il ramo senza
+    // progetti qui sotto non passa da `onProjectSelect`, che la chiuderebbe:
+    // lasciata li', la sua `ricarica` aprirebbe un file che nella cartella
+    // nuova non c'e' (cioe' il progetto vuoto di ripiego al posto di quello
+    // aperto), e il `sovrascrivi` scriverebbe senza che nessuno l'abbia letto.
+    dropChangedQuestion();
 
     // backend.setWorkspace ha gia' svuotato l'indice degli stem; qui cade il
     // resto dello stato per-stream, che e' React.

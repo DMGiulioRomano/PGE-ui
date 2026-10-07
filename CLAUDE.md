@@ -145,7 +145,9 @@ exists, the fourth only when a browser is installed):
   re-read/ask decision file by file, including the two asymmetric precedences
   and the safe default of `dirty`; the source guards on who sends the
   signature, who records it and the re-read going through the function that
-  clears the undo history; and the **executed** round trip, the real backend
+  clears the undo history, on the answers acting on the editor as it is when
+  they are given (one question at a time), on "own work" measured against the
+  file, and on the fingerprints of the rendered document; and the **executed** round trip, the real backend
   driven with a fake `fetch` over a fake disk — read, changed underneath,
   refused, overwritten, re-read).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
@@ -893,6 +895,54 @@ nor sit under the same surface as one that loses work. `Toast` therefore grew
 `ricarica` or `sovrascrivi`) and a `×` appears, which is the third answer. It is
 `persistent`, because the render does not restart until the question is
 answered.
+
+**One question at a time, and its answers act on the editor as it is *now*.**
+A persistent toast outlives the render that created it, and the keyboard stays
+free under it, so an answer that closed over the variables of the moment the
+question was put worked on an editor that no longer existed. Saved with the
+`data` of when Save was pressed, `sovrascrivi` left out of the file every edit
+made since — and then `_saveWritten` turned `dirty` off: "saved" over work
+never written, which the next change from the lab would have re-read away
+without asking, the exact loss this issue exists to prevent. The render's
+`sovrascrivi` rendered that same old document, with the backend and options of
+then. So the answers go through `guardLatestRef` — `{data, renderAgain}`,
+reassigned in the render body on every render, i.e. a value, not an effect —
+and the save's `attempt` reads `guardLatestRef.current.data`. And there is only
+one question (`changedQuestionRef`, the lab's "ogni scrittura nuova sostituisce
+la domanda in attesa"): a new one dismisses the pending one — two Saves, or a
+Save and a render, used to stack two `sovrascrivi`, and the one left behind
+still wrote — and so does any open (`onProjectSelect`, which `ricarica` and the
+workspace switch also go through; the switch drops it itself too, since its
+no-projects branch opens nothing): a question about a file that is no longer
+the open document has no answer left, and its `sovrascrivi` would write over
+whatever was opened since.
+
+**"Own work" is measured against the file, not against the last Save**
+(`dirtyOfFile`). `/render` *writes* the config but leaves `dirty` alone — the
+flag means "not saved" and the TopBar keeps saying so until the next Save — so,
+read alone, after the first render every change from the lab became a question
+("qui ci sono modifiche non salvate") about a file that already held exactly the
+document on screen, and the re-read, which is the issue's main scenario, never
+happened in PGE-ui's own loop (edit, render, listen). `fileDocRef` is the
+document the master is known to hold — the one read (`onProjectSelect`), the
+one saved, the one a render wrote (the `file-signatures` event) — and
+`dirtyOfFile(name, doc)` is `dirty && doc !== fileDocRef.current`, by
+**identity**: state is immutable and undo restores the same objects, so an undo
+back to the written document is again "nothing to lose", which is true. `doc`
+is the document being written, not the closure's `data`, because after a
+re-read the render goes on with the document just read while that closure still
+holds the old `data` and the old `dirty`: there the answer is "nothing", by
+construction.
+
+**The fingerprints a render records are the rendered document's**
+(`fpsOfThisRun`). After a re-read `doc` is not the closure's `data`, and
+`currentFps` still described the version before it: written into
+`lastRenderedFps` by `stream-done`, they read yellow on a stem just redone and
+green on one hand-edited back to the old version over audio rendered from the
+new one. `backend.js` already fingerprints `opts.streams`; this aligns the
+in-memory half with it. And a retry after a re-read no longer clears the log
+(`if (!opts0.attempts)`): it is the same render, and clearing it erased the
+`[reread]` line — the only trace of why the project had just reloaded itself.
 
 **"Ricarica" is an `apri` of the same file**, i.e. `onProjectSelect`, which does
 `_setDataRaw` + `resetHistory()` + `setDirty(false)`. The reset history is not a

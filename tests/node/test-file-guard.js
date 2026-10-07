@@ -249,12 +249,86 @@ assert("il render rifiutato non si annuncia come fallito",
   "nel log un errore che non c'e'");
 assert("le risposte rientrano dalla funzione che ha la guardia di rientro",
   /renderAgain\(\{ reread: plan\.ask \}\)/.test(appSrc) &&
-  /renderAgain\(\{ overwrite: true, doc \}\)/.test(appSrc),
+  /renderAgain\(\{ overwrite: true \}\)/.test(appSrc),
   "la domanda non ferma la tastiera: un `r` premuto nel frattempo non deve " +
   "diventare un secondo render");
 assert("...e il render riparte col documento appena letto",
   /return await runRender\(\{ doc: fresh, attempts: \(opts0\.attempts \|\| 0\) \+ 1 \}\)/.test(appSrc),
   "«il render prosegue sulla versione su disco»");
+
+/* Il toast vive piu' a lungo del render che l'ha creato: e' persistente e la
+   tastiera resta libera. Una risposta che chiude sulle variabili del momento
+   della domanda lavora su un editor che non c'e' piu'. */
+console.log("\n── le risposte valgono per l'editor di adesso ──");
+assert("lo stato di adesso e' riassegnato a ogni render, non in un effetto",
+  /guardLatestRef\.current = \{ data, renderAgain \};/.test(appSrc));
+assert("le due risposte del render passano dal renderAgain di adesso",
+  /guardLatestRef\.current\.renderAgain\(\{ reread: plan\.ask \}\)/.test(appSrc) &&
+  /guardLatestRef\.current\.renderAgain\(\{ overwrite: true \}\)/.test(appSrc),
+  "quello della chiusura rendeva il documento, il backend e le opzioni di " +
+  "quando la domanda era stata posta");
+assert("...e il `sovrascrivi` del render non si porta dietro il documento di allora",
+  !/renderAgain\(\{ overwrite: true, doc/.test(appSrc));
+{
+  const save = appSrc.slice(appSrc.indexOf("async function onSave("),
+                            appSrc.indexOf("async function _saveWritten("));
+  assert("il Salva scrive lo stato di adesso, non la `data` di quando e' stato premuto",
+    /const d = doc \|\| guardLatestRef\.current\.data;/.test(save) &&
+    !/const d = doc \|\| data;/.test(save),
+    "il `sovrascrivi` scriveva le modifiche di prima e poi `setDirty(false)`: " +
+    "«salvato» su lavoro mai scritto, e la guardia dopo l'avrebbe riletto via");
+}
+
+console.log("\n── una domanda alla volta ──");
+{
+  const ask = appSrc.slice(appSrc.indexOf("function askChangedOnDisk"),
+                           appSrc.indexOf("async function rereadFiles"));
+  assert("una domanda nuova toglie quella in attesa",
+    /^\s*dropChangedQuestion\(\);/m.test(ask) &&
+    ask.indexOf("dropChangedQuestion()") < ask.indexOf("pushToast("),
+    "due Salva impilavano due `sovrascrivi`, e quello rimasto indietro " +
+    "scriveva ancora");
+  assert("...e si ricorda quale toast e' la domanda",
+    /changedQuestionRef\.current = id;/.test(ask) && /return id;/.test(appSrc));
+  assert("...e ogni risposta, × compresa, la chiude",
+    /onClick: answered\(onReload\)/.test(ask) &&
+    /onClick: answered\(onOverwrite\)/.test(ask) &&
+    /onCancel: answered\(null\)/.test(ask));
+  const ops = appSrc.slice(appSrc.indexOf("async function onProjectSelect"));
+  assert("un `apri` rende superata la domanda, prima di ogni altra cosa",
+    /^\s*dropChangedQuestion\(\);/m.test(ops.slice(0, ops.indexOf("setActiveProject(name)"))),
+    "il suo `sovrascrivi` scriverebbe sopra il file appena aperto");
+  const ws = appSrc.slice(appSrc.indexOf("async function onWorkspaceChange"));
+  assert("...e cosi' il cambio di workspace, anche senza progetti da aprire",
+    ws.indexOf("dropChangedQuestion();") > 0 &&
+    ws.indexOf("dropChangedQuestion();") < ws.indexOf("if (!files.length)"));
+}
+
+console.log("\n── «modifiche proprie» e' rispetto al file, non al Salva ──");
+/* `/render` SCRIVE il config e non spegne `dirty`: letto da solo, dopo il
+   primo render ogni modifica del laboratorio diventava una domanda su un file
+   che conteneva gia' il documento a schermo, e la rilettura — lo scenario
+   dell'issue — non arrivava mai. */
+assert("dirtyOfFile confronta il documento che si scrive con quello del file",
+  /function dirtyOfFile\(_name, doc = data\) \{ return dirty && doc !== fileDocRef\.current; \}/.test(appSrc));
+assert("...che e' quello letto, quello salvato, e quello che un render ha scritto",
+  /fileDocRef\.current = parsed;/.test(appSrc) &&
+  /if \(r && r\.ok\) fileDocRef\.current = d;/.test(appSrc) &&
+  /e\.type === "file-signatures"[^\n]*\n\s*fileDocRef\.current = doc;/.test(appSrc));
+assert("...e il render chiede del documento che ha reso, non della `data` della chiusura",
+  /dirty: dirtyOfFile\(name, doc\),/.test(appSrc),
+  "dopo una rilettura la chiusura ha ancora la `data` e il `dirty` di prima");
+
+console.log("\n── le impronte sono del documento reso ──");
+assert("lo stream-done registra le impronte di `doc`, non quelle della `data`",
+  /setLastRenderedFps\(fps => \(\{ \.\.\.fps, \[e\.streamId\]: fpsOfThisRun\[e\.streamId\] \}\)\)/.test(appSrc) &&
+  !/\[e\.streamId\]: currentFps\[e\.streamId\]/.test(appSrc),
+  "dopo una rilettura `currentFps` descrive la versione di prima: giallo su " +
+  "uno stem appena rifatto, verde su uno reso dall'altra versione");
+assert("...e le calcola come backend.js, dagli stream di `doc` nel formato del giro",
+  /const fpsOfThisRun = doc === data \? currentFps\s*\n\s*: window\.PGERenderStatus\.fingerprintAll\(doc\.streams, tweaks\.outputFormat \|\| "wav"\);/.test(appSrc));
+assert("il nuovo tentativo dopo una rilettura non cancella la riga che la racconta",
+  /if \(!opts0\.attempts\) setLogLines\(\[\]\);/.test(appSrc));
 
 console.log("\n── le due route che scrivono, e una guardia sola ──");
 
