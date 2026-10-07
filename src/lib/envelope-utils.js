@@ -118,7 +118,17 @@
    *           che nell'envelope non c'e';
    *   cubic → qui resta lineare. La PCHIP vera vuole i due punti oltre il
    *           segmento (EnvelopeEditor.valueAtTime) e sbaglierebbe comunque la
-   *           forma della meta' che resta: l'errore e' su un punto solo. */
+   *           forma della meta' che resta: l'errore e' su un punto solo.
+   * `prevInterp` e' l'interp EFFETTIVO del segmento: il tag del punto se c'e',
+   * altrimenti quello ereditato (`_effInterp`). Leggere il solo tag dava
+   * lineare ogni punto nudo, e un punto nudo non e' lineare dappertutto: nel
+   * dict `{type, points}` segue il `type` — `{type: step}` e' cio' che
+   * l'editor scrive appena l'interp globale e' step —, dentro un BP group
+   * segue l'interp del gruppo, e su read_direction lo step e' imposto dal
+   * motore (PGE #207). */
+  function _effInterp(tag, inherited) {
+    return typeof tag === "string" ? tag : (inherited || null);
+  }
   function boundaryY(prevX, prevY, prevInterp, x, y, at) {
     if (prevInterp === "step") return prevY;
     if (!(x > prevX)) return y;
@@ -130,13 +140,17 @@
   // passano intatti: se sono fuori dominio è un problema che va segnalato, non
   // corretto in silenzio. Su read_direction senza snap l'interpolazione fra un
   // +1 e un -1 produce tipicamente uno 0.3, che il motore rifiuta.
-  function truncateEnvArray(arr, snap) {
+  // `inherited` e' l'interp di un punto senza tag (vedi boundaryY): il `type`
+  // del dict, quello del gruppo per i suoi punti interni, lo step imposto a
+  // read_direction. Assente, e' lineare.
+  function truncateEnvArray(arr, snap, inherited) {
     // object-form {type, points}: clip points beyond x=1.0, add closing BP
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      return { ...arr, points: truncateEnvArray(arr.points, snap) };
+      return { ...arr, points: truncateEnvArray(arr.points, snap,
+        typeof arr.type === "string" ? arr.type : inherited) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
-    if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap));
+    if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap, inherited));
     const result = [];
     let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
@@ -150,7 +164,7 @@
         const [x, y, interp] = bp;
         if (x <= 1.0) {
           result.push(item);
-          prevX = x; prevY = y; prevInterp = interp;
+          prevX = x; prevY = y; prevInterp = _effInterp(interp, inherited);
         } else {
           // first BP past boundary — interpolate closing BP at x=1.0.
           // Se il punto precedente sta gia' esattamente sul bordo l'envelope
@@ -169,14 +183,16 @@
         // BP group: tronca i punti interni (stessa regola dei BP); se resta
         // un solo punto il gruppo degenera a breakpoint nudo.
         if (prevX >= 1.0) break;
-        const inner = truncateEnvArray(item[0], snap);
+        // Dentro il gruppo il punto di partenza del segmento tagliato e'
+        // interno (ne viene un altro dopo), quindi eredita l'interp di zona.
+        const inner = truncateEnvArray(item[0], snap, item[1]);
         if (inner.length >= 2) result.push([inner, item[1]]);
         else if (inner.length === 1) result.push(inner[0]);
         const lastP = PGEEnv.bpAt(inner[inner.length - 1]);
         // Il segmento in uscita dall'ultimo punto di un gruppo segue l'interp
-        // globale, non quello di zona (expandMixed): solo un tag esplicito
-        // sul punto conta.
-        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = lastP[2]; }
+        // globale, non quello di zona (expandMixed): il tag del punto, se
+        // c'e', altrimenti l'ereditato di FUORI dal gruppo.
+        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = _effInterp(lastP[2], inherited); }
         if (item[0].some(p => { const b = PGEEnv.bpAt(p); return b && b[0] > 1.0; })) break; // il gruppo è stato tagliato
       } else if (PGEEnv.isCompactBlock(item)) {
         if (prevX >= 1.0) break; // block starts beyond boundary — drop
@@ -190,7 +206,9 @@
         prevX = item[1];
         const lastPat = PGEEnv.bpAt(item[0][item[0].length - 1]); // last pattern point
         prevY = lastPat ? lastPat[1] : prevY;
-        prevInterp = null;
+        // L'ultimo punto espanso del blocco porta il tag del suo punto di
+        // pattern, se l'ha; altrimenti il segmento dopo segue l'ereditato.
+        prevInterp = _effInterp(lastPat ? lastPat[2] : null, inherited);
       } else {
         result.push(item);
       }
@@ -368,9 +386,15 @@
     return _applyEnvFields(stream, arr => rescaleEnvArray(arr, ratio));
   }
 
+  // Su read_direction lo step e' imposto dal motore (PGE #207): e' l'interp
+  // ereditato di ogni suo punto, qualunque cosa sia scritta.
+  function _domainInterp(domain) {
+    return domain === "direction" ? "step" : null;
+  }
+
   function truncateStreamEnvelopes(stream) {
     return _applyEnvFields(stream,
-      (arr, domain) => truncateEnvArray(arr, snapForDomain(domain)));
+      (arr, domain) => truncateEnvArray(arr, snapForDomain(domain), _domainInterp(domain)));
   }
 
   function streamWouldTruncate(stream, ratio) {
@@ -422,9 +446,10 @@
    * `sliceEnvArray` risponde null su un array che ne contiene uno, e
    * `sliceStreamEnvelopes` lascia quel campo intatto contandolo in `skipped` —
    * chi chiama lo dice all'utente invece di riscrivere il blocco a caso. */
-  function sliceEnvArray(arr, cut, snap, inGroup) {
+  function sliceEnvArray(arr, cut, snap, inGroup, inherited) {
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
-      const pts = sliceEnvArray(arr.points, cut, snap);
+      const pts = sliceEnvArray(arr.points, cut, snap, false,
+        typeof arr.type === "string" ? arr.type : inherited);
       return pts === null ? null : { ...arr, points: pts };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
@@ -435,7 +460,7 @@
     // che niente lo dica. Il BP group nudo invece si taglia: sono punti.
     if (PGEEnv.isCompactBlock(arr)) return null;
     if (PGEEnv.isBareEnv(arr)) {
-      const out = sliceEnvArray([arr], cut, snap, inGroup);
+      const out = sliceEnvArray([arr], cut, snap, inGroup, inherited);
       return out === null ? null : _asBare(out);
     }
     if (arr.some(PGEEnv.isCompactBlock)) return null;
@@ -445,7 +470,11 @@
     const out = [];
     // `prevItem` viaggia con le sue coordinate perche' il punto tenuto quando
     // non sopravvive niente va scritto nella grafia di quello che lo detta.
-    let prevX = null, prevY = null, prevInterp = null, prevItem = null;  // ultimo punto PRIMA del taglio
+    // `prevInterp` e' il TAG scritto (va sul punto d'apertura), `prevEff`
+    // l'interp effettivo del segmento tagliato (decide il valore al taglio):
+    // con un tag ereditato scritto sul punto il dict si riempirebbe di
+    // eccezioni uguali al suo `type`.
+    let prevX = null, prevY = null, prevInterp = null, prevEff = null, prevItem = null;  // ultimo punto PRIMA del taglio
     for (const item of arr) {
       if (PGEEnv.isBPGroup(item)) {
         // Il gruppo si taglia con le stesse regole, ma da dentro: `inGroup`
@@ -453,13 +482,16 @@
         // tutto prima del taglio riaprirebbe l'envelope con un [0, y] che non
         // e' il valore al taglio (fra il gruppo e il taglio ci puo' essere un
         // altro breakpoint).
-        const inner = sliceEnvArray(item[0], cut, snap, true);
+        const inner = sliceEnvArray(item[0], cut, snap, true, item[1]);
         if (inner === null) return null;
         if (inner.length >= 2) out.push([inner, item[1]]);
         else if (inner.length === 1) out.push(inner[0]);
         const lastItem = item[0][item[0].length - 1];
         const lastP = PGEEnv.bpAt(lastItem);
-        if (lastP) { prevX = lastP[0]; prevY = lastP[1]; prevInterp = lastP[2]; prevItem = lastItem; }
+        if (lastP) {
+          prevX = lastP[0]; prevY = lastP[1]; prevInterp = lastP[2];
+          prevEff = _effInterp(lastP[2], inherited); prevItem = lastItem;
+        }
         continue;
       }
       // Le due grafie di un punto (PGEEnv.bpAt): un dict non entrava qui,
@@ -469,14 +501,14 @@
       if (!bp) { out.push(item); continue; }
       const [x, y, interp] = bp;
       if (x < cut) {
-        prevX = x; prevY = y; prevInterp = interp; prevItem = item;
+        prevX = x; prevY = y; prevInterp = interp; prevEff = _effInterp(interp, inherited); prevItem = item;
         continue;
       }
       // Primo punto oltre il taglio: davanti gli va il valore AL taglio, o la
       // coda partirebbe dal punto sbagliato. Si porta dietro l'interp del
       // segmento che stiamo tagliando a meta', che e' quello del punto prima.
       if (!out.length && prevX !== null && x > cut) {
-        out.push(PGEEnv.bpMake(item, 0, close(boundaryY(prevX, prevY, prevInterp, x, y, cut)), prevInterp));
+        out.push(PGEEnv.bpMake(item, 0, close(boundaryY(prevX, prevY, prevEff, x, y, cut)), prevInterp));
       }
       out.push(PGEEnv.bpAtX(item, shift(x)));
     }
@@ -492,7 +524,7 @@
   function sliceStreamEnvelopes(stream, cut) {
     let skipped = 0;
     const out = _applyEnvFields(stream, (arr, domain) => {
-      const sliced = sliceEnvArray(arr, cut, snapForDomain(domain));
+      const sliced = sliceEnvArray(arr, cut, snapForDomain(domain), false, _domainInterp(domain));
       if (sliced === null) { skipped++; return arr; }
       return sliced;
     });

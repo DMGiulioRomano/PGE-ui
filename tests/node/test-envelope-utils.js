@@ -732,8 +732,12 @@ console.log("\n── read_direction · truncateStreamEnvelopes instrada per cam
   assert("il campo continuo resta interpolato",
     eq(out.grain.durationEnv, [[0, 0.05], [1, 0.15]]),
     JSON.stringify(out.grain.durationEnv));
-  assert("il campo direction è snappato",
-    eq(out.grain.readDirectionEnv, [[0, 1], [1, -1]]),
+  // Il bordo cade a meta' del segmento +1 → -1. Questo assert diceva -1: il
+  // valore interpolato (-0.333) mandato al verso piu' vicino. Ma il motore
+  // legge read_direction come `{type: step, points}` (read_direction.py), e
+  // fino a 1.5 tiene +1: il verso giusto al bordo e' quello tenuto.
+  assert("il campo direction tiene il verso al bordo (step imposto dal motore)",
+    eq(out.grain.readDirectionEnv, [[0, 1], [1, 1]]),
     JSON.stringify(out.grain.readDirectionEnv));
 }
 assert("streamWouldTruncate vede readDirectionEnv",
@@ -2604,6 +2608,65 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
  * Il gemello di rescale+truncate: quello tiene la testa, questo la coda. La
  * regola e' una sola, x' = (x - cut)/(1 - cut), ed e' quella che tiene i
  * breakpoint fermi in tempo assoluto mentre l'origine si sposta sul taglio. */
+/* ── il punto che il taglio CALCOLA legge anche l'interp ereditato ─────────
+ * boundaryY guardava solo il tag scritto sul punto di partenza del segmento.
+ * Ma un punto senza tag non e' lineare dappertutto: nel dict `{type, points}`
+ * segue il `type`, dentro un BP group segue l'interp del gruppo (tranne
+ * l'ultimo punto, il cui segmento in uscita torna al globale), e su
+ * read_direction lo `step` lo impone il motore (PGE #207) qualunque cosa sia
+ * scritta. Su uno step il valore al bordo si TIENE: interpolarlo e' un salto
+ * che l'envelope non ha. Il dict `{type: step}` e' esattamente cio' che
+ * l'EnvelopeEditor scrive quando l'interp globale diventa step. */
+console.log("\n── truncate / slice: l'interp ereditato (dict, gruppo, read_direction) ──");
+{
+  const STEP_DICT = { type: "step", points: [[0, 0], [0.5, 1], [1.5, 3]] };
+  assert("truncate di un {type: step}: il punto di chiusura tiene il valore",
+    eq(U.truncateEnvArray(STEP_DICT), { type: "step", points: [[0, 0], [0.5, 1], [1, 1]] }),
+    JSON.stringify(U.truncateEnvArray(STEP_DICT)));
+  assert("…ma un tag scritto sul punto vince sul type del dict",
+    eq(U.truncateEnvArray({ type: "step", points: [[0, 0], [0.5, 1, "linear"], [1.5, 3]] }),
+       { type: "step", points: [[0, 0], [0.5, 1, "linear"], [1, 2]] }),
+    JSON.stringify(U.truncateEnvArray({ type: "step", points: [[0, 0], [0.5, 1, "linear"], [1.5, 3]] })));
+  assert("truncate di un BP group step: il punto di chiusura tiene il valore",
+    eq(U.truncateEnvArray([[[[0.15, 1], [0.75, 3], [1.2, 0]], "step"]]),
+       [[[[0.15, 1], [0.75, 3], [1, 3]], "step"]]),
+    JSON.stringify(U.truncateEnvArray([[[[0.15, 1], [0.75, 3], [1.2, 0]], "step"]])));
+  // L'ultimo punto del gruppo esce col globale, non con l'interp di zona.
+  const DICT_GRUPPO = { type: "step", points: [[[[0, 0], [0.4, 1]], "linear"], [1.5, 3]] };
+  assert("dopo un gruppo il segmento segue il type del dict",
+    eq(U.truncateEnvArray(DICT_GRUPPO), { type: "step", points: [[[[0, 0], [0.4, 1]], "linear"], [1, 1]] }),
+    JSON.stringify(U.truncateEnvArray(DICT_GRUPPO)));
+  const DICT_BLOCCO = { type: "step", points: [[[[0, 0], [100, 1]], 0.5, 2], [1.5, 3]] };
+  assert("dopo un blocco il segmento segue il type del dict",
+    eq(U.truncateEnvArray(DICT_BLOCCO), { type: "step", points: [[[[0, 0], [100, 1]], 0.5, 2], [1, 1]] }),
+    JSON.stringify(U.truncateEnvArray(DICT_BLOCCO)));
+  assert("slice di un {type: step}: il punto d'apertura tiene il valore, e non si tagga",
+    eq(U.sliceEnvArray({ type: "step", points: [[0, 0.2], [1, 1]] }, 0.5),
+       { type: "step", points: [[0, 0.2], [1, 1]] }),
+    JSON.stringify(U.sliceEnvArray({ type: "step", points: [[0, 0.2], [1, 1]] }, 0.5)));
+  assert("slice di un BP group step: il punto d'apertura tiene il valore",
+    eq(U.sliceEnvArray([[[[0, 1], [0.6, 3], [1, 0]], "step"]], 0.5),
+       [[[[0, 1], [0.2, 3], [1, 0]], "step"]]),
+    JSON.stringify(U.sliceEnvArray([[[[0, 1], [0.6, 3], [1, 0]], "step"]], 0.5)));
+  assert("un {type: cubic} resta lineare al bordo, come la cubica per tag (boundaryY)",
+    eq(U.truncateEnvArray({ type: "cubic", points: [[0, 0], [0.5, 1], [1.5, 3]] }),
+       { type: "cubic", points: [[0, 0], [0.5, 1], [1, 2]] }));
+  /* read_direction: il motore impone lo step, quindi il walk dello stream lo
+     passa come ereditato. Con l'interpolazione il bordo cadeva a -0.667 e lo
+     snap lo mandava a -1, cioe' la direzione girata dove il motore tiene +1. */
+  const rdT = U.truncateStreamEnvelopes({ grain: { readDirectionEnv: [[0, 1], [1.1, -1]] } });
+  assert("truncate dello stream: read_direction tiene il verso al bordo",
+    eq(rdT.grain.readDirectionEnv, [[0, 1], [1, 1]]), JSON.stringify(rdT.grain.readDirectionEnv));
+  const rdS = U.sliceStreamEnvelopes({ grain: { readDirectionEnv: [[0, 1], [0.6, -1]] } }, 0.5);
+  assert("slice dello stream: read_direction riapre col verso tenuto",
+    eq(rdS.stream.grain.readDirectionEnv, [[0, 1], [0.2, -1]]),
+    JSON.stringify(rdS.stream.grain.readDirectionEnv));
+  // Gli altri campi dello stesso stream non ereditano lo step.
+  const altri = U.truncateStreamEnvelopes({ panEnv: [[0, 0], [1.5, 30]] });
+  assert("…e gli altri campi restano lineari", eq(altri.panEnv, [[0, 0], [1, 20]]),
+    JSON.stringify(altri.panEnv));
+}
+
 console.log("\n── sliceEnvArray ──");
 assert("l'origine si sposta sul taglio, il punto al taglio e' interpolato",
   eq(U.sliceEnvArray([[0, 0], [1, 1]], 0.5), [[0, 0.5], [1, 1]]),
@@ -2679,8 +2742,11 @@ console.log("\n── sliceStreamEnvelopes ──");
   const out = U.sliceStreamEnvelopes(s, 0.5);
   assert("taglia ogni campo envelope dello stream",
     eq(out.stream.volumeEnv, [[0, 0.5], [1, 1]]));
-  assert("il dominio e' della chiave, non dello stream (direction snappato)",
-    eq(out.stream.grain.readDirectionEnv, [[0, 1], [1, 1]]));
+  // Diceva [0, 1]: lo 0 interpolato al taglio, mandato a +1 dallo snap. Con lo
+  // step che il motore impone il verso al taglio e' quello tenuto da t=0, -1.
+  assert("il dominio e' della chiave, non dello stream (direction: step tenuto)",
+    eq(out.stream.grain.readDirectionEnv, [[0, -1], [1, 1]]),
+    JSON.stringify(out.stream.grain.readDirectionEnv));
   assert("il campo col blocco compatto resta intatto ed e' contato in skipped",
     out.skipped === 1 && eq(out.stream.pointer.speedRatioEnv, s.pointer.speedRatioEnv));
   assert("lo stream di partenza non viene mutato",

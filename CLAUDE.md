@@ -1796,6 +1796,26 @@ instead of interpolated into a jump the envelope never had. `cubic` stays linear
 there: real PCHIP needs the points beyond the segment and would misdraw the
 surviving half anyway; the error is one point wide.
 
+**"The tag of the previous point" is the tag it has *or inherits*.** Reading the
+written tag alone made every bare point linear, and a bare point is not linear
+everywhere: in a `{type, points}` dict it follows the `type` — `{type: step}` is
+what the editor itself writes once the global interp is step —, inside a BP
+group it follows the group's interp (except the group's last point, whose
+outgoing segment is back on the global one), after a compact block it follows
+the last pattern point's tag or the global one, and on `read_direction` the
+engine imposes `step` whatever is written (`read_direction.py` wraps every form
+in `{type: step, points}`). So `truncateEnvArray` / `sliceEnvArray` carry an
+`inherited` interp down the walk (`_effInterp` resolves tag-or-inherited) and
+`truncateStreamEnvelopes` / `sliceStreamEnvelopes` pass `step` for the
+direction domain. On a step the closing point used to land interpolated —
+`{type: step, points: [[0,0],[0.5,1],[1.5,3]]}` truncated at 1 closed on `2`
+where the engine holds `1`, and a `read_direction` cut mid-segment snapped to
+the *other* sign. The slice's opening point keeps the *written* tag only: an
+inherited one written on it would fill a dict with exceptions equal to its own
+`type`. `tests/parity/test-envelope-cut-parity.js` asks the engine: the cut
+envelope, evaluated on its grid, against the original at the same absolute
+instants, with a guard that the old linear value was not the engine's.
+
 `sliceStreamEnvelopes` / `sliceEnvArray` in `envelope-utils.js` (node-tested)
 are the tail's half of the freeze math: `x' = (x - cut) / (1 - cut)`, with an
 interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
