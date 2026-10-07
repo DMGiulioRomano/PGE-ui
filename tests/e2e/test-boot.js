@@ -24,6 +24,12 @@
  *                           una cornice vuota
  *   4. undo/redo          — un gesto, un passo indietro, un passo avanti, e
  *                           lo stato torna dov'era
+ *   5. due editor, un file (#185) — l'altro editor riscrive il progetto, il
+ *                           Salva chiede invece di scrivere (una domanda sola
+ *                           per due Salva), e il `sovrascrivi` dato dopo
+ *                           un'altra modifica scrive il documento di ADESSO:
+ *                           e' un difetto delle chiusure di React, cioe' dove
+ *                           le guardie sorgente non arrivano
  *
  * Gli assert parlano di struttura (quanti breakpoint, quale stream, che
  * numero legge la riga `onset`), non di geometria: un assert sul pixel
@@ -395,6 +401,104 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       seen.pageerrors.length === 0, seen.pageerrors.join("\n      "));
     assert("nessun errore in console durante le interazioni",
       seen.errors.length === 0, seen.errors.join("\n      "));
+
+    /* ============================================================
+     * 5 — due editor, un file (#185)
+     * ============================================================ */
+    console.log("\n── due editor, un file: la domanda e le sue risposte ──");
+
+    /* Le guardie sorgente di tests/node/test-file-guard.js dicono che la
+     * catena c'e'; il difetto che questa sezione esiste per vedere sta nelle
+     * CHIUSURE di React, cioe' dove una guardia sorgente non arriva. La domanda
+     * e' un toast persistente e la tastiera resta libera: chi risponde lo fa
+     * su un editor che nel frattempo e' andato avanti, e la risposta deve
+     * valere per quello — non per l'editor di quando la domanda e' stata
+     * posta. Il `sovrascrivi` scriveva il documento di quando si era premuto
+     * Salva, e poi spegneva `dirty`: «salvato» su lavoro mai scritto.
+     *
+     * «L'altro editor» e' una PUT senza firma: e' cio' che il bridge vede di
+     * una scrittura del laboratorio — una che non ha letto questo file — e non
+     * serve conoscere la cartella temporanea di bridge.py. */
+    const bridge = `http://127.0.0.1:${session.port}`;
+    const FILE = `${bridge}/file?kind=projects&name=PGE_smoke.yml`;
+    const yaml = require("js-yaml");
+    const onDisk = async () => yaml.load(await (await fetch(FILE)).text());
+    const questions = () => page.evaluate(() =>
+      [...document.querySelectorAll(".pge-toast")]
+        .filter(t => /cambiato su disco/.test(
+          (t.querySelector(".tt-title") || {}).textContent || "")).length);
+    const errorsBefore = seen.errors.length;
+
+    const theirs = await (await fetch(FILE)).text();
+    const lab = await fetch(FILE, { method: "PUT",
+      body: theirs.replace(/^title: smoke$/m, "title: dal-laboratorio") });
+    assert("il laboratorio riscrive il file sotto all'editor",
+      lab.ok && (await onDisk()).title === "dal-laboratorio");
+
+    /* L'editor ha una modifica sua (lo spostamento rifatto dal redo qui
+     * sopra), quindi la guardia deve chiedere, non rileggere. Due Salva:
+     * la domanda e' una sola, la seconda sostituisce la prima. */
+    const onsetSaved = await onsetOf();
+    await page.keyboard.press("Control+s");
+    await wait(600);
+    await page.keyboard.press("Control+s");
+    await wait(600);
+    assert("con lavoro proprio il Salva chiede invece di scrivere",
+      (await onDisk()).title === "dal-laboratorio",
+      "il file del laboratorio e' stato sovrascritto senza domanda");
+    assert("due Salva, una domanda sola",
+      (await questions()) === 1, `domande aperte: ${await questions()}`);
+
+    /* La domanda resta in piedi e la tastiera no: un'altra modifica, POI la
+     * risposta. */
+    await page.click(".lane .clip");
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(400);
+    const onsetNow = await onsetOf();
+    assert("con la domanda aperta si continua a lavorare",
+      onsetNow !== onsetSaved, `${onsetSaved} → ${onsetNow}`);
+
+    const clicked = await page.evaluate(() => {
+      const q = [...document.querySelectorAll(".pge-toast")]
+        .find(t => /cambiato su disco/.test(t.textContent));
+      const b = q && [...q.querySelectorAll("button.tt-act")]
+        .find(x => x.textContent.trim() === "sovrascrivi");
+      if (b) b.click();
+      return !!b;
+    });
+    assert("la domanda offre `sovrascrivi`", clicked);
+    await wait(800);
+
+    const after = await onDisk();
+    const stream1 = (after.streams || []).find(s => s.stream_id === "stream1");
+    const left = (await page.evaluate(() => {
+      const c = document.querySelector(".lane .clip");
+      return c ? c.style.left : null;
+    }));
+    /* La fixture ha stream1 a 0; il redo qui sopra l'ha lasciato a 1, che e'
+     * cio' che c'era al Salva; la modifica a domanda aperta l'ha portato a 2.
+     * Il `sovrascrivi` della chiusura vecchia scriveva 1. */
+    assert("`sovrascrivi` scrive il documento di adesso, non quello del primo Salva",
+      left === onsetNow && stream1 && stream1.onset === 2,
+      `onset su disco: ${stream1 && stream1.onset}, atteso 2 (1 era quello ` +
+      `del primo Salva; la clip e' a ${left}, era a ${onsetSaved})`);
+    assert("...e si porta via il titolo dell'altro editor, come ha chiesto",
+      after.title === "smoke", `titolo su disco: ${after.title}`);
+    assert("...e la domanda non c'e' piu'", (await questions()) === 0);
+    const unsaved = await page.evaluate(() =>
+      !!document.querySelector(".pge-topbar .unsaved"));
+    assert("...e la topbar dice salvato perche' il file e' lo stato a schermo",
+      !unsaved);
+
+    /* Un 409 e' una risposta che il browser registra in console come
+     * «Failed to load resource»: e' cio' che questa sezione ha provocato, e
+     * nient'altro deve esserci. */
+    const fresh = seen.errors.slice(errorsBefore);
+    assert("nessun errore oltre ai 409 della guardia",
+      fresh.every(e => /409/.test(e) && /\/file\?kind=projects/.test(e)),
+      fresh.join("\n      "));
+    assert("nessuna eccezione nella sezione",
+      seen.pageerrors.length === 0, seen.pageerrors.join("\n      "));
 
     if (seen.mine.length) {
       console.log(`\n  (${seen.mine.length} errori di rete causati dal test: ` +

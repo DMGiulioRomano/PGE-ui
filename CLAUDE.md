@@ -405,7 +405,13 @@ and explode on its first render. That half is `tests/e2e/`.
 previously checked by hand: the page boots with **zero unhandled exceptions and
 zero console errors**, a project loads and reaches the timeline, the Inspector
 and the EnvelopeEditor open on a stream and the envelope *draws its
-breakpoints*, and one undo/redo round trip lands back where it started. The
+breakpoints*, and one undo/redo round trip lands back where it started. A fifth
+was added with #185, because its defect lived where no source guard reaches —
+in React's closures: "the other editor" (a `PUT /file` without a signature,
+i.e. what the bridge sees of a write that didn't read this file) rewrites the
+project, two Saves raise **one** question, and a `sovrascrivi` given after a
+further edit writes the document of *now*, not the one of the first Save; the
+409s that section provokes are the only console errors it tolerates. The
 assertions are structural (how many breakpoints, which stream, what the `onset`
 row reads), never pixels: a pixel assert ages badly, a boot assert doesn't.
 
