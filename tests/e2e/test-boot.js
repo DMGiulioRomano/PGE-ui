@@ -24,6 +24,11 @@
  *                           una cornice vuota
  *   4. undo/redo          — un gesto, un passo indietro, un passo avanti, e
  *                           lo stato torna dov'era
+ *   5. due editor, un file (#185) — il laboratorio riscrive il progetto sul
+ *                           disco mentre l'editor e' aperto: senza modifiche
+ *                           proprie l'editor rilegge, con modifiche chiede, e
+ *                           nessuna delle due strade si porta via il file
+ *                           dell'altro senza una risposta
  *
  * Gli assert parlano di struttura (quanti breakpoint, quale stream, che
  * numero legge la riga `onset`), non di geometria: un assert sul pixel
@@ -387,6 +392,194 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
     const redone = await onsetOf();
     assert("redo la rimanda avanti", redone === moved,
       `atteso ${moved}, letto ${redone}`);
+
+    /* ============================================================
+     * 5 — due editor, un file (#185)
+     * ============================================================ */
+    console.log("\n── due editor, un file: il laboratorio riscrive il progetto ──");
+
+    /* Il "laboratorio" e' questo test che scrive sul disco del workspace,
+     * col suo dumper e un commento suo: byte diversi da quelli di PGE-ui
+     * anche a documento identico, che e' esattamente il caso vero. */
+    const yaml = require("js-yaml");
+    const cfg = path.join(session.paths.workspace, "configs", "PGE_smoke.yml");
+    const labWrites = (mutate) => {
+      const doc = yaml.load(fs.readFileSync(cfg, "utf8"));
+      mutate(doc);
+      fs.writeFileSync(cfg, "# scritto dal laboratorio\n" + yaml.dump(doc, { flowLevel: 3 }));
+      return fs.readFileSync(cfg, "utf8");
+    };
+    const titleShown = () => page.evaluate(() =>
+      ((document.querySelector(".pge-topbar .proj .meta") || {}).textContent || ""));
+    const questions = () => page.evaluate(() =>
+      [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+        title: (t.querySelector(".tt-title") || {}).textContent || "",
+        acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+        x: !!t.querySelector(".tt-x"),
+      })));
+    const toastTitles = () => page.evaluate(() =>
+      [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+    const canUndo = () => page.evaluate(() => window.PGEHistory && window.PGEHistory.canUndo);
+    const stream2Onset = () => page.evaluate(() => {
+      const c = [...document.querySelectorAll(".lane .clip")]
+        .find(e => /^stream2\b/.test((e.querySelector(".lbl") || {}).textContent || ""));
+      return c ? c.style.left : null;
+    });
+    // Le risposte 409 del bridge: il browser le scrive in console come risorsa
+    // fallita. Sono provocate da questo test — il laboratorio che riscrive —
+    // e si contano, una per rifiuto atteso, invece di sparire in un filtro.
+    let expected409 = 0;
+    const save = async () => { await page.keyboard.press("Control+s"); await wait(700); };
+    // Le risposte di POST /render, in ordine: e' cio' che dice se il bridge ha
+    // rifiutato (409) o ha fatto partire lo stream del render (200). Il log del
+    // terminale no: chiuso, non disegna righe, e un "nessuna riga $" li'
+    // sarebbe verde per cecita'.
+    const renders = [];
+    page.on("response", (r) => {
+      if (new URL(r.url()).pathname === "/render") renders.push(r.status());
+    });
+
+    // (a) allineati: un salvataggio, e il disco e' il documento dell'editor.
+    await page.click(".lane .clip");
+    await save();
+    assert("il salvataggio di partenza va", (await toastTitles()).includes("Saved"),
+      JSON.stringify(await toastTitles()));
+
+    // (b) il laboratorio cambia il titolo e accorcia stream3; l'editor non ha
+    // modifiche proprie.
+    /* stream2 e non stream3: accorciare l'ultima clip sposterebbe la durata
+       del brano, che l'editor ricalcola dagli stream (`computeDuration`) — il
+       documento riletto non sarebbe piu' quello del laboratorio, e la riprova
+       lo riscriverebbe. Legittimo (e' cio' che l'editor scriverebbe), ma qui
+       si verifica l'altro caso. */
+    const widthOf2 = () => page.evaluate(() => {
+      const c = [...document.querySelectorAll(".lane .clip")]
+        .find(e => /^stream2\b/.test((e.querySelector(".lbl") || {}).textContent || ""));
+      return c ? c.getBoundingClientRect().width : null;
+    });
+    const w2 = await widthOf2();
+    const labA = labWrites(d => { d.title = "dal laboratorio"; d.streams[1].duration = 2; });
+    expected409++;
+    await save();
+    assert("senza modifiche proprie non si chiede niente", (await questions()).length === 0,
+      JSON.stringify(await questions()));
+    assert("...si rilegge: il titolo del laboratorio arriva nell'editor",
+      /dal laboratorio/.test(await titleShown()), await titleShown());
+    assert("...e la timeline lo disegna: stream2 e' lunga la meta'",
+      Math.abs((await widthOf2()) - w2 / 2) < 2, `${w2} → ${await widthOf2()}`);
+    assert("...e lo dice", (await toastTitles()).some(t => /riletto/.test(t)),
+      JSON.stringify(await toastTitles()));
+    /* Il documento riletto e' gia' su disco: la riprova non lo riscrive, e il
+       file resta del laboratorio byte per byte, commento compreso. Senza, al
+       giro dopo la guardia del laboratorio direbbe "cambiato" su niente. */
+    assert("...il file resta quello del laboratorio, byte per byte",
+      fs.readFileSync(cfg, "utf8") === labA);
+    assert("...e la rilettura azzera la storia", (await canUndo()) === false);
+
+    // (c) modifiche proprie, e il laboratorio riscrive ancora.
+    await page.click(".lane .clip");
+    const onsetBefore = await stream2Onset();
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(300);
+    assert("una modifica propria (⇧→)", (await canUndo()) === true);
+    const labB = labWrites(d => { d.title = "laboratorio, due"; });
+    expected409++;
+    await save();
+    const q1 = await questions();
+    assert("con modifiche proprie si chiede", q1.length === 1, JSON.stringify(q1));
+    assert("...con tre risposte: ricarica, sovrascrivi, ×",
+      q1.length === 1 && q1[0].acts.join(",") === "ricarica,sovrascrivi" && q1[0].x,
+      JSON.stringify(q1));
+    assert("...e intanto il file resta del laboratorio", fs.readFileSync(cfg, "utf8") === labB);
+
+    // «ricarica»: un "apri" dello stesso file.
+    await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+    await wait(800);
+    assert("ricarica: la domanda si chiude", (await questions()).length === 0);
+    assert("...il documento e' quello del laboratorio", /laboratorio, due/.test(await titleShown()),
+      await titleShown());
+    /* Il criterio dell'issue: un undo riporterebbe una versione che su disco
+       non c'e' piu', e la scrittura dopo la riscriverebbe. */
+    assert("...e l'undo non riporta la versione vecchia", (await canUndo()) === false);
+    assert("...la modifica propria e' andata (era la scelta)",
+      (await stream2Onset()) === onsetBefore, `${onsetBefore} → ${await stream2Onset()}`);
+    assert("...e il file non e' stato riscritto", fs.readFileSync(cfg, "utf8") === labB);
+
+    // «sovrascrivi»: si scrive la versione dell'editor.
+    await page.click(".lane .clip");
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(300);
+    const onsetMine = await stream2Onset();
+    labWrites(d => { d.title = "laboratorio, tre"; });
+    expected409++;
+    await save();
+    assert("ancora modifiche proprie: si chiede", (await questions()).length === 1);
+    await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+    await wait(800);
+    const afterOverwrite = yaml.load(fs.readFileSync(cfg, "utf8"));
+    assert("sovrascrivi: su disco c'e' la versione dell'editor",
+      afterOverwrite.title === "laboratorio, due" &&
+      !fs.readFileSync(cfg, "utf8").startsWith("# scritto dal laboratorio"),
+      String(afterOverwrite.title));
+    assert("...con la modifica propria", (await stream2Onset()) === onsetMine);
+    assert("...e il salvataggio lo dice", (await toastTitles()).includes("Saved"));
+
+    // ×: non si scrive niente.
+    await page.click(".lane .clip");
+    await page.keyboard.press("Shift+ArrowRight");
+    await wait(300);
+    const labD = labWrites(d => { d.title = "laboratorio, quattro"; });
+    expected409++;
+    await save();
+    await page.click(".pge-toast.ask .tt-x");
+    await wait(300);
+    assert("×: la domanda si chiude", (await questions()).length === 0);
+    assert("...e il file resta del laboratorio", fs.readFileSync(cfg, "utf8") === labD);
+
+    /* Il render passa dalla stessa guardia, prima di scrivere il config: con
+       modifiche proprie chiede, e il motore non parte finche' non si risponde.
+       (Il motore qui e' finto: partisse, la riga `$ …` lo direbbe nel log.) */
+    expected409++;
+    await page.keyboard.press("r");
+    await wait(800);
+    const q2 = await questions();
+    assert("il render su un file cambiato, con modifiche proprie: si chiede",
+      q2.length === 1 && /cambiato su disco/.test(q2[0].title), JSON.stringify(q2));
+    assert("...e il bridge l'ha rifiutato prima di partire", renders.join(",") === "409",
+      `risposte di /render: ${renders.join(",")}`);
+    assert("...ne' il config viene riscritto", fs.readFileSync(cfg, "utf8") === labD);
+    assert("...ne' si annuncia un render fallito", !(await toastTitles()).includes("Render failed"),
+      JSON.stringify(await toastTitles()));
+
+    /* «ricarica» riprende il render, sul documento riletto: e' quello che
+       l'altro editor ha appena scritto, cioe' quello che si vuole sentire. Il
+       config e' gia' su disco, quindi il render non lo riscrive. */
+    await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+    await wait(1500);
+    assert("ricarica, nel render: il render riparte e il bridge lo accetta",
+      renders.join(",") === "409,200", `risposte di /render: ${renders.join(",")}`);
+    // Il motore qui e' finto (un `python` non eseguibile): che il render
+    // "fallisca" e' la prova che e' partito davvero, fino allo spawn.
+    assert("...fino al motore", (await toastTitles()).includes("Render failed"),
+      JSON.stringify(await toastTitles()));
+    assert("...sul documento del laboratorio", /laboratorio, quattro/.test(await titleShown()));
+    assert("...senza riscrivere il config", fs.readFileSync(cfg, "utf8") === labD);
+
+    /* Senza modifiche proprie il render non chiede: rilegge e rende. */
+    const labE = labWrites(d => { d.title = "laboratorio, cinque"; });
+    expected409++;
+    await page.keyboard.press("r");
+    await wait(1500);
+    assert("render senza modifiche proprie: nessuna domanda", (await questions()).length === 0);
+    assert("...rilegge", /laboratorio, cinque/.test(await titleShown()), await titleShown());
+    assert("...e rende: un rifiuto, una rilettura, una riprova accettata",
+      renders.slice(2).join(",") === "409,200", `risposte di /render: ${renders.join(",")}`);
+    assert("...lasciando il config al laboratorio", fs.readFileSync(cfg, "utf8") === labE);
+
+    const refused = seen.errors.filter(e => / 409 /.test(e) && /\/(file|render)\b/.test(e));
+    assert(`i rifiuti in console sono quelli provocati dal test (${expected409})`,
+      refused.length === expected409, refused.join("\n      "));
+    seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused.includes(e)));
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni
      * (un handler che esplode al primo click) e' esattamente quello che una

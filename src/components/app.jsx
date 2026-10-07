@@ -136,6 +136,38 @@ function App() {
   const freezeOriginRef = useRefApp(null);   // {id, stream} captured at gesture start when freeze ON
   const pendingTruncateRef = useRefApp(null); // {id} set during gesture if shrink would truncate
 
+  /* ============ Due editor, un file (#185) ============
+   * Lo stesso configs/<brano>.yml puo' stare aperto qui e nel laboratorio di
+   * mare-nostrum. Il bridge rifiuta di scrivere un file che su disco non e' piu'
+   * quello letto (`file_signature.py`), e la decisione sul rifiuto —
+   * rileggere o chiedere, file per file — e' `PGEFileGuard` (file-guard.js).
+   * Qui c'e' la colla: cosa vuol dire "modifiche proprie" per questo editor, la
+   * rilettura, la domanda.
+   *
+   * `syncedDocRef[name]` e' il documento come questo editor lo scriverebbe
+   * nell'ultimo istante in cui era allineato col file: una lettura, o una
+   * scrittura andata a buon fine (salvataggio o render). Modifiche proprie =
+   * quello che scriverebbe adesso e' un altro documento. NON e' `dirty`:
+   * `dirty` resta acceso dopo un render, che pero' il file l'ha riscritto, e
+   * dopo un undo che torna al punto di prima — con `dirty` ogni render dopo un
+   * salvataggio del laboratorio chiederebbe, invece di rileggere.
+   *
+   * `dataRef` e' la `data` di ADESSO, per chi la legge dopo un await: la
+   * domanda "ci sono modifiche proprie?" arriva dopo il giro di rete del
+   * rifiuto, e nel frattempo l'utente puo' aver toccato qualcosa. */
+  const FG = window.PGEFileGuard;
+  const dataRef = useRefApp(data);
+  dataRef.current = data;
+  const syncedDocRef = useRefApp({});
+  function markSynced(name, yaml) {
+    if (typeof yaml === "string") syncedDocRef.current[name] = yaml;
+    else delete syncedDocRef.current[name];
+  }
+  function fileHasOwnChanges(name) {
+    if (!window.PGEYaml) return true;
+    return FG.ownChanges(window.PGEYaml.serialize(dataRef.current), syncedDocRef.current[name]);
+  }
+
   function setData(updater) {
     _setDataRaw(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -607,6 +639,7 @@ function App() {
     if (!toast.persistent) {
       setTimeout(() => setToasts(ts => ts.filter(x => x.id !== id)), toast.duration || 4000);
     }
+    return id;
   }
   function dismissToast(id) { setToasts(ts => ts.filter(x => x.id !== id)); }
   function dismissErrToasts() { setToasts(ts => ts.filter(x => x.kind !== "err")); }
@@ -1620,14 +1653,139 @@ function App() {
   }
   function selected() { return data.streams.find(s => s.id === selectedId); }
 
+  /* ============ Il file cambiato su disco: la domanda (#185) ============
+   * Tre risposte, non due: «ricarica», «sovrascrivi», e non scrivere niente —
+   * la × del toast, che non deve costare un click in piu' ne' stare sotto la
+   * stessa superficie di una risposta che perde lavoro (per questo il toast
+   * usa `actions` al plurale, che lo rende non cliccabile). Una domanda per
+   * file, e la scrittura riprende quando ogni file ha avuto la sua risposta:
+   * con #184 una scrittura toccera' anche gli stream importati.
+   *
+   * La domanda non ferma la tastiera, quindi le risposte passano da
+   * `latestRef`: le funzioni del render di ADESSO, non di quando la domanda e'
+   * stata posta. «sovrascrivi» scrive cio' che l'utente ha davanti, comprese le
+   * modifiche fatte mentre il toast era aperto. Ogni scrittura nuova la
+   * sostituisce (la via d'uscita piu' ovvia e' salvare le proprie da un'altra
+   * parte), e la chiudono anche l'apertura di un progetto e il cambio di
+   * workspace: riguardava quel file. */
+  const fileQuestionRef = useRefApp(null);
+  const latestRef = useRefApp({});
+  function closeFileQuestion() {
+    const q = fileQuestionRef.current;
+    if (!q) return;
+    fileQuestionRef.current = null;
+    for (const id of Object.values(q.ids)) dismissToast(id);
+  }
+  function askFileQuestion(op, files, state) {
+    closeFileQuestion();
+    const q = { op, state, pending: new Set(files), ids: {} };
+    const what = op === "render" ? "il render non e' partito" : "non salvato";
+    for (const name of files) {
+      q.ids[name] = pushToast({
+        kind: "warn", persistent: true,
+        title: `${name} e' cambiato su disco`,
+        message: `${what}: un altro editor l'ha riscritto e qui ci sono modifiche non salvate. ` +
+                 "«ricarica» le perde e riparte dal file, «sovrascrivi» scrive le tue, × non scrive niente",
+        actions: [
+          { label: "ricarica",    onClick: () => latestRef.current.answerFileQuestion(q, name, "reload") },
+          { label: "sovrascrivi", onClick: () => latestRef.current.answerFileQuestion(q, name, "overwrite") },
+        ],
+        onClose: () => latestRef.current.dropFileQuestion(q),
+      });
+    }
+    fileQuestionRef.current = q;
+    logToTerminal(`[file] ${files.join(", ")}: cambiato su disco, con modifiche proprie — ${what}, in attesa di una risposta`, "warn");
+  }
+  function dropFileQuestion(q) {
+    if (fileQuestionRef.current !== q) return;
+    closeFileQuestion();
+    logToTerminal(`[file] ${[...q.pending].join(", ")}: niente di scritto`, "warn");
+  }
+  async function answerFileQuestion(q, name, choice) {
+    if (fileQuestionRef.current !== q || !q.pending.has(name)) return;   // superata
+    q.pending.delete(name);
+    dismissToast(q.ids[name]);
+    delete q.ids[name];
+    if (choice === "reload") {
+      // «ricarica» e' un "apri" dello stesso file: rilettura, storia azzerata.
+      const doc = await rereadProject(name);
+      if (!doc) { if (fileQuestionRef.current === q) closeFileQuestion(); return; }
+      q.state = FG.afterReread(q.state, name, doc);
+    } else {
+      q.state = FG.afterOverwrite(q.state, name);
+    }
+    if (q.pending.size || fileQuestionRef.current !== q) return;
+    fileQuestionRef.current = null;
+    if (q.op === "render") await latestRef.current.renderAgain(q.state);
+    else await latestRef.current.saveProject(q.state);
+  }
+  /* La rilettura: un "apri" dello stesso file, cioe' `onProjectSelect` — non una
+     seconda copia del caricamento, che e' il modo in cui due strade divergono.
+     Azzera la storia: un undo riporterebbe indietro una versione che su disco
+     non c'e' piu', e la scrittura dopo la riscriverebbe sopra quella
+     dell'altro editor. Torna il documento letto, o `null` se la lettura non ne
+     ha prodotto uno (allora la scrittura si ferma: riprovare scriverebbe il
+     progetto di ripiego sopra il file). */
+  async function rereadProject(name) {
+    const doc = await onProjectSelect(name);
+    if (doc) {
+      logToTerminal(`[file] ${name}: era cambiato su disco — riletto, quello che hai davanti e' la versione su disco`, "warn");
+      pushToast({ kind: "info", title: `${name} riletto`,
+                  message: "era cambiato su disco: quello che hai davanti e' la versione su disco",
+                  duration: 5000 });
+    }
+    return doc;
+  }
+  // Gli altri esiti del giro: il file che cambia mentre lo si rilegge, e una
+  // rilettura che non ha dato un documento. Nessuno dei due scrive niente.
+  function reportFileOutcome(op, out) {
+    const files = (out.files || []).join(", ");
+    const what = op === "render" ? "il render non e' partito" : "non salvato";
+    if (out.outcome === "asked") { askFileQuestion(op, out.files, out.state); return; }
+    if (out.outcome === "stopped") {
+      logToTerminal(`[file] ${files}: cambia mentre lo rileggo — ${what}`, "warn");
+      pushToast({ kind: "warn", title: `${files} sta cambiando`,
+                  message: `cambia mentre lo rileggo: ${what}. Riprova fra un momento`,
+                  duration: 8000 });
+      return;
+    }
+    logToTerminal(`[file] ${files}: rilettura non riuscita — ${what}`, "err");
+    pushToast({ kind: "err", title: `${files}: rilettura non riuscita`,
+                message: `${what}: il file su disco non si legge come un progetto`,
+                persistent: true });
+  }
+
+  // Le funzioni di questo render, per le risposte che arrivano dopo (vedi sopra).
+  latestRef.current = { answerFileQuestion, dropFileQuestion, renderAgain, saveProject };
+
   /* ============ Save / SaveAs ============ */
+  // L'ingresso della UI (Cmd+S, la topbar) prende zero argomenti di proposito:
+  // va a `onClick`, che gli consegnerebbe un MouseEvent come stato del giro.
   async function onSave() {
+    return saveProject(FG.initialState());
+  }
+  async function saveProject(state) {
+    closeFileQuestion();
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
-    const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
-      `# (yaml bridge not loaded — save skipped)\n# project: ${data.project}\n`;
+    const name = basename + ".yml";
+    let yaml = null;
+    let res = null;
     try {
-      await backend.fs.writeFile("projects", basename + ".yml", yaml);
+      const out = await FG.attempt({
+        write: async (st) => {
+          const doc = st.doc || data;
+          yaml = window.PGEYaml ? window.PGEYaml.serialize(doc) :
+            `# (yaml bridge not loaded — save skipped)\n# project: ${doc.project}\n`;
+          res = await backend.fs.writeFile("projects", name, yaml,
+                                            { overwrite: FG.overwrites(st, name) });
+          return res;
+        },
+        ownChanges: fileHasOwnChanges,
+        reread: rereadProject,
+      }, state);
+      if (out.outcome !== "done") { reportFileOutcome("save", out); return; }
+      markSynced(name, yaml);
       setDirty(false);
       // Il file appena scritto porta `deviation_probability`: la migrazione da
       // `dephase` e' compiuta, e l'avviso in Inspector deve tacere. _setDataRaw
@@ -1636,7 +1794,10 @@ function App() {
       // di undo, come l'arrivo tardivo dei media. Solo qui e non in onSaveAs:
       // quello scrive un altro file, l'originale porta ancora la chiave morta.
       _setDataRaw(d => window.PGEYaml ? window.PGEYaml.clearDeviationProbabilityLegacy(d) : d);
-      pushToast({ kind: "ok", title: "Saved", message: `configs/${basename}.yml · ${(yaml.length / 1024).toFixed(1)}kb`, duration: 2200 });
+      // "gia' su disco": il file conteneva gia' questo documento (magari scritto
+      // a modo suo dall'altro editor) e il bridge non l'ha riscritto (#185).
+      const size = res.written ? `${(yaml.length / 1024).toFixed(1)}kb` : "gia' su disco";
+      pushToast({ kind: "ok", title: "Saved", message: `configs/${name} · ${size}`, duration: 2200 });
       refreshProjects();
     } catch (e) {
       pushToast({ kind: "err", title: "Save failed", message: e.message, persistent: true });
@@ -1650,7 +1811,12 @@ function App() {
     const yaml = window.PGEYaml ? window.PGEYaml.serialize(data) :
       `# saved-as ${fullName}\n# from: ${activeProject}\n`;
     try {
-      await backend.fs.writeFile("projects", fullName, yaml);
+      // Un nome appena digitato, non il file aperto: dietro al documento non
+      // c'e' una lettura di QUEL file, quindi non c'e' una firma da rispettare
+      // (#185). Senza, un nome aperto prima nella sessione avrebbe la sua firma
+      // registrata, e il rifiuto arriverebbe a un chiamante che annuncia
+      // "Saved as" comunque. E' la regola del `salva con nome` del laboratorio.
+      await backend.fs.writeFile("projects", fullName, yaml, { overwrite: true });
       pushToast({ kind: "ok", title: "Saved as", message: `configs/${fullName}`, duration: 2500 });
       refreshProjects();
     } catch (e) {
@@ -1667,10 +1833,12 @@ function App() {
                                  : { project: basename, title: "", duration: 10, streams: [], samples: [] };
     const backend = window.PGEBackend.current;
     try {
-      await backend.fs.writeFile("projects", fullName, window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n");
+      // Come Save As: un nome nuovo, nessuna lettura da rispettare.
+      await backend.fs.writeFile("projects", fullName, window.PGEYaml ? window.PGEYaml.serialize(empty) : "# empty\n",
+                                 { overwrite: true });
       pushToast({ kind: "ok", title: "Project created", message: `configs/${fullName}`, duration: 2200 });
       await refreshProjects();
-      onProjectSelect(fullName);
+      openProject(fullName);
     } catch (e) {
       pushToast({ kind: "err", title: "Couldn't create project", message: e.message, persistent: true });
     }
@@ -1729,29 +1897,45 @@ function App() {
      backend.js e' UNA variabile di chiusura, riassegnata a ogni `run()`, quindi
      il secondo giro sovrascriveva quella del primo e Cancel ne uccideva uno
      solo — l'altro restava a scrivere sul disco senza piu' un modo di fermarlo. */
+  /* `onRender` e' l'ingresso della UI e prende zero argomenti di proposito: va
+     a `onClick`, che le consegnerebbe un MouseEvent. `renderAgain` e' quello
+     che porta lo stato del giro della guardia di #185 — le risposte alla
+     domanda del file cambiato rientrano da qui, cioe' dalla stessa guardia di
+     rientro: la domanda non ferma la tastiera, e un `r` premuto nel frattempo
+     non deve diventare un secondo render. */
   async function onRender() {
+    return renderAgain(FG.initialState());
+  }
+  async function renderAgain(state) {
     if (renderStatus.running || renderingRef.current) return;
     renderingRef.current = true;
     try {
-      await runRender();
+      await runRender(state);
     } finally {
       renderingRef.current = false;
     }
   }
 
-  async function runRender() {
+  async function runRender(state) {
     const backend = window.PGEBackend.current;
     const basename = activeProject.replace(/\.yml$/, "");
+    const configName = basename + ".yml";
+    const guardState = state || FG.initialState();
+    // Una risposta alla domanda del file cambiato riprende un render chiesto
+    // prima: il log di quel tentativo (il rifiuto, la rilettura) resta.
+    const resumed = Object.keys(guardState.rereads).length > 0 || guardState.overwrite.length > 0;
+    const startDoc = guardState.doc || data;
+    closeFileQuestion();
 
     /* Lo stato si alza PRIMA di qualunque attesa. `jget` passa da
        `fetchWithTimeout` con timeout 10 s, e con l'attesa qui davanti premere
        Render non produceva niente di visibile — log non svuotato, nessun toast,
        bottone non "in corso" — per dieci secondi buoni col bridge lento o giu',
        e poi il render partiva lo stesso. */
-    setLogLines([]);
-    setRenderStatus({ running: true, total: data.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
+    if (!resumed) setLogLines([]);
+    setRenderStatus({ running: true, total: startDoc.streams.length, done: 0, currentStreamId: null, lastOk: null, lastGenerated: 0 });
     if (!terminalOpen) {
-      pushToast({ kind: "info", title: "Rendering started", message: `${data.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
+      pushToast({ kind: "info", title: "Rendering started", message: `${startDoc.streams.length} streams · ${renderOptions.useCache ? "incremental" : "full"}`, duration: 3000 });
     }
 
     // Terza (e ultima utile) occasione per la versione di semantica: qui il
@@ -1785,9 +1969,18 @@ function App() {
     let generated = 0;
     let curStreamId = null;
 
-    const opts = {
+    /* Il documento di QUESTO tentativo, e le impronte che ne derivano. Di norma
+       e' `data`; dopo una rilettura (#185) e' il documento riletto, che lo
+       stato di React non ha ancora reso — la `data` della closure e' quella
+       che il bridge ha appena rifiutato. Le impronte si fissano qui, accanto
+       al documento, per la regola di `semOfThisRun`: lo `stream-done` deve
+       registrare l'impronta di cio' che il motore ha reso, non di cio' che la
+       closure ricorda. */
+    let yamlOfThisRun = null;
+    let fpsOfThisRun = {};
+    const optsFor = (doc, st) => ({
       yamlBasename: basename,
-      yamlContent: window.PGEYaml ? window.PGEYaml.serialize(data) : null,
+      yamlContent: yamlOfThisRun,
       renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
@@ -1814,11 +2007,13 @@ function App() {
         && magnifySpecToSend(renderOptions.magnifyAt)) || undefined,
       reaper: renderOptions.reaper,
       preclean: renderOptions.preclean,
-      streams: data.streams,
+      streams: doc.streams,
       outputFormat: tweaks.outputFormat || "wav",
       semanticsVersion: semOfThisRun,
-    };
-    const result = await backend.render.run(opts, (e) => {
+      // La risposta «sovrascrivi» alla domanda del file cambiato (#185).
+      overwrite: FG.overwrites(st, configName) || undefined,
+    });
+    const onRenderEvent = (e) => {
       if (e.type === "log") {
         setLogLines(ls => [...ls, { text: e.line, cls: classifyLogLine(e.line) }]);
       } else if (e.type === "stream-start") {
@@ -1837,7 +2032,7 @@ function App() {
         }
         setRenderStatus(s => ({ ...s, done: s.done + 1 }));
         // bump fp for this stream (so UI marks it fresh)
-        setLastRenderedFps(fps => ({ ...fps, [e.streamId]: currentFps[e.streamId] }));
+        setLastRenderedFps(fps => ({ ...fps, [e.streamId]: fpsOfThisRun[e.streamId] }));
         // ...e la semantica con cui il motore l'ha appena scritto. Senza questa
         // riga lo stem resterebbe marcato con quella del render precedente e
         // tornerebbe giallo subito dopo essere stato rifatto. La persistenza su
@@ -1891,7 +2086,37 @@ function App() {
         }
         setStemResync(n => n + 1);
       }
-    });
+    };
+
+    /* Il render passa dallo stesso giro del salvataggio (#185): il bridge
+       rifiuta di riscrivere il config se su disco e' cambiato, e `FG.attempt`
+       decide — senza modifiche proprie rilegge e riprova (il render prosegue
+       sulla versione su disco, quella che l'altro editor ha appena scritto),
+       con modifiche proprie chiede. Il render non parte finche' la domanda non
+       ha avuto risposta. */
+    const out = await FG.attempt({
+      write: (st) => {
+        const doc = st.doc || data;
+        yamlOfThisRun = window.PGEYaml ? window.PGEYaml.serialize(doc) : null;
+        fpsOfThisRun = window.PGERenderStatus.fingerprintAll(doc.streams, tweaks.outputFormat || "wav");
+        return backend.render.run(optsFor(doc, st), onRenderEvent);
+      },
+      ownChanges: fileHasOwnChanges,
+      reread: rereadProject,
+    }, guardState);
+    const result = out.result || { ok: false };
+
+    /* Un render rifiutato non e' un render fallito: il motore non e' nemmeno
+       partito, e "Render failed" manderebbe a cercare nel log un errore che non
+       c'e'. Lo stato si spegne, e a dire cosa e' successo e' la guardia. */
+    if (out.outcome !== "done" && out.outcome !== "failed") {
+      setRenderStatus(s => ({ ...s, running: false, currentStreamId: null }));
+      reportFileOutcome("render", out);
+      return;
+    }
+    // Il config su disco e' adesso il documento di questo render (scritto, o
+    // trovato gia' scritto): e' il nuovo allineamento col file.
+    if (result.configWritten !== false && yamlOfThisRun) markSynced(configName, yamlOfThisRun);
 
     setRenderStatus(s => ({
       ...s, running: false, currentStreamId: null,
@@ -2040,9 +2265,14 @@ function App() {
         // Intentional _setDataRaw (bypasses history): loading a project is an
         // atomic action, not an undoable edit — resetHistory() clears the stack
         // right after so undo can't step back into the previous project. #44
+        // E' anche cio' che fa di «ricarica» (#185) una rilettura sicura: un
+        // undo riporterebbe la versione che su disco non c'e' piu'.
         _setDataRaw(parsed);
         resetHistory();
         setDirty(false);
+        // L'allineamento col file: il documento come questo editor lo
+        // scriverebbe, appena letto. Da qui "modifiche proprie" (#185).
+        markSynced(name, window.PGEYaml.serialize(parsed));
         const ms = (performance.now() - t0).toFixed(0);
         logToTerminal(`[load] ${name} · ${parsed.streams.length} streams · ${parsed.duration}s · ${(yamlText.length/1024).toFixed(1)}kb · ${ms}ms`, "ok");
         // Run a round-trip check — if the bridge would lose information on
@@ -2063,7 +2293,10 @@ function App() {
         pushToast({ kind: "info", title: `loaded ${name}`, message: `${parsed.streams.length} streams · ${parsed.duration}s`, duration: 2000 });
         // also invalidate audio buffers — new project has different streams
         if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
-        return;
+        // Il documento letto, per chi deve usarlo SUBITO: la rilettura di #185
+        // riprova la scrittura con questo, perche' lo stato di React non e'
+        // ancora quello nuovo.
+        return parsed;
       }
       logToTerminal(`[load] ${name} · empty file or yaml bridge unavailable — fallback`, "warn");
     } catch (e) {
@@ -2077,6 +2310,19 @@ function App() {
     _setDataRaw(d => ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     resetHistory();
     setDirty(false);
+    // Il ripiego non e' il file: nessun allineamento noto, e una scrittura su
+    // un file cambiato chiede invece di rileggere (#185).
+    markSynced(name, null);
+    return null;
+  }
+
+  /* L'apertura di un progetto dalla UI: chiude la domanda del file cambiato,
+     che riguardava il file di prima. `onProjectSelect` no — e' anche la
+     rilettura di «ricarica», che con piu' file in domanda (#184) non deve
+     chiudere quelle degli altri. */
+  function openProject(name) {
+    closeFileQuestion();
+    return onProjectSelect(name);
   }
 
   /* Cambio di workspace (#147): la cartella con configs/ output/ cache/.
@@ -2094,6 +2340,12 @@ function App() {
     }
     const res = await backend.setWorkspace(path);
     if (!res || res.ok !== true) return res || { ok: false, error: "cambio rifiutato" };
+
+    // Le firme le ha buttate backend.setWorkspace (#185); qui cade la loro
+    // meta' React: l'allineamento coi file della cartella di prima, e la
+    // domanda su uno di quei file.
+    closeFileQuestion();
+    syncedDocRef.current = {};
 
     // backend.setWorkspace ha gia' svuotato l'indice degli stem; qui cade il
     // resto dello stato per-stream, che e' React.
@@ -2199,7 +2451,7 @@ function App() {
                      activeSample={activeSample} onSelectSample={setActiveSample}
                      onPreviewSample={setPreviewSample}
                      activeProject={activeProject}
-                     onSelectProject={onProjectSelect}
+                     onSelectProject={openProject}
                      onNewProject={onNewProject}
                      showWaveform={tweaks.showWaveformBrowser}
                      onChooseMediaFolder={onChooseMediaFolder}

@@ -24,11 +24,22 @@
  *                                   invalido / render in corso). "" torna al --root
  *   fs.listDir(kind)              → Promise<{ path, files: [{name, duration?}] }>
  *   fs.chooseDir(kind)            → Promise<{ path } | null>
- *   fs.readFile(kind, name)       → Promise<string>
- *   fs.writeFile(kind, name, str) → Promise<void>
+ *   fs.readFile(kind, name)       → Promise<string>. Ricorda la firma del file
+ *                                   letto (header X-PGE-Signature, #185)
+ *   fs.writeFile(kind, name, str, {overwrite}?)
+ *                                 → Promise<{ ok:true, written, signature }>, o
+ *                                   { ok:false, changed:true, files:[name], error }
+ *                                   se il file e' cambiato su disco da quando e'
+ *                                   stato letto: un rifiuto e' una risposta, non
+ *                                   un'eccezione. Lancia sugli altri errori
+ *   fs.signature(kind, name)      → la firma ricordata di quel file, o null
  *   fs.fileExists(kind, name)     → Promise<boolean>
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
+ *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml`; con
+ *     `opts.overwrite` la sovrascrittura. Su un config cambiato su disco torna
+ *     { ok:false, changed:true, files:[name], configWritten:false } senza
+ *     evento `done`: il motore non e' partito (#185).
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
@@ -58,6 +69,10 @@
   // Output format → stem extension. One table: the index key, the playback URL
   // and the render bookkeeping must all agree on it.
   const EXT_OF = { wav: ".wav", aiff: ".aif", flac: ".flac" };
+
+  // L'header con cui GET /file porta la firma dei byte letti (#185). Lo stesso
+  // nome di `SIGNATURE_HEADER` in server.py.
+  const SIGNATURE_HEADER = "X-PGE-Signature";
 
   // Fast string hash → 16 hex chars. Not cryptographic but stable enough
   // to match Python's per-stream fingerprint behavior.
@@ -288,24 +303,33 @@
        fra due file tenuto dalla prosa. */
     let running = false;
 
+    /* Le firme dei file letti (#185), per (kind, nome): "questo file l'ho letto
+       e conteneva questi byte". Il backend e' l'unico posto che legge e
+       scrive, quindi l'invariante — la firma di cio' che si e' appena scritto
+       prende il posto di quella letta — sta qui, e non e' un patto fra app.jsx
+       e il bridge.
+
+       In memoria e NON persistito: dopo un reload quella lettura non c'e' piu'
+       stata (l'editor rilegge il progetto al boot e rifirma). Una firma
+       persistita affermerebbe una lettura che nessuno ha fatto, nel verso
+       peggiore: una che per caso combacia e' una scrittura che passa senza che
+       la guardia abbia guardato niente.
+
+       Una firma che non arriva (bridge piu' vecchio di #185, risposta senza il
+       campo) non prende il posto di quella che c'era: la cancella. Senza firma
+       la guardia tace, che e' il comportamento di prima; con una firma vecchia
+       rifiuterebbe scritture che quel bridge non sa nemmeno rifiutare. */
+    const signatures = new Map();
+    const sigKey = (kind, name) => `${kind}/${name}`;
+    function _rememberSignature(kind, name, sig) {
+      if (typeof sig === "string" && sig) signatures.set(sigKey(kind, name), sig);
+      else signatures.delete(sigKey(kind, name));
+    }
+
     async function jget(path) {
       const r = await fetchWithTimeout(baseUrl + path);
       if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
       return await r.json();
-    }
-    async function jput(path, body) {
-      const r = await fetchWithTimeout(baseUrl + path, {
-        method: "PUT",
-        headers: { "Content-Type": "text/plain" },
-        body,
-      });
-      if (!r.ok) throw new Error(`PUT ${path} → HTTP ${r.status}`);
-      return await r.json();
-    }
-    async function getText(path) {
-      const r = await fetchWithTimeout(baseUrl + path);
-      if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
-      return await r.text();
     }
 
     async function ensureConfig() {
@@ -342,10 +366,51 @@
         return cachedConfig[key] || null;
       },
       async readFile(kind, name) {
-        return await getText(`/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`);
+        const p = `/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`;
+        const r = await fetchWithTimeout(baseUrl + p);
+        if (!r.ok) {
+          // Un file che non c'e' non ha una lettura da ricordare. Un errore di
+          // rete invece non dice niente del file: la firma di prima resta.
+          if (r.status === 404) _rememberSignature(kind, name, null);
+          throw new Error(`GET ${p} → HTTP ${r.status}`);
+        }
+        const text = await r.text();
+        // Il testo e la firma vengono dalla stessa risposta, che il bridge ha
+        // prodotto da una lettura sola: e' la firma di QUESTO testo.
+        _rememberSignature(kind, name, r.headers && r.headers.get
+          ? r.headers.get(SIGNATURE_HEADER) : null);
+        return text;
       },
-      async writeFile(kind, name, str) {
-        await jput(`/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, str);
+      /* Scrive passando la firma letta. Il 409 `changed` non lancia: lanciare lo
+         farebbe arrivare come un "Save failed", cioe' la domanda mai posta. Un
+         rifiuto NON aggiorna la firma — quella su disco e' del documento
+         dell'altro editor, e adottarla vorrebbe dire averlo letto senza averlo
+         caricato: la scrittura dopo passerebbe e se lo porterebbe via. Quella
+         versione si adotta rileggendo. */
+      async writeFile(kind, name, str, opts = {}) {
+        let p = `/file?kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`;
+        const sig = signatures.get(sigKey(kind, name));
+        if (sig) p += `&signature=${encodeURIComponent(sig)}`;
+        if (opts.overwrite) p += "&overwrite=1";
+        const r = await fetchWithTimeout(baseUrl + p, {
+          method: "PUT",
+          headers: { "Content-Type": "text/plain" },
+          body: str,
+        });
+        if (r.status === 409) {
+          const body = await r.json().catch(() => null);
+          if (body && body.changed) {
+            return { ok: false, changed: true, files: [body.name || name],
+                     error: body.error || `${name} changed on disk` };
+          }
+        }
+        if (!r.ok) throw new Error(`PUT ${p} → HTTP ${r.status}`);
+        const body = await r.json();
+        _rememberSignature(kind, name, body && body.signature);
+        return { ok: true, written: body.written !== false, signature: body.signature || null };
+      },
+      signature(kind, name) {
+        return signatures.get(sigKey(kind, name)) || null;
       },
       async fileExists(kind, name) {
         try {
@@ -553,13 +618,38 @@
         // ...e il disegno degli stem che il motore PUO' aver riscritto, che e'
         // una misura del file come la durata: vedi `stems-resync` in fondo.
         const resyncIds = [];
+        // Il config che questo render riscrive, e la firma con cui l'editor l'ha
+        // letto (#185). `overwrite` va solo come `true`: e' la risposta
+        // dell'utente al rifiuto, e il bridge legge solo quel valore.
+        const configName = `${opts.yamlBasename}.yml`;
+        const body = { ...opts,
+                       signature: signatures.get(sigKey("projects", configName)) || undefined,
+                       overwrite: opts.overwrite === true ? true : undefined };
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(opts),
+            body: JSON.stringify(body),
             signal: cancelAbort.signal,
           });
+          /* Il config e' cambiato su disco da quando l'editor l'ha letto: il
+             bridge ha rifiutato PRIMA di scrivere, e il motore non e' partito.
+             Non e' un render fallito, quindi niente `done` — che e' l'evento di
+             un render finito, e farebbe registrare l'esito di un giro mai
+             cominciato — e niente throw, che lo farebbe arrivare come
+             "Render failed". La decisione (rileggere o chiedere) e' del
+             chiamante: `PGEFileGuard`. Prima di `configWritten = res.ok`, che
+             qui resta falso: il bridge ha rifiutato prima di scrivere. */
+          if (res.status === 409) {
+            const refusal = await res.json().catch(() => null);
+            if (refusal && refusal.changed) {
+              const name = refusal.name || configName;
+              onEvent && onEvent({ type: "log",
+                line: `[FILE] ${name}: cambiato su disco da quando l'editor l'ha letto — non riscritto` });
+              return { ok: false, changed: true, files: [name],
+                       error: refusal.error || `${name} changed on disk`, configWritten: false };
+            }
+          }
           configWritten = res.ok;
           if (!res.ok || !res.body) {
             const txt = await res.text().catch(() => "");
@@ -580,6 +670,11 @@
               try {
                 const ev = JSON.parse(line);
                 onEvent && onEvent(ev);
+                // La firma di cio' che il bridge ha appena scritto (o trovato
+                // gia' scritto) prende il posto di quella letta: senza, il
+                // salvataggio dopo si accuserebbe da solo di aver cambiato il
+                // file (#185).
+                if (ev.type === "file-signature") _rememberSignature(ev.kind, ev.name, ev.signature);
                 if (ev.type === "done") {
                   lastResult = ev;
                   // Fallback: emit synthetic stream-done for any generated stem
@@ -1010,6 +1105,11 @@
       stemIndex = {};
       for (const k of Object.keys(stemDurIndex)) delete stemDurIndex[k];
       _persistStemIndex();
+      // Le firme parlano dei file della cartella di PRIMA (#185). Due cartelle
+      // possono avere un progetto omonimo, e nel caso peggiore la firma
+      // ereditata COMBACIA: una scrittura passerebbe senza che la guardia
+      // abbia guardato il file giusto. Il progetto riaperto rifirma.
+      signatures.clear();
       try { localStorage.removeItem("pge-local-sem"); } catch {}
       try { localStorage.removeItem("pge-local-renderer"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
