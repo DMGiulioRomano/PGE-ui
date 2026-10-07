@@ -53,8 +53,10 @@ Endpoints:
     GET  /renderers             — the engine's audio backends + whether each can run
     GET  /media                 — list refs/ contents with durations
     GET  /projects              — list configs/*.yml
-    GET  /file?kind=…&name=…    — read a file (kind: projects|media|cache|output)
-    PUT  /file?kind=…&name=…    — write a file
+    GET  /file?kind=…&name=…    — read a file (kind: projects|media|cache|output);
+                                  its signature in the X-PGE-Signature header
+    PUT  /file?kind=…&name=…    — write a file; &signature=… is the one read,
+                                  409 {changed} if the disk moved since (#185)
     GET  /cache_manifest/<basename>  — read cache/<basename>.json
     POST /render                — run main.py, stream NDJSON events
     POST /render/cancel         — terminate the running render
@@ -81,8 +83,13 @@ from pathlib import Path
 try:
     from flask import Flask, jsonify, request, send_file, send_from_directory, Response, abort
     from flask_cors import CORS
+    # PyYAML non lo usa questo file ma `file_signature`, per il confronto per
+    # documento (#185). Chiesto qui perche' una dipendenza che manca dica cosa
+    # installare invece di un traceback — e non importando file_signature
+    # dentro il try, che renderebbe "manca una dipendenza" anche un suo errore.
+    import yaml  # noqa: F401
 except ImportError:
-    sys.exit("Missing deps. Run:\n    pip install flask flask-cors")
+    sys.exit("Missing deps. Run:\n    pip install -r requirements.txt")
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
@@ -93,6 +100,12 @@ from render_pipeline import (
     RenderState, render_events, merged_output, build_render_command,
     start_watchdog, renderer_availability,
 )
+# Due editor, un file (#185): la firma e la scrittura che la rispetta.
+from file_signature import read_signed, write_guarded, is_yaml_name
+
+# L'header che porta la firma di cio' che GET /file ha letto. Un header e non
+# il corpo, perche' il corpo E' il documento.
+SIGNATURE_HEADER = "X-PGE-Signature"
 
 
 # -------------------------------------------------------------------------
@@ -872,7 +885,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
 
     app = Flask(__name__)
     # CORS open — the browser is on the same machine, no security risk.
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    # `expose_headers` e' portante: di default `fetch()` non lascia leggere un
+    # header che non sia "safelisted" a una pagina cross-origin, e l'editor
+    # aperto come `file://` lo e' (origine "null"). Senza, li' la firma
+    # arriverebbe `null` e la guardia di #185 resterebbe disarmata in silenzio.
+    CORS(app, resources={r"/*": {"origins": "*"}},
+         expose_headers=[SIGNATURE_HEADER])
 
     # State for the running render (only one at a time); the shared lock
     # serializes /render and /render/cancel. render_timeout is the hard cap
@@ -1224,6 +1242,20 @@ def make_app(root: Path, render_timeout: float = 600.0,
                 for p in sorted(configs.iterdir())
                 if p.is_file() and p.suffix == ".yml"]
 
+    def _query_flag(value) -> bool:
+        """Un flag dalla query string: solo `1` o `true`. `bool("false")` e'
+        True, e qui una lettura larga vorrebbe dire una sovrascrittura che
+        nessuno ha chiesto."""
+        return str(value).strip().lower() in ("1", "true")
+
+    def _changed_payload(name):
+        # La forma del rifiuto (#185): `changed` e' un campo a parte, non un
+        # errore da riconoscere dal testo; `name` dice QUALE file, perche' i
+        # file di una scrittura saranno N (#184) e la decisione e' per file.
+        return {"ok": False, "changed": True, "name": name,
+                "error": f"{name} e' cambiato su disco da quando l'editor "
+                         "l'ha letto: ricarica o sovrascrivi"}
+
     @app.get("/projects")
     def list_projects():
         if not configs.exists():
@@ -1242,19 +1274,38 @@ def make_app(root: Path, render_timeout: float = 600.0,
         path = safe_resolve(base, name)
         if not path or not path.exists():
             abort(404)
-        return path.read_text(encoding="utf-8")
+        # Testo e firma da UNA lettura: con due, il file puo' cambiare nel
+        # mezzo e l'editor ricorderebbe la firma di un documento che non gli e'
+        # mai arrivato (#185). `mimetype` senza charset: Flask lo aggiunge da
+        # se' ai `text/*`, e scritto anche qui uscirebbe due volte.
+        text, sig = read_signed(path)
+        return Response(text, mimetype="text/plain",
+                        headers={SIGNATURE_HEADER: sig})
 
     @app.put("/file")
     def put_file():
+        """Scrive un file, rispettando la lettura dell'editor (#185).
+
+        `signature` e' la firma che l'editor ha letto (GET /file, o la risposta
+        della sua ultima scrittura): se su disco non e' piu' quella non si
+        scrive niente e si risponde 409 con `changed` — un campo, non un errore
+        da riconoscere dal testo. `overwrite` e' la risposta dell'utente a quel
+        409. Senza `signature` si scrive come sempre: un file mai letto non ha
+        niente con cui confrontarsi. Le tre regole stanno in `write_guarded`."""
         kind = request.args.get("kind")
         name = request.args.get("name", "")
         base = _bases().get(kind)
         if not base: abort(400, "bad kind")
         path = safe_resolve(base, name)
         if not path: abort(400, "bad name")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(request.get_data(as_text=True), encoding="utf-8")
-        return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size})
+        res = write_guarded(path, request.get_data(as_text=True),
+                            read_signature=request.args.get("signature", ""),
+                            overwrite=_query_flag(request.args.get("overwrite")),
+                            yaml_document=is_yaml_name(name))
+        if not res["ok"]:
+            return jsonify(_changed_payload(name)), 409
+        return jsonify({"ok": True, "path": str(path), "bytes": path.stat().st_size,
+                        "written": res["written"], "signature": res["signature"]})
 
     # --------- rendered audio playback ---------
 
@@ -1589,8 +1640,28 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # (cache/<basename>.json), so a random temp name would orphan the manifest
         # every render and mark all streams DIRTY. Git is the versioning/rollback
         # mechanism for configs/ — see CLAUDE.md "NDJSON render protocol".
+        #
+        # ...e la scrittura passa dalla stessa guardia di PUT /file (#185), qui
+        # PRIMA di scrivere: il motore rilegge il file da disco, quindi un render
+        # sopra un file che l'altro editor ha cambiato se lo porterebbe via come
+        # un salvataggio. Il rifiuto precede venv, stream e motore, ed e' JSON
+        # come gli altri rifiuti di questa route. `overwrite` vale solo come
+        # `true` JSON: `bool("false")` e' True, una sovrascrittura chiesta da
+        # nessuno.
+        # Un documento che il file ha gia' non si riscrive (passo 1): il caso
+        # vero e' il render subito dopo una rilettura, dove riscriverlo col
+        # nostro serializzatore farebbe dire "cambiato" al laboratorio al giro
+        # dopo, su un documento che nessuno ha cambiato.
+        signed = None
         if yaml_content:
-            yml.write_text(yaml_content, encoding="utf-8")
+            read_sig = opts.get("signature")
+            res = write_guarded(yml, yaml_content,
+                                read_signature=read_sig if isinstance(read_sig, str) else "",
+                                overwrite=opts.get("overwrite") is True)
+            if not res["ok"]:
+                return jsonify(_changed_payload(yml.name)), 409
+            signed = {"type": "file-signature", "kind": "projects", "name": yml.name,
+                      "signature": res["signature"], "written": res["written"]}
         elif not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
@@ -1632,6 +1703,13 @@ def make_app(root: Path, render_timeout: float = 600.0,
             # tutta la vita del bridge. #147
             rs.enter()
             try:
+                # La firma di cio' che questo render ha scritto (o trovato gia'
+                # scritto), come PRIMA riga: prende il posto di quella letta, o
+                # il render o il salvataggio dopo si accuserebbero da soli di
+                # aver cambiato il file. Un evento per file, cosi' i file di un
+                # render possono diventare N senza che cambi forma (#184).
+                if signed is not None:
+                    yield json.dumps(signed) + "\n"
                 # Ensure engine venv exists before running main.py.
                 venv_py = root / ".venv" / "bin" / "python"
                 if not venv_py.exists():

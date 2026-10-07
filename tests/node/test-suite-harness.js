@@ -587,6 +587,8 @@ console.log("\n── source-guard: il sorgente resta leggibile come codice ─�
   // letture conservano la lunghezza (e' la premessa di `depthAt`, che conta la
   // profondita' sulla maschera agli offset trovati sul codice).
   const repoRoot = path.join(__dirname, "..", "..");
+  const bridgePy = fs.readdirSync(repoRoot).filter((f) => /\.py$/.test(f))
+    .map((f) => path.join(repoRoot, f));
   const srcFiles = ["src/lib", "src/components"].flatMap((d) => {
     const dir = path.join(repoRoot, d);
     return fs.existsSync(dir)
@@ -597,9 +599,15 @@ console.log("\n── source-guard: il sorgente resta leggibile come codice ─�
     // commento li' comincia per `#`, e la docstring e' una stringa — che
     // sopravvive, come una stringa JS: si censiscono solo le righe che
     // COMINCIANO per `#`, e una dentro una docstring non e' una di quelle.
-    ["server.py", "render_pipeline.py", "audio_pipeline.py", "engine_introspect.py"]
-      .map((f) => path.join(repoRoot, f)).filter((f) => fs.existsSync(f)));
+    // I `.py` della radice, letti e non elencati: la lista scritta a mano ne
+    // aveva quattro, e il quinto (`file_signature.py`, #185) ne sarebbe
+    // rimasto fuori senza che niente lo dicesse — chi aggiunge un helper del
+    // bridge non e' chi si ricorda di aggiornare la lista.
+    bridgePy);
   assert("ci sono sorgenti da censire", srcFiles.length > 0);
+  assert("la lettura dei .py del bridge trova server.py e i suoi helper",
+    bridgePy.some((f) => path.basename(f) === "server.py") && bridgePy.length >= 5,
+    bridgePy.map((f) => path.basename(f)).join(", ") || "(vuota)");
   const leaky = [];
   const skewed = [];
   for (const file of srcFiles) {

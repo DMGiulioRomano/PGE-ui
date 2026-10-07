@@ -821,6 +821,41 @@ def test_ci_installs_the_bridge_requirements():
     assert found, "nessun passo della CI lancia pytest su tests/python"
 
 
+def test_every_ci_bridge_install_reads_the_requirements():
+    """La stessa regola per OGNI passo della CI che installa le dipendenze del
+    bridge, non solo per quello di pytest. Il job e2e aveva la sua lista
+    trascritta (`pip install flask flask-cors`), e con #185 il bridge importa
+    PyYAML: `tests/e2e/bridge.py` sarebbe uscito prima di annunciare la porta.
+    Ogni `pip install` della CI fuori dal checkout del motore e' un install
+    del bridge: l'unico altro e' il venv del motore, col SUO requirements.txt."""
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    bridge_installs = []
+    for name, job in wf["jobs"].items():
+        for step in job.get("steps", []):
+            run = str(step.get("run", ""))
+            if "pip install" not in run:
+                continue
+            wd = step.get("working-directory")
+            # Il venv del motore installa il SUO requirements.txt: non e' il bridge.
+            if wd and "PythonGranularEngine" in wd:
+                continue
+            bridge_installs.append((name, run))
+            assert "-r requirements.txt" in run, (
+                f"job {name}: il bridge si installa da requirements.txt, "
+                f"non da una lista trascritta: {run!r}")
+    assert len(bridge_installs) >= 2, (
+        f"la lettura dei passi di install trova troppo poco: {bridge_installs}")
+
+
+def test_requirements_declare_what_the_bridge_imports():
+    """PyYAML era solo una dipendenza dei TEST (tests/python/requirements.txt)
+    finche' il bridge non l'ha importato: da #185 lo importa, e chi installa
+    il bridge con `make install` deve averlo."""
+    reqs = (REPO / "requirements.txt").read_text().lower()
+    assert "pyyaml" in reqs
+
+
 # ---------------------------------------------------------------------------
 # make serve: le stesse due scelte, dette dal Makefile
 # ---------------------------------------------------------------------------
