@@ -1369,6 +1369,38 @@ suite gained `rate: 0.9` and `exponent: 100.5` as probes — the two where the o
 mirror lagged by 22 and 28 cycles — and requires an engine with #293
 (`tests/parity/README.md`'s recorded SHA).
 
+**The two sentences the panel shows are the engine's prose, and they are
+pinned like any other copied constant** (#193). The EnvelopeEditor's overflow
+warning repeats two pieces of `ParameterBoundError`'s hint — *why* the block is
+refused (`TIME_DIST_OVERFLOW_WHY`) and *what to do*
+(`TIME_DIST_OVERFLOW_FIX`, the engine's `_RIMEDI_OVERFLOW`) — because the
+warning and the failed render are one fault told twice to one reader: diverge,
+and whoever reads both looks for two problems. They diverged. The editor said
+«non sta in un float», the engine's hint word for word, and with the sum guard
+taking `nan` sums too (a `.nan`/`.inf` parameter, which no bound refuses) that
+sentence became false of half the cases — a `nan` fits in a float perfectly
+well — so the engine now says what it measured, «il risultato non è un numero
+finito», and the editor stayed behind in silence, because nothing here read the
+prose. Both constants live in `envelope-loops.js` and
+`test-time-dist-parity.js` asks them of the real hint, which the oracle now
+carries (`calc_hint`: `str(exc)` of that exception is only its first line).
+Three probes, one per parameter, since the remedy is the parameter's and not
+the distribution's (PGE #216); the **floor** is that the hint no longer
+contains «non sta in un float» — inclusion alone is also true of a needle too
+generic, and that floor is the only part that notices an engine rewording the
+sentence without moving the thresholds, which is exactly #193. The other half
+needs no engine and sits in `test-time-dist.js`: the panel must *read* the two
+constants rather than transcribe them, because parity reads the constant and
+not the JSX — a second copy inside the message would pass parity unseen, and
+that is the shape the defect took the first time. Its window is bounded by the
+branches around it, not by a character count: `codeOf` blanks comments keeping
+their spaces, so a fixed slice held only spaces, i.e. accused nothing while its
+two negative asserts passed by blindness. Only the engine's *pair* diagnosis is
+mirrored: `timeDistError` returns `kind: "overflow"` for finite parameters
+alone — a `.nan`/`.inf` leaves earlier as `kind: "param"` — so the other branch
+of that hint, where reducing the cycles doesn't help, is unreachable from this
+string.
+
 ### Dynamic parameter bounds
 
 `GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` under `src/pge/parameters/` (falling back to pre-#162 flat `src/parameters/`). Returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` wraps the fetch in `refreshEngineBounds()` and calls it from **three** sites — boot, project change, render start — the same three as `refreshEngineSem`, and for the same reason (see below). `bounds.js` (`mergeEngineBounds`, node-tested) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param and whether it reads `min_val/max_val` or `min_range/max_range`. `window.PGE_BOUNDS` in `yaml-bridge.js` is the **static fallback** (used on `file://` / server down).

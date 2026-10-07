@@ -66,7 +66,7 @@ Le operazioni dell'oracolo:
 | `fingerprint` | `StreamCacheManager.compute_fingerprint` (con `semantics` opzionale, che rimpiazza la costante per la durata della chiamata, e `renderer`, il backend che sta dentro l'hash accanto ad essa — default `numpy`, come cabla la UI) | `backend.fingerprintStream` |
 | `parse_magnify_spec` | i target di `--magnify-at`, o l'errore — da `pge.shared.magnify_spec`, importato, da PGE #246 | `window.PGEMagnifySpec` |
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
-| `build_time_distribution` | strategia, durate, errori | `window.PGEEnv.timeDistError` |
+| `build_time_distribution` | strategia, durate, errori — e l'`hint` dell'errore (`calc_hint`), cioè la riga che il motore stampa sotto «Hint:» a render fallito: `str(exc)` di `ParameterBoundError` non la porta, e senza di lei il patto sulle frasi dell'avviso (#193, sotto) non si può porre | `window.PGEEnv.timeDistError` |
 | `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
 | `evaluate_envelope` | quanto vale l'`Envelope` vero ai tempi chiesti (`Envelope.evaluate`). Dove `build_envelope` dice *se* il motore costruisce un corpo, questa dice *cosa ne suona*: serve alle riscritture che lasciano il corpo valido e ne cambiano il senso. I due termini di ogni confronto sono risposte del motore, nessun valore atteso è scritto di qua. Con `duration` e `time_mode` il corpo si costruisce come lo costruisce uno stream (`create_scaled_envelope`), l'unica strada che legge `time_unit` | `window.PGEEnv.wrapEnv` (#189, e le chiavi del dict come `time_unit`); `PGEEnvUtils.truncateEnvArray` / `sliceEnvArray` (il punto calcolato al taglio, suite `envelope-cut`) |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
@@ -443,6 +443,57 @@ sopra un campione (oggi 0.002 s = 96 campioni a 48 kHz), ma il vincolo ha un
 verso solo — sotto un campione non c'è niente da rendere — e con il payload che
 porta il solo `output_sr` il `Math.min` teneva il pavimento derivato dal sample
 rate **vecchio**, cioè faceva rientrare il difetto dalla porta di servizio.
+
+## Le frasi dell'errore, la costante che non sembrava una costante
+
+Le costanti ricopiate dal motore si riconoscono: sono numeri, liste di nomi,
+vocabolari. Due ne sono sfuggite per anni perché sono **prosa** — due pezzi
+dell'hint di `ParameterBoundError` che il pannello degli inviluppi ripete
+all'autore prima che il render fallisca:
+
+- *perché* il blocco è rifiutato (`TIME_DIST_OVERFLOW_WHY` in
+  `src/lib/envelope-loops.js`), e
+- *cosa fare* (`TIME_DIST_OVERFLOW_FIX`, cioè `_RIMEDI_OVERFLOW` del motore).
+
+L'avviso dell'editor e l'errore del render sono lo stesso guasto detto due
+volte, e servono a un lettore solo: se le due frasi divergono, chi legge la
+prima e poi la seconda cerca due problemi dove ce n'è uno.
+
+È andata esattamente così. L'editor diceva «non sta in un float e il motore
+rifiuta il blocco», che era l'hint del motore parola per parola. Con PGE #219
+(fusa con #293) la guardia sulla somma ha cominciato a prendere anche le somme
+`nan` — un parametro `.nan`/`.inf`, che nessun bound rifiuta — e quella frase
+è diventata **falsa di metà dei casi**, perché un `nan` in un float ci sta
+benissimo: il motore dice ora ciò che ha misurato, «il risultato non è un
+numero finito». Qui nessun test guardava la prosa, quindi l'editor è rimasto
+indietro in silenzio (PGE-ui #193, punto 3). Il resto di quella issue —
+la regola della somma nello specchio e la banda tornata larga uno — era
+già stato chiuso dalla parità, che aveva visto le soglie muoversi; le due
+frasi no, perché nessuna parità le chiedeva.
+
+Il patto è in `test-time-dist-parity.js`, su tre coppie — una per parametro,
+perché il rimedio dipende dal parametro e non dalla distribuzione (PGE #216) —
+e chiede tre cose: che la UI classifichi davvero quella coppia come
+`overflow` (su un `kind` diverso il pannello mostrerebbe un'altra stringa, e
+il patto sarebbe posto su quella sbagliata), che l'hint vero contenga le due
+frasi della UI, e — il pavimento — che **non** contenga più «non sta in un
+float». L'inclusione da sola è vera anche di un ago troppo generico; quel
+pavimento è l'unica parte che si accorge di un motore che riscrive la frase
+senza cambiare le soglie, che è precisamente il caso di #193.
+
+Il confronto scioglie accenti e apostrofi: il motore scrive l'italiano senza
+accenti nei suoi sorgenti («non e' un numero finito»), l'interfaccia con. Si
+confrontano le parole, non la grafia.
+
+L'altra metà del presidio non ha bisogno del motore e sta in
+`tests/node/test-time-dist.js`: che il pannello **legga** le due costanti
+invece di trascriverle. È necessaria perché la parità legge la costante, non la
+JSX — una seconda copia della frase dentro il messaggio passerebbe la parità
+senza che nessuno la veda, ed è la forma in cui il difetto si è presentato la
+prima volta. La finestra di quel source guard è delimitata dai rami che la
+circondano e non da un numero di caratteri: `codeOf` svuota i commenti
+lasciando gli spazi, e con uno slice fisso conteneva solo spazi — cioè non
+accusava niente, e i due assert in negativo passavano per cecità.
 
 ## Aggiungere un caso
 
