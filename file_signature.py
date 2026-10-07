@@ -115,6 +115,13 @@ def same_document(a, b) -> bool:
     return a == b
 
 
+class _Unreadable:
+    """Il sentinella di "non l'ho capito", che non e' un documento."""
+
+
+_UNREADABLE = _Unreadable()
+
+
 def _load(raw: bytes):
     """Il parse YAML di questi byte, o ``_UNREADABLE`` se non si legge.
 
@@ -129,13 +136,6 @@ def _load(raw: bytes):
         # ValueError copre l'UnicodeDecodeError di byte che non sono utf-8:
         # `PUT /file` scrive anche dove il contenuto non e' detto sia YAML.
         return _UNREADABLE
-
-
-class _Unreadable:
-    pass
-
-
-_UNREADABLE = _Unreadable()
 
 
 def already_on_disk(path: Path, text: str) -> str:

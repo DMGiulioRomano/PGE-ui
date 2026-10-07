@@ -1712,29 +1712,44 @@ function App() {
         dirty: attempts === 0 ? dirtyOfFile(name) : dirtyNow,
         attempts,
       })));
-      if (plan.reread.length) {
+      /* Un ramo per decisione, e la rilettura dentro il ramo che la chiede:
+         rileggere anche prima di arrendersi (`stop`) vorrebbe dire adottare la
+         versione su disco di un file e poi dire «continua a cambiare», cioe'
+         due cose di cui una sola e' vera. */
+      if (plan.action === "reread") {
         const fresh = await rereadFiles(plan.reread);
+        if (!fresh) {
+          // Il file non si e' letto (vuoto, illeggibile): riprovare
+          // scriverebbe il progetto di ripiego sopra quello dell'altro
+          // editor. Si dice, e si lascia il disco com'e'.
+          pushToast({ kind: "err", persistent: true,
+                      title: `${label} fermo`,
+                      message: `${names.join(", ")}: non si rilegge — niente scritto` });
+          return res;
+        }
+        doc = fresh;
         attempts += 1;
         dirtyNow = false;
-        if (plan.action === "reread") {
-          if (!fresh) {
-            // Il file non si e' letto (vuoto, illeggibile): riprovare
-            // scriverebbe il progetto di ripiego sopra quello dell'altro
-            // editor. Si dice, e si lascia il disco com'e'.
-            pushToast({ kind: "err", persistent: true,
-                        title: `${label} fermo`,
-                        message: `${names.join(", ")}: non si rilegge — niente scritto` });
-            return res;
-          }
-          doc = fresh;
-          logToTerminal(`[reread] ${names.join(", ")} · ripreso dalla versione su disco`, "warn");
-          continue;
-        }
+        logToTerminal(`[reread] ${names.join(", ")} · ripreso dalla versione su disco`, "warn");
+        continue;
       }
       if (plan.action === "ask") {
+        /* I file che volevano solo una rilettura si rileggono comunque: la
+           domanda resta sugli altri. Oggi le due liste non sono mai piene
+           insieme (il file e' uno), ma la decisione e' per-file e questo e' il
+           ramo che #184 trova gia' scritto. */
+        if (plan.reread.length) await rereadFiles(plan.reread);
         askChangedOnDisk(plan.ask,
-          () => { rereadFiles(plan.ask); },
-          () => { attempt({ overwrite: true, doc }); });
+          /* Fire-and-forget con la coda gestita: queste girano dal click sul
+             toast, fuori da questa chiamata, e una promise rifiutata senza
+             catch qui diventerebbe una unhandled rejection invece di un
+             messaggio. */
+          () => { rereadFiles(plan.ask).catch(() => {}); },
+          () => {
+            Promise.resolve(attempt({ overwrite: true, doc })).catch((e) =>
+              pushToast({ kind: "err", title: `${label} failed`,
+                          message: e.message, persistent: true }));
+          });
         // `pending`: la scrittura non e' avvenuta e non e' nemmeno fallita —
         // aspetta una risposta. Chi chiama non deve ne' festeggiare ne'
         // mostrare un errore.
@@ -2136,9 +2151,12 @@ function App() {
         return;
       }
       if (plan.action === "ask") {
+        if (plan.reread.length) await rereadFiles(plan.reread);
+        // Le due risposte girano dal click sul toast, fuori da qui: la coda si
+        // chiude, o una promise rifiutata diventa una unhandled rejection.
         askChangedOnDisk(plan.ask,
-          () => { renderAgain({ reread: plan.ask }); },
-          () => { renderAgain({ overwrite: true, doc }); });
+          () => { renderAgain({ reread: plan.ask }).catch(() => {}); },
+          () => { renderAgain({ overwrite: true, doc }).catch(() => {}); });
         return;
       }
       pushToast({ kind: "err", persistent: true, title: "Render fermo",
