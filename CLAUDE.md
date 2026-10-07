@@ -136,7 +136,13 @@ exists, the fourth only when a browser is installed):
   key's one home between master and file, the file staying a lab document,
   `changedImports` against the disk rather than history, the conflict of one
   file imported twice, `detachImport`, plus source guards on where app.jsx
-  keeps the disk and on the paste/split/Raw-tab wiring), and `test-sources.js` (the static
+  keeps the disk and on the paste/split/Raw-tab wiring), and
+  `test-lab-roundtrip.js` (#188: the reverse round trip on documents the
+  mare-nostrum lab really wrote, `tests/fixtures/lab/` — imported by a master,
+  opened and saved untouched, then with `volume` touched on each, through the
+  editor's own open/save road; every structure the lab writes and the editor
+  doesn't produce on its own is compared as YAML, and the comparison is asked
+  to see each loss the issue feared), and `test-sources.js` (the static
   gate on the editor's own sources: every `src/lib/*.js` and
   `src/components/*.jsx` parses in the dialect the browser gets, the census
   between `PGE Editor.html` and the filesystem closes in both directions, the
@@ -2212,6 +2218,32 @@ by one; `tests/e2e/test-boot.js` walks the whole road in a browser — open from
 the project list, save untouched (file byte-identical, master identical but for
 the header), a resize into the file, an onset into the master, two undos and a
 save that writes the file back.
+
+**A lab document comes back whole** (#188, step 4 of the plan, "round-trip
+inverso"). The rules above say where each key goes; what they don't say is
+whether the *content* of the imported file survives the editor — and the lab
+writes structures nothing else in this repo produces: `grain.envelope:
+{states, curve}` with a type on the curve's points, `voices.pitch.progression`
+with its inversions and `interp`, `voices:` with `unit: {edo: N}` and
+`normalized`, lists with the type on the point. It matters more than for a
+master stream because of how a file is written: an untouched save writes no
+import at all (the "disk" is the re-serialization), but the first touch to an
+imported stream — any key — rewrites its **whole** file from the state, so
+everything the bridge can't carry is lost on an edit that had nothing to do
+with it. `tests/fixtures/lab/` holds five documents the lab's own page wrote
+(`genera/genera.py` drives it in node; regenerate, never hand-edit) and a
+master importing them. Three readers, three questions:
+`tests/node/test-lab-roundtrip.js` (what the editor would write of each file is
+already the lab's document, YAML for YAML; `volume` touched rewrites that file
+only, and there only `volume`), `tests/parity/test-lab-roundtrip-parity.js`
+(the engine, through `resolve_stream_files`, sees the same streams — same cache
+fingerprint, same placement — before and after the editor, and sees the
+`volume` on that stream alone), and `tests/fixtures/lab/genera/ritorno.py`
+(run by hand against a mare-nostrum checkout, which is not a sibling here: the
+lab's page reopens what the editor wrote, finds its own document, types
+included — `gia_su_disco` — and would rewrite nothing). Nothing in the bridge
+had to change for it to pass; each of the three was checked against a bridge
+sabotaged to drop one structure.
 
 Two limits, declared. The bridge reads and writes imports only **under
 `configs/`** (`safe_resolve_import`, see "Security stance"): an absolute path or
