@@ -1,0 +1,40 @@
+seed: 1441
+duration: 4
+bpm: 120
+streams:
+- stream_id: risacca
+  onset: 12.5
+  mute: true
+  duration: 4
+  sample: onda.wav
+  time_mode: normalized
+  distribution_mode: uniform
+  fill_factor:
+    type: cubic
+    points: [[0, 2], [0.5, 3], [1, 1.5]]
+  distribution: 0.7
+  grain:
+    duration: [[0, 0.03], [0.5, 0.05, step], [1, 0.02]]
+    duration_range: 0.005
+    envelope: hanning
+    read_direction: [[0, 1], [0.4, -1], [0.7, 1]]
+  pointer:
+    start: 0
+    speed_ratio: 0.5
+    loop_unit: normalized
+    offset_range: 0.02
+  pitch:
+    ratio: 0.8
+    range: 0.05
+  pan: 0
+  pan_range: 90
+  volume: -6
+  voices:
+    num_voices: 3
+    pitch:
+      strategy: stochastic
+      unit: ratio
+      pitch_range: 0.2
+    pan:
+      strategy: stochastic
+      spread: 120
