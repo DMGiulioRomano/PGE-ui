@@ -821,6 +821,53 @@ def test_ci_installs_the_bridge_requirements():
     assert found, "nessun passo della CI lancia pytest su tests/python"
 
 
+def test_no_ci_step_installs_a_transcribed_package_list():
+    """La regola vale per OGNI passo che installa, non solo per quello di pytest.
+
+    La guardia sopra guardava il job di pytest, e la lista trascritta e'
+    ricomparsa nel job e2e, che installava `flask flask-cors`: giusta il giorno
+    in cui e' stata scritta, e muta il giorno che il bridge ha preso una
+    dipendenza in piu' (pyyaml, #185 — `bridge.py` uscito con 1 prima di
+    annunciare la porta). E' la terza volta: la #153 aveva perso numpy e
+    soundfile, la #166 gunicorn.
+
+    La cura e' che le liste non esistano: ogni `pip install` della CI nomina
+    file (`-r`), e i file sono la dichiarazione. `--upgrade`, `-q` e compagnia
+    sono opzioni, non pacchetti, e passano.
+    """
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+
+    found = 0
+    for name, job in wf["jobs"].items():
+        for step in job.get("steps", []):
+            run = str(step.get("run", ""))
+            for line in run.splitlines():
+                if "pip install" not in line:
+                    continue
+                found += 1
+                args = line.split("pip install", 1)[1].split()
+                bare = []
+                skip = False
+                for a in args:
+                    if skip:
+                        skip = False
+                        continue
+                    if a == "-r":
+                        skip = True          # il prossimo e' il file
+                    elif a.startswith("-r"):
+                        pass                 # -rfile
+                    elif a.startswith("-"):
+                        pass                 # un'opzione qualsiasi
+                    else:
+                        bare.append(a)
+                assert not bare, (
+                    f"il job {name!r} installa {bare} per nome: va in un "
+                    f"requirements, o il giorno che la dipendenza cambia "
+                    f"questo passo non lo sa")
+    assert found, "nessun passo della CI installa dipendenze python"
+
+
 # ---------------------------------------------------------------------------
 # make serve: le stesse due scelte, dette dal Makefile
 # ---------------------------------------------------------------------------

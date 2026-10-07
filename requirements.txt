@@ -1,5 +1,11 @@
 flask>=3.0
 flask-cors>=4.0
 gunicorn>=22.0
+# Dalla #185: `file_signature.already_on_disk` confronta il DOCUMENTO,
+# non i byte, e il confronto sta nel bridge perche' solo qui i tipi
+# sono quelli scritti (`4` e `4.0` sono documenti diversi dalla
+# PGE #211, e in JS sono lo stesso numero). Serve al bridge, non al
+# venv del motore, che ha il suo.
+pyyaml>=6.0
 numpy>=1.24
 soundfile>=0.12

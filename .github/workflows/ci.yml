@@ -138,7 +138,11 @@ jobs:
       # passo attaccato al file.
       - name: install bridge + test deps
         working-directory: PGE-ui
-        run: pip install -r requirements.txt pytest PyYAML
+        # Due `-r`, nessun nome scritto a mano: `pytest PyYAML` era una lista
+        # trascritta accanto a un file che le dichiarava gia'
+        # (tests/python/requirements.txt), cioe' la stessa forma dell'errore
+        # che questo passo porta scritto sopra.
+        run: pip install -r requirements.txt -r tests/python/requirements.txt
       # Build the engine's own venv so test_engine_render runs (instead of
       # skipping on a missing .venv/main.py). numpy renderer needs numpy+soundfile.
       # Skipped implicitly when the checkout above didn't land the engine sources.
@@ -207,13 +211,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Solo flask + flask-cors: numpy e soundfile servono a /peaks e
-      # /spectrogram, che senza stem sul disco nessuno chiama. /diagnose li
-      # segnala mancanti e va bene — e' un check giallo nel log di boot, non
-      # un errore in console, ed e' esattamente lo stato in cui il test deve
-      # restare verde.
+      # requirements.txt, non una lista trascritta qui. Era
+      # `pip install flask flask-cors`, con sopra il commento che spiegava
+      # perche' bastavano (numpy e soundfile servono a /peaks e /spectrogram,
+      # che senza stem sul disco nessuno chiama): la lista era giusta il
+      # giorno in cui e' stata scritta, e dalla #185 il bridge ha una
+      # dipendenza in piu' (pyyaml, per il confronto fra due documenti) che
+      # questo passo non sapeva di dover installare — bridge.py uscito con 1
+      # prima di annunciare la porta, cioe' il job rosso sulla dipendenza
+      # giusta e per il motivo sbagliato. E' la terza volta: la #153 ci ha
+      # perso numpy e soundfile, la #166 gunicorn, e il job pytest ha gia'
+      # una guardia perche' non succeda piu' (test_launch.py). Qui costa il
+      # download di numpy e soundfile, che il test non usa e che non
+      # cambiano cio' che asserisce.
       - name: install bridge deps
-        run: pip install flask flask-cors
+        run: pip install -r requirements.txt
       - name: install e2e deps
         working-directory: tests/e2e
         run: npm install

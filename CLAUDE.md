@@ -234,10 +234,15 @@ guards the three readers and the three recipes, and measures the node one by
 running it against an invented root.
 
 CI runs all of it on push and PR (`.github/workflows/ci.yml`), in three jobs:
-`node`, `python` and `e2e`. The python job
-installs the bridge from `requirements.txt` (never a list transcribed in the
-workflow: that is how `/peaks` in #153 and the launch tests of #166 went
-skipped-green), checks out the sibling engine and builds its venv. The node job checks it out
+`node`, `python` and `e2e`. **Every `pip install` in that workflow names files
+(`-r`), never packages** — that is how `/peaks` in #153, the launch tests of
+#166 and the whole `e2e` job of #185 went red or skipped-green, three times on
+the same shape: a list that was right the day it was written and went mute the
+day the bridge took one dependency more. `test_launch.py` guards the pytest
+job's step *and* every other install step, and the e2e job reads
+`requirements.txt` like the python one (it costs the numpy + soundfile
+download, which that test doesn't use and which changes nothing it asserts).
+The python job also checks out the sibling engine and builds its venv. The node job checks it out
 too, for the fixture-dependent parts and for `make tests-parity` (which needs no
 engine venv at all), so both run on a PR: a `configs/` change in
 `PythonGranularEngine` can turn PGE-ui CI red on purpose (the #131 canary), and
@@ -2924,5 +2929,5 @@ used to leave the suite green.
 - Stem filenames: `<basename>__<streamId>.<ext>` (double underscore separator); `<ext>` follows the Settings output format (`tweaks.outputFormat`, default `wav` → `.wav`; `aiff` → `.aif`, `flac` → `.flac`).
 - Cache manifests: `cache/<basename>.json`, one file per project. Keyed by the YAML basename — `/render` writes the editor state to the stable `configs/<basename>.yml` (never a temp file) so the manifest persists across renders and incremental caching works.
 - Editor served by the bridge (`GET /`), which opens the browser on it — there is no separate dev server for the frontend. `file://` works as a fallback that only finds a bridge on `:7878`.
-- `requirements.txt` is for the bridge only. The engine has its own (and its own venv).
+- `requirements.txt` is for the bridge only (`pyyaml` is in it since #185: `already_on_disk` compares two YAML *documents*, and the bridge is the only place where the types are the ones that were written). The engine has its own (and its own venv); `tests/python/requirements.txt` is the test-only half, and CI reads both with `-r`.
 - File signatures: `sha256:<hexdigest>` over the file's bytes as they sit on disk, the algorithm declared once (`file_signature.ALGO`). Shared convention with mare-nostrum's lab — see "Due editor, un file" (#185).
