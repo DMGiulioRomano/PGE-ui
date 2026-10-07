@@ -1149,7 +1149,12 @@ function Timeline({ streams, tracks, selected, selectedTrack, onSelect, onTrackS
                 </div>
                 ) : null}
                 {showClipLabels !== false ? (<>
-                <div className="lbl">{s.id} · {s.sample}</div>
+                {/* Uno stream importato con `file:` (#183) si riconosce dal
+                    nome del file accanto all'id: le sue modifiche finiscono
+                    li', non nel master (#184). */}
+                <div className="lbl" title={s._import ? `importato da ${s._import.file}` : undefined}>
+                  {s.id} · {s._import ? <span className="clip-file">{s._import.file}</span> : null}{s._import ? " · " : null}{s.sample}
+                </div>
                 <div className="metaline">d:{(typeof s.density === "number" || typeof s.density === "string") ? s.density : (s.densityEnv ? "env" : "ff " + s.fillFactor)} · {(typeof s.voices.num === "number") ? s.voices.num : "env"}v</div>
                 </>) : null}
                 {showSpectrograms && spectrogramFor && spectrogramFor(s.id) ?

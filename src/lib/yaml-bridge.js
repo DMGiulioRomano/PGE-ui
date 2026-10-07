@@ -712,6 +712,291 @@
     return text.replace(/__PGE_ENV_INLINE_(\d+)__/g, (_, i) => tokens[+i]);
   }
 
+  /* ---------- lo stream come file (PGE #290; PGE-ui #183, #184) ----------
+   *
+   * Una voce di `streams:` del master puo' essere `- file: <path>`: lo stream
+   * e' scritto in un altro documento — un documento del laboratorio, che si
+   * apre e si rende anche da solo — e il master ne tiene soltanto il
+   * piazzamento. Il path e' relativo alla cartella del master (`configs/`).
+   *
+   * In memoria uno stream importato e' uno stream come gli altri, risolto come
+   * lo risolve il motore (`resolve_stream_files`), piu' la sua provenienza in
+   * `_import`: il file, la voce del master come era scritta, la testa del file
+   * e il piazzamento che lo stream ha DENTRO il file. La provenienza resta
+   * fuori dall'impronta (FP_IGNORE_TOP in backend.js): il motore calcola il
+   * fingerprint sullo stream risolto, quindi lo stesso stream importato o
+   * scritto nel master e' lo stesso hash.
+   *
+   * Ogni chiave ha una sola casa (regola 3 del piano, regola 4 del motore). Il
+   * master riscrive `- file:` piu' le chiavi di piazzamento; tutto il resto —
+   * `duration` compresa — va nel file importato, che resta un documento del
+   * laboratorio: il suo `seed`, il suo `stream_id`, il suo `onset: 0` restano
+   * quelli del file, perche' nel brano li ignora il motore e da solo li usa il
+   * laboratorio.
+   *
+   * Cosa scrivere lo decide il chiamante, contro il DISCO e non contro la
+   * storia: `serializeImports` dice come sarebbe ogni file adesso,
+   * `changedImports` quali differiscono da cio' che si sa essere su disco.
+   * Quel "disco" non puo' stare in `data`: uno snapshot di undo lo porterebbe
+   * indietro con se', e un file salvato e poi annullato risulterebbe "non
+   * cambiato". Sta in un ref di app.jsx. */
+
+  // CHIAVI_DI_PIAZZAMENTO del motore (pge/engine/stream_files.py). Accanto a
+  // `file:` il master tiene queste e basta; dentro lo stream del file si
+  // ignorano. tests/parity/test-fingerprint-parity.js pretende che la lista
+  // sia quella del motore.
+  const PLACEMENT_KEYS = ["stream_id", "onset", "mute", "solo"];
+
+  // La forma che il motore riconosce come voce importata: un mapping con la
+  // chiave `file` (`isinstance(voce, dict) and 'file' in voce`). Il valore si
+  // giudica dopo, e un valore che non e' un path e' un errore, non uno stream.
+  function isFileEntry(e) {
+    return !!e && typeof e === "object" && !Array.isArray(e) && "file" in e;
+  }
+
+  // Lo `stream_id` di default: il nome del file senza estensione, come
+  // `os.path.splitext(os.path.basename(file))[0]`. I punti in testa non sono
+  // un'estensione (`.yml` resta `.yml`, come in python).
+  function importDefaultId(file) {
+    const base = String(file).split("/").pop();
+    let lead = 0;
+    while (lead < base.length && base[lead] === ".") lead++;
+    const dot = base.lastIndexOf(".");
+    return dot >= lead ? base.slice(0, dot) : base;
+  }
+
+  // I file che il master importa, una volta sola e in ordine di master: e'
+  // cio' che il chiamante deve leggere (dal bridge) prima di `parse`. Un testo
+  // che non si parsa non importa niente — l'errore lo dira' `parse`.
+  function importRefs(text) {
+    let y;
+    try { y = window.jsyaml ? window.jsyaml.load(text) : null; } catch { return []; }
+    if (!y || typeof y !== "object" || !Array.isArray(y.streams)) return [];
+    const out = [];
+    for (const e of y.streams) {
+      if (isFileEntry(e) && typeof e.file === "string" && e.file && !out.includes(e.file)) {
+        out.push(e.file);
+      }
+    }
+    return out;
+  }
+
+  // Lo stream unico del documento importato, o la descrizione di cio' che si
+  // e' trovato al suo posto (la riga `Trovati:` di StreamFileCountError).
+  function singleImportedStream(doc) {
+    if (doc == null) return { found: "nessuno stream" };
+    if (typeof doc !== "object" || Array.isArray(doc)) {
+      return { found: `il documento non e' una mappa (${Array.isArray(doc) ? "lista" : typeof doc})` };
+    }
+    const streams = doc.streams;
+    if (streams == null) return { found: "nessuno stream" };
+    if (!Array.isArray(streams)) return { found: `'streams' non e' una lista (${typeof streams})` };
+    if (streams.length !== 1) return { found: streams.length ? `${streams.length} stream` : "nessuno stream" };
+    const st = streams[0];
+    if (!st || typeof st !== "object" || Array.isArray(st)) {
+      return { found: `una voce che non e' uno stream (${Array.isArray(st) ? "lista" : typeof st})` };
+    }
+    return { stream: st };
+  }
+
+  /* La voce `file:` del master, risolta. `imports` e' la mappa che il
+   * chiamante ha riempito leggendo i file dal bridge: `{[file]: {text}}`, o
+   * `{[file]: {error}}` quando la lettura e' fallita. Ritorna lo stream
+   * risolto (o null) e gli errori, ciascuno col master e la voce: e' la regola
+   * 8 del motore, e l'editor non deve fare di meno.
+   *
+   * La risoluzione e' quella del motore, riga per riga: le chiavi di
+   * piazzamento dello stream importato si buttano, quelle del master si
+   * aggiungono, e lo `stream_id` mancante (o null) diventa il nome del file.
+   * La chiave estranea accanto a `file:` e' un errore anche qui, ma lo stream
+   * si risolve lo stesso: l'errore e' nel master, e mostrarne il contenuto
+   * aiuta a correggerlo. Nello stream non entra — resta nella voce, dove
+   * l'autore l'ha scritta. */
+  function resolveImportEntry(entry, index, masterName, imports) {
+    const where = `${masterName}, streams[${index}]`;
+    const errors = [];
+    const file = entry.file;
+    if (typeof file !== "string" || !file) {
+      errors.push(`${where}: 'file:' vuole il path di un documento YAML con un solo stream, ` +
+                  `relativo alla cartella del master (trovato: ${JSON.stringify(file)})`);
+      return { stream: null, errors };
+    }
+    const stray = Object.keys(entry).filter(k => k !== "file" && !PLACEMENT_KEYS.includes(k));
+    if (stray.length) {
+      errors.push(`${where}: accanto a 'file: ${file}' il master tiene solo il piazzamento ` +
+                  `(${PLACEMENT_KEYS.join(", ")}); ${stray.map(k => `'${k}'`).join(", ")} ` +
+                  `si scrive nel file importato`);
+    }
+    const got = imports && Object.prototype.hasOwnProperty.call(imports, file) ? imports[file] : null;
+    if (!got || typeof got.text !== "string") {
+      errors.push(`${where}: il file importato '${file}' non si legge` +
+                  (got && got.error ? ` (${got.error})` : " (non letto)"));
+      return { stream: null, errors };
+    }
+    let doc;
+    try { doc = window.jsyaml.load(got.text); }
+    catch (e) {
+      errors.push(`${where}: il file importato '${file}' non e' YAML valido (${String(e && e.message || e).split("\n")[0]})`);
+      return { stream: null, errors };
+    }
+    const one = singleImportedStream(doc);
+    if (!one.stream) {
+      errors.push(`${where}: il file importato '${file}' deve contenere un solo stream ` +
+                  `(una lista 'streams:' con un mapping dentro). Trovati: ${one.found}`);
+      return { stream: null, errors };
+    }
+    const st = one.stream;
+    if ("file" in st) {
+      errors.push(`${where}: il file importato '${file}' importa a sua volta ` +
+                  `'${st.file}': niente catene (un file:, in un file importato, e' un errore)`);
+      return { stream: null, errors };
+    }
+    const resolved = {};
+    for (const k of PLACEMENT_KEYS) if (k in entry) resolved[k] = entry[k];
+    if (resolved.stream_id == null) resolved.stream_id = importDefaultId(file);
+    for (const k of Object.keys(st)) if (!PLACEMENT_KEYS.includes(k)) resolved[k] = st[k];
+
+    const place = {};
+    for (const k of Object.keys(st)) if (PLACEMENT_KEYS.includes(k)) place[k] = st[k];
+    const head = {};
+    for (const k of Object.keys(doc)) head[k] = k === "streams" ? null : doc[k];
+    return {
+      stream: resolved,
+      errors,
+      meta: {
+        file,
+        entry: { ...entry },     // la voce come era scritta, chiavi estranee comprese
+        head,                    // la testa del file; `streams` tiene solo il posto
+        place,                   // il piazzamento dello stream DENTRO il file
+        dur0: st.duration ?? null,   // la durata dichiarata nel file, al caricamento
+      },
+    };
+  }
+
+  /* La voce del master per uno stream importato: `file:` piu' il piazzamento,
+   * e nient'altro. Ogni chiave che lo stato non ha cambiato torna come era
+   * scritta (onset in forma di espressione, `mute: false` che per il motore e'
+   * "muto" perche' conta la presenza): aprire e salvare non deve toccare il
+   * master. Una chiave estranea resta dov'era — l'errore lo segnala il parse,
+   * e cancellarla in silenzio nasconderebbe lo sbaglio. */
+  function importEntryToYaml(s) {
+    const imp = s._import;
+    const raw = imp.entry || { file: imp.file };
+    const defaultId = importDefaultId(imp.file);
+    const effId = raw.stream_id != null ? String(raw.stream_id) : defaultId;
+    const onset = s.onset ?? 0;
+    const out = {};
+    for (const k of Object.keys(raw)) {
+      if (k === "file") {
+        // Il path e' quello della provenienza, non quello letto: e' a quel
+        // file che `serializeImports` scrive lo stream, e i due devono essere
+        // lo stesso (#186 ne dara' uno nuovo alla copia).
+        out.file = imp.file;
+      } else if (k === "stream_id") {
+        if (s.id === effId) out.stream_id = raw.stream_id;
+        else if (s.id !== defaultId) out.stream_id = s.id;
+        // rinominato col nome del file: il default basta, la chiave se ne va
+      } else if (k === "onset") {
+        out.onset = onset === (raw.onset ?? 0) ? raw.onset : onset;
+      } else if (k === "mute" || k === "solo") {
+        if (s[k]) out[k] = raw[k];    // presente = attivo, qualunque valore
+      } else {
+        out[k] = raw[k];
+      }
+    }
+    if (!("stream_id" in raw) && s.id !== effId) out.stream_id = s.id;
+    if (!("onset" in raw) && onset !== 0) out.onset = onset;
+    if (!("mute" in raw) && s.mute) out.mute = true;
+    if (!("solo" in raw) && s.solo) out.solo = true;
+    return out;
+  }
+
+  /* Il documento del file importato per lo stato di adesso: la testa del file
+   * com'era (stesso ordine, stesse chiavi), lo stream con il PROPRIO
+   * piazzamento davanti e il resto dallo stato. La sola chiave di testa che
+   * segue lo stato e' `duration`, come nel laboratorio: e' la lunghezza del
+   * render del file da solo, e uno stream allungato in un file con la testa
+   * ferma verrebbe tagliato. Segue solo se la durata dello stream e' dichiarata
+   * ed e' cambiata da quella letta; uno stream a durata implicita (PGE #205)
+   * non la materializza. */
+  function importedFileDoc(s) {
+    const imp = s._import;
+    const { _import, ...plain } = s;
+    const y = streamToYaml(plain);
+    for (const k of PLACEMENT_KEYS) delete y[k];
+    const st = { ...imp.place, ...y };
+    const touched = !s.durationImplicit && s.duration !== imp.dur0;
+    const doc = {};
+    for (const k of Object.keys(imp.head || {})) {
+      if (k === "streams") doc.streams = [st];
+      else if (k === "duration" && touched) doc.duration = s.duration;
+      else doc[k] = imp.head[k];
+    }
+    if (!("streams" in doc)) doc.streams = [st];
+    return doc;
+  }
+
+  /* Come sarebbe ogni file importato adesso: `{files: {[file]: testo},
+   * conflicts: [file]}`. Il testo e' senza intestazione, cosi' due chiamate
+   * sullo stesso stato danno lo stesso testo e il confronto col disco e' un
+   * confronto di stringhe. Lo stesso file importato da due voci (il motore lo
+   * permette, con due `stream_id`) e' UN file: finche' le due copie dicono la
+   * stessa cosa e' un file solo, quando divergono e' un conflitto, e chi salva
+   * deve rifiutare invece di sceglierne una. */
+  function serializeImports(data) {
+    const files = {}, conflicts = [];
+    for (const s of (data && data.streams) || []) {
+      if (!s || !s._import) continue;
+      const text = dumpWithInlineEnvelopes(importedFileDoc(s));
+      const f = s._import.file;
+      if (Object.prototype.hasOwnProperty.call(files, f)) {
+        if (files[f] !== text && !conflicts.includes(f)) conflicts.push(f);
+      } else {
+        files[f] = text;
+      }
+    }
+    return { files, conflicts };
+  }
+
+  // I file da scrivere: quelli il cui testo di adesso non e' quello che si sa
+  // essere su disco. Un file mai visto (assente da `disk`) si scrive.
+  function changedImports(files, disk) {
+    const out = {};
+    for (const f of Object.keys(files || {})) {
+      if (!disk || !Object.prototype.hasOwnProperty.call(disk, f) || disk[f] !== files[f]) out[f] = files[f];
+    }
+    return out;
+  }
+
+  // Il testo che va su disco: l'intestazione del master (chi, quando), poi il
+  // documento. Fuori dal confronto col disco, perche' `# saved:` cambia sempre.
+  function importedFileText(file, body) {
+    return `# stream: ${file}\n` +
+           `# saved:   ${new Date().toISOString()}\n` +
+           `# editor:  PGE-ui\n` +
+           `\n` + body;
+  }
+
+  // Lo stream senza provenienza: si scrive per intero nel master. E' cio' che
+  // incolla e split fanno della copia e della coda finche' #186 e #187 non le
+  // mettono in un file nuovo — una copia che tenesse `_import` scriverebbe nel
+  // file dell'originale.
+  function detachImport(s) {
+    if (!s || !s._import) return s;
+    const { _import, ...plain } = s;
+    return plain;
+  }
+
+  /* Le voci di `streams:` del master. Una voce `file:` che non si e' risolta
+   * (file mancante, malformato) non e' uno stream della timeline, ma il master
+   * non la perde: torna alla sua posizione, com'era scritta. */
+  function masterStreams(data) {
+    const out = (data.streams || []).map(s => (s && s._import) ? importEntryToYaml(s) : streamToYaml(s));
+    const pending = (data._unresolvedImports || []).slice().sort((a, b) => a.index - b.index);
+    for (const u of pending) out.splice(Math.min(u.index, out.length), 0, u.entry);
+    return out;
+  }
+
   function dataToYaml(data) {
     if (!window.jsyaml) return "";
     const payload = {};
@@ -721,7 +1006,7 @@
     // seed (engine #81): emit on presence, not truthiness — seed: 0 is a valid
     // seed and must survive. Absent/null stays absent (open+save no-op).
     if (data.seed !== undefined && data.seed !== null) payload.seed = data.seed;
-    payload.streams = (data.streams || []).map(streamToYaml);
+    payload.streams = masterStreams(data);
 
     // Preserve any project-level extras we don't model.
     if (data._extra && typeof data._extra === "object") {
@@ -993,9 +1278,44 @@
     if (!window.jsyaml) throw new Error("js-yaml not loaded");
     const y = window.jsyaml.load(text) || {};
     const samples = opts.samples || [];
-    const streams = Array.isArray(y.streams)
-      ? y.streams.map((s, i) => streamFromYaml(s, i, samples))
-      : [];
+    // Le voci `file:` (PGE #290) si risolvono qui, contro i testi che il
+    // chiamante ha letto dal bridge (`opts.imports`, vedi `importRefs`). Una
+    // voce che non si risolve non diventa uno stream ma non si perde: resta in
+    // `_unresolvedImports` e il salvataggio la rimette al suo posto. Gli errori
+    // — tutti, compresi quelli che lasciano lo stream risolto — stanno in
+    // `importErrors`, col master e la voce, perche' chi apre li possa dire.
+    const masterName = `${opts.project || y.project || "untitled"}.yml`;
+    const streams = [];
+    const unresolved = [];
+    const importErrors = [];
+    if (Array.isArray(y.streams)) {
+      y.streams.forEach((entry, i) => {
+        if (!isFileEntry(entry)) { streams.push(streamFromYaml(entry, i, samples)); return; }
+        const r = resolveImportEntry(entry, i, masterName, opts.imports);
+        const file = typeof entry.file === "string" ? entry.file : null;
+        for (const message of r.errors) importErrors.push({ index: i, file, message });
+        if (!r.stream) { unresolved.push({ index: i, entry }); return; }
+        const s = streamFromYaml(r.stream, i, samples);
+        s._import = r.meta;
+        streams.push(s);
+      });
+    }
+    // Regola 7 del motore: due stream con lo stesso id, se uno viene da un
+    // file, sono un errore (i due stem avrebbero lo stesso nome). Qui sotto
+    // l'editor li separa comunque con un suffisso, ma il render lo rifiutera':
+    // meglio dirlo all'apertura.
+    {
+      const byId = new Map();
+      for (const s of streams) byId.set(s.id, [...(byId.get(s.id) || []), s]);
+      for (const [id, group] of byId) {
+        if (group.length > 1 && group.some(s => s._import)) {
+          const files = group.map(s => s._import ? `'${s._import.file}'` : "scritto nel master");
+          importErrors.push({ index: null, file: null,
+            message: `${masterName}: lo stream_id '${id}' e' di ${group.length} stream (${files.join(", ")}) — ` +
+                     `due stem con lo stesso nome; dai uno 'stream_id' diverso accanto a 'file:'` });
+        }
+      }
+    }
     // Dedupe stream ids — some engine configs have duplicate stream_id values,
     // which would break React keys + selection. Suffix collisions with #2, #3…
     {
@@ -1026,6 +1346,8 @@
     // and strings; a missing or null seed means "unseeded" and stays unmodelled.
     if (y.seed !== undefined && y.seed !== null) data.seed = y.seed;
     if (Object.keys(extras).length) data._extra = extras;
+    if (unresolved.length) data._unresolvedImports = unresolved;
+    if (importErrors.length) data.importErrors = importErrors;
     return data;
   }
 
@@ -1103,8 +1425,13 @@
   // on every pre-v7 project opened, about the one rewrite the editor performs
   // on purpose. (It also reads undefined on a stream the UI created rather than
   // parsed, which the re-parse would turn into false.)
+  // `_import` (PGE-ui #183) e' la provenienza di uno stream importato, e la sua
+  // voce del master si riscrive dallo stato: riletta, dice cio' che e' stato
+  // appena scritto, non cio' che era stato letto. Quello che conta — che il
+  // FILE torni identico — `roundTripDiff` lo confronta a parte, testo contro
+  // testo.
   const IGNORE_FIELDS = new Set(["color", "samples", "statePositions", "_curveRaw",
-                                 "deviationProbabilityLegacy"]);
+                                 "deviationProbabilityLegacy", "_import"]);
 
   function deepDiff(a, b, path, out) {
     if (a === b) return;
@@ -1149,8 +1476,13 @@
     let text;
     try { text = dataToYaml(data); }
     catch (e) { return [{ path: "(serialize threw)", before: e.message, after: null }]; }
+    // Gli stream importati si rileggono dai file come il salvataggio li
+    // scriverebbe: e' il giro completo, master e file insieme.
+    const before = serializeImports(data).files;
+    const imports = {};
+    for (const f of Object.keys(before)) imports[f] = { text: before[f] };
     let back;
-    try { back = parse(text, { project: data.project, samples: data.samples }); }
+    try { back = parse(text, { project: data.project, samples: data.samples, imports }); }
     catch (e) { return [{ path: "(parse threw)", before: e.message, after: null }]; }
 
     const diffs = [];
@@ -1167,6 +1499,10 @@
     const ids = new Set([...Object.keys(byIdA), ...Object.keys(byIdB)]);
     for (const id of ids) {
       deepDiff(byIdA[id], byIdB[id], ["streams", id], diffs);
+    }
+    const after = serializeImports(back).files;
+    for (const f of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[f] !== after[f]) diffs.push({ path: `imports.${f}`, before: before[f], after: after[f] });
     }
     return diffs;
   }
@@ -1339,5 +1675,13 @@
     roundTripDiff,
     statePositionsReachYaml,
     DEVIATION_PROB_IMPLICIT,
+    // lo stream come file (PGE #290; PGE-ui #183, #184)
+    PLACEMENT_KEYS,
+    importRefs,
+    importDefaultId,
+    serializeImports,
+    changedImports,
+    importedFileText,
+    detachImport,
   };
 })();

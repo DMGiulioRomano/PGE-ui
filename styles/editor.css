@@ -257,6 +257,8 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 .clip:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 0 1px rgba(255,255,255,.06); }
 .clip.selected { outline: 1px solid var(--accent); outline-offset: 0; z-index: 2; }
 .clip.selected .lbl { background: var(--accent); color: var(--fg-on-accent); }
+/* Il file da cui lo stream e' importato (`file:`, #183). */
+.clip .lbl .clip-file { text-decoration: underline dotted; text-underline-offset: 2px; }
 .clip.muted { opacity: .35; }
 .clip.error { background: var(--status-error-bg) !important; outline: 1px solid var(--status-error); }
 .clip.error .lbl { color: var(--status-error); }
