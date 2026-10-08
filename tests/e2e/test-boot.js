@@ -811,6 +811,117 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       const refused6 = seen.errors.filter(e => / 409 /.test(e) && /\/save\b/.test(e));
       assert("...un rifiuto, in console", refused6.length === 1, refused6.join("\n      "));
       seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused6.includes(e)));
+
+      // 6 — lo split dello stream importato (#187): la testa resta nel suo
+      // file, accorciata, e la coda e' un file nuovo, `onda-2.yml`, scritto al
+      // salvataggio e non allo split. Lo split vuole due cose che il workspace
+      // non ha: la posizione di lettura (il sidecar dei grani, che c'e' solo
+      // accanto a uno stem) e, con `loop_unit: normalized`, la durata del
+      // sample. Le scrive il test — un WAV muto e un sidecar a mano — e la
+      // pagina si ricarica, perche' media e stem l'editor li legge al boot e
+      // all'apertura. Uno stem orfano `onda-3` e' l'altra meta' della regola:
+      // un id che ha ancora uno stem non si prende.
+      const wav = (seconds, sr = 8000) => {
+        const n = Math.round(seconds * sr), b = Buffer.alloc(44 + 2 * n);
+        b.write("RIFF", 0); b.writeUInt32LE(36 + 2 * n, 4); b.write("WAVE", 8);
+        b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+        b.writeUInt32LE(sr, 24); b.writeUInt32LE(2 * sr, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+        b.write("data", 36); b.writeUInt32LE(2 * n, 40);
+        return b;
+      };
+      const media = await page.evaluate(async () => (await fetch("/media")).json());
+      fs.writeFileSync(path.join(media.path, "smoke.wav"), wav(2));
+      const outDir = path.join(session.paths.workspace, "output");
+      fs.mkdirSync(outDir, { recursive: true });
+      const stemBase = MASTER.replace(/\.yml$/, "");
+      fs.writeFileSync(path.join(outDir, `${stemBase}__onda.wav`), wav(3));
+      fs.writeFileSync(path.join(outDir, `${stemBase}__onda-3.wav`), wav(1));
+      const grains = [];
+      for (let t = 0; t < 3; t += 0.25) grains.push({ t, dur: 0.05, vol: -6, ptr: +(t * 0.1).toFixed(3), pr: 0.8, v: 0 });
+      fs.writeFileSync(path.join(outDir, `${stemBase}__onda__grains.json`),
+        JSON.stringify({ stream_id: "onda", duration: 3, num_voices: 1, grains }));
+      // Il lavoro non salvato della sezione 5 resta indietro: alla domanda
+      // del browser ("lasciare la pagina?") si risponde si'.
+      const leave = (d) => d.accept();
+      page.on("dialog", leave);
+      await page.reload();
+      await page.waitForSelector(".lane .clip", { timeout: 15000 });
+      page.off("dialog", leave);
+      await page.click(".bw-tabs button:nth-child(2)");
+      await page.evaluate((n) => {
+        const it = [...document.querySelectorAll(".pge-browser .it.proj")]
+          .find(e => (e.querySelector(".nm") || {}).textContent === n);
+        if (it) it.click();
+      }, MASTER);
+      await page.waitForSelector(".lane .clip .clip-file", { timeout: 10000 });
+      await wait(500);
+      const entries8 = await entriesOf();
+      const head8 = await importText();
+      const dir8 = await streamsDir();
+      const splitHere = async () => {
+        await importedClip();
+        // onda e' a onset 1 per 3 s: il cursore a 2.5 la taglia a meta'.
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent("pge-seek", { detail: 2.5 })));
+        await wait(200);
+        await page.keyboard.press("d");
+        await wait(600);                          // lo split aspetta GET /import-dir
+      };
+      // Il primo `d` chiede il sidecar e rifiuta (la posizione di lettura
+      // non e' ancora in memoria): e' il rifiuto di sempre, non della #187.
+      await splitHere();
+      const refusedFirst = (await fileLabels()).length === 1;
+      if (refusedFirst) await splitHere();
+      const labels8 = await fileLabels();
+      assert("lo split dello stream importato: la coda ha un file suo, onda-2.yml, accanto alla testa",
+        labels8.length === 2 && labels8.includes(FILE) && labels8.includes("streams/onda-2.yml"),
+        JSON.stringify(labels8));
+      assert("...che allo split non si scrive", JSON.stringify(await streamsDir()) === JSON.stringify(dir8),
+        JSON.stringify(await streamsDir()));
+      await save();
+      const tailDoc = await yamlOf(await importOf("streams/onda-2.yml"));
+      const headDoc = await yamlOf(await importText());
+      assert("salvato, la coda e' un documento del laboratorio a se': uno stream, stream_id = nome del file",
+        !!tailDoc && tailDoc.streams.length === 1 && tailDoc.streams[0].stream_id === "onda-2",
+        JSON.stringify(tailDoc));
+      assert("...col seed del file originale, lunga quanto la coda",
+        tailDoc && tailDoc.seed === 1441 && tailDoc.duration === 1.5 && tailDoc.streams[0].duration === 1.5,
+        JSON.stringify(tailDoc && [tailDoc.seed, tailDoc.duration, tailDoc.streams[0].duration]));
+      // Il sidecar dice ptr 0.15 a 1.5 s dall'onset; il sample dura 2 s, e
+      // loop_unit e' normalized: start = 0.15 / 2.
+      assert("...che riprende la lettura del sample dove la testa si ferma",
+        tailDoc && tailDoc.streams[0].pointer.start === 0.075, JSON.stringify(tailDoc && tailDoc.streams[0].pointer));
+      assert("la testa resta nel suo file, accorciata",
+        headDoc.streams[0].stream_id === "onda" && headDoc.streams[0].duration === 1.5 && headDoc.duration === 1.5,
+        JSON.stringify([headDoc.duration, headDoc.streams[0].duration]));
+      const entries9 = await entriesOf();
+      const tailEntry = entries9.find(e => e.file === "streams/onda-2.yml");
+      assert("il master ha due voci `file:`: la testa dov'era, la coda all'onset del taglio, senza stream_id",
+        JSON.stringify(entries9.find(e => e.file === FILE)) === JSON.stringify(entries8.find(e => e.file === FILE))
+          && JSON.stringify(tailEntry) === JSON.stringify({ file: "streams/onda-2.yml", onset: 2.5 })
+          && entries9.length === entries8.length + 1, JSON.stringify(entries9));
+
+      // Un undo solo: testa e coda tornano lo stream di prima, il master pure.
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      assert("lo split e' un passo solo di undo", (await fileLabels()).length === 1, JSON.stringify(await fileLabels()));
+      await save();
+      assert("...salvato, la voce della coda sparisce e la testa torna intera",
+        JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
+          && JSON.stringify(await yamlOf(await importText())) === JSON.stringify(await yamlOf(head8)),
+        JSON.stringify(await entriesOf()));
+      // Di nuovo: onda-2.yml c'e' su disco, onda-3 ha uno stem. Si passa a -4.
+      await splitHere();
+      const labels10 = await fileLabels();
+      assert("tagliato di nuovo: onda-2.yml esiste, onda-3 ha uno stem — la coda e' onda-4",
+        labels10.includes("streams/onda-4.yml") && (await streamsDir()).includes("streams/onda-2.yml"),
+        JSON.stringify(labels10));
+      // ...e annullato PRIMA del salvataggio: su disco non resta niente.
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      assert("undo dello split prima del salvataggio: niente nel master, niente su disco",
+        JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
+          && !(await streamsDir()).includes("streams/onda-4.yml"), JSON.stringify(await streamsDir()));
     }
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni

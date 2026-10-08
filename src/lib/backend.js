@@ -40,8 +40,9 @@
  *   fs.listImportDir(dir)         → Promise<{ ok:true, files:[path] } | { ok:false, error }>:
  *                                   i documenti YAML di una cartella sotto configs/
  *                                   ("" = configs/ stessa), coi path relativi a
- *                                   configs/ — i nomi che la copia di uno stream
- *                                   importato non puo' prendere (#186). Non lancia
+ *                                   configs/ — i nomi che un file nuovo, la copia di
+ *                                   uno stream importato (#186) o la coda del suo
+ *                                   split (#187), non puo' prendere. Non lancia
  *   fs.save(basename, yaml, imports, {overwrite, create}?)
  *                                 → Promise<{ ok:true, written:[nomi], signature }>:
  *                                   il master e i file importati cambiati
@@ -51,7 +52,8 @@
  *                                   { ok:false, changed:true, files:[name], error }
  *                                   e non scrive niente, import compresi. `create`
  *                                   sono i file NUOVI fra gli import (le copie,
- *                                   #186): se uno esiste gia' torna
+ *                                   #186; le code degli split, #187): se uno
+ *                                   esiste gia' torna
  *                                   { ok:false, exists:true, files:[path], error }
  *                                   e non scrive niente. Lancia col messaggio del
  *                                   bridge sugli altri errori

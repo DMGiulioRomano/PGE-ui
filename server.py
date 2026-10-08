@@ -198,10 +198,12 @@ def _exists_payload(files):
     # La forma del rifiuto di #186, accanto a quella di #185: `exists` e' un
     # campo, `files` dice quali.
     names = ", ".join(files)
+    # Il file nuovo nasce da due gesti, la copia (#186) e la coda di uno split
+    # (#187): il rimedio li nomina tutti e due.
     return {"ok": False, "exists": True, "files": files,
-            "error": f"{names}: esiste gia' su disco, e il file nuovo di una copia "
-                     "non sovrascrive niente. Annulla l'incolla e incolla di nuovo: "
-                     "la copia prende un nome libero"}
+            "error": f"{names}: esiste gia' su disco, e un file nuovo (la copia di "
+                     "un incolla, la coda di uno split) non sovrascrive niente. "
+                     "Annulla il gesto e rifallo: il file nuovo prende un nome libero"}
 
 
 def write_import_plan(plan, creates=frozenset()):

@@ -418,12 +418,13 @@ console.log("\n── l'impronta di uno stream importato e' quella dello stesso 
   assert("spostare il file non muove l'impronta", fingerprintStream(moved, "wav") === fingerprintStream(imported, "wav"));
 }
 
-console.log("\n── staccare la provenienza (incolla, split) ──");
+/* Uno stream senza provenienza si scrive per intero nel master. Incolla e
+   split la toglievano alla copia e alla coda (`detachImport`) finche' #186 e
+   #187 non hanno dato a ciascuna un file suo (test-stream-copy.js,
+   test-stream-split.js); la regola del serializzatore resta. */
+console.log("\n── senza provenienza, lo stream sta nel master ──");
 {
-  const s = open().streams[0];
-  const d = Y.detachImport(s);
-  assert("detachImport toglie la provenienza", !("_import" in d) && d.id === s.id && d.density === s.density);
-  assert("...e lascia stare chi non ne ha", Y.detachImport(open().streams[1]) === open().streams[1] || !("_import" in Y.detachImport(open().streams[1])));
+  const { _import, ...d } = open().streams[0];
   const inl = { ...open(), streams: [d, open().streams[1]] };
   const e = masterDoc(inl).streams[0];
   assert("staccato, lo stream si scrive per intero nel master", !("file" in e) && e.stream_id === "risacca"
@@ -499,13 +500,12 @@ console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardi
     assert("...e non li segna una seconda volta dopo run()",
       (rr.match(/markImportsWritten\(/g) || []).length === 1);
   }
-  /* L'incolla non stacca piu': la copia di uno stream importato e' un file
-     nuovo (#186, tests/node/test-stream-copy.js). Lo split si', finche' la
-     #187 non da' alla coda il suo `<nome>-2.yml`. */
-  const detach = app.match(/detachImport\(/g) || [];
-  assert("lo split stacca la provenienza della coda (finche' #187 non le da' un file nuovo)",
-    detach.length === 1 && /detachImport\(sliced\.stream\)/.test(app), `${detach.length} chiamate`);
-  assert("l'incolla da' alla copia un file suo (#186)", /copyImport\(/.test(app));
+  /* Ne' l'incolla ne' lo split staccano piu' la provenienza: la copia di uno
+     stream importato e' un file nuovo (#186, test-stream-copy.js), e cosi' la
+     coda di uno split (#187, test-stream-split.js). */
+  assert("nessuno stacca piu' la provenienza di uno stream importato", !/detachImport\(/.test(app));
+  assert("l'incolla e lo split danno alla copia e alla coda un file loro (#186, #187)",
+    (app.match(/copyImport\(/g) || []).length === 2);
   const ye = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
   assert("il tab Raw conserva la provenienza dello stream che riscrive",
     /_import:\s*stream\._import/.test(ye));

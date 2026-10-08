@@ -135,7 +135,8 @@ exists, the fourth only when a browser is installed):
   with `imports`, the messages that name an import which doesn't resolve, every
   key's one home between master and file, the file staying a lab document,
   `changedImports` against the disk rather than history, the conflict of one
-  file imported twice, `detachImport`, plus source guards on where app.jsx
+  file imported twice, a stream with no provenance written whole in the
+  master, plus source guards on where app.jsx
   keeps the disk and on the paste/split/Raw-tab wiring), and
   `test-lab-roundtrip.js` (#188: the reverse round trip on documents the
   mare-nostrum lab really wrote, `tests/fixtures/lab/` — imported by a master,
@@ -170,10 +171,25 @@ exists, the fourth only when a browser is installed):
   the backend over a fake bridge — `fs.listImportDir`, `createImports` on
   `/save` and `/render`, the `exists` refusal returned rather than thrown and
   with no `done` — plus source guards on the async paste asking the folder
-  before allocating, on the split still detaching, on the three writers
-  sending `create`, and on a render refused with `exists` going off without
-  recording an outcome — `lastOk: false` would print "last run failed" under
-  a "Render refused" toast).
+  before allocating, on the split giving its tail a file too, on the three
+  writers sending `create`, and on a render refused with `exists` going off
+  without recording an outcome — `lastOk: false` would print "last run failed"
+  under a "Render refused" toast), and `test-stream-split.js` (#187: the split
+  of an imported stream — `allocStreamIds` with bases, `<name>-2` then the next
+  number past a live id, a stem and a file name already in the folder,
+  `importSplitBase` being the *file's* name and not the stream's id, the split
+  done the way app.jsx does it on the same library functions: the head's file
+  shortened, `<name>-2.yml` a lab document of its own — one stream,
+  `stream_id` = file name, the original's seed, `pointer.start` where the head
+  stops and the pointer's envelopes going on from the cut —, the master with
+  two `file:` entries, nothing to create once undone;
+  a master stream's tail unchanged, a fresh copy's tail beside the copy; a
+  file imported by two entries, where cutting one adds a conflict and cutting
+  both at the same point doesn't (`importConflictsAdded`, `importConflictText`);
+  plus source guards on the async split listing the folder only when it cuts
+  an imported stream, its oracle, the identity check after the await, the
+  shared-file refusal before it, the re-entry guard of `onSplit`, and the
+  conflict message promising no "detach").
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -238,8 +254,10 @@ exists, the fourth only when a browser is installed):
   missing folder empty, the `/import` boundary —, and `createImports` on
   `/save` and `/render`: a new file that already exists is a 409 `{exists}`
   with the disk untouched, master and other imports included, before the
-  #185 verdict and before the engine; a malformed list is a 400; and
-  `write_import_plan` opening a new file in exclusive-create mode), and
+  #185 verdict and before the engine; a malformed list is a 400;
+  `write_import_plan` opening a new file in exclusive-create mode; and the
+  refusal's remedy naming both gestures that create a new file, the paste and
+  #187's split), and
   `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
@@ -472,6 +490,18 @@ leaves the original byte-identical, undoing the paste drops the master entry,
 a second paste avoids the name now on disk, and a paste undone *before* the
 save leaves nothing on disk. Existence is asked of `GET /import-dir`, never of
 `GET /import`: a 404 there is a console error the test would have put there.
+Last, #187's split, after a page reload: the test writes what a split needs
+and the stub engine never produces — a mute WAV as the sample (with
+`loop_unit: normalized` its duration is required), a stem and a hand-made grain
+sidecar for `onda` (the read position), and an orphan stem `onda-3` — reloads
+the page (media and stems are read at boot and at open; the unsaved edit of
+step 5 makes the browser ask, and the test answers "leave"), and splits the
+imported clip at the playhead: the tail gets `streams/onda-2.yml`, not on disk
+until the save, then a lab document with `stream_id: onda-2`, the original's
+seed and `pointer.start` read off the sidecar, the head's file shortened and
+the master with the tail's `file:` entry at the cut; one undo takes the whole
+split back; splitting again lands on `onda-4` (`onda-2.yml` is on disk,
+`onda-3` owns a stem); and a split undone before the save leaves nothing.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -1985,7 +2015,8 @@ them.
 Reaper's S key, rebindable (`tweaks.shortcutSplit`, default `d`). Every selected
 clip the playhead crosses becomes two streams, in one undo step. The head keeps
 the original id (its stem goes stale by itself — the duration moved); the tail
-gets a fresh id from `allocStreamIds` and lands in the head's lane via
+gets a fresh id from `allocStreamIds` — a `streamN`, or `<name>-N` for an
+imported stream (below) — and lands in the head's lane via
 `addStreamToTrackOf`.
 
 The two halves fail in two different ways, and each has its own guard:
@@ -2011,6 +2042,71 @@ normalized` **without** `loop_unit`: there the engine reads seconds, and the
 normalized branch would write a position 8× off. That is why the unit is asked of
 `loopUnitInfo` rather than deduced from the stream. Normalized with an unknown
 sample duration is the third refusal.
+
+**An imported stream splits into two files** (#187, rule 6 of the plan). The
+head keeps its id and its file (`streams/risacca.yml`), shortened there by the
+same freeze; the tail becomes a new file beside it, `<name>-2.yml`, which the
+master imports with a `- file:` entry at the cut. Five rules:
+
+- **The tail's id is its file's name**, `<name>-N`: `<name>` is the head's
+  *file* name (`importSplitBase`, not the stream's id — a master entry that
+  renames it `stream_id: alto` still gives `risacca-2`, because a file name is
+  what is being chosen), and N the first from 2 that `allocStreamIds` gives as
+  free. Its `count` also takes a list of **bases** now (`null` = a `streamN`,
+  a string `b` = `b-2`, `b-3`, …), so the two series share one notion of
+  free: not a live id, not one handed out earlier in the same call (two
+  entries importing one file get `-2` and `-3`), not refused by the oracle.
+  The oracle is `splitIdTaken`, the paste's shape — `ownsStemFor(id) ||` a
+  file name already in the folder (`importIdTaken` over the bridge's listing,
+  `importDiskRef` and `importFilesOf`) — so `-2` is skipped both when
+  `<name>-2.yml` exists and when the id `<name>-2` owns a stem. The rule is
+  literal: the tail of `risacca-2` is `risacca-2-2`. No suffix is stripped —
+  a `take-1.yml` the author named is not a number of this series.
+- **The tail is a copy of the provenance**, made by `copyImport` exactly like
+  #186's paste: the file's top level (`seed`, `bpm`; `duration` follows the
+  tail's, the head-of-file rule), its placement inside the file, and the
+  `stream_id` the file writes renamed to the new id — so it opens in the lab
+  as a document of its own: one stream, `stream_id` = file name, the
+  original's seed. Its `pointer.start` is the one above.
+- **Written at the save or before the render, never at the split** — the
+  copy's rule: the tail is `fresh`, travels in `createImports`, and the bridge
+  creates it in exclusive mode or refuses with 409 `{exists}`, whose remedy
+  now names both gestures that make a new file. A split undone before the
+  save leaves nothing on disk; once saved, the file stays (data-only, like
+  `deleteStream`) and its name stays taken.
+- **The split asks the folder first, so it is async — but only when it cuts
+  an imported stream** (`dirs.length ? await listImportNames(…) : []`): a split
+  of master streams takes no round trip and is the split it was.
+  `listImportNames` is one helper, shared with the paste. Across that await
+  the clips can change (an edit, `d` pressed again), and the head and tail
+  computed before it would throw the change away, so after it the split
+  checks that `dataRef.current` still holds the very stream objects it cut,
+  and gives up with a toast otherwise.
+- **The three refusals are unchanged and come first**, before any round
+  trip: no clip under the playhead, no sidecar, normalized with an unknown
+  sample duration. **A fourth joins them**: a file imported by more than one
+  master entry is one document (the entries differ in placement only), and the
+  head is shortened *in its file*, so cutting one entry makes the in-memory
+  copies diverge — a `conflict`, and save and render refuse. The split asks
+  first (`importConflictsAdded(data, withHeads)`, the conflicts the heads would
+  add, not the ones already there) and refuses with a toast naming the file
+  and the streams that import it (`importConflictText`), instead of leaving a
+  state that can't be saved. Entries cut together at the same point stay equal
+  and pass; the tails don't enter, each has a new file.
+- **One split at a time** (`onSplit`, the shortcut's entry): a ref raised
+  before any await and dropped in a `finally`, `renderAgain`'s shape. Without
+  it a `d` pressed while the first split waited for the folder started from
+  the state without the first tail; the identity check reads the last render,
+  and if the second answer came before that render the head was rewritten and
+  a second, identical tail was born.
+
+`tests/node/test-stream-split.js` pins the rules on the library functions the
+split is made of; `tests/parity/test-stream-split-parity.js` cuts each stream
+of the lab fixtures (`tests/fixtures/lab/`) and asks the engine
+(`resolve_stream_files`) — head with its id, tail named after its file with no
+`stream_id` in the master entry (the engine's default), the other streams'
+fingerprints unchanged, the tail's file alone one stream; and
+`tests/e2e/test-boot.js` walks the gesture in a browser.
 
 **`rescaleEnvArray` deliberately does not clamp x to 1** (and that clamp was a
 bug, not a safety net): it ate exactly the information `truncateEnvArray` needs.
@@ -2068,6 +2164,15 @@ interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
 held last value when nothing survives the cut (the engine rejects an empty
 envelope). `snapForDomain` applies there too — that interpolated point is a
 *computed* y, and on `read_direction` an unsnapped one is a parse error.
+**The pointer's envelopes are cut too**, and `start` is the only pointer field
+the split writes: the tail's pointer is `{...sliced.stream.pointer, start}`.
+It used to be `{...s.pointer, start}` — the whole stream's — which threw away
+the slice of `speed_ratio`, `offset_range` and the loop envelopes, so the tail
+ran those curves again from their beginning, squeezed into its own length:
+the sound changed exactly at the cut. Since #187 the tail is a lab document
+of its own, so that curve would have stayed written there. The split lives in
+`app.jsx`, so `test-stream-split.js` pins it with a source guard beside the
+model it runs.
 **Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
 half isn't defined, so `sliceEnvArray` returns `null` on an array holding one —
 and on a **bare** one, the value that *is* the block — the field is left
@@ -2412,7 +2517,12 @@ its **placement**. The path is relative to the master's folder, i.e.
   same file imported by two entries (the engine allows it with two
   `stream_id`s) is one file: as long as both copies say the same thing it is
   written once, when they diverge it is a `conflict` and save and render
-  refuse rather than pick one.
+  refuse rather than pick one. The refusal names the file and the streams
+  that import it (`importConflictText`) and the remedies the editor really
+  has — undo the edit, or make it on every one of those streams; no gesture
+  detaches a stream from its file, so the message doesn't promise one. The
+  split refuses *before* creating such a conflict (see "Split at the
+  playhead").
 - **Errors name the master and the file, and the editor doesn't crash.** A file
   that is missing, unreadable, malformed, holds no stream or more than one, or
   chains another `file:` leaves its entry unresolved: it is not a timeline
@@ -2423,11 +2533,11 @@ its **placement**. The path is relative to the master's folder, i.e.
   key stays in the entry where the author wrote it. A duplicate effective id
   involving an import (the engine's rule 7) is reported too. All of them land
   in `data.importErrors`, which `onProjectSelect` logs and toasts.
-- **A copy is a new file; a split still detaches.** A paste of an imported
-  stream gets a file of its own beside the original (#186, below). The tail
-  of a split is still written in full in the master (`detachImport`): with
-  the head's provenance it would write into *its* file. `<name>-2.yml` for
-  the tail is #187; the split's head keeps its file and is shortened there.
+- **A copy and a split's tail are new files.** A paste of an imported
+  stream gets a file of its own beside the original (#186, below), and so
+  does the tail of a split, `<name>-2.yml` (#187, see "Split at the
+  playhead"); the split's head keeps its file and is shortened there. Nothing
+  detaches a stream from its file any more — `detachImport` went with #187.
 - **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
   edit there lands in the file; the timeline shows the file name beside the
   id, and the Inspector has a `file` row.
@@ -2711,7 +2821,7 @@ it would crop the drawing to the previous length).
 
 ### Stream identity (`allocStreamIds`, the stem index)
 
-A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again. The paste's oracle (`pasteIdTaken`, #186) asks `ownsStemFor` first and then whether the id is a file name beside an imported original; `test-stream-id.js` accepts a named oracle only if its declaration starts with that `ownsStemFor(id) ||`.
+A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again. The paste's oracle (`pasteIdTaken`, #186) asks `ownsStemFor` first and then whether the id is a file name beside an imported original, and so does the split's (`splitIdTaken`, #187, whose tail of an imported stream is `<name>-N`: `allocStreamIds` takes a list of bases for that); `test-stream-id.js` accepts a named oracle only if its declaration starts with that `ownsStemFor(id) ||`.
 
 `deleteStream` is a **data-only** mutation. With ids that never recycle, a leftover cache entry can never be picked up by a different stream — a Ctrl+Z'd stream comes back with its cached data intact.
 

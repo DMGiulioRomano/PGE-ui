@@ -401,10 +401,13 @@ console.log("\n── app.jsx: l'incolla crea un file nuovo, salvataggio e rende
   assert("pasteStreams e' asincrona (chiede la cartella al bridge prima di scegliere il nome)", !!paste);
   assert("...la copia passa da copyImport, non si stacca piu' dal suo file",
     /copyImport\(/.test(paste) && !/detachImport\(/.test(paste));
-  const list = paste.indexOf("listImportDir(");
+  // L'elenco passa da `listImportNames`, che lo split condivide (#187).
+  const list = paste.indexOf("listImportNames(");
   const alloc = paste.indexOf("allocStreamIds(");
   assert("...elenca la cartella PRIMA di allocare l'id", list > 0 && alloc > 0 && list < alloc,
     `list@${list} alloc@${alloc}`);
+  assert("...e l'elenco e' quello del bridge (GET /import-dir)",
+    /listImportDir\(/.test(fnBody("async function listImportNames(")));
   assert("...e l'oracolo dell'id guarda stem e file: ownsStemFor e importIdTaken",
     /ownsStemFor\(/.test(paste) && /importIdTaken\(/.test(paste));
   assert("...con i file su disco ricordati e quelli del documento, non solo l'elenco",
@@ -413,8 +416,9 @@ console.log("\n── app.jsx: l'incolla crea un file nuovo, salvataggio e rende
   // copia quando `_srcProject` non e' questo.
   assert("...nessun ramo diverso per l'altro progetto: `_srcProject` decide solo la corsia",
     (paste.match(/_srcProject/g) || []).length <= 2);
-  const split = fnBody("function splitAtPlayhead(");
-  assert("lo split stacca ancora la coda (il suo file nuovo e' la #187)", /detachImport\(/.test(split));
+  // Lo split non stacca piu' la coda: ha un file suo (#187, test-stream-split.js).
+  const split = fnBody("async function splitAtPlayhead(");
+  assert("anche lo split da' alla coda un file suo (#187)", /copyImport\(/.test(split) && !/detachImport\(/.test(split));
 
   const iw = fnBody("function importWrites(");
   assert("importWrites dice quali file sono nuovi (importCreates contro il disco ricordato)",

@@ -338,6 +338,9 @@ function App() {
      entrambi `running: false` comunque si ordinassero le setState. Un ref si
      alza nello stesso tick e vale per ogni chiusura, viva o stantia. */
   const renderingRef = useRefApp(false);
+  /* La stessa guardia per lo split (#187), che da quando taglia uno stream
+     importato aspetta la cartella dal bridge: vedi `onSplit`. */
+  const splittingRef = useRefApp(false);
 
   /* La versione di semantica del motore, richiesta al bridge.
    *
@@ -1099,7 +1102,7 @@ function App() {
       }
       if (matchShortcut(e, tweaks.shortcutSplit || "d") && selectedIds.length > 0) {
         e.preventDefault();
-        splitAtPlayhead();
+        onSplit();
         return;
       }
       // Alt+↑/↓ (rebindable): move the selected clips one lane. Placed before
@@ -1194,6 +1197,23 @@ function App() {
     clipboardRef.current = JSON.parse(JSON.stringify(toCopy))
       .map(s => ({ ...s, _srcId: s.id, _srcProject: activeProject }));
   }
+  /* I documenti YAML delle cartelle `dirs` sotto configs/, chiesti al bridge:
+     i nomi che un file nuovo — la copia di un incolla (#186), la coda di uno
+     split (#187) — non puo' prendere. Un elenco che non arriva non ferma il
+     gesto: lo dice nel log, i nomi che l'editor conosce restano, e il bridge
+     comunque non crea un file che c'e' gia'. */
+  async function listImportNames(dirs, what) {
+    const backend = window.PGEBackend.current;
+    const listed = [];
+    const answers = await Promise.all(dirs.map(dir =>
+      backend.fs.listImportDir ? backend.fs.listImportDir(dir) : Promise.resolve({ ok: false, error: "no listing" })));
+    answers.forEach((a, i) => {
+      if (a.ok) listed.push(...a.files);
+      else logToTerminal(`[file] ${dirs[i] || "configs/"}: elenco non riuscito (${a.error}) — ` +
+                         `il nome ${what} evita solo i file che l'editor conosce`, "warn");
+    });
+    return listed;
+  }
   async function pasteStreams() {
     const copied = clipboardRef.current;
     if (!copied.length) return;
@@ -1203,23 +1223,11 @@ function App() {
     /* La copia di uno stream importato (#186) e' un file NUOVO accanto
        all'originale, col nome del suo id (`copyImport`). Il nome lo sceglie
        questo incolla, e lo sceglie libero solo sapendo cosa c'e' gia' in
-       quella cartella: si chiede al bridge PRIMA di allocare l'id. Un elenco
-       che non arriva non ferma l'incolla — i nomi che l'editor conosce
-       restano, e il bridge comunque non crea un file che c'e' gia'. Da un
+       quella cartella: si chiede al bridge PRIMA di allocare l'id. Da un
        altro progetto la regola e' la stessa: il path e' relativo alla
        cartella del master, quindi la copia nasce accanto ai file di QUESTO. */
     const dirs = [...new Set(copied.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
-    const listed = [];
-    if (dirs.length) {
-      const backend = window.PGEBackend.current;
-      const answers = await Promise.all(dirs.map(dir =>
-        backend.fs.listImportDir ? backend.fs.listImportDir(dir) : Promise.resolve({ ok: false, error: "no listing" })));
-      answers.forEach((a, i) => {
-        if (a.ok) listed.push(...a.files);
-        else logToTerminal(`[file] ${dirs[i] || "configs/"}: elenco non riuscito (${a.error}) — ` +
-                           `il nome della copia evita solo i file che l'editor conosce`, "warn");
-      });
-    }
+    const listed = dirs.length ? await listImportNames(dirs, "della copia") : [];
     const newIds = [];
     setData(d => {
       // L'id non deve avere uno stem su disco (ownsStemFor: altrimenti la copia
@@ -1265,6 +1273,23 @@ function App() {
                     `un file nuovo accanto all'originale, scritto al salvataggio o prima del render`);
     }
   }
+  /* L'ingresso dello split, con la sua guardia di rientro — lo schema di
+     `renderAgain` per il render. Lo split di uno stream importato aspetta la
+     cartella dal bridge (#187), e un `d` premuto durante quell'attesa partiva
+     dallo stato in cui la prima coda non c'era ancora: il controllo
+     d'identita' dopo l'attesa legge l'ultimo ridisegno, e se la seconda
+     risposta arrivava prima di quello la testa si riscriveva e nasceva una
+     seconda coda uguale. Un ref si alza nello stesso tick e vale per ogni
+     chiusura: durante l'attesa un secondo split non parte. */
+  async function onSplit() {
+    if (splittingRef.current) return;
+    splittingRef.current = true;
+    try {
+      await splitAtPlayhead();
+    } finally {
+      splittingRef.current = false;
+    }
+  }
   /* ---- split al cursore (tasto rimappabile, default "d") ----
    * Il taglio di Reaper: la clip selezionata diventa due stream, la testa e la
    * coda, e il suono non cambia. Cambiano solo i due modi in cui una meta' puo'
@@ -1283,8 +1308,13 @@ function App() {
    * dentro dei secondi lo manderebbe fuori file; su uno YAML scritto a mano che
    * porta `time_mode: normalized` senza `loop_unit` vale l'opposto, ed e' per
    * questo che l'unita' la chiede a loopUnitInfo invece di dedurla dallo
-   * stream. */
-  function splitAtPlayhead() {
+   * stream.
+   * Di uno stream importato con `file:` (#187) la testa resta nel suo file,
+   * accorciata, e la coda diventa un file nuovo accanto, `<nome>-N.yml` col
+   * nome del file della testa: per sceglierlo libero lo split chiede la
+   * cartella al bridge, come l'incolla, e per questo e' asincrono. Lo split di
+   * soli stream scritti nel master non fa giri di rete. */
+  async function splitAtPlayhead() {
     const t = time;
     const R = (x) => +x.toFixed(4);
     const targets = data.streams.filter(s =>
@@ -1330,20 +1360,68 @@ function App() {
       const sliced = sliceStreamEnvelopes(s, cutNorm);
       skipped += sliced.skipped;
       // La testa di uno stream importato resta nel suo file, accorciata (la
-      // modifica va li', #184). La coda no: con la provenienza della testa
-      // scriverebbe nello stesso file, e il file e' uno. La coda in un file
-      // suo (`<nome>-2.yml`) e' la #187; finche' non c'e', sta nel master.
+      // modifica va li', #184). La coda qui ha ancora la provenienza della
+      // testa, e con quella scriverebbe nello stesso file: la sua — un file
+      // nuovo, la voce del master, lo `stream_id` del documento — gliela da'
+      // `copyImport` quando avra' l'id (#187).
+      // Il pointer e' quello TAGLIATO, con lo start sopra: speed_ratio,
+      // offset_range e gli inviluppi del loop riprendono dal taglio come ogni
+      // altra curva. Lo `s.pointer` dello stream intero li faceva ripartire
+      // dall'inizio, compressi nella durata della coda.
       const tail = {
-        ...window.PGEYaml.detachImport(sliced.stream),
+        ...sliced.stream,
         onset: R(t), duration: R(s.duration - cutRel),
         durationImplicit: false, durationUnresolved: false,
-        pointer: { ...(s.pointer || {}), start },
+        pointer: { ...(sliced.stream.pointer || {}), start },
       };
       halves.set(s.id, { head, tail });
     }
+    /* Lo stesso file importato da piu' voci e' un documento solo: la testa
+       accorciata nel file lo cambierebbe per tutte, le copie in memoria non
+       direbbero piu' la stessa cosa, e salvataggio e render si rifiuterebbero
+       sul conflitto. Lo si dice adesso, con gli altri rifiuti e prima di ogni
+       giro di rete, invece di lasciare uno stato che non si salva. Tagliate
+       insieme allo stesso punto le voci restano uguali, e lo split passa; le
+       code non c'entrano, hanno ciascuna un file nuovo. */
+    const PY = window.PGEYaml;
+    const withHeads = { ...data, streams: data.streams.map(s => (halves.has(s.id) ? halves.get(s.id).head : s)) };
+    const sharedFiles = PY.importConflictsAdded(data, withHeads);
+    if (sharedFiles.length) {
+      pushToast({ kind: "warn", title: "Split rifiutato",
+                  message: `${PY.importConflictText(data, sharedFiles)}: lo stesso file importato da piu' voci ` +
+                           `e' un documento solo, e dopo lo split le sue copie non direbbero piu' la stessa cosa — ` +
+                           `salvataggio e render si rifiuterebbero`,
+                  duration: 6000 });
+      return;
+    }
+    /* La coda di uno stream importato si chiama `<nome>-N` ed e' il nome del
+       suo file nuovo: libero solo sapendo cosa c'e' gia' nella cartella, che
+       si chiede al bridge PRIMA di allocare l'id — come l'incolla. */
+    const dirs = [...new Set(targets.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
+    const listed = dirs.length ? await listImportNames(dirs, "della coda") : [];
+    /* Fra la domanda e la risposta l'utente puo' aver toccato una clip da
+       tagliare (o premuto di nuovo il tasto): testa e coda, calcolate prima,
+       butterebbero via quella modifica. Si guarda la `data` di ADESSO e, se una
+       clip non e' piu' quella, si rinuncia. */
+    if (dirs.length && targets.some(s => !dataRef.current.streams.includes(s))) {
+      pushToast({ kind: "warn", title: "Split annullato",
+                  message: "una clip e' cambiata mentre si sceglieva il nome della coda — riprova",
+                  duration: 4000 });
+      return;
+    }
     const newIds = [];
+    const tailFiles = [];
     setData(d => {
-      const ids = window.PGEYaml.allocStreamIds(d.streams, halves.size, ownsStemFor);
+      // L'id della coda non deve avere uno stem su disco (ownsStemFor, come
+      // ogni id nuovo: vedi allocStreamIds in yaml-bridge.js), e quello di una
+      // coda in un file nuovo non deve essere il nome di un file che c'e' gia'
+      // nella sua cartella: quelli elencati dal bridge, quelli che l'editor ha
+      // scritto (`importDiskRef`) e quelli che il documento nomina.
+      const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(d)];
+      const splitIdTaken = (id) => ownsStemFor(id) || PY.importIdTaken(id, dirs, knownFiles);
+      // La base di ogni coda: il nome del file della testa, o null (uno streamN).
+      const bases = d.streams.filter(s => halves.has(s.id)).map(s => PY.importSplitBase(s));
+      const ids = PY.allocStreamIds(d.streams, bases, splitIdTaken);
       const tails = [];
       let i = 0;
       const streams = d.streams.map(s => {
@@ -1351,7 +1429,12 @@ function App() {
         if (!h) return s;
         const id = ids[i++];
         newIds.push(id);
-        tails.push({ src: s.id, stream: { ...h.tail, id } });
+        // Uno stream scritto nel master prende solo l'id; uno importato anche
+        // il file nuovo, scritto al salvataggio o prima del render — non
+        // adesso, cosi' uno split annullato non lascia niente su disco.
+        const tail = PY.copyImport(h.tail, id);
+        if (tail._import) tailFiles.push(tail._import.file);
+        tails.push({ src: s.id, stream: tail });
         return h.head;
       });
       const withTails = { ...d, streams: [...streams, ...tails.map(x => x.stream)] };
@@ -1362,6 +1445,10 @@ function App() {
     });
     setSelectedIds([...targets.map(s => s.id), ...newIds]);
     setDirty(true);
+    if (tailFiles.length) {
+      logToTerminal(`[file] ${tailFiles.length === 1 ? "la coda" : `${tailFiles.length} code`} in un file nuovo ` +
+                    `(${tailFiles.join(", ")}), scritto al salvataggio o prima del render`);
+    }
     if (cuts.some(c => !c.exact)) {
       pushToast({ kind: "warn", title: "pointer.start e' una stima",
                   message: "pointer.offset_range devia ogni grano: la posizione di lettura e' la mediana dei grani vicini",
@@ -1829,16 +1916,21 @@ function App() {
      intestazione, uguale fra due chiamate sullo stesso stato — `texts` cio' che
      va sul disco, con l'intestazione. Lo stesso file importato da due voci con
      modifiche diverse non ha un testo solo: e' un rifiuto, non una scelta.
-     `create` sono i file NUOVI fra quelli da scrivere — le copie incollate e
-     mai scritte (#186) — che il bridge crea e non sovrascrive mai: decisi
-     contro il disco ricordato, come `bodies`, perche' dopo la prima scrittura
-     il file e' nostro anche se un undo riporta la copia. */
+     `create` sono i file NUOVI fra quelli da scrivere — le copie incollate
+     (#186) e le code degli split (#187), mai scritte — che il bridge crea e
+     non sovrascrive mai: decisi contro il disco ricordato, come `bodies`,
+     perche' dopo la prima scrittura il file e' nostro anche se un undo
+     riporta la copia. */
   function importWrites(d) {
     const PY = window.PGEYaml;
     const imp = PY.serializeImports(d);
     if (imp.conflicts.length) {
-      return { error: `lo stesso file importato da piu' stream con modifiche diverse: ${imp.conflicts.join(", ")} — ` +
-                      `rendile uguali, o stacca uno degli stream dal file` };
+      // Per il motore il file e' un documento solo: il rimedio e' riportare le
+      // copie a dire la stessa cosa. Nessun gesto dell'editor stacca uno
+      // stream dal suo file, e il messaggio non ne promette uno.
+      return { error: `lo stesso file importato da piu' stream con modifiche diverse: ` +
+                      `${PY.importConflictText(d, imp.conflicts)} — per il motore e' un documento solo: ` +
+                      `annulla la modifica, o falla uguale su ognuno degli stream che lo importano` };
     }
     const bodies = PY.changedImports(imp.files, importDiskRef.current);
     const texts = {};
