@@ -1194,28 +1194,53 @@ function App() {
     clipboardRef.current = JSON.parse(JSON.stringify(toCopy))
       .map(s => ({ ...s, _srcId: s.id, _srcProject: activeProject }));
   }
-  function pasteStreams() {
+  async function pasteStreams() {
     const copied = clipboardRef.current;
     if (!copied.length) return;
+    const PY = window.PGEYaml;
     const minOnset = Math.min(...copied.map(s => s.onset));
     const shift = Math.max(0, time) - minOnset;
+    /* La copia di uno stream importato (#186) e' un file NUOVO accanto
+       all'originale, col nome del suo id (`copyImport`). Il nome lo sceglie
+       questo incolla, e lo sceglie libero solo sapendo cosa c'e' gia' in
+       quella cartella: si chiede al bridge PRIMA di allocare l'id. Un elenco
+       che non arriva non ferma l'incolla — i nomi che l'editor conosce
+       restano, e il bridge comunque non crea un file che c'e' gia'. Da un
+       altro progetto la regola e' la stessa: il path e' relativo alla
+       cartella del master, quindi la copia nasce accanto ai file di QUESTO. */
+    const dirs = [...new Set(copied.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
+    const listed = [];
+    if (dirs.length) {
+      const backend = window.PGEBackend.current;
+      const answers = await Promise.all(dirs.map(dir =>
+        backend.fs.listImportDir ? backend.fs.listImportDir(dir) : Promise.resolve({ ok: false, error: "no listing" })));
+      answers.forEach((a, i) => {
+        if (a.ok) listed.push(...a.files);
+        else logToTerminal(`[file] ${dirs[i] || "configs/"}: elenco non riuscito (${a.error}) — ` +
+                           `il nome della copia evita solo i file che l'editor conosce`, "warn");
+      });
+    }
     const newIds = [];
     setData(d => {
-      // hasStemFor as the oracle: an id whose stem is still on disk must not be
-      // recycled, or the paste inherits a deleted stream's audio (see
-      // allocStreamIds in yaml-bridge.js).
-      const ids = window.PGEYaml.allocStreamIds(d.streams, copied.length, ownsStemFor);
+      // L'id non deve avere uno stem su disco (ownsStemFor: altrimenti la copia
+      // eredita l'audio di uno stream cancellato, vedi allocStreamIds in
+      // yaml-bridge.js), e per la copia di uno stream importato non deve essere
+      // il nome di un file che c'e' gia' nella sua cartella: quelli elencati
+      // dal bridge, quelli che l'editor ha scritto (`importDiskRef`) e quelli
+      // che il documento nomina — anche una copia incollata prima e non ancora
+      // salvata.
+      const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(d)];
+      const pasteIdTaken = (id) => ownsStemFor(id) || PY.importIdTaken(id, dirs, knownFiles);
+      const ids = PY.allocStreamIds(d.streams, copied.length, pasteIdTaken);
       const pasted = copied.map((s, i) => {
         newIds.push(ids[i]);
         // `_srcId` is clipboard bookkeeping, not stream data: it must not reach
         // the model, or it would sit inside the stem fingerprint.
         const { _srcId, _srcProject, ...body } = JSON.parse(JSON.stringify(s));
-        // La copia di uno stream importato (#184) si scrive per intero nel
-        // master: con la provenienza dell'originale scriverebbe nel SUO file, e
-        // due voci che importano lo stesso file sono un file solo. Un file
-        // nuovo per la copia e' la #186; finche' non c'e', la copia e' dentro.
-        return { ...window.PGEYaml.detachImport(body), id: ids[i],
-                 onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
+        // Uno stream importato porta con se' una provenienza nuova: il suo file,
+        // che si scrive al salvataggio o prima del render — non adesso, cosi'
+        // un incolla annullato non lascia niente su disco.
+        return { ...PY.copyImport(body, ids[i]), onset: Math.max(0, +(s.onset + shift).toFixed(2)) };
       });
       const withPaste = { ...d, streams: [...d.streams, ...pasted] };
       // The copy joins the lane its original sits in (#141) — no similarity
@@ -1234,6 +1259,11 @@ function App() {
     });
     setSelectedIds(newIds);
     setDirty(true);
+    const nImported = copied.filter(s => s._import).length;
+    if (nImported) {
+      logToTerminal(`[file] ${nImported === 1 ? "la copia" : `${nImported} copie`} di stream importati: ` +
+                    `un file nuovo accanto all'originale, scritto al salvataggio o prima del render`);
+    }
   }
   /* ---- split al cursore (tasto rimappabile, default "d") ----
    * Il taglio di Reaper: la clip selezionata diventa due stream, la testa e la
@@ -1798,7 +1828,11 @@ function App() {
      (`importDiskRef`). `bodies` e' cio' che si confronta — il testo senza
      intestazione, uguale fra due chiamate sullo stesso stato — `texts` cio' che
      va sul disco, con l'intestazione. Lo stesso file importato da due voci con
-     modifiche diverse non ha un testo solo: e' un rifiuto, non una scelta. */
+     modifiche diverse non ha un testo solo: e' un rifiuto, non una scelta.
+     `create` sono i file NUOVI fra quelli da scrivere — le copie incollate e
+     mai scritte (#186) — che il bridge crea e non sovrascrive mai: decisi
+     contro il disco ricordato, come `bodies`, perche' dopo la prima scrittura
+     il file e' nostro anche se un undo riporta la copia. */
   function importWrites(d) {
     const PY = window.PGEYaml;
     const imp = PY.serializeImports(d);
@@ -1809,7 +1843,8 @@ function App() {
     const bodies = PY.changedImports(imp.files, importDiskRef.current);
     const texts = {};
     for (const f of Object.keys(bodies)) texts[f] = PY.importedFileText(f, bodies[f]);
-    return { bodies, texts };
+    const create = PY.importCreates(d, importDiskRef.current).filter(f => f in bodies);
+    return { bodies, texts, create };
   }
   // Scritti: adesso il disco e' questo.
   function markImportsWritten(bodies) {
@@ -1847,7 +1882,7 @@ function App() {
           imp = importWrites(doc);
           if (imp.error) return { ok: false, refused: imp.error };
           res = await backend.fs.save(basename, yaml, imp.texts,
-                                      { overwrite: FG.overwrites(st, name) });
+                                      { overwrite: FG.overwrites(st, name), create: imp.create });
           return res;
         },
         ownChanges: fileHasOwnChanges,
@@ -1855,6 +1890,13 @@ function App() {
       }, state);
       if (out.outcome === "failed" && out.result && out.result.refused) {
         pushToast({ kind: "err", title: "Save refused", message: out.result.refused, persistent: true });
+        return;
+      }
+      // Il file nuovo di una copia c'e' gia' su disco (#186): il bridge non ha
+      // scritto niente, e non e' un "Save failed" — e' un nome da cambiare.
+      if (out.outcome === "failed" && out.result && out.result.exists) {
+        logToTerminal(`[file] ${out.result.error}`, "err");
+        pushToast({ kind: "err", title: "Save refused", message: out.result.error, persistent: true });
         return;
       }
       if (out.outcome !== "done") { reportFileOutcome("save", out); return; }
@@ -1904,7 +1946,14 @@ function App() {
       // (#185). Senza, un nome aperto prima nella sessione avrebbe la sua firma
       // registrata, e il rifiuto arriverebbe a un chiamante che annuncia
       // "Saved as" comunque. E' la regola del `salva con nome` del laboratorio.
-      await backend.fs.save(fullName.replace(/\.yml$/, ""), yaml, imp.texts, { overwrite: true });
+      // Sovrascrive il MASTER (un nome appena digitato), non i file nuovi delle
+      // copie (#186): quelli si creano e basta, anche qui.
+      const res = await backend.fs.save(fullName.replace(/\.yml$/, ""), yaml, imp.texts,
+                                        { overwrite: true, create: imp.create });
+      if (res.ok === false) {
+        pushToast({ kind: "err", title: "Save As refused", message: res.error, persistent: true });
+        return;
+      }
       markImportsWritten(imp.bodies);
       pushToast({ kind: "ok", title: "Saved as", message: `configs/${fullName}${importCount(Object.keys(imp.bodies).length)}`, duration: 2500 });
       refreshProjects();
@@ -2079,10 +2128,13 @@ function App() {
        closure ricorda. */
     let yamlOfThisRun = null;
     let fpsOfThisRun = {};
-    const optsFor = (doc, st, importTexts) => ({
+    const optsFor = (doc, st, importTexts, importCreate) => ({
       yamlBasename: basename,
       yamlContent: yamlOfThisRun,
       imports: importTexts,
+      // I file nuovi delle copie (#186): il bridge li crea, e se ci sono gia'
+      // rifiuta il render prima di scrivere qualunque cosa.
+      createImports: importCreate && importCreate.length ? importCreate : undefined,
       renderer: rendererOfThisRun,
       useCache: renderOptions.useCache,
       visualize: renderOptions.visualize,
@@ -2199,7 +2251,7 @@ function App() {
     const out = await FG.attempt({
       write: async (st) => {
         const doc = st.doc || data;
-        const plan = window.PGEYaml ? importWrites(doc) : { bodies: {}, texts: {} };
+        const plan = window.PGEYaml ? importWrites(doc) : { bodies: {}, texts: {}, create: [] };
         if (plan.error) return { ok: false, error: plan.error, configWritten: false };
         yamlOfThisRun = window.PGEYaml ? window.PGEYaml.serialize(doc) : null;
         fpsOfThisRun = window.PGERenderStatus.fingerprintAll(doc.streams, tweaks.outputFormat || "wav");
@@ -2214,7 +2266,7 @@ function App() {
            "modifiche proprie?" che segue un rifiuto deve vederli non scritti. */
         const importDiskBefore = importDiskRef.current;
         markImportsWritten(plan.bodies);
-        const r = await backend.render.run(optsFor(doc, st, plan.texts), onRenderEvent);
+        const r = await backend.render.run(optsFor(doc, st, plan.texts, plan.create), onRenderEvent);
         if (r && r.configWritten === false && window.PGEYaml) {
           importDiskRef.current = window.PGEYaml.releaseImports(importDiskRef.current, plan.bodies, importDiskBefore);
         }
@@ -2231,6 +2283,19 @@ function App() {
     if (out.outcome !== "done" && out.outcome !== "failed") {
       setRenderStatus(s => ({ ...s, running: false, currentStreamId: null }));
       reportFileOutcome("render", out);
+      return;
+    }
+    /* Il file nuovo di una copia c'e' gia' su disco (#186): anche questo e' un
+       rifiuto, non un render fallito — il bridge non ha scritto niente e il
+       motore non e' partito. Lo stato si spegne come qui sopra, senza
+       registrare un esito: `lastOk: false` farebbe dire al terminale "last
+       run failed", col pallino rosso, di un giro mai cominciato. */
+    if (result.exists) {
+      setRenderStatus(s => ({ ...s, running: false, currentStreamId: null }));
+      pushToast({
+        kind: "err", title: "Render refused", message: result.error || "see log", duration: 8000,
+        action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
+      });
       return;
     }
     // Il config su disco e' adesso il documento di questo render (scritto, o

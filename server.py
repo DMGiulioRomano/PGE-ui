@@ -93,7 +93,8 @@ except ImportError:
 
 # Audio + render machinery extracted from this module (#43).
 from audio_pipeline import (
-    safe_resolve, safe_resolve_import, audio_duration, _resolve_audio, PEAK_BUCKETS,
+    safe_resolve, safe_resolve_import, safe_resolve_import_dir, audio_duration,
+    _resolve_audio, PEAK_BUCKETS,
     transcode_wav, peaks_file, spectrogram_file, SoxNotFound, SoxFailed,
 )
 from render_pipeline import (
@@ -166,14 +167,57 @@ def plan_import_writes(base: Path, imports, master: Path):
     return plan, None
 
 
-def write_import_plan(plan):
+def plan_import_creates(plan, create):
+    """I file del piano che sono NUOVI (PGE-ui #186): la copia di uno stream
+    importato, nata nel browser e mai scritta. `(set di path, None)` oppure
+    `(None, messaggio)`.
+
+    Il browser li nomina in `createImports`, e devono stare fra gli import
+    della stessa richiesta: un file nuovo senza testo non e' un file da
+    creare, e' una richiesta sbagliata."""
+    if create is None:
+        return set(), None
+    if not isinstance(create, list) or not all(isinstance(c, str) for c in create):
+        return None, "createImports: attesa una lista di path"
+    rels = {rel for rel, _path, _text in plan}
+    for c in create:
+        if c not in rels:
+            return None, f"createImports: {c!r} non e' fra i file importati della richiesta"
+    return set(create), None
+
+
+def existing_creates(plan, creates):
+    """I file nuovi che sul disco ci sono gia': un file nuovo si crea, non si
+    sovrascrive mai (#186). Un link rotto c'e' anche lui — scriverci
+    attraverso scriverebbe altrove."""
+    return [rel for rel, path, _text in plan
+            if rel in creates and (path.exists() or path.is_symlink())]
+
+
+def _exists_payload(files):
+    # La forma del rifiuto di #186, accanto a quella di #185: `exists` e' un
+    # campo, `files` dice quali.
+    names = ", ".join(files)
+    return {"ok": False, "exists": True, "files": files,
+            "error": f"{names}: esiste gia' su disco, e il file nuovo di una copia "
+                     "non sovrascrive niente. Annulla l'incolla e incolla di nuovo: "
+                     "la copia prende un nome libero"}
+
+
+def write_import_plan(plan, creates=frozenset()):
     """Scrive il piano di `plan_import_writes`. Le sottocartelle si creano (un
     file nuovo in `streams/`, #186), sempre sotto la cartella del master: il
-    path e' gia' passato dalla validazione."""
+    path e' gia' passato dalla validazione.
+
+    I file in `creates` si aprono in creazione esclusiva (`"x"`): il controllo
+    di `existing_creates` precede la scrittura, e un file comparso nel mezzo
+    fa fallire la scrittura (FileExistsError, un OSError che le route rendono
+    JSON) invece di finire sovrascritto."""
     written = []
     for rel, path, text in plan:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        with open(path, "x" if rel in creates else "w", encoding="utf-8") as f:
+            f.write(text)
         written.append(rel)
     return written
 
@@ -1394,6 +1438,32 @@ def make_app(root: Path, render_timeout: float = 600.0,
                             "error": f"{configs.name}/{rel} non si legge: {type(e).__name__}: {e}"}), 422
         return jsonify({"ok": True, "file": rel, "path": str(path), "text": text})
 
+    @app.get("/import-dir")
+    def get_import_dir():
+        """I documenti YAML di una cartella sotto `configs/` (PGE-ui #186): i
+        nomi che una copia NON puo' prendere. Il browser sceglie il nome del
+        file nuovo di uno stream incollato, e lo sceglie libero solo se sa
+        cosa c'e' gia' accanto all'originale.
+
+        Solo i nomi, e solo quelli che il bridge leggerebbe come import
+        (`.yml`/`.yaml`, non nascosti): un file d'altro tipo non prende il nome
+        di nessuna copia. Una cartella che non c'e' non ha nomi presi — nasce
+        alla prima scrittura. Stesso confine di `GET /import`, e la stessa
+        risposta JSON anche sul rifiuto."""
+        rel = request.args.get("dir", "")
+        path = safe_resolve_import_dir(configs, rel)
+        if path is None:
+            return jsonify({"ok": False,
+                            "error": f"cartella non valida: {rel!r} — il bridge elenca solo "
+                                     f"cartelle sotto quella del master"}), 400
+        files = []
+        if path.is_dir():
+            files = sorted(p.name for p in path.iterdir()
+                           if not p.name.startswith(".")
+                           and p.suffix.lower() in (".yml", ".yaml")
+                           and (p.is_file() or p.is_symlink()))
+        return jsonify({"ok": True, "dir": rel, "files": files})
+
     @app.post("/save")
     def save_project():
         """Il master e i file importati cambiati, in un colpo solo (#184).
@@ -1416,6 +1486,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
         plan, err = plan_import_writes(configs, opts.get("imports"), yml)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        # I file nuovi delle copie (#186) si creano, non si sovrascrivono: uno
+        # che c'e' gia' e' un 409 a disco intatto, come gli altri rifiuti.
+        creates, err = plan_import_creates(plan, opts.get("createImports"))
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        taken = existing_creates(plan, creates)
+        if taken:
+            return jsonify(_exists_payload(taken)), 409
         # Due editor, un file (#185): il master si decide qui, prima di ogni
         # scrittura — un rifiuto e' un 409 a disco intatto, file importati
         # compresi, come un path cattivo e' un 400 a disco intatto.
@@ -1423,7 +1501,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if not verdict["ok"]:
             return jsonify(_changed_payload(yml.name)), 409
         try:
-            written = write_import_plan(plan)
+            written = write_import_plan(plan, creates)
             res = apply_guarded(yml, content, verdict)
         except OSError as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
@@ -1768,6 +1846,14 @@ def make_app(root: Path, render_timeout: float = 600.0,
         import_plan, import_err = plan_import_writes(configs, opts.get("imports"), yml)
         if import_err:
             return jsonify({"ok": False, "error": import_err}), 400
+        # ...e i file nuovi delle copie (#186), come in /save: un file nuovo
+        # che c'e' gia' e' un 409 prima di ogni scrittura e prima del motore.
+        import_creates, import_err = plan_import_creates(import_plan, opts.get("createImports"))
+        if import_err:
+            return jsonify({"ok": False, "error": import_err}), 400
+        taken = existing_creates(import_plan, import_creates)
+        if taken:
+            return jsonify(_exists_payload(taken)), 409
 
         yaml_content = opts.get("yamlContent")
         # Write the editor state to the canonical config (never a temp file): the
@@ -1798,7 +1884,7 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # traceback HTML, e il master non si scrive dopo un import fallito.
         signed = None
         try:
-            write_import_plan(import_plan)
+            write_import_plan(import_plan, import_creates)
             if verdict is not None:
                 res = apply_guarded(yml, yaml_content, verdict)
                 signed = {"type": "file-signature", "kind": "projects", "name": yml.name,

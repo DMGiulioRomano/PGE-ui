@@ -160,7 +160,20 @@ exists, the fourth only when a browser is installed):
   a fake disk — the signature read from the header, sent on `PUT /file`,
   `POST /save` and `POST /render`, never adopted from a refusal, replaced by the one the write
   returns, dropped by an older bridge and by a workspace switch — plus source
-  guards on the app.jsx wiring and on the three-answer `Toast`).
+  guards on the app.jsx wiring and on the three-answer `Toast`), and
+  `test-stream-copy.js` (#186: duplicating an imported stream — the copy's
+  path beside the original, `importIdTaken`'s case-insensitive collision rule
+  and the id it makes `allocStreamIds` skip, `copyImport` keeping everything
+  but `stream_id` and sharing nothing, the two files not touching each other,
+  `importCreates` deciding which files are *new* against the disk and not the
+  history, a paste from another project going through the same function; then
+  the backend over a fake bridge — `fs.listImportDir`, `createImports` on
+  `/save` and `/render`, the `exists` refusal returned rather than thrown and
+  with no `done` — plus source guards on the async paste asking the folder
+  before allocating, on the split still detaching, on the three writers
+  sending `create`, and on a render refused with `exists` going off without
+  recording an outcome — `lastOk: false` would print "last run failed" under
+  a "Render refused" toast).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -220,7 +233,14 @@ exists, the fourth only when a browser is installed):
   `GET`/`PUT /file`, `POST /save` and `POST /render` — a refusal leaves the
   other editor's bytes untouched, the imported files of the same request
   included, a document already on disk is not rewritten, `overwrite` is read
-  strictly), and `test_engine_render.py`
+  strictly), `test_stream_copy.py` (#186: `GET /import-dir` — the YAML
+  documents of one folder under `configs/`, hidden and other files left out, a
+  missing folder empty, the `/import` boundary —, and `createImports` on
+  `/save` and `/render`: a new file that already exists is a 409 `{exists}`
+  with the disk untouched, master and other imports included, before the
+  #185 verdict and before the engine; a malformed list is a 400; and
+  `write_import_plan` opening a new file in exclusive-create mode), and
+  `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
 - **`make tests-parity`** (node + python, needs the engine checkout) — the
@@ -444,7 +464,14 @@ back from the bridge (`GET /import`, `GET /file`), i.e. from the disk. See "The
 stream as a file". Its last step is where the two features meet: an unsaved
 edit inside the imported stream, the lab rewriting the master, and a save that
 must **ask** rather than reread — a reread reopens the whole project and would
-drop the edit, which the master's own serialization can't see.
+drop the edit, which the master's own serialization can't see. Just before
+that, #186: Ctrl+C / Ctrl+V of the imported clip gives a second clip with a
+file of its own (`streams/<id>.yml`) that isn't on disk until the save, the
+saved copy says what the original says but for `stream_id`, an edit to it
+leaves the original byte-identical, undoing the paste drops the master entry,
+a second paste avoids the name now on disk, and a paste undone *before* the
+save leaves nothing on disk. Existence is asked of `GET /import-dir`, never of
+`GET /import`: a 404 there is a console error the test would have put there.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -2396,11 +2423,11 @@ its **placement**. The path is relative to the master's folder, i.e.
   key stays in the entry where the author wrote it. A duplicate effective id
   involving an import (the engine's rule 7) is reported too. All of them land
   in `data.importErrors`, which `onProjectSelect` logs and toasts.
-- **Copy and split detach.** A paste of an imported stream, and the tail of a
-  split, are written in full in the master (`detachImport`): with the
-  original's provenance they would write into *its* file. A new file for the
-  copy is #186, `<name>-2.yml` for the tail is #187; the split's head keeps its
-  file and is shortened there.
+- **A copy is a new file; a split still detaches.** A paste of an imported
+  stream gets a file of its own beside the original (#186, below). The tail
+  of a split is still written in full in the master (`detachImport`): with
+  the head's provenance it would write into *its* file. `<name>-2.yml` for
+  the tail is #187; the split's head keeps its file and is shortened there.
 - **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
   edit there lands in the file; the timeline shows the file name beside the
   id, and the Inspector has a `file` row.
@@ -2412,6 +2439,59 @@ by one; `tests/e2e/test-boot.js` walks the whole road in a browser — open from
 the project list, save untouched (file byte-identical, master identical but for
 the header), a resize into the file, an onset into the master, two undos and a
 save that writes the file back.
+
+**Duplicating an imported stream creates a new file** (#186, rule 5 of the
+plan). Ctrl+C / Ctrl+V of a stream imported from `streams/risacca.yml` used to
+detach the copy into the master; now the copy is an independent document
+beside the original, `streams/<id>.yml`, and the master imports it with a
+`- file:` entry of its own. Five rules, each with its reason:
+
+- **The file name is the id**, and the id comes from `allocStreamIds` — so the
+  default `stream_id` (the file name) stays true and the master entry writes
+  none, and an id that owns a stem is still never recycled. A different id is
+  a different realization (`rng = (seed, stream_id, component)`), which is the
+  decision of mare-nostrum#2: a copy, not an alias.
+- **Same content but `stream_id`** (`copyImport`): the file's top level
+  (`seed`, `duration`, `bpm`), its placement *inside* the file (`onset`,
+  `mute`) and the stream from the state; the `stream_id` the file writes
+  becomes the new id (the lab's rule: the file's name), and one the file
+  didn't write isn't added. Everything is copied, nothing shared: the two
+  files don't touch each other in either direction.
+- **The name never collides with a file that exists.** The paste is async: it
+  asks the bridge for the folder (`GET /import-dir`, `fs.listImportDir`)
+  *before* allocating, and the oracle `pasteIdTaken` refuses an id that owns a
+  stem (`ownsStemFor`) or that is a file name in that folder
+  (`importIdTaken`), counting the listing, the files this editor wrote
+  (`importDiskRef`, which outlives an undo) and those the document names
+  (`importFilesOf`: an earlier unsaved copy, an unresolved entry). The match is
+  case-insensitive and extension-blind (`.yml`/`.yaml`): a Mac's disk doesn't
+  tell `Stream7.YML` from `stream7.yml`, and refusing a free name costs one
+  number. A listing that fails doesn't stop the paste (logged), because the
+  last word is the bridge's: the new files travel in `createImports` on
+  `/save` and `/render`, and one that already exists is a **409 `{exists,
+  files}` before any write** — master and other imports included, before the
+  #185 verdict, before the engine — then the write itself opens it in
+  exclusive-create mode, so the window between check and write can fail but
+  never overwrite. The editor reports it as "Save/Render refused" with the
+  remedy (undo the paste, paste again: the listing now has the name).
+- **Written at save or before the render, never at the paste.** The copy is
+  *new* (`_import.fresh`) until written, and which files are new is
+  `importCreates(data, importDiskRef)` — against the remembered disk, not the
+  history, for `changedImports`' reason: after the first write the file is
+  ours, and a redo that brings the copy back must rewrite it, not "create" it.
+  So a paste undone before the save writes nothing at all. Once written, the
+  file stays: undoing the paste after a save drops the master entry at the
+  next save but deletes no file — the same data-only rule as `deleteStream`,
+  and the name stays taken.
+- **From another project, the same rule.** The path is relative to the
+  master's folder, so the copy of a stream copied in another piece lands in
+  the same subfolder under *this* master's `configs/`; `_srcProject` decides
+  only the lane, as before.
+
+Save As sends `create` too, beside its `overwrite: true` (which is the
+master's: a new file is created, never overwritten, there as well). The copy is
+own work for #185's question — a new file is never in `importDiskRef` — so a
+lab save of the master asks instead of rereading it away.
 
 **A lab document comes back whole** (#188, step 4 of the plan, "round-trip
 inverso"). The rules above say where each key goes; what they don't say is
@@ -2631,7 +2711,7 @@ it would crop the drawing to the previous length).
 
 ### Stream identity (`allocStreamIds`, the stem index)
 
-A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again.
+A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again. The paste's oracle (`pasteIdTaken`, #186) asks `ownsStemFor` first and then whether the id is a file name beside an imported original; `test-stream-id.js` accepts a named oracle only if its declaration starts with that `ownsStemFor(id) ||`.
 
 `deleteStream` is a **data-only** mutation. With ids that never recycle, a leftover cache entry can never be picked up by a different stream — a Ctrl+Z'd stream comes back with its cached data intact.
 
@@ -3032,7 +3112,12 @@ Binds `127.0.0.1` by default. CORS wide-open — the editor is served by the bri
 write of `POST /render` answer 409 `{changed}` when the file's signature on disk isn't
 the one the editor read (see "Two editors, one file"). It is a guard between two
 cooperating editors on one machine, not an access control: a client that omits
-the signature writes as before.
+the signature writes as before. The same holds for #186's 409 `{exists}`: an
+import named in `createImports` that is already on disk is not written — a
+promise the browser asks for, not a protection against a client that doesn't.
+`GET /import-dir?dir=` lists only names, only `.yml`/`.yaml`, only under
+`configs/` (`safe_resolve_import_dir`: every segment through `safe_resolve`,
+`""` for `configs/` itself).
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check

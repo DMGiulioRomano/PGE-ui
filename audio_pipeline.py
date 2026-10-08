@@ -69,6 +69,23 @@ def safe_resolve_import(base: Path, rel) -> "Path | None":
     return path
 
 
+def safe_resolve_import_dir(base: Path, rel) -> "Path | None":
+    """La cartella di file importati da elencare (PGE-ui #186): `""` e' la
+    cartella del master stessa, altrimenti ogni segmento passa da
+    `safe_resolve` come in `safe_resolve_import` — stesso confine, senza la
+    regola dell'estensione, che e' dei file e non delle cartelle."""
+    if rel == "":
+        return base
+    if not isinstance(rel, str):
+        return None
+    path = base
+    for seg in rel.split("/"):
+        path = safe_resolve(path, seg)
+        if path is None:
+            return None
+    return path
+
+
 _AUDIO_EXTS = (".aif", ".aiff", ".wav", ".flac", ".mp3")
 
 

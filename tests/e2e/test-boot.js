@@ -708,6 +708,79 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         JSON.stringify((await yamlOf(master4)).streams[0]) === JSON.stringify({ file: FILE, onset: 1 }),
         JSON.stringify((await yamlOf(master4)).streams[0]));
 
+      // 4b — duplicare lo stream importato (#186): la copia e' un file nuovo
+      // accanto all'originale, scritto al salvataggio e non al duplica. Cosa
+      // c'e' nella cartella lo si chiede al bridge con GET /import-dir, che
+      // risponde 200 anche per un file che non c'e': un GET /import di un file
+      // assente sarebbe un 404, cioe' un errore in console messo dal test.
+      const streamsDir = () => page.evaluate(async () => {
+        const r = await fetch("/import-dir?dir=streams");
+        const j = await r.json();
+        return j && j.ok ? j.files.map(n => `streams/${n}`) : null;
+      });
+      const importOf = (f) => page.evaluate(async (x) => {
+        const r = await fetch(`/import?file=${encodeURIComponent(x)}`);
+        const j = await r.json();
+        return j && j.ok ? j.text : null;
+      }, f);
+      const fileLabels = () => page.evaluate(() =>
+        [...document.querySelectorAll(".lane .clip .clip-file")].map(e => e.textContent.trim()));
+      const entriesOf = async () => (await yamlOf(await masterText())).streams;
+      const entries4 = await entriesOf();
+      const dir4 = await streamsDir();
+      await importedClip();
+      await page.keyboard.press("Control+c");
+      await page.keyboard.press("Control+v");
+      await wait(600);                            // l'incolla aspetta GET /import-dir
+      const labels7 = await fileLabels();
+      const copyFile = labels7.find(t => t !== FILE);
+      assert("incollato, lo stream importato ha un file suo accanto all'originale, col nome dell'id",
+        labels7.length === 2 && /^streams\/stream\d+\.yml$/.test(copyFile || ""), JSON.stringify(labels7));
+      assert("...che al duplica non si scrive", JSON.stringify(await streamsDir()) === JSON.stringify(dir4),
+        JSON.stringify(await streamsDir()));
+      // La copia incollata e' la selezione: la durata +1 va a lei.
+      await page.keyboard.press("Control+Shift+ArrowRight");
+      await wait(300);
+      await save();
+      const copyDoc = await yamlOf(await importOf(copyFile));
+      const origDoc = await yamlOf(file4);
+      const copyId = copyFile.replace(/^streams\//, "").replace(/\.yml$/, "");
+      const sans = (d) => ({ ...d, duration: null,
+        streams: d.streams.map(({ stream_id, duration, ...rest }) => rest) });
+      assert("salvato, il file nuovo dice cio' che dice l'originale, tranne stream_id (= nome del file)",
+        !!copyDoc && JSON.stringify(sans(copyDoc)) === JSON.stringify(sans(origDoc))
+          && copyDoc.streams[0].stream_id === copyId, JSON.stringify(copyDoc));
+      assert("...e la modifica alla copia sta nel suo file", copyDoc.streams[0].duration === origDoc.streams[0].duration + 1,
+        `${origDoc.streams[0].duration} → ${copyDoc.streams[0].duration}`);
+      assert("...e l'originale non si tocca, byte per byte", (await importText()) === file4);
+      const entries7 = await entriesOf();
+      assert("il master ha una voce `file:` nuova, senza stream_id",
+        entries7.length === 3 && entries7.some(e => e.file === copyFile && !("stream_id" in e))
+          && JSON.stringify(entries7[0]) === JSON.stringify(entries4[0]), JSON.stringify(entries7));
+
+      // Undo della modifica e dell'incolla: la voce sparisce dal master. Il
+      // file, scritto, resta — ed e' un nome che la copia dopo non prende.
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      assert("annullato l'incolla, la voce sparisce dal master",
+        JSON.stringify(await entriesOf()) === JSON.stringify(entries4), JSON.stringify(await entriesOf()));
+      await page.keyboard.press("Control+v");
+      await wait(600);
+      const copyFile2 = (await fileLabels()).find(t => t !== FILE);
+      assert("incollato di nuovo, il nome evita il file che c'e' gia' su disco",
+        !!copyFile2 && copyFile2 !== copyFile && (await streamsDir()).includes(copyFile)
+          && !(await streamsDir()).includes(copyFile2), `${copyFile} → ${copyFile2}`);
+      // ...e annullato PRIMA del salvataggio: su disco non resta niente.
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      assert("undo del duplica prima del salvataggio: niente nel master, niente su disco",
+        JSON.stringify(await entriesOf()) === JSON.stringify(entries4)
+          && !(await streamsDir()).includes(copyFile2), JSON.stringify(await streamsDir()));
+
       // 5 — due editor, un file (#185) su un brano con import. Una modifica
       // dentro lo stream importato non muove il master, che ne tiene solo il
       // piazzamento; ma e' lavoro proprio, e la rilettura — un "apri" del

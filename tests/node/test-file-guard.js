@@ -532,14 +532,16 @@ console.log("\n── app.jsx: le catene ──");
     /async function onRender\(\)/.test(APP_SRC) && /async function onSave\(\)/.test(APP_SRC));
   /* Save As e New project scrivono un nome appena digitato, non il file
      aperto: dietro al documento non c'e' una lettura di QUEL file. */
+  /* Il `create` accanto (#186) riguarda i file nuovi delle copie, che si
+     creano e basta: la sovrascrittura e' quella del master. */
   assert("Save As e New project sovrascrivono per costruzione",
-    (APP_SRC.match(/fs\.save\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 1 &&
+    (APP_SRC.match(/fs\.save\([^;]*\{\s*overwrite:\s*true(,\s*create:\s*imp\.create)?\s*\}\)/g) || []).length === 1 &&
     (APP_SRC.match(/writeFile\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 1);
   /* Dalla #184 il salvataggio e' POST /save, master e import insieme: la
      guardia deve viaggiare li', non su un PUT /file che il salvataggio non
      usa piu'. */
   assert("il salvataggio passa da fs.save con la risposta alla domanda",
-    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\) \}\)/.test(APP_SRC));
+    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\)(, create: imp\.create)? \}\)/.test(APP_SRC));
   /* La rilettura riapre il progetto intero, file importati compresi: una
      modifica dentro uno stream importato e' lavoro proprio anche se il master
      (che ne tiene solo il piazzamento) non si muove. */

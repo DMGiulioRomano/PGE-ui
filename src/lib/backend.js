@@ -37,21 +37,33 @@
  *   fs.readImport(file)           → Promise<{ ok, text } | { ok:false, error }>: un file
  *                                   importato con `file:` (#183), relativo a configs/.
  *                                   Non lancia: l'errore e' un messaggio per l'autore
- *   fs.save(basename, yaml, imports, {overwrite}?)
+ *   fs.listImportDir(dir)         → Promise<{ ok:true, files:[path] } | { ok:false, error }>:
+ *                                   i documenti YAML di una cartella sotto configs/
+ *                                   ("" = configs/ stessa), coi path relativi a
+ *                                   configs/ — i nomi che la copia di uno stream
+ *                                   importato non puo' prendere (#186). Non lancia
+ *   fs.save(basename, yaml, imports, {overwrite, create}?)
  *                                 → Promise<{ ok:true, written:[nomi], signature }>:
  *                                   il master e i file importati cambiati
  *                                   ({path: testo}), in un colpo solo (#184). Porta
  *                                   la firma letta del master (#185): su un master
  *                                   cambiato su disco torna, come writeFile,
  *                                   { ok:false, changed:true, files:[name], error }
- *                                   e non scrive niente, import compresi. Lancia
- *                                   col messaggio del bridge sugli altri errori
+ *                                   e non scrive niente, import compresi. `create`
+ *                                   sono i file NUOVI fra gli import (le copie,
+ *                                   #186): se uno esiste gia' torna
+ *                                   { ok:false, exists:true, files:[path], error }
+ *                                   e non scrive niente. Lancia col messaggio del
+ *                                   bridge sugli altri errori
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
  *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml`; con
  *     `opts.overwrite` la sovrascrittura. Su un config cambiato su disco torna
  *     { ok:false, changed:true, files:[name], configWritten:false } senza
- *     evento `done`: il motore non e' partito (#185).
+ *     evento `done`: il motore non e' partito (#185). `opts.createImports` sono
+ *     i file nuovi fra `opts.imports` (#186): se uno esiste gia' torna
+ *     { ok:false, exists:true, files:[path], configWritten:false }, ancora
+ *     senza `done`.
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
@@ -452,6 +464,22 @@
           return { ok: false, error: e.message };
         }
       },
+      // I documenti YAML di una cartella sotto configs/ (#186), coi path
+      // relativi a configs/ come li scrive una voce `file:`. Non lancia: chi
+      // chiede e' l'incolla, e un elenco che non arriva non deve fermarla — il
+      // bridge rifiuta comunque di creare un file che c'e' gia'.
+      async listImportDir(dir) {
+        try {
+          const r = await fetchWithTimeout(baseUrl + `/import-dir?dir=${encodeURIComponent(dir || "")}`);
+          const body = await r.json().catch(() => null);
+          if (r.ok && body && body.ok === true && Array.isArray(body.files)) {
+            return { ok: true, files: body.files.map(n => (dir ? `${dir}/${n}` : n)) };
+          }
+          return { ok: false, error: (body && body.error) || `HTTP ${r.status}` };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
       // Il master e i file importati cambiati, in una richiesta (#184): il
       // bridge li valida tutti prima di scriverne uno. La firma e' quella del
       // master (#185), con le regole di writeFile: un 409 `changed` torna come
@@ -460,11 +488,13 @@
       async save(basename, yamlContent, imports, opts = {}) {
         const name = `${basename}.yml`;
         const sig = signatures.get(sigKey("projects", name));
+        const create = Array.isArray(opts.create) && opts.create.length ? opts.create : undefined;
         const r = await fetchWithTimeout(baseUrl + "/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             basename, yamlContent, imports: imports || {},
+            createImports: create,
             signature: sig || undefined,
             overwrite: opts.overwrite ? true : undefined,
           }),
@@ -473,6 +503,12 @@
         if (r.status === 409 && body && body.changed) {
           return { ok: false, changed: true, files: [body.name || name],
                    error: body.error || `${name} changed on disk` };
+        }
+        // Il file nuovo di una copia c'e' gia' su disco (#186): un rifiuto,
+        // come quello qui sopra, e il bridge non ha scritto niente.
+        if (r.status === 409 && body && body.exists) {
+          return { ok: false, exists: true, files: Array.isArray(body.files) ? body.files : [],
+                   error: body.error || "a new imported file already exists on disk" };
         }
         if (!r.ok || !body || body.ok !== true) {
           throw new Error((body && body.error) || `POST /save → HTTP ${r.status}`);
@@ -712,6 +748,16 @@
                 line: `[FILE] ${name}: cambiato su disco da quando l'editor l'ha letto — non riscritto` });
               return { ok: false, changed: true, files: [name],
                        error: refusal.error || `${name} changed on disk`, configWritten: false };
+            }
+            /* Il file nuovo di una copia c'e' gia' su disco (#186): stesso
+               rifiuto prima di ogni scrittura, stessa risposta senza `done`. */
+            if (refusal && refusal.exists) {
+              const files = Array.isArray(refusal.files) ? refusal.files : [];
+              onEvent && onEvent({ type: "log",
+                line: `[FILE] ${files.join(", ")}: esiste gia' su disco — il file nuovo della copia non si sovrascrive` });
+              return { ok: false, exists: true, files,
+                       error: refusal.error || "a new imported file already exists on disk",
+                       configWritten: false };
             }
           }
           configWritten = res.ok;

@@ -481,9 +481,10 @@ console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardi
   /* Dal merge con #185 il render passa dal giro della guardia (`FG.attempt`),
      e ogni tentativo ha il suo documento — dopo una rilettura, quello riletto —
      quindi il piano degli import (`plan`) si fa dentro il tentativo, e il
-     corpo del POST lo riceve da li' (`optsFor(doc, st, plan.texts)`). */
+     corpo del POST lo riceve da li' (`optsFor(doc, st, plan.texts, …)`; il
+     quarto argomento sono i file nuovi di #186). */
   assert("il render manda i file cambiati, cosi' sono su disco prima del motore",
-    /imports:\s*importTexts/.test(app) && /optsFor\(doc, st, plan\.texts\)/.test(app));
+    /imports:\s*importTexts/.test(app) && /optsFor\(doc, st, plan\.texts(, plan\.create)?\)/.test(app));
   {
     const rr = app.slice(app.indexOf("async function runRender("));
     const claim = rr.indexOf("markImportsWritten(plan.bodies)");
@@ -498,9 +499,13 @@ console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardi
     assert("...e non li segna una seconda volta dopo run()",
       (rr.match(/markImportsWritten\(/g) || []).length === 1);
   }
+  /* L'incolla non stacca piu': la copia di uno stream importato e' un file
+     nuovo (#186, tests/node/test-stream-copy.js). Lo split si', finche' la
+     #187 non da' alla coda il suo `<nome>-2.yml`. */
   const detach = app.match(/detachImport\(/g) || [];
-  assert("incolla e split staccano la provenienza (finche' #186/#187 non danno un file nuovo)",
-    detach.length >= 2, `${detach.length} chiamate`);
+  assert("lo split stacca la provenienza della coda (finche' #187 non le da' un file nuovo)",
+    detach.length === 1 && /detachImport\(sliced\.stream\)/.test(app), `${detach.length} chiamate`);
+  assert("l'incolla da' alla copia un file suo (#186)", /copyImport\(/.test(app));
   const ye = SG.codeOf(path.join(__dirname, "../../src/components/YamlEditor.jsx"));
   assert("il tab Raw conserva la provenienza dello stream che riscrive",
     /_import:\s*stream\._import/.test(ye));
