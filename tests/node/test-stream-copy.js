@@ -423,6 +423,19 @@ console.log("\n── app.jsx: l'incolla crea un file nuovo, salvataggio e rende
   assert("anche Save As", (app.match(/create:\s*imp\.create/g) || []).length >= 2);
   assert("e il render, nel corpo del POST", /createImports:\s*importCreate/.test(app)
     && /optsFor\(doc, st, plan\.texts, plan\.create\)/.test(app));
+  /* Un render rifiutato perche' il file nuovo c'e' gia' non e' un render
+     fallito: il bridge non ha scritto niente e il motore non e' partito. Come
+     per i rifiuti della guardia di #185, lo stato si spegne e basta — se
+     arrivasse a `lastOk: !!result.ok` il terminale direbbe "last run failed",
+     col pallino rosso, sotto un toast che dice "Render refused". */
+  const rr = fnBody("async function runRender(");
+  const refused = /if \(result\.exists\) \{[\s\S]*?return;\s*\}/.exec(rr);
+  const failedAt = rr.indexOf("lastOk: !!result.ok");
+  assert("il render rifiutato per un file nuovo gia' su disco esce prima di registrare un esito",
+    !!refused && failedAt > 0 && refused.index < failedAt, `exists@${refused && refused.index} lastOk@${failedAt}`);
+  assert("...spegne lo stato senza dire fallito, e lo dice come rifiuto",
+    !!refused && /running:\s*false/.test(refused[0]) && !/lastOk/.test(refused[0])
+      && /title:\s*"Render refused"/.test(refused[0]), refused ? refused[0] : "");
   const saveAs = fnBody("async function onSaveAs(");
   assert("Save As non annuncia un salvataggio rifiutato", /\.ok\s*===\s*false|!res\.ok|!\w+\.ok/.test(saveAs));
   const save = fnBody("async function saveProject(");

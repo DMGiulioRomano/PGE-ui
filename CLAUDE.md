@@ -170,8 +170,10 @@ exists, the fourth only when a browser is installed):
   the backend over a fake bridge — `fs.listImportDir`, `createImports` on
   `/save` and `/render`, the `exists` refusal returned rather than thrown and
   with no `done` — plus source guards on the async paste asking the folder
-  before allocating, on the split still detaching, and on the three writers
-  sending `create`).
+  before allocating, on the split still detaching, on the three writers
+  sending `create`, and on a render refused with `exists` going off without
+  recording an outcome — `lastOk: false` would print "last run failed" under
+  a "Render refused" toast).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
