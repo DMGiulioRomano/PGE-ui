@@ -309,8 +309,10 @@ function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, int
           perche' `timeDistError` ha appena stabilito che lo rifiuta. Qui no —
           la guardia scatta quando il conto in doppia precisione dell'anteprima
           non arriva, e questo non dice niente su cosa fara' il motore: dentro
-          la banda int/float ({geometric, ratio: 2} e {exponential, rate: 0.5},
-          entrambe a 1024 cicli) il motore rifiuta comunque. Il testo si limita
+          la banda in cui `timeDistError` tace — {geometric, ratio: 2}, dove
+          viene dalla lettura intera, e {exponential, rate: 0.5}, dove viene dal
+          pareggio sul limite dei float; entrambe a 1024 cicli — il motore
+          rifiuta comunque. Il testo si limita
           quindi a quello che si sa: i numeri disegnati non sono le durate del
           blocco. Resta warn e non error, e senza inviti a cambiare il valore,
           perche' nello YAML puo' non esserci niente da correggere. */}
