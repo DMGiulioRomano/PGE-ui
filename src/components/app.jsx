@@ -338,6 +338,9 @@ function App() {
      entrambi `running: false` comunque si ordinassero le setState. Un ref si
      alza nello stesso tick e vale per ogni chiusura, viva o stantia. */
   const renderingRef = useRefApp(false);
+  /* La stessa guardia per lo split (#187), che da quando taglia uno stream
+     importato aspetta la cartella dal bridge: vedi `onSplit`. */
+  const splittingRef = useRefApp(false);
 
   /* La versione di semantica del motore, richiesta al bridge.
    *
@@ -1099,7 +1102,7 @@ function App() {
       }
       if (matchShortcut(e, tweaks.shortcutSplit || "d") && selectedIds.length > 0) {
         e.preventDefault();
-        splitAtPlayhead();
+        onSplit();
         return;
       }
       // Alt+↑/↓ (rebindable): move the selected clips one lane. Placed before
@@ -1270,6 +1273,23 @@ function App() {
                     `un file nuovo accanto all'originale, scritto al salvataggio o prima del render`);
     }
   }
+  /* L'ingresso dello split, con la sua guardia di rientro — lo schema di
+     `renderAgain` per il render. Lo split di uno stream importato aspetta la
+     cartella dal bridge (#187), e un `d` premuto durante quell'attesa partiva
+     dallo stato in cui la prima coda non c'era ancora: il controllo
+     d'identita' dopo l'attesa legge l'ultimo ridisegno, e se la seconda
+     risposta arrivava prima di quello la testa si riscriveva e nasceva una
+     seconda coda uguale. Un ref si alza nello stesso tick e vale per ogni
+     chiusura: durante l'attesa un secondo split non parte. */
+  async function onSplit() {
+    if (splittingRef.current) return;
+    splittingRef.current = true;
+    try {
+      await splitAtPlayhead();
+    } finally {
+      splittingRef.current = false;
+    }
+  }
   /* ---- split al cursore (tasto rimappabile, default "d") ----
    * Il taglio di Reaper: la clip selezionata diventa due stream, la testa e la
    * coda, e il suono non cambia. Cambiano solo i due modi in cui una meta' puo'
@@ -1356,10 +1376,27 @@ function App() {
       };
       halves.set(s.id, { head, tail });
     }
+    /* Lo stesso file importato da piu' voci e' un documento solo: la testa
+       accorciata nel file lo cambierebbe per tutte, le copie in memoria non
+       direbbero piu' la stessa cosa, e salvataggio e render si rifiuterebbero
+       sul conflitto. Lo si dice adesso, con gli altri rifiuti e prima di ogni
+       giro di rete, invece di lasciare uno stato che non si salva. Tagliate
+       insieme allo stesso punto le voci restano uguali, e lo split passa; le
+       code non c'entrano, hanno ciascuna un file nuovo. */
+    const PY = window.PGEYaml;
+    const withHeads = { ...data, streams: data.streams.map(s => (halves.has(s.id) ? halves.get(s.id).head : s)) };
+    const sharedFiles = PY.importConflictsAdded(data, withHeads);
+    if (sharedFiles.length) {
+      pushToast({ kind: "warn", title: "Split rifiutato",
+                  message: `${PY.importConflictText(data, sharedFiles)}: lo stesso file importato da piu' voci ` +
+                           `e' un documento solo, e dopo lo split le sue copie non direbbero piu' la stessa cosa — ` +
+                           `salvataggio e render si rifiuterebbero`,
+                  duration: 6000 });
+      return;
+    }
     /* La coda di uno stream importato si chiama `<nome>-N` ed e' il nome del
        suo file nuovo: libero solo sapendo cosa c'e' gia' nella cartella, che
        si chiede al bridge PRIMA di allocare l'id — come l'incolla. */
-    const PY = window.PGEYaml;
     const dirs = [...new Set(targets.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
     const listed = dirs.length ? await listImportNames(dirs, "della coda") : [];
     /* Fra la domanda e la risposta l'utente puo' aver toccato una clip da
@@ -1888,8 +1925,12 @@ function App() {
     const PY = window.PGEYaml;
     const imp = PY.serializeImports(d);
     if (imp.conflicts.length) {
-      return { error: `lo stesso file importato da piu' stream con modifiche diverse: ${imp.conflicts.join(", ")} — ` +
-                      `rendile uguali, o stacca uno degli stream dal file` };
+      // Per il motore il file e' un documento solo: il rimedio e' riportare le
+      // copie a dire la stessa cosa. Nessun gesto dell'editor stacca uno
+      // stream dal suo file, e il messaggio non ne promette uno.
+      return { error: `lo stesso file importato da piu' stream con modifiche diverse: ` +
+                      `${PY.importConflictText(d, imp.conflicts)} — per il motore e' un documento solo: ` +
+                      `annulla la modifica, o falla uguale su ognuno degli stream che lo importano` };
     }
     const bodies = PY.changedImports(imp.files, importDiskRef.current);
     const texts = {};

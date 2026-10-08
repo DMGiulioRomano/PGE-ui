@@ -183,9 +183,13 @@ exists, the fourth only when a browser is installed):
   `stream_id` = file name, the original's seed, `pointer.start` where the head
   stops and the pointer's envelopes going on from the cut —, the master with
   two `file:` entries, nothing to create once undone;
-  a master stream's tail unchanged, a fresh copy's tail beside the copy; plus
-  source guards on the async split listing the folder only when it cuts an
-  imported stream, its oracle, and the identity check after the await).
+  a master stream's tail unchanged, a fresh copy's tail beside the copy; a
+  file imported by two entries, where cutting one adds a conflict and cutting
+  both at the same point doesn't (`importConflictsAdded`, `importConflictText`);
+  plus source guards on the async split listing the folder only when it cuts
+  an imported stream, its oracle, the identity check after the await, the
+  shared-file refusal before it, the re-entry guard of `onSplit`, and the
+  conflict message promising no "detach").
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -2080,7 +2084,21 @@ master imports with a `- file:` entry at the cut. Five rules:
   and gives up with a toast otherwise.
 - **The three refusals are unchanged and come first**, before any round
   trip: no clip under the playhead, no sidecar, normalized with an unknown
-  sample duration.
+  sample duration. **A fourth joins them**: a file imported by more than one
+  master entry is one document (the entries differ in placement only), and the
+  head is shortened *in its file*, so cutting one entry makes the in-memory
+  copies diverge — a `conflict`, and save and render refuse. The split asks
+  first (`importConflictsAdded(data, withHeads)`, the conflicts the heads would
+  add, not the ones already there) and refuses with a toast naming the file
+  and the streams that import it (`importConflictText`), instead of leaving a
+  state that can't be saved. Entries cut together at the same point stay equal
+  and pass; the tails don't enter, each has a new file.
+- **One split at a time** (`onSplit`, the shortcut's entry): a ref raised
+  before any await and dropped in a `finally`, `renderAgain`'s shape. Without
+  it a `d` pressed while the first split waited for the folder started from
+  the state without the first tail; the identity check reads the last render,
+  and if the second answer came before that render the head was rewritten and
+  a second, identical tail was born.
 
 `tests/node/test-stream-split.js` pins the rules on the library functions the
 split is made of; `tests/parity/test-stream-split-parity.js` cuts each stream
@@ -2499,7 +2517,12 @@ its **placement**. The path is relative to the master's folder, i.e.
   same file imported by two entries (the engine allows it with two
   `stream_id`s) is one file: as long as both copies say the same thing it is
   written once, when they diverge it is a `conflict` and save and render
-  refuse rather than pick one.
+  refuse rather than pick one. The refusal names the file and the streams
+  that import it (`importConflictText`) and the remedies the editor really
+  has — undo the edit, or make it on every one of those streams; no gesture
+  detaches a stream from its file, so the message doesn't promise one. The
+  split refuses *before* creating such a conflict (see "Split at the
+  playhead").
 - **Errors name the master and the file, and the editor doesn't crash.** A file
   that is missing, unreadable, malformed, holds no stream or more than one, or
   chains another `file:` leaves its entry unresolved: it is not a timeline

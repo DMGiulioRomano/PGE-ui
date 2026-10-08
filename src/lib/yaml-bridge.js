@@ -959,6 +959,27 @@
     return { files, conflicts };
   }
 
+  /* I file che `after` mette in conflitto e `before` no (#187). Lo stesso file
+   * importato da due voci e' un documento solo — le voci differiscono nel
+   * piazzamento e basta — e la testa di uno split si accorcia nel SUO file:
+   * tagliarne una sola fa divergere le copie, e salvataggio e render si
+   * rifiuterebbero. Chi taglia lo chiede prima, invece di lasciare uno stato
+   * che non si salva. Un conflitto che c'era gia' non e' di chi chiede. */
+  function importConflictsAdded(before, after) {
+    const was = serializeImports(before).conflicts;
+    return serializeImports(after).conflicts.filter(f => !was.includes(f));
+  }
+
+  // I file in conflitto, ciascuno con gli stream che lo importano: il rimedio
+  // passa da quegli stream, e il messaggio deve dire quali sono.
+  function importConflictText(data, files) {
+    const streams = (data && data.streams) || [];
+    return (files || []).map(f => {
+      const ids = streams.filter(s => s && s._import && s._import.file === f).map(s => s.id);
+      return ids.length ? `${f} (${ids.join(", ")})` : f;
+    }).join("; ");
+  }
+
   // I file da scrivere: quelli il cui testo di adesso non e' quello che si sa
   // essere su disco. Un file mai visto (assente da `disk`) si scrive.
   function changedImports(files, disk) {
@@ -1835,6 +1856,8 @@
     importDefaultId,
     serializeImports,
     changedImports,
+    importConflictsAdded,
+    importConflictText,
     releaseImports,
     importedFileText,
     importDirOf,

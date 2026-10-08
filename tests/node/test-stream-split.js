@@ -322,6 +322,46 @@ console.log("\n── la coda continua gli inviluppi del pointer dal taglio ─�
     eq(hp.speed_ratio, [[0, 0.5], [1, 1.25]]), JSON.stringify(hp.speed_ratio));
 }
 
+/* Lo stesso file importato da due voci (il motore lo permette, con due
+ * `stream_id`) e' un documento solo: le voci differiscono nel piazzamento e
+ * basta. La testa di uno split si accorcia nel SUO file, quindi tagliarne una
+ * cambia il documento di tutte, e le copie in memoria smettono di dire la
+ * stessa cosa: un conflitto, e salvataggio e render si rifiutano. Lo split lo
+ * chiede prima (`importConflictsAdded`) e rifiuta invece di lasciare uno stato
+ * che non si salva; il messaggio dice quali stream importano il file
+ * (`importConflictText`). */
+console.log("\n── lo stesso file importato da due voci: lo split non crea un conflitto ──");
+{
+  const VOCI = `seed: 1441\nstreams:\n- stream_id: voci\n  duration: 4\n  sample: onda.wav\n  volume: -6\n` +
+               `  pointer:\n    start: 0\n    loop_unit: normalized\n`;
+  const shared = (onsetAlto) => Y.parse(
+    `streams:\n  - file: streams/voci.yml\n    stream_id: coro\n    onset: 0\n` +
+    `  - file: streams/voci.yml\n    stream_id: alto\n    onset: ${onsetAlto}\n`,
+    { project: "brano", samples: [], imports: { "streams/voci.yml": { text: VOCI } } });
+  const V = "streams/voci.yml";
+
+  const d = shared(10);
+  assert("le due voci si aprono senza errori, nessun conflitto all'apertura",
+    !d.importErrors && eq(Y.serializeImports(d).conflicts, []), JSON.stringify(d.importErrors));
+  const p = split(d, "coro", 2, 0.25);
+  assert("tagliarne una sola mette il file in conflitto: e' quello che lo split deve vedere",
+    eq(Y.importConflictsAdded(d, p), [V]), JSON.stringify(Y.importConflictsAdded(d, p)));
+  const both = shared(0);
+  const pp = split(split(both, "coro", 2, 0.25), "alto", 2, 0.25);
+  assert("tagliate insieme allo stesso punto le copie restano uguali: nessun conflitto nuovo",
+    eq(Y.importConflictsAdded(both, pp), []), JSON.stringify(Y.serializeImports(pp).conflicts));
+  const edited = { ...d, streams: d.streams.map(s => (s.id === "coro" ? { ...s, volume: -3 } : s)) };
+  assert("un conflitto che c'era gia' non e' dello split",
+    eq(Y.importConflictsAdded(edited, split(edited, "alto", 12, 0.25)), []));
+  const solo = open();
+  assert("un file importato da una voce sola non va mai in conflitto",
+    eq(Y.importConflictsAdded(solo, split(solo, "risacca", 4.5, 0.4)), []));
+  assert("il messaggio nomina il file e gli stream che lo importano",
+    Y.importConflictText(d, [V]) === "streams/voci.yml (coro, alto)", Y.importConflictText(d, [V]));
+  assert("...e un file che nessuno importa resta il suo nome",
+    Y.importConflictText(d, ["streams/altro.yml"]) === "streams/altro.yml");
+}
+
 /* ===========================================================================
  * 3. Il cablaggio in app.jsx (guardie sorgente)
  * ======================================================================== */
@@ -367,6 +407,37 @@ console.log("\n── app.jsx: lo split da' alla coda un file suo ──");
   assert("...e il pointer della coda e' quello tagliato, con lo start nuovo",
     /pointer:\s*\{\s*\.\.\.\(sliced\.stream\.pointer\s*\|\|\s*\{\}\),\s*start\s*\}/.test(sp)
       && !/\.\.\.\(s\.pointer\b/.test(sp), (sp.match(/pointer:\s*\{[^}]*\}/) || [""])[0]);
+
+  /* Il quarto rifiuto (il file condiviso) viene con gli altri tre: prima di
+     ogni giro di rete, e prima dell'allocazione. */
+  const conflict = sp.indexOf("importConflictsAdded(");
+  assert("...rifiuta prima della cartella uno split che metterebbe in conflitto un file condiviso",
+    conflict > 0 && conflict < sp.indexOf("await listImportNames(")
+      && /importConflictText\(/.test(sp.slice(conflict, sp.indexOf("await listImportNames("))),
+    `conflict@${conflict}`);
+
+  /* La guardia di rientro, come quella del render (`renderAgain`): su un ref,
+     alzata prima di ogni await, riabbassata in un finally. Senza, un `d`
+     premuto mentre il primo split aspetta la cartella partiva dallo stato in
+     cui la prima coda non c'era ancora, e se la sua risposta arrivava prima
+     del ridisegno il controllo d'identita' passava: una seconda coda uguale. */
+  const entry = fnBody("async function onSplit(");
+  assert("onSplit e' l'ingresso dello split, con la sua guardia di rientro su un ref",
+    /splittingRef\.current\) return;/.test(entry)
+      && entry.indexOf("splittingRef.current = true") >= 0
+      && entry.indexOf("splittingRef.current = true") < entry.indexOf("await splitAtPlayhead("), entry);
+  assert("...riabbassata in un finally", /finally\s*\{\s*splittingRef\.current = false;/.test(entry), entry);
+  // Le chiamate, non la dichiarazione: l'unica deve essere quella di onSplit.
+  const directCalls = app.match(/(?<!function )\bsplitAtPlayhead\(\)/g) || [];
+  assert("...e la scorciatoia passa da li', non chiama lo split direttamente",
+    /\bonSplit\(\);/.test(app) && directCalls.length === 1 && /await splitAtPlayhead\(\)/.test(entry),
+    `${directCalls.length} chiamate dirette`);
+
+  /* Il conflitto che resta (una modifica su una sola delle voci) si dice coi
+     rimedi che l'editor ha: nessun gesto "stacca" uno stream dal suo file. */
+  const iw = fnBody("function importWrites(");
+  assert("il rifiuto per conflitto nomina gli stream del file e non promette uno 'stacca' che non c'e'",
+    /importConflictText\(/.test(iw) && !/stacca/.test(iw), iw.slice(0, 400));
 
   const ln = fnBody("async function listImportNames(");
   assert("l'elenco delle cartelle e' un aiuto solo, condiviso con l'incolla", /listImportDir\(/.test(ln));
