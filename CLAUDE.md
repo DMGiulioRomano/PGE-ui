@@ -181,7 +181,8 @@ exists, the fourth only when a browser is installed):
   done the way app.jsx does it on the same library functions: the head's file
   shortened, `<name>-2.yml` a lab document of its own — one stream,
   `stream_id` = file name, the original's seed, `pointer.start` where the head
-  stops —, the master with two `file:` entries, nothing to create once undone;
+  stops and the pointer's envelopes going on from the cut —, the master with
+  two `file:` entries, nothing to create once undone;
   a master stream's tail unchanged, a fresh copy's tail beside the copy; plus
   source guards on the async split listing the folder only when it cuts an
   imported stream, its oracle, and the identity check after the await).
@@ -2145,6 +2146,15 @@ interpolated breakpoint at `x'=0` so the value at the cut doesn't jump, and the
 held last value when nothing survives the cut (the engine rejects an empty
 envelope). `snapForDomain` applies there too — that interpolated point is a
 *computed* y, and on `read_direction` an unsnapped one is a parse error.
+**The pointer's envelopes are cut too**, and `start` is the only pointer field
+the split writes: the tail's pointer is `{...sliced.stream.pointer, start}`.
+It used to be `{...s.pointer, start}` — the whole stream's — which threw away
+the slice of `speed_ratio`, `offset_range` and the loop envelopes, so the tail
+ran those curves again from their beginning, squeezed into its own length:
+the sound changed exactly at the cut. Since #187 the tail is a lab document
+of its own, so that curve would have stayed written there. The split lives in
+`app.jsx`, so `test-stream-split.js` pins it with a source guard beside the
+model it runs.
 **Compact blocks are out of scope**: cutting a `{type, ratio, n_reps}` block in
 half isn't defined, so `sliceEnvArray` returns `null` on an array holding one —
 and on a **bare** one, the value that *is* the block — the field is left

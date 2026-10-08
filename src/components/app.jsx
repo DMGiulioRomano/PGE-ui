@@ -1344,11 +1344,15 @@ function App() {
       // testa, e con quella scriverebbe nello stesso file: la sua — un file
       // nuovo, la voce del master, lo `stream_id` del documento — gliela da'
       // `copyImport` quando avra' l'id (#187).
+      // Il pointer e' quello TAGLIATO, con lo start sopra: speed_ratio,
+      // offset_range e gli inviluppi del loop riprendono dal taglio come ogni
+      // altra curva. Lo `s.pointer` dello stream intero li faceva ripartire
+      // dall'inizio, compressi nella durata della coda.
       const tail = {
         ...sliced.stream,
         onset: R(t), duration: R(s.duration - cutRel),
         durationImplicit: false, durationUnresolved: false,
-        pointer: { ...(s.pointer || {}), start },
+        pointer: { ...(sliced.stream.pointer || {}), start },
       };
       halves.set(s.id, { head, tail });
     }
@@ -1875,10 +1879,11 @@ function App() {
      intestazione, uguale fra due chiamate sullo stesso stato — `texts` cio' che
      va sul disco, con l'intestazione. Lo stesso file importato da due voci con
      modifiche diverse non ha un testo solo: e' un rifiuto, non una scelta.
-     `create` sono i file NUOVI fra quelli da scrivere — le copie incollate e
-     mai scritte (#186) — che il bridge crea e non sovrascrive mai: decisi
-     contro il disco ricordato, come `bodies`, perche' dopo la prima scrittura
-     il file e' nostro anche se un undo riporta la copia. */
+     `create` sono i file NUOVI fra quelli da scrivere — le copie incollate
+     (#186) e le code degli split (#187), mai scritte — che il bridge crea e
+     non sovrascrive mai: decisi contro il disco ricordato, come `bodies`,
+     perche' dopo la prima scrittura il file e' nostro anche se un undo
+     riporta la copia. */
   function importWrites(d) {
     const PY = window.PGEYaml;
     const imp = PY.serializeImports(d);

@@ -44,8 +44,9 @@ function split(d, id, start) {
   const cutRel = s.duration / 2, t = s.onset + cutRel;
   const head = { ...EU.truncateStreamEnvelopes(EU.rescaleStreamEnvelopes(s, s.duration, cutRel)),
                  duration: cutRel, durationImplicit: false, durationUnresolved: false };
-  const body = { ...EU.sliceStreamEnvelopes(s, 0.5).stream, onset: t, duration: s.duration - cutRel,
-                 durationImplicit: false, durationUnresolved: false, pointer: { ...(s.pointer || {}), start } };
+  const sliced = EU.sliceStreamEnvelopes(s, 0.5).stream;
+  const body = { ...sliced, onset: t, duration: s.duration - cutRel,
+                 durationImplicit: false, durationUnresolved: false, pointer: { ...(sliced.pointer || {}), start } };
   const [tailId] = Y.allocStreamIds(d.streams, [Y.importSplitBase(s)], () => false);
   const tail = Y.copyImport(body, tailId);
   return { data: { ...d, streams: [...d.streams.map(x => (x === s ? head : x)), tail] }, head, tail, t, cutRel };

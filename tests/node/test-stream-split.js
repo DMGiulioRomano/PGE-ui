@@ -116,7 +116,7 @@ function split(data, id, t, start, taken = () => false) {
   const sliced = EU.sliceStreamEnvelopes(s, cutRel / s.duration);
   const body = { ...sliced.stream, onset: t, duration: s.duration - cutRel,
                  durationImplicit: false, durationUnresolved: false,
-                 pointer: { ...(s.pointer || {}), start } };
+                 pointer: { ...(sliced.stream.pointer || {}), start } };
   const bases = [Y.importSplitBase(s)];
   const [tailId] = Y.allocStreamIds(data.streams, bases, taken);
   const tail = Y.copyImport(body, tailId);
@@ -297,6 +297,31 @@ console.log("\n── la coda di una copia non ancora salvata (#186) ──");
     eq(Y.importCreates(p, Y.serializeImports(d).files), ["streams/stream7.yml", "streams/stream7-2.yml"]));
 }
 
+/* Il pointer della coda e' quello TAGLIATO, con lo `start` nuovo sopra: lo
+ * start e' il solo campo del pointer che lo split riscrive. Ripartire dal
+ * pointer dello stream intero buttava via il taglio di speed_ratio,
+ * offset_range e degli inviluppi del loop, che `sliceStreamEnvelopes` fa come
+ * per ogni altro inviluppo: la coda li ripercorreva dall'inizio, compressi
+ * nella sua durata, e il suono cambiava proprio al taglio. Adesso la coda e'
+ * un documento del laboratorio a se', e quella curva ci resterebbe scritta. */
+console.log("\n── la coda continua gli inviluppi del pointer dal taglio ──");
+{
+  const text = RISACCA.replace("    speed_ratio: 0.5\n",
+    "    speed_ratio: [[0, 0.5], [1, 2]]\n    offset_range: [[0, 0], [1, 0.2]]\n");
+  const d = Y.parse(MASTER, { project: "brano", samples: [], imports: { [FILE]: { text } } });
+  const p = split(d, "risacca", 4.5, 0.4);                  // a meta' dei suoi 4 s
+  const tp = fileDoc(p, TAIL).streams[0].pointer;
+  assert("speed_ratio riparte da dove la testa lo lascia: 1.25 a meta' di 0.5 → 2",
+    eq(tp.speed_ratio, [[0, 1.25], [1, 2]]), JSON.stringify(tp.speed_ratio));
+  assert("...e cosi' offset_range: 0.1 a meta' di 0 → 0.2",
+    eq(tp.offset_range, [[0, 0.1], [1, 0.2]]), JSON.stringify(tp.offset_range));
+  assert("...con lo start nuovo e il resto del pointer com'era",
+    tp.start === 0.4 && tp.loop_unit === "normalized", JSON.stringify(tp));
+  const hp = fileDoc(p, FILE).streams[0].pointer;
+  assert("la testa, congelata, si ferma su quel valore",
+    eq(hp.speed_ratio, [[0, 0.5], [1, 1.25]]), JSON.stringify(hp.speed_ratio));
+}
+
 /* ===========================================================================
  * 3. Il cablaggio in app.jsx (guardie sorgente)
  * ======================================================================== */
@@ -337,6 +362,11 @@ console.log("\n── app.jsx: lo split da' alla coda un file suo ──");
      modifica. Si guarda la data di ADESSO e si rinuncia. */
   assert("...e dopo l'await rinuncia se lo stream da tagliare non e' piu' quello",
     /dataRef\.current/.test(sp.slice(sp.indexOf("await listImportNames("))));
+  /* Il modello qui sopra prende il pointer tagliato: app.jsx deve fare lo
+     stesso, e lo stream intero non deve rientrare dalla porta del pointer. */
+  assert("...e il pointer della coda e' quello tagliato, con lo start nuovo",
+    /pointer:\s*\{\s*\.\.\.\(sliced\.stream\.pointer\s*\|\|\s*\{\}\),\s*start\s*\}/.test(sp)
+      && !/\.\.\.\(s\.pointer\b/.test(sp), (sp.match(/pointer:\s*\{[^}]*\}/) || [""])[0]);
 
   const ln = fnBody("async function listImportNames(");
   assert("l'elenco delle cartelle e' un aiuto solo, condiviso con l'incolla", /listImportDir\(/.test(ln));
