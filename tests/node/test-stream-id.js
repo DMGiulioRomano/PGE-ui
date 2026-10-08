@@ -56,8 +56,18 @@ console.log("\n── app.jsx wiring (source guard) ──");
   // ownsStem, not hasStem: allocation must reject an id that owns a stem in
   // *any* format, or it recycles one whose .aif is on disk while the editor is
   // rendering .wav — and the ghost audio surfaces the moment the format flips.
+  // The oracle is either `ownsStemFor` itself or a named one whose declaration
+  // asks it first: paste's `pasteIdTaken` also refuses an id that is already a
+  // file name next to an imported original (#186), and must not lose the stem
+  // half while gaining that one.
+  const oracleOf = (c) => (c.match(/,\s*(\w+)\)$/) || [])[1];
+  const asksOwnsStem = (name) => {
+    if (name === "ownsStemFor") return true;
+    const decl = appSrc.match(new RegExp(`const ${name}\\s*=\\s*\\(id\\)\\s*=>\\s*([^;]*);`));
+    return !!decl && /^ownsStemFor\(id\)\s*\|\|/.test(decl[1]);
+  };
   assert("tutti passano l'oracolo di possesso format-agnostic",
-         calls.every(c => /ownsStem/.test(c)), JSON.stringify(calls));
+         calls.every(c => asksOwnsStem(oracleOf(c))), JSON.stringify(calls));
 }
 
 console.log("\n── deleting a stream is undoable (source guard) ──");

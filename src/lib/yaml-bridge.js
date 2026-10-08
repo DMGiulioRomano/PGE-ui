@@ -890,7 +890,7 @@
       if (k === "file") {
         // Il path e' quello della provenienza, non quello letto: e' a quel
         // file che `serializeImports` scrive lo stream, e i due devono essere
-        // lo stesso (#186 ne dara' uno nuovo alla copia).
+        // lo stesso — alla copia ne da' uno nuovo `copyImport` (#186).
         out.file = imp.file;
       } else if (k === "stream_id") {
         if (s.id === effId) out.stream_id = raw.stream_id;
@@ -994,13 +994,120 @@
   }
 
   // Lo stream senza provenienza: si scrive per intero nel master. E' cio' che
-  // incolla e split fanno della copia e della coda finche' #186 e #187 non le
-  // mettono in un file nuovo — una copia che tenesse `_import` scriverebbe nel
-  // file dell'originale.
+  // lo split fa della coda finche' #187 non la mette in un file nuovo — una
+  // coda che tenesse `_import` scriverebbe nel file della testa.
   function detachImport(s) {
     if (!s || !s._import) return s;
     const { _import, ...plain } = s;
     return plain;
+  }
+
+  /* ---------- duplicare uno stream importato (PGE-ui #186) ----------
+   *
+   * La regola 5 del piano: la copia di uno stream importato e' un file NUOVO e
+   * indipendente accanto all'originale, `<cartella dell'originale>/<id>.yml`,
+   * e il master la importa con una voce `file:` sua. Il nome del file e' l'id
+   * dello stream, cosi' lo `stream_id` di default (il nome del file) resta
+   * vero e la voce del master non ne scrive uno. Id diverso vuol dire
+   * realizzazione diversa (mare-nostrum#2): e' una copia, non un alias.
+   *
+   * Il file nuovo NON si scrive al duplica: si scrive al salvataggio o prima
+   * del render, come ogni file importato cambiato, cosi' un duplica annullato
+   * con undo non lascia niente su disco. Fino ad allora la copia e' "nuova"
+   * (`_import.fresh`): nata nell'editor, mai letta da un disco. Un file nuovo
+   * si CREA e non si sovrascrive mai — il bridge lo rifiuta se esiste gia'
+   * (`createImports`, 409 `exists`) — e quali file lo sono lo dice
+   * `importCreates`, contro il disco ricordato e non contro la storia: dopo la
+   * prima scrittura il file e' nostro, e un undo che riporta la copia non deve
+   * farlo tornare "da creare". */
+
+  // La cartella di un file importato, relativa a quella del master: "" per un
+  // file in cima a `configs/`.
+  function importDirOf(file) {
+    const s = String(file);
+    const i = s.lastIndexOf("/");
+    return i < 0 ? "" : s.slice(0, i);
+  }
+
+  // Il path del file della copia: accanto all'originale, col nome dell'id e
+  // l'estensione dell'originale (`.yml` se non ne ha una che il bridge scrive).
+  function importCopyFile(file, id) {
+    const dir = importDirOf(file);
+    const base = String(file).slice(dir ? dir.length + 1 : 0);
+    const m = /\.(ya?ml)$/i.exec(base);
+    const name = `${id}${m ? m[0] : ".yml"}`;
+    return dir ? `${dir}/${name}` : name;
+  }
+
+  /* `id` e' preso come nome di file in una delle cartelle `dirs`? Lo e' se fra
+     `files` (path relativi alla cartella del master) c'e' un documento YAML in
+     quella cartella con quel nome, estensione a parte. Senza distinguere le
+     maiuscole, ne' nel nome ne' nella cartella: il disco di un Mac non le
+     distingue, e `Stream7.YML` e `stream7.yml` sono lo stesso file. Il verso
+     largo e' quello sicuro — un nome libero scartato costa un numero in piu'
+     nell'id, un nome preso accettato e' un file nuovo che non si puo' creare. */
+  function importIdTaken(id, dirs, files) {
+    const want = String(id).toLowerCase();
+    const inDirs = new Set((dirs || []).map(d => String(d).toLowerCase()));
+    if (!inDirs.size) return false;
+    for (const f of files || []) {
+      if (typeof f !== "string" || !/\.ya?ml$/i.test(f)) continue;
+      if (!inDirs.has(importDirOf(f).toLowerCase())) continue;
+      if (importDefaultId(f).toLowerCase() === want) return true;
+    }
+    return false;
+  }
+
+  // I file che il documento nomina: quelli degli stream importati e quelli
+  // delle voci `file:` che non si sono risolte (un file che c'e' ma non si
+  // legge resta un file che c'e').
+  function importFilesOf(data) {
+    const out = [];
+    const add = (f) => { if (typeof f === "string" && f && !out.includes(f)) out.push(f); };
+    for (const s of (data && data.streams) || []) if (s && s._import) add(s._import.file);
+    for (const u of (data && data._unresolvedImports) || []) if (u && u.entry) add(u.entry.file);
+    return out;
+  }
+
+  /* La copia di uno stream con l'id nuovo. Di uno stream scritto nel master
+     cambia solo l'id. Di uno importato anche la provenienza: il file nuovo, la
+     voce del master ridotta a `file:` (il piazzamento — onset, mute, solo —
+     viene dallo stato, come per ogni stream importato), la stessa testa del
+     file e lo stesso piazzamento DENTRO il file, tranne lo `stream_id`, che nel
+     documento del laboratorio e' il nome del file. Uno `stream_id` che il file
+     non scriveva non si aggiunge. Tutto copiato, niente condiviso con
+     l'originale: i due file non si influenzano. */
+  function copyImport(s, id) {
+    if (!s || !s._import) return { ...s, id };
+    const imp = s._import;
+    const file = importCopyFile(imp.file, id);
+    const place = JSON.parse(JSON.stringify(imp.place || {}));
+    if ("stream_id" in place) place.stream_id = id;
+    return {
+      ...s,
+      id,
+      _import: {
+        file,
+        entry: { file },
+        head: JSON.parse(JSON.stringify(imp.head || {})),
+        place,
+        dur0: imp.dur0 ?? null,
+        fresh: true,
+      },
+    };
+  }
+
+  // I file da CREARE: quelli delle copie nuove che il disco ricordato non ha
+  // ancora. In ordine di master, una volta sola.
+  function importCreates(data, disk) {
+    const out = [];
+    for (const s of (data && data.streams) || []) {
+      const imp = s && s._import;
+      if (!imp || imp.fresh !== true) continue;
+      if (disk && Object.prototype.hasOwnProperty.call(disk, imp.file)) continue;
+      if (!out.includes(imp.file)) out.push(imp.file);
+    }
+    return out;
   }
 
   /* Le voci di `streams:` del master. Una voce `file:` che non si e' risolta
@@ -1700,5 +1807,11 @@
     releaseImports,
     importedFileText,
     detachImport,
+    importDirOf,
+    importCopyFile,
+    importIdTaken,
+    importFilesOf,
+    copyImport,
+    importCreates,
   };
 })();
