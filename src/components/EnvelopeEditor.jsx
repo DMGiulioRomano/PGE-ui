@@ -280,10 +280,25 @@ function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, int
           {block.distError.kind === "name"
             ? `time_dist "${block.distError.name}" non esiste: il motore rifiuta il blocco. Validi: ${window.PGEEnv.TIME_DIST_NAMES.join(", ")}.`
             : block.distError.kind === "overflow"
-            // Né il parametro né n_reps è fuori posto da solo: è la coppia a
-            // esplodere, quindi il messaggio nomina entrambi e lascia scegliere
-            // quale ridurre — come fa l'hint del motore (PGE #212).
-            ? `time_dist ${block.distError.name}: ${block.distError.param}=${block.distError.value} con n_reps=${block.distError.nReps} non sta in un float e il motore rifiuta il blocco. Riduci n_reps, oppure ${window.PGEEnv.TIME_DIST_OVERFLOW_FIX[block.distError.param] || `riduci ${block.distError.param}`}.`
+            /* Né il parametro né n_reps è fuori posto da solo: è la coppia a
+               esplodere, quindi il messaggio nomina entrambi e lascia scegliere
+               quale ridurre — come fa l'hint del motore (PGE #212).
+
+               Le due frasi del motore arrivano da `window.PGEEnv`, non da qui:
+               sono testo suo, e la parità le chiede all'hint vero (PGE #293).
+               Diceva «non sta in un float», che era l'hint di allora, e quando
+               il motore ha smesso di dirlo — la guardia sulla somma prende
+               anche le somme `nan`, e un `nan` in un float ci sta — questa
+               riga è rimasta indietro senza che niente parlasse: l'avviso
+               nell'editor e l'errore del render non si riconoscevano più.
+
+               Qui serve la sola diagnosi della coppia, e non quella dell'altro
+               ramo del motore (un parametro non finito, dove ridurre i cicli
+               non aiuta): `timeDistError` dà `kind: "overflow"` solo per
+               parametri finiti — un `.nan`/`.inf` esce prima come
+               `kind: "param"` — quindi quel ramo non è raggiungibile da questa
+               stringa. */
+            ? `time_dist ${block.distError.name}: con ${block.distError.param}=${block.distError.value} e n_reps=${block.distError.nReps} ${window.PGEEnv.TIME_DIST_OVERFLOW_WHY}, quindi il motore rifiuta il blocco. Riduci n_reps, oppure ${window.PGEEnv.TIME_DIST_OVERFLOW_FIX[block.distError.param] || `riduci ${block.distError.param}`}.`
             : `time_dist ${block.distError.name}: il parametro "${block.distError.param}" non è valido e il motore rifiuta il blocco.`}
           {" "}L'anteprima qui sopra usa cicli di durata uguale.
         </div>
@@ -294,8 +309,10 @@ function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, int
           perche' `timeDistError` ha appena stabilito che lo rifiuta. Qui no —
           la guardia scatta quando il conto in doppia precisione dell'anteprima
           non arriva, e questo non dice niente su cosa fara' il motore: dentro
-          la banda int/float ({geometric, ratio: 2} a 1024 cicli, {exponential,
-          rate: 0.5} a 1025) il motore rifiuta comunque. Il testo si limita
+          la banda in cui `timeDistError` tace — {geometric, ratio: 2}, dove
+          viene dalla lettura intera, e {exponential, rate: 0.5}, dove viene dal
+          pareggio sul limite dei float; entrambe a 1024 cicli — il motore
+          rifiuta comunque. Il testo si limita
           quindi a quello che si sa: i numeri disegnati non sono le durate del
           blocco. Resta warn e non error, e senza inviti a cambiare il valore,
           perche' nello YAML puo' non esserci niente da correggere. */}

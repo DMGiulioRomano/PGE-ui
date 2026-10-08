@@ -29,6 +29,14 @@
  *      soglie combaciano e la banda e' zero.
  *   3. Le durate disegnate sono quelle del motore, quando la UI non dichiara
  *      un ripiego.
+ *   4. L'avviso dell'editor dice lo stesso guasto dell'hint del motore. Le due
+ *      frasi che il pannello ripete (`TIME_DIST_OVERFLOW_WHY`,
+ *      `TIME_DIST_OVERFLOW_FIX`) sono testo del motore, ed erano trascrizioni
+ *      verificate solo contro se stesse: quando il motore ha smesso di dire
+ *      «non sta in un float» (PGE #293, #219 — la guardia sulla somma prende
+ *      anche le somme `nan`, e un `nan` in un float ci sta) l'editor e' rimasto
+ *      indietro senza che niente parlasse, ed e' il caso vero da cui questo
+ *      patto nasce (PGE-ui #193).
  *
  * Run: node tests/parity/test-time-dist-parity.js
  * =========================================================================== */
@@ -294,6 +302,57 @@ parity({
             E.timeDistError(spec, n) === null);
           assert(`${label}: la guardia sull'output ripiega e lo dichiara`,
             E.isPreviewFallback(E.computeCycleDurations(T, n, spec)) === true);
+        });
+      },
+    },
+    {
+      label: "l'avviso dell'editor e l'hint del motore dicono lo stesso guasto",
+      run: async (ask, assert) => {
+        /* Una coppia per parametro, perche' il rimedio dipende dal parametro
+           e non dalla distribuzione (PGE #216): tre frasi diverse da chiedere.
+           Le coppie sono scelte perche' la UI le segnala come `overflow` —
+           verificato qui sotto, prima di guardare l'hint: su una coppia che
+           `timeDistError` classifica altrimenti il pannello mostrerebbe un
+           altro messaggio, e il patto sarebbe posto sulla stringa sbagliata. */
+        const COPPIE = [
+          [{ type: "geometric", ratio: 10 }, 400, "ratio"],
+          [{ type: "exponential", rate: 0.9 }, 7000, "rate"],
+          [{ type: "power", exponent: 100.5 }, 1200, "exponent"],
+        ];
+        /* Il motore scrive l'italiano senza accenti nei suoi sorgenti («non
+           e' un numero finito»), l'interfaccia con («non è»). Il confronto e'
+           sulle parole, quindi: minuscole, accenti sciolti e apostrofi via. */
+        const norm = (t) => String(t).toLowerCase().normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "").replace(/['\u2019]/g, "");
+
+        const answers = await ask(COPPIE.map(([spec, n]) => ({
+          op: "build_time_distribution", args: { spec, n_reps: n, total_time: T } })));
+
+        COPPIE.forEach(([spec, n, param], i) => {
+          const label = `${JSON.stringify(spec)}@${n}`;
+          const mine = E.timeDistError(spec, n);
+          assert(`${label}: la UI lo segnala come overflow di ${param}`,
+            mine !== null && mine.kind === "overflow" && mine.param === param,
+            JSON.stringify(mine));
+
+          const r = answers[i];
+          assert(`${label}: il motore rifiuta e l'errore porta un hint`,
+            r.ok && r.value.calc_error !== null && r.value.calc_hint,
+            JSON.stringify(r.ok ? r.value : r.error));
+          if (!r.ok || !r.value.calc_hint) return;
+          const hint = norm(r.value.calc_hint);
+
+          assert(`${label}: l'hint contiene la frase dell'editor ("${E.TIME_DIST_OVERFLOW_WHY}")`,
+            hint.includes(norm(E.TIME_DIST_OVERFLOW_WHY)), r.value.calc_hint);
+          assert(`${label}: e il rimedio che l'editor propone ("${E.TIME_DIST_OVERFLOW_FIX[param]}")`,
+            hint.includes(norm(E.TIME_DIST_OVERFLOW_FIX[param])), r.value.calc_hint);
+
+          /* Il pavimento del patto: l'inclusione da sola e' vera anche di un
+             ago troppo generico, e di un motore che dicesse due cose insieme.
+             Questa e' la frase che il motore diceva prima di #219 ed e' quella
+             che l'editor ripeteva: se torna nell'hint, l'ago non discrimina. */
+          assert(`${label}: l'hint non dice piu' «non sta in un float»`,
+            !hint.includes(norm("non sta in un float")), r.value.calc_hint);
         });
       },
     },
