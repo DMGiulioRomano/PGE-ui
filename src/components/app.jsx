@@ -1194,6 +1194,23 @@ function App() {
     clipboardRef.current = JSON.parse(JSON.stringify(toCopy))
       .map(s => ({ ...s, _srcId: s.id, _srcProject: activeProject }));
   }
+  /* I documenti YAML delle cartelle `dirs` sotto configs/, chiesti al bridge:
+     i nomi che un file nuovo — la copia di un incolla (#186), la coda di uno
+     split (#187) — non puo' prendere. Un elenco che non arriva non ferma il
+     gesto: lo dice nel log, i nomi che l'editor conosce restano, e il bridge
+     comunque non crea un file che c'e' gia'. */
+  async function listImportNames(dirs, what) {
+    const backend = window.PGEBackend.current;
+    const listed = [];
+    const answers = await Promise.all(dirs.map(dir =>
+      backend.fs.listImportDir ? backend.fs.listImportDir(dir) : Promise.resolve({ ok: false, error: "no listing" })));
+    answers.forEach((a, i) => {
+      if (a.ok) listed.push(...a.files);
+      else logToTerminal(`[file] ${dirs[i] || "configs/"}: elenco non riuscito (${a.error}) — ` +
+                         `il nome ${what} evita solo i file che l'editor conosce`, "warn");
+    });
+    return listed;
+  }
   async function pasteStreams() {
     const copied = clipboardRef.current;
     if (!copied.length) return;
@@ -1203,23 +1220,11 @@ function App() {
     /* La copia di uno stream importato (#186) e' un file NUOVO accanto
        all'originale, col nome del suo id (`copyImport`). Il nome lo sceglie
        questo incolla, e lo sceglie libero solo sapendo cosa c'e' gia' in
-       quella cartella: si chiede al bridge PRIMA di allocare l'id. Un elenco
-       che non arriva non ferma l'incolla — i nomi che l'editor conosce
-       restano, e il bridge comunque non crea un file che c'e' gia'. Da un
+       quella cartella: si chiede al bridge PRIMA di allocare l'id. Da un
        altro progetto la regola e' la stessa: il path e' relativo alla
        cartella del master, quindi la copia nasce accanto ai file di QUESTO. */
     const dirs = [...new Set(copied.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
-    const listed = [];
-    if (dirs.length) {
-      const backend = window.PGEBackend.current;
-      const answers = await Promise.all(dirs.map(dir =>
-        backend.fs.listImportDir ? backend.fs.listImportDir(dir) : Promise.resolve({ ok: false, error: "no listing" })));
-      answers.forEach((a, i) => {
-        if (a.ok) listed.push(...a.files);
-        else logToTerminal(`[file] ${dirs[i] || "configs/"}: elenco non riuscito (${a.error}) — ` +
-                           `il nome della copia evita solo i file che l'editor conosce`, "warn");
-      });
-    }
+    const listed = dirs.length ? await listImportNames(dirs, "della copia") : [];
     const newIds = [];
     setData(d => {
       // L'id non deve avere uno stem su disco (ownsStemFor: altrimenti la copia
@@ -1283,8 +1288,13 @@ function App() {
    * dentro dei secondi lo manderebbe fuori file; su uno YAML scritto a mano che
    * porta `time_mode: normalized` senza `loop_unit` vale l'opposto, ed e' per
    * questo che l'unita' la chiede a loopUnitInfo invece di dedurla dallo
-   * stream. */
-  function splitAtPlayhead() {
+   * stream.
+   * Di uno stream importato con `file:` (#187) la testa resta nel suo file,
+   * accorciata, e la coda diventa un file nuovo accanto, `<nome>-N.yml` col
+   * nome del file della testa: per sceglierlo libero lo split chiede la
+   * cartella al bridge, come l'incolla, e per questo e' asincrono. Lo split di
+   * soli stream scritti nel master non fa giri di rete. */
+  async function splitAtPlayhead() {
     const t = time;
     const R = (x) => +x.toFixed(4);
     const targets = data.streams.filter(s =>
@@ -1330,20 +1340,47 @@ function App() {
       const sliced = sliceStreamEnvelopes(s, cutNorm);
       skipped += sliced.skipped;
       // La testa di uno stream importato resta nel suo file, accorciata (la
-      // modifica va li', #184). La coda no: con la provenienza della testa
-      // scriverebbe nello stesso file, e il file e' uno. La coda in un file
-      // suo (`<nome>-2.yml`) e' la #187; finche' non c'e', sta nel master.
+      // modifica va li', #184). La coda qui ha ancora la provenienza della
+      // testa, e con quella scriverebbe nello stesso file: la sua — un file
+      // nuovo, la voce del master, lo `stream_id` del documento — gliela da'
+      // `copyImport` quando avra' l'id (#187).
       const tail = {
-        ...window.PGEYaml.detachImport(sliced.stream),
+        ...sliced.stream,
         onset: R(t), duration: R(s.duration - cutRel),
         durationImplicit: false, durationUnresolved: false,
         pointer: { ...(s.pointer || {}), start },
       };
       halves.set(s.id, { head, tail });
     }
+    /* La coda di uno stream importato si chiama `<nome>-N` ed e' il nome del
+       suo file nuovo: libero solo sapendo cosa c'e' gia' nella cartella, che
+       si chiede al bridge PRIMA di allocare l'id — come l'incolla. */
+    const PY = window.PGEYaml;
+    const dirs = [...new Set(targets.filter(s => s._import).map(s => PY.importDirOf(s._import.file)))];
+    const listed = dirs.length ? await listImportNames(dirs, "della coda") : [];
+    /* Fra la domanda e la risposta l'utente puo' aver toccato una clip da
+       tagliare (o premuto di nuovo il tasto): testa e coda, calcolate prima,
+       butterebbero via quella modifica. Si guarda la `data` di ADESSO e, se una
+       clip non e' piu' quella, si rinuncia. */
+    if (dirs.length && targets.some(s => !dataRef.current.streams.includes(s))) {
+      pushToast({ kind: "warn", title: "Split annullato",
+                  message: "una clip e' cambiata mentre si sceglieva il nome della coda — riprova",
+                  duration: 4000 });
+      return;
+    }
     const newIds = [];
+    const tailFiles = [];
     setData(d => {
-      const ids = window.PGEYaml.allocStreamIds(d.streams, halves.size, ownsStemFor);
+      // L'id della coda non deve avere uno stem su disco (ownsStemFor, come
+      // ogni id nuovo: vedi allocStreamIds in yaml-bridge.js), e quello di una
+      // coda in un file nuovo non deve essere il nome di un file che c'e' gia'
+      // nella sua cartella: quelli elencati dal bridge, quelli che l'editor ha
+      // scritto (`importDiskRef`) e quelli che il documento nomina.
+      const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(d)];
+      const splitIdTaken = (id) => ownsStemFor(id) || PY.importIdTaken(id, dirs, knownFiles);
+      // La base di ogni coda: il nome del file della testa, o null (uno streamN).
+      const bases = d.streams.filter(s => halves.has(s.id)).map(s => PY.importSplitBase(s));
+      const ids = PY.allocStreamIds(d.streams, bases, splitIdTaken);
       const tails = [];
       let i = 0;
       const streams = d.streams.map(s => {
@@ -1351,7 +1388,12 @@ function App() {
         if (!h) return s;
         const id = ids[i++];
         newIds.push(id);
-        tails.push({ src: s.id, stream: { ...h.tail, id } });
+        // Uno stream scritto nel master prende solo l'id; uno importato anche
+        // il file nuovo, scritto al salvataggio o prima del render — non
+        // adesso, cosi' uno split annullato non lascia niente su disco.
+        const tail = PY.copyImport(h.tail, id);
+        if (tail._import) tailFiles.push(tail._import.file);
+        tails.push({ src: s.id, stream: tail });
         return h.head;
       });
       const withTails = { ...d, streams: [...streams, ...tails.map(x => x.stream)] };
@@ -1362,6 +1404,10 @@ function App() {
     });
     setSelectedIds([...targets.map(s => s.id), ...newIds]);
     setDirty(true);
+    if (tailFiles.length) {
+      logToTerminal(`[file] ${tailFiles.length === 1 ? "la coda" : `${tailFiles.length} code`} in un file nuovo ` +
+                    `(${tailFiles.join(", ")}), scritto al salvataggio o prima del render`);
+    }
     if (cuts.some(c => !c.exact)) {
       pushToast({ kind: "warn", title: "pointer.start e' una stima",
                   message: "pointer.offset_range devia ogni grano: la posizione di lettura e' la mediana dei grani vicini",

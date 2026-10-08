@@ -151,6 +151,23 @@ def test_save_never_overwrites_an_existing_file(tmp_path):
     assert _tree(root) == before
 
 
+def test_exists_remedy_names_both_gestures(tmp_path):
+    """Un file nuovo nasce da due gesti: la copia (#186) e la coda di uno split
+    (#187). Il rimedio che il rifiuto propone li deve nominare tutti e due —
+    "annulla l'incolla" detto a chi ha tagliato una clip lo manda a cercare un
+    incolla che non ha fatto."""
+    root = _root(tmp_path)
+    _with_original(root)
+    (root / "configs" / "streams" / "risacca-2.yml").write_text("streams: []\n")
+    r = _client(root).post("/save", json={
+        "basename": "brano", "yamlContent": MASTER,
+        "imports": {"streams/risacca-2.yml": "streams:\n- stream_id: risacca-2\n"},
+        "createImports": ["streams/risacca-2.yml"]})
+    assert r.status_code == 409
+    error = r.get_json()["error"]
+    assert "incolla" in error and "split" in error, error
+
+
 def test_save_existing_file_without_create_is_a_plain_write(tmp_path):
     """Senza `createImports` un file importato si riscrive come sempre: e' il
     file di uno stream gia' letto, o gia' scritto da questo editor."""

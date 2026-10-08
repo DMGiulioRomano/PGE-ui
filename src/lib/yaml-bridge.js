@@ -890,7 +890,8 @@
       if (k === "file") {
         // Il path e' quello della provenienza, non quello letto: e' a quel
         // file che `serializeImports` scrive lo stream, e i due devono essere
-        // lo stesso — alla copia ne da' uno nuovo `copyImport` (#186).
+        // lo stesso — alla copia e alla coda di uno split ne da' uno nuovo
+        // `copyImport` (#186, #187).
         out.file = imp.file;
       } else if (k === "stream_id") {
         if (s.id === effId) out.stream_id = raw.stream_id;
@@ -993,15 +994,6 @@
            `\n` + body;
   }
 
-  // Lo stream senza provenienza: si scrive per intero nel master. E' cio' che
-  // lo split fa della coda finche' #187 non la mette in un file nuovo — una
-  // coda che tenesse `_import` scriverebbe nel file della testa.
-  function detachImport(s) {
-    if (!s || !s._import) return s;
-    const { _import, ...plain } = s;
-    return plain;
-  }
-
   /* ---------- duplicare uno stream importato (PGE-ui #186) ----------
    *
    * La regola 5 del piano: la copia di uno stream importato e' un file NUOVO e
@@ -1097,8 +1089,31 @@
     };
   }
 
-  // I file da CREARE: quelli delle copie nuove che il disco ricordato non ha
-  // ancora. In ordine di master, una volta sola.
+  /* ---------- lo split di uno stream importato (PGE-ui #187) ----------
+   *
+   * La regola 6 del piano: la testa resta nel suo file, accorciata, e la coda
+   * diventa un file NUOVO accanto, `<nome>-2.yml`, importato dal master con
+   * l'onset della coda. La coda e' una copia della provenienza come quella
+   * dell'incolla — un documento del laboratorio a se', la testa del file e il
+   * suo piazzamento interno copiati, lo `stream_id` del file rinominato — e
+   * quindi la fa `copyImport`, con un id diverso: non il prossimo `streamN` ma
+   * `<nome>-N`, dove `<nome>` e' il nome del file della testa e N il primo da
+   * 2 in su che `allocStreamIds` da' per libero. Il file e' l'id, come per la
+   * copia: lo `stream_id` di default (il nome del file) resta vero.
+   *
+   * La base e' il nome del FILE, non l'id dello stream: uno stream che il
+   * master rinomina (`stream_id: alto` accanto a `file: streams/risacca.yml`)
+   * da' comunque `risacca-2`, perche' e' un nome di file che si sta scegliendo.
+   * E la regola e' letterale: la coda di `risacca-2` e' `risacca-2-2`, nessun
+   * suffisso si toglie — un `take-1.yml` scritto dall'autore non e' un numero
+   * di questa serie. Uno stream scritto nel master non ha base: la sua coda e'
+   * uno `streamN`, nel master, come sempre. */
+  function importSplitBase(s) {
+    return s && s._import ? importDefaultId(s._import.file) : null;
+  }
+
+  // I file da CREARE: quelli delle copie nuove (incolla, coda di uno split)
+  // che il disco ricordato non ha ancora. In ordine di master, una volta sola.
   function importCreates(data, disk) {
     const out = [];
     for (const s of (data && data.streams) || []) {
@@ -1745,15 +1760,31 @@
    * `isTaken(id)` is the caller's "this id still owns a stem" oracle (backend
    * hasStem). Optional: without it (file:// / server down) we only avoid the
    * ids currently in `streams`, which is the best that can be known offline.
+   *
+   * `count` e' quanti id servono, oppure la lista delle loro BASI (#187): una
+   * voce null e' uno `streamN` come sempre, una stringa `b` e' il primo `b-2`,
+   * `b-3`, ... libero — la coda dello split di uno stream importato, che ha il
+   * nome del suo file nuovo (`importSplitBase`). Libero vuol dire la stessa
+   * cosa nelle due serie, ed e' il punto di passarle da qui: non e' l'id di uno
+   * stream vivo, non e' uno dato prima in questa chiamata, e l'oracolo non lo
+   * rifiuta (uno stem, un nome di file gia' preso).
    */
   function allocStreamIds(streams, count = 1, isTaken) {
     const used = new Set((streams || []).map(s => s.id));
     const taken = (id) => used.has(id) || (isTaken ? !!isTaken(id) : false);
+    const bases = Array.isArray(count) ? count : Array.from({ length: count }, () => null);
     const out = [];
     let counter = used.size + 1;
-    for (let i = 0; i < count; i++) {
-      while (taken("stream" + counter)) counter++;
-      const id = "stream" + counter++;
+    for (const base of bases) {
+      let id;
+      if (base == null) {
+        while (taken("stream" + counter)) counter++;
+        id = "stream" + counter++;
+      } else {
+        let n = 2;
+        while (taken(`${base}-${n}`)) n++;
+        id = `${base}-${n}`;
+      }
       used.add(id);
       out.push(id);
     }
@@ -1806,12 +1837,12 @@
     changedImports,
     releaseImports,
     importedFileText,
-    detachImport,
     importDirOf,
     importCopyFile,
     importIdTaken,
     importFilesOf,
     copyImport,
+    importSplitBase,
     importCreates,
   };
 })();
