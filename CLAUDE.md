@@ -171,9 +171,11 @@ exists, the fourth only when a browser is installed):
   the backend over a fake bridge — `fs.listImportDir`, `createImports` on
   `/save` and `/render`, the `exists` refusal returned rather than thrown and
   with no `done` — plus source guards on the async paste asking the folder
-  before allocating, on the split giving its tail a file too, and on the three
-  writers sending `create`), and `test-stream-split.js` (#187: the split of an
-  imported stream — `allocStreamIds` with bases, `<name>-2` then the next
+  before allocating, on the split giving its tail a file too, on the three
+  writers sending `create`, and on a render refused with `exists` going off
+  without recording an outcome — `lastOk: false` would print "last run failed"
+  under a "Render refused" toast), and `test-stream-split.js` (#187: the split
+  of an imported stream — `allocStreamIds` with bases, `<name>-2` then the next
   number past a live id, a stem and a file name already in the folder,
   `importSplitBase` being the *file's* name and not the stream's id, the split
   done the way app.jsx does it on the same library functions: the head's file

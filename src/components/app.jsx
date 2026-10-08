@@ -2331,6 +2331,19 @@ function App() {
       reportFileOutcome("render", out);
       return;
     }
+    /* Il file nuovo di una copia c'e' gia' su disco (#186): anche questo e' un
+       rifiuto, non un render fallito — il bridge non ha scritto niente e il
+       motore non e' partito. Lo stato si spegne come qui sopra, senza
+       registrare un esito: `lastOk: false` farebbe dire al terminale "last
+       run failed", col pallino rosso, di un giro mai cominciato. */
+    if (result.exists) {
+      setRenderStatus(s => ({ ...s, running: false, currentStreamId: null }));
+      pushToast({
+        kind: "err", title: "Render refused", message: result.error || "see log", duration: 8000,
+        action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
+      });
+      return;
+    }
     // Il config su disco e' adesso il documento di questo render (scritto, o
     // trovato gia' scritto): e' il nuovo allineamento col file.
     if (result.configWritten !== false && yamlOfThisRun) markSynced(configName, yamlOfThisRun);
@@ -2363,9 +2376,7 @@ function App() {
       }
     } else {
       pushToast({
-        // Un file nuovo di una copia che c'e' gia' (#186) non e' un render
-        // fallito: il motore non e' partito, e il rimedio e' nel messaggio.
-        kind: "err", title: result.exists ? "Render refused" : "Render failed", message: result.error || "see log",
+        kind: "err", title: "Render failed", message: result.error || "see log",
         duration: 8000,
         action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
       });
