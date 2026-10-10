@@ -136,7 +136,11 @@ exists, the fourth only when a browser is installed):
   key's one home between master and file, the file staying a lab document,
   `changedImports` against the disk rather than history, the conflict of one
   file imported twice, a stream with no provenance written whole in the
-  master, plus source guards on where app.jsx
+  master, `importReadFiles` (the files whose content the document holds, the
+  reads a write must respect) and `rereadImport` (the targeted reread of one
+  imported file: its streams resolved again from the new text, placement and
+  id kept from the state, every other stream the same object, a text that
+  doesn't resolve an error naming the file), plus source guards on where app.jsx
   keeps the disk and on the paste/split/Raw-tab wiring), and
   `test-lab-roundtrip.js` (#188: the reverse round trip on documents the
   mare-nostrum lab really wrote, `tests/fixtures/lab/` — imported by a master,
@@ -157,11 +161,18 @@ exists, the fourth only when a browser is installed):
   rule), and `test-file-guard.js` (#185: `window.PGEFileGuard` — reread /
   ask / stop decided file by file, the `plan` over N files with its two
   precedences, `ownChanges` comparing documents without the `# saved:` header,
-  `attempt` driven with injected writes and rereads; then the real backend over
+  `attempt` driven with injected writes and rereads, the reread receiving the
+  round's state; then the real backend over
   a fake disk — the signature read from the header, sent on `PUT /file`,
   `POST /save` and `POST /render`, never adopted from a refusal, replaced by the one the write
-  returns, dropped by an older bridge and by a workspace switch — plus source
-  guards on the app.jsx wiring and on the three-answer `Toast`), and
+  returns, dropped by an older bridge and by a workspace switch — and the same
+  for the imported files: the signature `readImport` remembers under the kind
+  `import` (kept on an error that isn't a 404), `importSignatures` for every
+  file of the document written or not, `overwriteImports`, a refusal naming the
+  files, the master first, and the signatures `/save` and the `kind: import`
+  events give back — plus source guards on the app.jsx wiring (own changes and
+  reread per file, the master's question grouping the imports, Save As in the
+  round) and on the three-answer `Toast`), and
   `test-stream-copy.js` (#186: duplicating an imported stream — the copy's
   path beside the original, `importIdTaken`'s case-insensitive collision rule
   and the id it makes `allocStreamIds` skip, `copyImport` keeping everything
@@ -249,7 +260,14 @@ exists, the fourth only when a browser is installed):
   `GET`/`PUT /file`, `POST /save` and `POST /render` — a refusal leaves the
   other editor's bytes untouched, the imported files of the same request
   included, a document already on disk is not rewritten, `overwrite` is read
-  strictly), `test_stream_copy.py` (#186: `GET /import-dir` — the YAML
+  strictly), `test_import_signature.py` (#185 on the files of #184: `GET
+  /import` carrying the signature of the bytes read, and the guard on
+  `POST /save` and `POST /render` over the imported files — a changed import
+  refused whether the request writes it or not, master and imports named in one
+  409 with the disk untouched and before the venv, `overwriteImports`, step 1
+  for an import already on disk, a deleted import not a change, a new file
+  never checked, malformed fields a 400, and the signatures given back),
+  `test_stream_copy.py` (#186: `GET /import-dir` — the YAML
   documents of one folder under `configs/`, hidden and other files left out, a
   missing folder empty, the `/import` boundary —, and `createImports` on
   `/save` and `/render`: a new file that already exists is a 409 `{exists}`
@@ -479,7 +497,13 @@ Since #183/#184 a fifth: a master with `- file:` (`fixtures/PGE_smoke_file.yml`
 plus `fixtures/streams/onda.yml`) opened from the project list, saved untouched,
 then edited in each of its two homes and undone — what landed where is read
 back from the bridge (`GET /import`, `GET /file`), i.e. from the disk. See "The
-stream as a file". Its last step is where the two features meet: an unsaved
+stream as a file". Then the guard on the imported file: the lab rewrites
+`streams/onda.yml` while the master has an unsaved edit — the save rereads that
+file alone and saves the master's edit, the file left the lab's byte for byte;
+with an edit inside the file too, the save asks about that file and «ricarica»
+resumes it, «sovrascrivi» writes the editor's; a render rereads a file it
+doesn't even write; and with master and file both rewritten there is one
+question for the two. Its last step is where the two features meet: an unsaved
 edit inside the imported stream, the lab rewriting the master, and a save that
 must **ask** rather than reread — a reread reopens the whole project and would
 drop the edit, which the master's own serialization can't see. Just before
@@ -869,27 +893,53 @@ two routes the verdict is decided **before any file is written**
 the imported files untouched too, because writing them and then refusing the
 master would be the half piece `plan_import_writes` exists to prevent. The
 render refuses before the venv and the stream as well. The refusal is a 409 with `changed` as a field
-of its own and `name` saying which file — never an error to recognize from its
+of its own and `files` saying which files, the master first (`name` is the
+first of them, the shape of before) — never an error to recognize from its
 text.
+
+**The imported files (#184) are guarded the same way, file by file.** The lab
+writes the stream files, not the master, so this is the common case of the two.
+`GET /import` sends the signature in its JSON body (`read_signed`, one read for
+text and signature — here the body is JSON, not the document). `POST /save` and
+`POST /render` take `importSignatures` (`{path: signature}`) and
+`overwriteImports` (`[path]`), malformed → 400 (`import_guard_fields`), and
+`check_import_plan` decides every file before anything is written: a file the
+request writes goes through steps 1 and 2 of `write_guarded`; a file the request
+does **not** write but whose signature it carries is refused if the disk no
+longer holds what was read — the engine re-reads the imports from disk, so a
+render started on a file the lab just rewrote would play that version while the
+editor shows (and records the dot of) another. A new file (`createImports`,
+#186) has no read to respect: it has its own rule, exclusive creation.
+`apply_import_plan` writes the bytes in utf-8, like the master, and returns the
+signature of each file written or found already written: in `/save`'s response
+as `importSignatures`, in the render's NDJSON as one `file-signature` event of
+kind `import` per file.
 
 `backend.js` owns the signatures (in memory, per `(kind, name)`, never
 persisted: after a reload that read never happened, and a persisted signature
 that happens to match is a write that passes with nobody looking). The one
-written replaces the one read (from the `PUT` body, from the `file-signature`
-event); a refusal doesn't touch it; a bridge that sends none (older than #185)
-drops it, so the guard falls silent instead of refusing writes that bridge can't
-refuse; a 404 drops it; a workspace switch drops them all (two folders can hold
-a same-named project, and the inherited signature might *match*). A refused
+written replaces the one read (from the `PUT` body, from `/save`'s response,
+from the `file-signature` event); a refusal doesn't touch it; a bridge that
+sends none (older than #185, or than the guard on the imports) drops it, so the
+guard falls silent instead of refusing writes that bridge can't refuse; a 404
+drops it; a workspace switch drops them all (two folders can hold a same-named
+project, and the inherited signature might *match*). The imported files live
+under the kind `import`: `readImport` remembers what it read, and an error that
+isn't "the file is not there" (network, unreadable file) keeps the old one —
+it is the version the editor still holds. `fs.save` and `render.run` take the
+list of files the document holds (`opts.importFiles`, i.e.
+`PGEYaml.importReadFiles` — the resolved imports, not an unresolved `file:`
+entry, of which the editor holds nothing) and send the signature of each,
+written or not; the list itself stays in the browser. A refused
 `writeFile` / `fs.save` / `render.run` **returns** `{ok:false, changed:true, files}` — not a
 throw, which would arrive as "Save failed" / "Render failed", i.e. the question
 never asked — and the refused render emits no `done` (it is the event of a
 render that finished; the engine never started).
 
 The decision is `src/lib/file-guard.js` (`window.PGEFileGuard`, pure,
-node-tested), **file by file from day one**: today the guard watches one file,
-the master — imported streams (#184) are written beside it but not signed yet,
-see the declared limits below — and with them a clean imported file is reread
-even while the master has something to ask.
+node-tested), **file by file from day one**: the guard watches the master and
+every imported file of the document, and a clean imported file is reread even
+while the master has something to ask.
 
 - `decide`: a file already reread once → `stop` (it is changing *now*; chasing
   it never ends — `MAX_REREADS = 1`, the lab's number); otherwise own changes →
@@ -906,13 +956,17 @@ even while the master has something to ask.
   each file is reread at most once, an overwritten file isn't refused again.
   `state.doc` carries the reread document into the retry, because React state
   isn't synchronous — retrying with the closure's `data` would send the bridge
-  exactly what it just refused. `afterOverwrite` clears it: «sovrascrivi» writes
-  what the user has in front of them *now*, edits made while the question was
-  open included.
+  exactly what it just refused. For the same reason `reread(name, state)`
+  receives the round's state: with two clean files to reread, the second starts
+  from the document the first left. `afterOverwrite` clears it: «sovrascrivi»
+  writes what the user has in front of them *now*, edits made while the
+  question was open included.
 
-`app.jsx` is the glue, and the two things only it can say:
+`app.jsx` is the glue, and the two things only it can say — each of them
+twice, because a refused file is either the master or an imported file
+(`fileHasOwnChanges(name, master)`, `rereadFile(name, state, master)`):
 
-- **"Own changes" is not `dirty`.** It is `FG.ownChanges(serialize(now),
+- **"Own changes" is not `dirty`.** On the master it is `FG.ownChanges(serialize(now),
   syncedDocRef[name])`: the document this editor would write now against the one
   it would have written at the last alignment with the file — a read
   (`onProjectSelect`), a successful save, a render whose config was written or
@@ -929,16 +983,39 @@ even while the master has something to ask.
   an undo would bring back a version no longer on disk, and the next write would
   write it over the other editor's. The reread document is also the new
   alignment, so the retry finds it already on disk and leaves the lab's bytes.
+- **An imported file is neither.** Its own changes are *its* text against what
+  is known to be on disk (`importDiskRef`), or a conflict between two copies of
+  it — the master and the other files don't enter. And its reread is
+  **targeted**: `rereadImportFile` reads that file (`GET /import`) and replaces
+  the streams that import it (`PGEYaml.rereadImport`, pure, node-tested),
+  keeping what belongs to the master — id, placement as the state has it now,
+  the entry as written, colour — and leaving every other stream the same
+  object. Reopening the project, as for the master, would throw away the
+  unsaved work in the other files, master included, while the question was
+  about this one. It resets the history like the master's reread (an undo
+  would bring back a version of that file no longer on disk), and that file's
+  `importDiskRef` becomes the reread one, so the retry finds it on disk and
+  leaves the lab's bytes. The state is updated on the state of *now*
+  (functional `_setDataRaw`), the returned document on the round's
+  (`state.doc`), for the reason above.
 
 The question is a persistent toast **per file** with three answers —
 «ricarica», «sovrascrivi», and the × (write nothing) — so `Toast` grew `actions`
 (plural): with those the surface is not clickable (with `action` singular the
 whole toast is the button, and a stray click would become an answer that
-writes), each answer has its button, and the × calls `onClose`. The write
-resumes when every file has its answer. The answers go through `latestRef`
-(this render's `answerFileQuestion` / `saveProject` / `renderAgain`), because
-the question doesn't freeze the keyboard. Any new write replaces the question
-(`closeFileQuestion` at the top of `saveProject` and `runRender`), and so do
+writes), each answer has its button, and the × calls `onClose`. **Except the
+master's**: its reread reopens the whole project, imported files included, so
+when the master is asked about, the imported files asked about join its toast
+(one question, both names) — two toasts would make the outcome depend on the
+order of the clicks («sovrascrivi» on the import, then «ricarica» on the
+master, and the changes just defended go with the reread). The write resumes
+when every question has its answer. «ricarica» on an answer rereads on the
+state of *now* (`{...q.state, doc: null}`), not on the round's document, which
+is the one of when the question was asked. The answers go through `latestRef`
+(this render's `answerFileQuestion` / `saveProject` / `saveProjectAs` /
+`renderAgain`), because the question doesn't freeze the keyboard. Any new
+write replaces the question (`closeFileQuestion` at the top of `saveProject`,
+`saveProjectAs` and `runRender`), and so do
 opening a project (`openProject`, the UI's door — not `onProjectSelect`, which is
 also the reread and with N files must not close the others' questions) and a
 workspace switch (which also empties `syncedDocRef`).
@@ -953,32 +1030,35 @@ fingerprints are fixed **per attempt** (`yamlOfThisRun`, `fpsOfThisRun`): the
 for `semOfThisRun`'s reason — after a reread the closure remembers the refused
 document. Save As and New project pass `overwrite: true`: a name just typed, not
 the open file, so there is no read of *that* file behind the document (the lab's
-`salva con nome` rule).
+`salva con nome` rule). That covers the **master** only: the imported files
+Save As writes are the original's, read with it, so Save As goes through the
+same `FG.attempt` (`saveProjectAs`, whose answers resume it by name) — a clean
+one is reread and the copy retried, one with own changes asks.
 
 Declared limits: the window between check and write is that of any
 check-then-write on a filesystem (the guard catches the real case, two editors
 open for minutes); a reread whose document PGE-ui doesn't round-trip identically
 (top-level `duration` is recomputed from the streams, `computeDuration`) is
 rewritten by the retry — legitimate, it is what this editor writes, and the lab's
-guard will then ask or reread on its side. **Imported streams (#184) are
-written but not guarded**: `GET /import` sends no signature, so a lab that
-rewrites `streams/x.yml` while it is open here is not noticed, and the next
-save or render that touches that file overwrites it. `file-signature` is one
-event per file and `plan` already takes N, so signing them is a matter of
-calling the same pieces, not rewriting them. What #184 did change is what
-counts as **own changes on the master**: a reread is an "open" of the whole
+guard will then ask or reread on its side. A targeted reread of an imported
+file resets the whole history, like the master's: the snapshots hold the old
+version of that file's streams, and patching each of them was not worth its
+code. An unresolved `file:` entry is not guarded — the editor holds nothing of
+it and rewrites the entry as written. What #184 changed for the master is what
+counts as **own changes on the master**: its reread is an "open" of the whole
 project, imported files included, and an edit inside an imported stream
 doesn't move the master's serialization (the master holds its placement only).
-So `fileHasOwnChanges` also asks `changedImports` against `importDiskRef` (and
-a conflict between two copies of one file counts): without it a lab save of the
-master would reread away unsaved edits made in an imported stream, without
-asking. In a render, each attempt marks its imports written and, when the bridge
-refused (`configWritten === false`), gives the claim back **inside** the attempt
-(`releaseImports`), so the question that follows a refusal sees them unwritten.
+So on the master `fileHasOwnChanges` also asks `changedImports` against
+`importDiskRef` (and a conflict between two copies of one file counts): without
+it a reread of the master would throw away unsaved edits made in an imported
+stream, without asking. In a render, each attempt marks its imports written
+and, when the bridge refused (`configWritten === false`), gives the claim back
+**inside** the attempt (`releaseImports`), so the question that follows a
+refusal sees them unwritten.
 
 ### NDJSON render protocol
 
-`POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`, and — first, when the request carried a document — `file-signature` (`{kind, name, signature, written}`, #185: the signature of the config this render wrote or found already written; one event per file, so the N files of #184 don't change its shape). A config changed on disk since the editor read it is not a stream at all: a JSON 409 before any of this (see "Two editors, one file"). `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
+`POST /render` returns one JSON object per line. Event types: `log`, `stream-start`, `stream-done`, `done`, and — first — `file-signature` (`{kind, name, signature, written}`, #185: the signature of a file this render wrote or found already written; one event per file — the config, kind `projects`, when the request carried a document, then each imported file of the request, kind `import`). A config or an imported file changed on disk since the editor read it is not a stream at all: a JSON 409 before any of this (see "Two editors, one file"). `server.py` parses `main.py` stdout into these structured events. Adding a new render-time UI signal usually means: extend the parser in `server.py` AND the consumer in `backend.js` AND the React state in `app.jsx`.
 
 **Not every `[CACHE]` line is a stream, and the shape doesn't say which.** The
 engine prints `[CACHE] Manifest: <path>` on every `--cache` render and
@@ -3251,8 +3331,9 @@ nowhere else.
 Binds `127.0.0.1` by default. CORS wide-open — the editor is served by the bridge on its own origin (#166), but opening the HTML as `file://` stays possible and needs it. No auth. `--host 0.0.0.0` exposes arbitrary `python src/main.py` execution against attacker-controlled configs — only use on a trusted LAN. Path traversal in `name=` params is rejected; `kind=` is whitelisted (`projects|media|cache|output`). `POST /workspace` takes an unconstrained absolute path and creates `configs/output/cache` under it: with no auth that is a local-tool decision, and one more reason not to pass `--host 0.0.0.0`. What it does not do is answer a bad path with a 500: a NUL (`ValueError` from the filesystem) and a `~unknownuser` (`RuntimeError` from `expanduser`) are 400s with the message, like the missing folder — the same rule `/render` learned by going through `safe_resolve`.
 
 **A write can be refused** (#185): `PUT /file`, `POST /save` and the config
-write of `POST /render` answer 409 `{changed}` when the file's signature on disk isn't
-the one the editor read (see "Two editors, one file"). It is a guard between two
+write of `POST /render` answer 409 `{changed}` when the signature on disk of the
+master, or of an imported file the editor read (`importSignatures`), isn't the
+one the editor read (see "Two editors, one file"). It is a guard between two
 cooperating editors on one machine, not an access control: a client that omits
 the signature writes as before. The same holds for #186's 409 `{exists}`: an
 import named in `createImports` that is already on disk is not written — a

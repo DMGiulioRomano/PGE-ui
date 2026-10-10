@@ -467,6 +467,99 @@ console.log("\n── il render reclama i file prima di partire, e li rende se n
     FILE in Y.changedImports({ [FILE]: A }, savedMeanwhile));
 }
 
+/* La guardia di #185 sui file importati: un file cambiato su disco da quando
+ * l'editor l'ha letto si rilegge da solo, senza riaprire il progetto intero —
+ * riaprirlo butterebbe le modifiche non salvate negli altri file, master
+ * compreso. `rereadImport` e' quella rilettura, pura: gli stream di QUEL file
+ * si risolvono di nuovo dal testo appena letto, e il resto resta com'e'. */
+console.log("\n── i file di cui il documento tiene il contenuto (le letture da rispettare) ──");
+{
+  const m = `streams:\n  - file: streams/risacca.yml\n  - file: streams/manca.yml\n` +
+            `  - file: streams/risacca.yml\n    stream_id: eco\n  - stream_id: riva\n    duration: 1\n`;
+  const d = Y.parse(m, { project: "brano", samples: [],
+                         imports: { [FILE]: { text: RISACCA }, "streams/manca.yml": { error: "404" } } });
+  /* Di una voce che non si e' risolta l'editor non tiene niente — ne' da
+     perdere ne' da mostrare — e il master la riscrive com'era: non c'e' una
+     lettura da rispettare. `importFilesOf` la conta (un file che c'e' resta un
+     nome preso), questa no. */
+  assert("importReadFiles: i file degli stream importati, una volta sola, senza le voci irrisolte",
+    eq(Y.importReadFiles(d), [FILE]), JSON.stringify(Y.importReadFiles(d)));
+  assert("...mentre importFilesOf conta anche la voce irrisolta",
+    eq(Y.importFilesOf(d), [FILE, "streams/manca.yml"]), JSON.stringify(Y.importFilesOf(d)));
+  assert("un documento senza import non ne ha", eq(Y.importReadFiles({ streams: [] }), [])
+    && eq(Y.importReadFiles(null), []));
+}
+
+console.log("\n── rereadImport: rileggere UN file importato, e solo quello ──");
+{
+  const LAB = RISACCA.replace("distribution: 0.7", "distribution: 0.2").replace("volume: -6", "volume: -3");
+  const d0 = open();
+  // Lavoro non salvato altrove: un parametro di riva (master) e l'onset
+  // dell'importato (piazzamento, quindi master anche lui).
+  const edited = withStream(withStream(d0, "riva", { volume: -20 }), "risacca", { onset: 7 });
+  const out = Y.rereadImport(edited, FILE, LAB, { project: "brano", samples: [] });
+  assert("riletto: torna un documento, non un errore", !!out.data && !out.error, JSON.stringify(out.error));
+  const r = out.data.streams.find(s => s.id === "risacca");
+  assert("lo stream riletto dice cio' che dice il file adesso",
+    r.distribution === 0.2 && r.volume === -3, JSON.stringify([r.distribution, r.volume]));
+  /* Il piazzamento e' del master, e il master non si sta rileggendo: l'onset
+     toccato e non salvato resta quello dello stato. */
+  assert("...col piazzamento dello stato (l'onset toccato resta)", r.onset === 7, String(r.onset));
+  const r0 = edited.streams.find(s => s.id === "risacca");
+  assert("...lo stesso id e lo stesso colore", r.id === r0.id && r.color === r0.color);
+  assert("...e la voce del master com'era scritta", eq(r._import.entry, r0._import.entry)
+    && r._import.file === FILE, JSON.stringify(r._import.entry));
+  assert("...con la testa e il piazzamento interno del file riletto",
+    r._import.head.seed === 1441 && eq(r._import.place, { stream_id: "risacca", onset: 12.5, mute: true }),
+    JSON.stringify([r._import.head, r._import.place]));
+  const riva0 = edited.streams.find(s => s.id === "riva");
+  assert("gli altri stream sono gli stessi oggetti: il lavoro non salvato resta",
+    out.data.streams.find(s => s.id === "riva") === riva0 && riva0.volume === -20);
+  assert("rereadImport non tocca il documento che riceve",
+    edited.streams.find(s => s.id === "risacca").distribution === 0.7);
+  /* La rilettura e' la stessa di un'apertura: il file come lo riscriverebbe
+     l'editor e' quello che darebbe il progetto riaperto con quel testo. E' il
+     "disco" che app.jsx ricorda dopo la rilettura (`importDiskRef`). */
+  const reopened = open(MASTER, { [FILE]: { text: LAB } });
+  assert("il file riletto si riscrive come lo riscriverebbe il progetto riaperto",
+    Y.serializeImports(out.data).files[FILE] === Y.serializeImports(reopened).files[FILE]);
+  assert("...e il master, che tiene il piazzamento, non cambia per la rilettura",
+    body(Y.serialize(out.data)) === body(Y.serialize(edited)));
+  const fresh = { ...edited, streams: edited.streams.map(s => s.id === "risacca"
+    ? { ...s, _import: { ...s._import, fresh: true } } : s) };
+  assert("un file riletto c'e' su disco: non e' piu' un file da creare",
+    !("fresh" in Y.rereadImport(fresh, FILE, LAB, {}).data.streams[0]._import));
+}
+
+console.log("\n── rereadImport: lo stesso file da due voci, un file che nessuno importa ──");
+{
+  const m = `streams:\n  - file: streams/risacca.yml\n  - file: streams/risacca.yml\n    stream_id: eco\n    onset: 5\n`;
+  const d = open(m);
+  const LAB = RISACCA.replace("distribution: 0.7", "distribution: 0.1");
+  const out = Y.rereadImport(d, FILE, LAB, { project: "brano", samples: [] });
+  assert("le due voci si rileggono tutte e due, ognuna col suo piazzamento",
+    out.data.streams.map(s => [s.id, s.onset, s.distribution]).join(";") === "risacca,0,0.1;eco,5,0.1",
+    JSON.stringify(out.data.streams.map(s => [s.id, s.onset, s.distribution])));
+  assert("...e dopo dicono la stessa cosa: nessun conflitto", eq(Y.serializeImports(out.data).conflicts, []));
+  const none = Y.rereadImport(d, "streams/altro.yml", LAB, {});
+  assert("un file che nessuno stream importa: il documento torna com'e', lo stesso oggetto",
+    none.data === d && !none.error);
+}
+
+console.log("\n── rereadImport: un testo che non si risolve non tocca niente ──");
+{
+  const d = open();
+  for (const [what, text] of [
+    ["YAML rotto", "streams: [\n"],
+    ["due stream", "streams:\n  - stream_id: a\n  - stream_id: b\n"],
+    ["una catena", "streams:\n  - file: streams/altro.yml\n"],
+  ]) {
+    const out = Y.rereadImport(d, FILE, text, { project: "brano", samples: [] });
+    assert(`${what}: un errore che nomina il file, e nessun documento`,
+      !out.data && typeof out.error === "string" && out.error.includes(FILE), JSON.stringify(out));
+  }
+}
+
 console.log("\n── app.jsx: dove sta il disco, chi scrive, chi stacca (guardie sorgente) ──");
 {
   const app = SG.codeOf(path.join(__dirname, "../../src/components/app.jsx"));

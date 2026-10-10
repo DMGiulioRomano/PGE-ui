@@ -781,6 +781,161 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         JSON.stringify(await entriesOf()) === JSON.stringify(entries4)
           && !(await streamsDir()).includes(copyFile2), JSON.stringify(await streamsDir()));
 
+      // 4c — due editor, un file, sul file IMPORTATO (#185 sui file di #184).
+      // Il laboratorio scrive i file degli stream, non il master: e' il caso
+      // comune. Un file importato cambiato su disco si rilegge da solo — gli
+      // stream di quel file e basta, senza riaprire il progetto — e il lavoro
+      // non salvato altrove, master compreso, resta e si salva. Con modifiche
+      // proprie in quel file si chiede, di quel file solo.
+      {
+        const lab = require("js-yaml");
+        const importPath = path.join(session.paths.workspace, "configs", FILE);
+        const masterPath4 = path.join(session.paths.workspace, "configs", MASTER);
+        const labWritesFile = (p, mutate) => {
+          const doc = lab.load(fs.readFileSync(p, "utf8"));
+          mutate(doc);
+          fs.writeFileSync(p, "# scritto dal laboratorio\n" + lab.dump(doc, { flowLevel: 3 }));
+          return fs.readFileSync(p, "utf8");
+        };
+        const questions = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+            title: (t.querySelector(".tt-title") || {}).textContent || "",
+            acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+          })));
+        const toastTitles = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+        const canUndo = () => page.evaluate(() => window.PGEHistory && window.PGEHistory.canUndo);
+        const rivaClip = async () => { await page.click(".lane .clip:not(:has(.clip-file))"); await wait(200); };
+        const ondaWidth = () => page.evaluate(() => {
+          const c = document.querySelector(".lane .clip:has(.clip-file)");
+          return c ? c.getBoundingClientRect().width : null;
+        });
+        // Il volume dello stream importato, come lo mostra l'Inspector: e' cio'
+        // che il laboratorio cambia, e cio' che dice se la rilettura e' arrivata.
+        const ondaVolume = async () => {
+          await importedClip();
+          return page.evaluate(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "volume");
+            const v = r && r.querySelector(".val");
+            return v ? v.textContent : null;
+          });
+        };
+        const rivaOnsetOnDisk = () => lab.load(fs.readFileSync(masterPath4, "utf8")).streams[1].onset;
+        const reread = async () => { await save(); await wait(500); };
+
+        // (a) niente di proprio nel file, un lavoro non salvato nel master
+        // (l'onset di riva), e il laboratorio riscrive il file.
+        const riva0 = rivaOnsetOnDisk();
+        await rivaClip();
+        await page.keyboard.press("Shift+ArrowRight");
+        await wait(300);
+        const labA = labWritesFile(importPath, d => { d.streams[0].volume = -3; });
+        await reread();
+        assert("file importato cambiato, senza modifiche proprie in lui: non si chiede niente",
+          (await questions()).length === 0, JSON.stringify(await questions()));
+        assert("...si rilegge quel file, e lo dice", (await toastTitles()).includes(`${FILE} riletto`),
+          JSON.stringify(await toastTitles()));
+        assert("...gli stream di quel file sono la versione del laboratorio", (await ondaVolume()) === "-3",
+          String(await ondaVolume()));
+        assert("...il file resta del laboratorio, byte per byte", fs.readFileSync(importPath, "utf8") === labA);
+        assert("...e il lavoro nel master non si perde: si salva", rivaOnsetOnDisk() === riva0 + 1,
+          `${riva0} → ${rivaOnsetOnDisk()}`);
+        assert("...la rilettura azzera la storia", (await canUndo()) === false);
+
+        // (b) modifiche proprie nel file (la durata) e nel master (riva), e il
+        // laboratorio riscrive il file: si chiede di quel file, e basta.
+        const w0 = await ondaWidth();
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        await rivaClip();
+        await page.keyboard.press("Shift+ArrowRight");
+        await wait(300);
+        const labB = labWritesFile(importPath, d => { d.streams[0].volume = -9; });
+        await reread();
+        const qb = await questions();
+        assert("modifiche proprie nel file importato: si chiede, di quel file",
+          qb.length === 1 && qb[0].title === `${FILE} e' cambiato su disco`
+            && qb[0].acts.join(",") === "ricarica,sovrascrivi", JSON.stringify(qb));
+        assert("...e intanto non si scrive niente", fs.readFileSync(importPath, "utf8") === labB
+          && rivaOnsetOnDisk() === riva0 + 1);
+        await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+        await wait(1200);
+        assert("ricarica: la domanda si chiude", (await questions()).length === 0);
+        assert("...il file si rilegge: la versione del laboratorio", (await ondaVolume()) === "-9"
+          && Math.abs((await ondaWidth()) - w0) < 2, `${await ondaVolume()} · ${w0} → ${await ondaWidth()}`);
+        assert("...il salvataggio riprende: il lavoro nel master si salva", rivaOnsetOnDisk() === riva0 + 2,
+          `${riva0} → ${rivaOnsetOnDisk()}`);
+        assert("...e il file resta del laboratorio, byte per byte", fs.readFileSync(importPath, "utf8") === labB);
+
+        // (c) «sovrascrivi»: il file prende la versione dell'editor.
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        labWritesFile(importPath, d => { d.streams[0].volume = -12; });
+        await reread();
+        assert("ancora modifiche proprie nel file: si chiede", (await questions()).length === 1);
+        await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+        await wait(1200);
+        const docC = lab.load(fs.readFileSync(importPath, "utf8"));
+        assert("sovrascrivi: su disco c'e' la versione dell'editor, con la sua durata",
+          docC.streams[0].volume === -9 && docC.streams[0].duration === 4
+            && !fs.readFileSync(importPath, "utf8").startsWith("# scritto dal laboratorio"),
+          JSON.stringify([docC.streams[0].volume, docC.streams[0].duration]));
+        // La durata torna 3: lo split del passo 6 taglia a meta' uno stream di 3 s.
+        await page.keyboard.press("Control+z");
+        await wait(300);
+        await save();
+        assert("...e un undo salvato la riporta", lab.load(fs.readFileSync(importPath, "utf8")).streams[0].duration === 3);
+
+        // (d) il render, senza modifiche proprie: il motore rilegge gli import
+        // dal disco, e partito su un file riscritto dal laboratorio suonerebbe
+        // una versione che l'editor non mostra. Il bridge rifiuta anche se il
+        // render quel file non lo scrive; si rilegge e si rende.
+        const renders4 = [];
+        const onResponse = (r) => { if (new URL(r.url()).pathname === "/render") renders4.push(r.status()); };
+        page.on("response", onResponse);
+        const labD = labWritesFile(importPath, d => { d.streams[0].volume = -6; });
+        await importedClip();
+        await page.keyboard.press("r");
+        await wait(1800);
+        page.off("response", onResponse);
+        assert("render su un file importato riscritto: nessuna domanda", (await questions()).length === 0,
+          JSON.stringify(await questions()));
+        assert("...un rifiuto, la rilettura, una riprova accettata", renders4.join(",") === "409,200",
+          `risposte di /render: ${renders4.join(",")}`);
+        assert("...sulla versione del laboratorio, che resta sua byte per byte",
+          (await ondaVolume()) === "-6" && fs.readFileSync(importPath, "utf8") === labD, String(await ondaVolume()));
+
+        // (e) master e file cambiati insieme, con modifiche proprie nel file:
+        // una domanda sola. La rilettura del master riapre il brano intero,
+        // file importati compresi, quindi la sua risposta vale per tutti e due.
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        const labEm = labWritesFile(masterPath4, d => { d.title = "dal laboratorio, 4c"; });
+        const labEf = labWritesFile(importPath, d => { d.streams[0].volume = -15; });
+        await reread();
+        const qe = await questions();
+        assert("master e file importato cambiati, con modifiche proprie: una domanda sola, per tutti e due",
+          qe.length === 1 && qe[0].title === `${MASTER}, ${FILE} sono cambiati su disco`, JSON.stringify(qe));
+        await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+        await wait(1500);
+        assert("ricarica: il brano si riapre dal disco, file importato compreso",
+          (await questions()).length === 0 && (await ondaVolume()) === "-15"
+            && Math.abs((await ondaWidth()) - w0) < 2, `${await ondaVolume()} · ${await ondaWidth()}`);
+        assert("...e il salvataggio che riprende non riscrive niente: i due file restano del laboratorio",
+          fs.readFileSync(masterPath4, "utf8") === labEm && fs.readFileSync(importPath, "utf8") === labEf);
+
+        // I 409 di POST /save e /render sono provocati da questo passo: si
+        // contano, uno per rifiuto, e si tolgono dagli errori in console.
+        const refused4 = seen.errors.filter(e => / 409 /.test(e) && /\/(save|render)\b/.test(e));
+        assert("i rifiuti in console sono quelli provocati dal laboratorio (5)", refused4.length === 5,
+          refused4.join("\n      "));
+        seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused4.includes(e)));
+      }
+
       // 5 — due editor, un file (#185) su un brano con import. Una modifica
       // dentro lo stream importato non muove il master, che ne tiene solo il
       // piazzamento; ma e' lavoro proprio, e la rilettura — un "apri" del
