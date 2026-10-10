@@ -51,6 +51,9 @@ global.localStorage = {
 const DISK = {};               // configs/: nome → testo
 let HEADER_ON = true;          // un bridge piu' vecchio di #185 non manda la firma
 let SIG_IN_PUT = true;         // ...ne' la rimanda dopo una scrittura
+let IMPORT_GUARD = true;       // un bridge senza la guardia sugli import: GET /import
+                               // senza firma, nessun controllo, 409 con `name` e basta
+const IMPORT_FAIL = {};        // file → "net" | 422: una lettura che non riesce
 const PUTS = [];               // le richieste PUT /file viste
 const SAVES = [];              // i corpi di POST /save visti (#184)
 const RENDERS = [];            // i corpi di POST /render visti
@@ -75,6 +78,24 @@ function ndjsonBody(lines) {
 // disco, file presente, niente sovrascrittura → 409.
 function refused(name, sig, overwrite) {
   return !!sig && name in DISK && sigOf(DISK[name]) !== sig && !overwrite;
+}
+/* La stessa guardia sui file importati: ogni firma mandata, scritto o no dalla
+   richiesta, tranne i file nuovi e quelli da sovrascrivere. Il master per
+   primo, come il bridge vero. */
+function refusedFiles(master, body, sig, overwrite) {
+  const files = refused(master, sig, overwrite) ? [master] : [];
+  if (!IMPORT_GUARD) return files;
+  const creates = body.createImports || [];
+  const over = body.overwriteImports || [];
+  for (const [f, s] of Object.entries(body.importSignatures || {})) {
+    if (!creates.includes(f) && refused(f, s, over.includes(f))) files.push(f);
+  }
+  return files;
+}
+function changedRes(files) {
+  return jsonRes(409, { ok: false, changed: true, name: files[0],
+                        ...(IMPORT_GUARD ? { files } : {}),
+                        error: `${files.join(", ")} cambiato su disco` });
 }
 
 global.fetch = (url, init = {}) => {
@@ -104,26 +125,42 @@ global.fetch = (url, init = {}) => {
   /* POST /save (#184): master e import cambiati in una richiesta. La guardia
      e' quella del master, decisa prima di scrivere qualunque file: un rifiuto
      lascia intatti anche gli import (il bridge vero lo verifica pytest). */
+  /* GET /import (#183): il file importato, con la firma dei byte letti dalla
+     guardia sugli import in poi. */
+  if (u.pathname === "/import") {
+    const f = u.searchParams.get("file");
+    if (IMPORT_FAIL[f] === "net") return Promise.reject(new Error("rete giu'"));
+    if (IMPORT_FAIL[f] === 422) return jsonRes(422, { ok: false, error: `${f} non si legge` });
+    if (!(f in DISK)) return jsonRes(404, { ok: false, error: `configs/${f} non esiste` });
+    return jsonRes(200, { ok: true, file: f, text: DISK[f],
+                          ...(IMPORT_GUARD ? { signature: sigOf(DISK[f]) } : {}) });
+  }
   if (u.pathname === "/save") {
     const body = JSON.parse(init.body);
     SAVES.push(body);
     const name = `${body.basename}.yml`;
-    if (refused(name, body.signature, body.overwrite === true))
-      return jsonRes(409, { ok: false, changed: true, name, error: `${name} e' cambiato su disco` });
+    const changed = refusedFiles(name, body, body.signature, body.overwrite === true);
+    if (changed.length) return changedRes(changed);
     for (const [f, t] of Object.entries(body.imports || {})) DISK[f] = t;
     DISK[name] = body.yamlContent;
+    const importSignatures = {};
+    for (const [f, t] of Object.entries(body.imports || {})) importSignatures[f] = sigOf(t);
     return jsonRes(200, { ok: true, written: [...Object.keys(body.imports || {}), name],
-                          ...(SIG_IN_PUT ? { signature: sigOf(body.yamlContent) } : {}) });
+                          ...(SIG_IN_PUT ? { signature: sigOf(body.yamlContent) } : {}),
+                          ...(SIG_IN_PUT && IMPORT_GUARD ? { importSignatures } : {}) });
   }
   if (u.pathname === "/render") {
     const body = JSON.parse(init.body);
     RENDERS.push(body);
     const name = `${body.yamlBasename}.yml`;
-    if (refused(name, body.signature, body.overwrite === true))
-      return jsonRes(409, { ok: false, changed: true, name, error: `${name} e' cambiato su disco` });
+    const changed = refusedFiles(name, body, body.signature, body.overwrite === true);
+    if (changed.length) return changedRes(changed);
+    for (const [f, t] of Object.entries(body.imports || {})) DISK[f] = t;
     DISK[name] = body.yamlContent;
     return Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, body: ndjsonBody([
       { type: "file-signature", kind: "projects", name, signature: sigOf(body.yamlContent), written: true },
+      ...Object.entries(body.imports || {}).map(([f, t]) =>
+        ({ type: "file-signature", kind: "import", name: f, signature: sigOf(t), written: true })),
       { type: "done", ok: true, generated: [] },
     ]) });
   }
@@ -337,6 +374,27 @@ console.log("\n── attempt: il giro, con le scritture iniettate ──");
   const r9 = await FG.attempt(g.hooks, FG.initialState());
   assert("un fallimento che non e' un rifiuto passa com'e'",
     r9.outcome === "failed" && r9.result.error === "boom");
+
+  /* Due file puliti rifiutati insieme (il master e un importato, o due
+     importati): la rilettura del secondo deve partire dal documento che ha
+     lasciato la prima, non dallo stato di React — che non e' sincrono, e
+     darebbe il documento di prima della prima rilettura. Percio' la rilettura
+     riceve lo stato del giro. */
+  const seenStates = [];
+  let refusedOnce = false;
+  const two = { hooks: {
+    write: async () => {
+      if (refusedOnce) return { ok: true };
+      refusedOnce = true;
+      return { ok: false, changed: true, files: ["streams/a.yml", "streams/b.yml"] };
+    },
+    ownChanges: () => false,
+    reread: async (name, st) => { seenStates.push({ name, doc: st && st.doc }); return { after: name }; },
+  } };
+  const r10 = await FG.attempt(two.hooks, FG.initialState());
+  assert("due file puliti: la rilettura riceve lo stato del giro",
+    r10.outcome === "done" && seenStates.length === 2 && seenStates[0].doc === null
+      && seenStates[1].doc && seenStates[1].doc.after === "streams/a.yml", JSON.stringify(seenStates));
 }
 
 /* ===========================================================================
@@ -488,18 +546,171 @@ console.log("\n── backend: il render porta la firma, e la riceve ──");
   assert("dopo un rifiuto si puo' rendere di nuovo", r5.ok === true);
 }
 
+/* La guardia sui file importati con `file:` (#185 sui file di #184). Lo
+   stesso `streams/risacca.yml` puo' stare aperto qui (come stream importato
+   dal master) e nel laboratorio, che di quel file fa il suo documento: e' il
+   caso piu' comune dei due, perche' il laboratorio scrive i file degli stream
+   e non il master. */
+console.log("\n── backend: un file importato si legge con la sua firma ──");
+{
+  const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
+  const X = "streams/x.yml";
+  DISK[X] = "streams:\n- stream_id: x\n";
+  const rx = await be.fs.readImport(X);
+  assert("readImport restituisce il testo e la firma dei byte letti",
+    rx.ok === true && rx.text === DISK[X] && rx.signature === sigOf(DISK[X]), JSON.stringify(rx));
+  assert("...e la ricorda, sotto un kind suo: non e' un progetto",
+    be.fs.signature("import", X) === sigOf(DISK[X]) && be.fs.signature("projects", X) === null);
+
+  IMPORT_GUARD = false;
+  await be.fs.readImport(X);
+  assert("un bridge che non firma gli import: la firma di prima si butta, e la guardia tace",
+    be.fs.signature("import", X) === null);
+  IMPORT_GUARD = true;
+  await be.fs.readImport(X);
+
+  /* Un errore che non e' "il file non c'e'" non dice niente della lettura che
+     l'editor ha in mano: la firma resta, e la scrittura dopo resta guardata.
+     E' il caso della rilettura mirata che non riesce, dove l'editor tiene
+     ancora la versione vecchia. */
+  IMPORT_FAIL[X] = "net";
+  const rnet = await be.fs.readImport(X);
+  IMPORT_FAIL[X] = 422;
+  const r422 = await be.fs.readImport(X);
+  delete IMPORT_FAIL[X];
+  assert("un errore di rete o un file illeggibile: un errore, e la firma resta",
+    rnet.ok === false && r422.ok === false && be.fs.signature("import", X) === sigOf(DISK[X]),
+    JSON.stringify([rnet, r422]));
+  const saved = DISK[X];
+  delete DISK[X];
+  const r404 = await be.fs.readImport(X);
+  assert("un file sparito: nessuna lettura da ricordare",
+    r404.ok === false && be.fs.signature("import", X) === null, JSON.stringify(r404));
+  DISK[X] = saved;
+}
+
+console.log("\n── backend: il salvataggio porta le firme degli import ──");
+{
+  const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
+  const X = "streams/x.yml", Y = "streams/y.yml";
+  const X0 = "streams:\n- stream_id: x\n", Y0 = "streams:\n- stream_id: y\n";
+  DISK["mi.yml"] = "title: mi\n"; DISK[X] = X0; DISK[Y] = Y0;
+  await be.fs.readFile("projects", "mi.yml");
+  await be.fs.readImport(X);
+  await be.fs.readImport(Y);
+
+  const s1 = await be.fs.save("mi", "title: mi2\n", { [X]: "x2\n" },
+                              { importFiles: [X, Y, "streams/mai-letto.yml"] });
+  const sent = SAVES.at(-1);
+  /* Tutti i file del documento, non solo quelli che la richiesta scrive: uno
+     cambiato su disco e non riscritto e' comunque una versione che l'editor
+     non ha, e il render la suonerebbe col pallino di quella che ha. */
+  assert("il salvataggio manda la firma letta di ogni file importato del documento, scritto o no",
+    eq(sent.importSignatures, { [X]: sigOf(X0), [Y]: sigOf(Y0) }), JSON.stringify(sent.importSignatures));
+  assert("...nessuna sovrascrittura", sent.overwriteImports === undefined);
+  assert("...e non l'elenco dei file, che resta del browser", !("importFiles" in sent));
+  assert("scrive", s1.ok === true && DISK[X] === "x2\n" && DISK["mi.yml"] === "title: mi2\n", JSON.stringify(s1));
+  assert("la firma dell'import scritto prende il posto di quella letta",
+    be.fs.signature("import", X) === sigOf("x2\n"));
+  assert("...quella dell'import non scritto resta", be.fs.signature("import", Y) === sigOf(Y0));
+
+  // Il laboratorio salva Y, che questo salvataggio non scrive.
+  DISK[Y] = "# laboratorio\n" + Y0;
+  const s2 = await be.fs.save("mi", "title: mi3\n", {}, { importFiles: [X, Y] });
+  assert("un import cambiato sotto, anche non scritto: rifiuto, che nomina quel file",
+    s2.ok === false && s2.changed === true && eq(s2.files, [Y]), JSON.stringify(s2));
+  assert("...niente di scritto, master compreso", DISK["mi.yml"] === "title: mi2\n");
+  assert("...e la firma letta NON cambia", be.fs.signature("import", Y) === sigOf(Y0));
+
+  DISK["mi.yml"] = "title: dal laboratorio\n";
+  const s3 = await be.fs.save("mi", "title: mi3\n", {}, { importFiles: [X, Y] });
+  assert("master e import cambiati: un rifiuto solo, coi due nomi, il master per primo",
+    s3.changed === true && eq(s3.files, ["mi.yml", Y]), JSON.stringify(s3.files));
+
+  const s4 = await be.fs.save("mi", "title: mi4\n", { [Y]: "y4\n" },
+                              { overwrite: true, importFiles: [X, Y], overwriteImports: [Y] });
+  assert("sovrascrivi l'import: il POST lo dice, per nome", eq(SAVES.at(-1).overwriteImports, [Y]));
+  assert("...e scrive", s4.ok === true && DISK[Y] === "y4\n" && DISK["mi.yml"] === "title: mi4\n");
+  assert("...e la firma scritta prende il posto di quella letta", be.fs.signature("import", Y) === sigOf("y4\n"));
+
+  // Ricarica: una rilettura del file, e il salvataggio dopo passa.
+  DISK[X] = "# laboratorio\nx: 5\n";
+  const s5a = await be.fs.save("mi", "title: mi5\n", {}, { importFiles: [X, Y] });
+  await be.fs.readImport(X);
+  const s5 = await be.fs.save("mi", "title: mi5\n", {}, { importFiles: [X, Y] });
+  assert("dopo la rilettura dell'import il salvataggio passa",
+    s5a.changed === true && s5.ok === true && DISK["mi.yml"] === "title: mi5\n", JSON.stringify([s5a, s5]));
+
+  /* Un bridge senza la guardia sugli import: il 409 del master porta solo
+     `name`, e la risposta di un salvataggio non porta le firme degli import.
+     Quelle dei file scritti si buttano — la guardia tace, invece di rifiutare
+     scritture che quel bridge non sa nemmeno rifiutare. */
+  IMPORT_GUARD = false;
+  DISK["mi.yml"] = "title: ancora il laboratorio\n";
+  const s6 = await be.fs.save("mi", "title: mi6\n", {}, { importFiles: [X, Y] });
+  assert("un 409 con il solo `name`: files = [name]", s6.changed === true && eq(s6.files, ["mi.yml"]),
+    JSON.stringify(s6));
+  await be.fs.readFile("projects", "mi.yml");
+  await be.fs.save("mi", "title: mi6\n", { [X]: "x6\n" }, { importFiles: [X, Y] });
+  assert("un salvataggio senza le firme degli import di ritorno: quella del file scritto si butta",
+    be.fs.signature("import", X) === null && be.fs.signature("import", Y) === sigOf("y4\n"));
+  IMPORT_GUARD = true;
+}
+
+console.log("\n── backend: il render porta le firme degli import, e le riceve ──");
+{
+  const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
+  const QX = "streams/qx.yml", QY = "streams/qy.yml";
+  DISK["q.yml"] = "title: q\n"; DISK[QX] = "qx: 1\n"; DISK[QY] = "qy: 1\n";
+  await be.fs.readFile("projects", "q.yml");
+  await be.fs.readImport(QX);
+  await be.fs.readImport(QY);
+  const opts = { yamlBasename: "q", yamlContent: "title: q\n", streams: [], outputFormat: "wav",
+                 renderer: "numpy", semanticsVersion: 3, importFiles: [QX, QY] };
+
+  const r1 = await be.render.run({ ...opts, imports: { [QX]: "qx: 2\n" } }, () => {});
+  const sent = RENDERS.at(-1);
+  assert("il POST del render porta la firma di ogni import del documento",
+    eq(sent.importSignatures, { [QX]: sigOf("qx: 1\n"), [QY]: sigOf("qy: 1\n") }), JSON.stringify(sent.importSignatures));
+  assert("...e non l'elenco dei file", !("importFiles" in sent));
+  assert("il render va", r1.ok === true && DISK[QX] === "qx: 2\n");
+  assert("l'evento file-signature di un import rimpiazza la sua firma letta",
+    be.fs.signature("import", QX) === sigOf("qx: 2\n") && be.fs.signature("import", QY) === sigOf("qy: 1\n"));
+
+  /* Il caso per cui la guardia guarda anche i file che il render NON scrive:
+     il motore li rilegge dal disco, e partito su un import riscritto dal
+     laboratorio suonerebbe quella versione, mentre l'editor ne mostra (e ne
+     registrerebbe) un'altra. */
+  DISK[QY] = "# laboratorio\nqy: 9\n";
+  const ev2 = [];
+  const r2 = await be.render.run(opts, (e) => ev2.push(e));
+  assert("un import cambiato sotto, che il render non scrive: rifiuto, prima del motore",
+    r2.ok === false && r2.changed === true && eq(r2.files, [QY]) && r2.configWritten === false,
+    JSON.stringify(r2));
+  assert("...nessun `done`, e una riga di log che nomina il file",
+    !ev2.some(e => e.type === "done") && ev2.some(e => e.type === "log" && e.line.includes(QY)),
+    JSON.stringify(ev2));
+  const r3 = await be.render.run({ ...opts, overwriteImports: [QY] }, () => {});
+  assert("sovrascrivi l'import: il POST lo dice, e il render va",
+    eq(RENDERS.at(-1).overwriteImports, [QY]) && r3.ok === true, JSON.stringify(r3));
+}
+
 console.log("\n── backend: il cambio di workspace butta le firme ──");
 {
   const be = window.PGEBackend.create({ baseUrl: "http://bridge" });
   DISK["w.yml"] = "w: 1\n";
+  DISK["streams/w.yml"] = "w: 2\n";
   await be.fs.readFile("projects", "w.yml");
+  await be.fs.readImport("streams/w.yml");
   await be.setWorkspace("/no");
-  assert("un cambio rifiutato non tocca niente", be.fs.signature("projects", "w.yml") === sigOf("w: 1\n"));
+  assert("un cambio rifiutato non tocca niente", be.fs.signature("projects", "w.yml") === sigOf("w: 1\n")
+    && be.fs.signature("import", "streams/w.yml") === sigOf("w: 2\n"));
   /* Due cartelle possono avere un progetto omonimo, e nel caso peggiore la
      firma ereditata COMBACIA: una scrittura passerebbe senza che la guardia
      abbia guardato il file giusto. */
   await be.setWorkspace("/altrove");
-  assert("un cambio riuscito le butta", be.fs.signature("projects", "w.yml") === null);
+  assert("un cambio riuscito le butta, quelle degli import comprese",
+    be.fs.signature("projects", "w.yml") === null && be.fs.signature("import", "streams/w.yml") === null);
 }
 
 /* ===========================================================================
@@ -512,9 +723,12 @@ console.log("\n── app.jsx: le catene ──");
   assert("file-guard.js e' caricato dalla pagina",
     fs.readFileSync(path.join(__dirname, "../../PGE Editor.html"), "utf8")
       .includes('<script src="src/lib/file-guard.js"></script>'));
-  assert("il salvataggio e il render passano dallo stesso giro",
-    (APP_SRC.match(/FG\.attempt\(/g) || []).length === 2,
-    "attese due chiamate a FG.attempt (save, render)");
+  /* Save As e' nel giro dalla guardia sugli import: il master e' un nome
+     appena digitato (sovrascritto per costruzione), ma i file importati sono
+     gli STESSI dell'originale, e il laboratorio puo' averne riscritto uno. */
+  assert("il salvataggio, Save As e il render passano dallo stesso giro",
+    (APP_SRC.match(/FG\.attempt\(/g) || []).length === 3,
+    "attese tre chiamate a FG.attempt (save, save as, render)");
   /* Ricarica e' un "apri" dello stesso file: la storia azzerata e' il
      criterio dell'issue — un undo riporterebbe una versione che su disco non
      c'e' piu', e la scrittura dopo la riscriverebbe sopra l'altro editor. */
@@ -534,14 +748,17 @@ console.log("\n── app.jsx: le catene ──");
      aperto: dietro al documento non c'e' una lettura di QUEL file. */
   /* Il `create` accanto (#186) riguarda i file nuovi delle copie, che si
      creano e basta: la sovrascrittura e' quella del master. */
-  assert("Save As e New project sovrascrivono per costruzione",
-    (APP_SRC.match(/fs\.save\([^;]*\{\s*overwrite:\s*true(,\s*create:\s*imp\.create)?\s*\}\)/g) || []).length === 1 &&
+  /* ...ma solo il MASTER: i file importati che Save As riscrive sono gli
+     stessi dell'originale, letti con lui, e passano dalla guardia come in un
+     salvataggio (`importGuard`). */
+  assert("Save As e New project sovrascrivono il master per costruzione",
+    (APP_SRC.match(/fs\.save\([^;]*\{\s*overwrite:\s*true,\s*create:\s*imp\.create,\s*\.\.\.importGuard\(doc, st, fullName\)\s*\}\)/g) || []).length === 1 &&
     (APP_SRC.match(/writeFile\([^;]*\{\s*overwrite:\s*true\s*\}\)/g) || []).length === 1);
   /* Dalla #184 il salvataggio e' POST /save, master e import insieme: la
      guardia deve viaggiare li', non su un PUT /file che il salvataggio non
      usa piu'. */
   assert("il salvataggio passa da fs.save con la risposta alla domanda",
-    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\)(, create: imp\.create)? \}\)/.test(APP_SRC));
+    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\), create: imp\.create,\s*\.\.\.importGuard\(doc, st, name\) \}\)/.test(APP_SRC));
   /* La rilettura riapre il progetto intero, file importati compresi: una
      modifica dentro uno stream importato e' lavoro proprio anche se il master
      (che ne tiene solo il piazzamento) non si muove. */
@@ -563,6 +780,56 @@ console.log("\n── app.jsx: le catene ──");
     assert("il render rende gli import non scritti dentro il tentativo",
       /configWritten === false[\s\S]*releaseImports\([\s\S]*return r;\s*$/.test(body), body.slice(0, 300));
   }
+  /* La guardia sui file importati (#185 sui file di #184). Ogni scrittura —
+     salvataggio, Save As, render — manda le letture di TUTTI i file importati
+     del documento e le risposte «sovrascrivi» date su quei file. */
+  {
+    const at = APP_SRC.indexOf("function importGuard(");
+    const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n  }\n", at));
+    assert("importGuard: i file letti del documento, e le sovrascritture che non sono del master",
+      /importReadFiles\(doc\)/.test(body) && /overwrite[\s\S]*filter\([\s\S]*!== master/.test(body),
+      body.slice(0, 300));
+    assert("...e il render la porta nel suo POST",
+      /const optsFor = \(doc, st,[\s\S]*?\.\.\.importGuard\(doc, st, configName\)/.test(APP_SRC));
+  }
+  /* "Modifiche proprie" su un file importato sono le SUE: il master e gli altri
+     file non entrano, perche' la sua rilettura rimpiazza solo i suoi stream. */
+  {
+    const at = APP_SRC.indexOf("function fileHasOwnChanges(");
+    const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n  }\n", at));
+    assert("modifiche proprie su un import: il suo testo contro il suo disco, e nient'altro",
+      /function fileHasOwnChanges\(name, master\)/.test(body) &&
+      /if \(name !== master\) \{[\s\S]*?changedImports\(\{ \[name\]: imp\.files\[name\] \}, importDiskRef\.current\)/.test(body),
+      body.slice(0, 300));
+  }
+  /* La rilettura di un import e' mirata: GET /import di quel file e
+     `rereadImport`, non `onProjectSelect` — riaprire il progetto butterebbe il
+     lavoro non salvato negli altri file, master compreso. Azzera la storia come
+     quella del master, e il "disco" di quel file e' quello appena letto. */
+  {
+    const at = APP_SRC.indexOf("async function rereadImportFile(");
+    const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n  }\n", at));
+    assert("la rilettura di un import legge quel file e rimpiazza i suoi stream, e basta",
+      /readImport\(file\)/.test(body) && /rereadImport\(/.test(body) && !/onProjectSelect\(/.test(body),
+      body.slice(0, 300));
+    assert("...azzera la storia", /resetHistory\(\)/.test(body));
+    assert("...e il suo disco ricordato diventa il file appena letto", /importDiskRef\.current = /.test(body));
+  }
+  assert("la rilettura va al master o all'import secondo il file",
+    /function rereadFile\(name, st, master\)\s*\{\s*return name === master \? rereadProject\(name\) : rereadImportFile\(name, st\);/.test(APP_SRC));
+  assert("salvataggio, Save As e render: modifiche proprie e riletture sanno qual e' il master",
+    (APP_SRC.match(/ownChanges: \(f\) => fileHasOwnChanges\(f, (name|configName|fullName)\)/g) || []).length === 3 &&
+    (APP_SRC.match(/reread: \(f, st\) => rereadFile\(f, st, (name|configName|fullName)\)/g) || []).length === 3);
+  /* «ricarica» su risposta: la domanda non ferma la tastiera, e il documento
+     del giro e' quello di quando e' stata posta — rileggere su quello
+     butterebbe le modifiche fatte nel frattempo. */
+  assert("«ricarica» su risposta rilegge sullo stato di adesso, non su quello del giro",
+    /rereadFile\(key, \{ \.\.\.q\.state, doc: null \}, q\.master\)/.test(APP_SRC));
+  /* La rilettura del master riapre il brano intero, file importati compresi:
+     una risposta sul master risponde anche per gli import di cui si chiede, e
+     due domande separate farebbero dipendere l'esito dall'ordine dei clic. */
+  assert("se si chiede del master, gli import di cui si chiede stanno nella sua domanda",
+    /files\.includes\(master\)\s*\?\s*\[\[master, \.\.\.files\.filter\(f => f !== master\)\]\]/.test(APP_SRC));
   assert("le risposte alla domanda passano dal ref, cioe' dalle funzioni di adesso",
     /latestRef\.current\.answerFileQuestion\(/.test(APP_SRC));
   assert("ogni scrittura nuova chiude la domanda in attesa",

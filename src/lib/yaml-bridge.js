@@ -1082,6 +1082,72 @@
     return out;
   }
 
+  /* ---------- due editor, un file, sui file importati (#185 sui file di #184) ----------
+   *
+   * Lo stesso `streams/risacca.yml` puo' stare aperto qui, come stream
+   * importato dal master, e nel laboratorio di mare-nostrum, che di quel file
+   * fa il suo documento. Il bridge non scrive — e non rende — su un file
+   * importato che su disco non e' piu' quello letto: la decisione su quel
+   * rifiuto e' la stessa del master (`PGEFileGuard`), file per file. Cambia
+   * cosa vuol dire rileggere: non riaprire il progetto intero, che
+   * butterebbe il lavoro non salvato negli altri file, master compreso, ma
+   * rimpiazzare gli stream di quel file. */
+
+  // I file di cui il documento tiene il CONTENUTO: quelli degli stream
+  // importati, una volta sola e in ordine di master. Sono le letture che una
+  // scrittura deve rispettare. Diversamente da `importFilesOf`, una voce che
+  // non si e' risolta non conta: di quel file l'editor non tiene niente — ne'
+  // da perdere ne' da mostrare — e il master la riscrive com'era.
+  function importReadFiles(data) {
+    const out = [];
+    for (const s of (data && data.streams) || []) {
+      const f = s && s._import && s._import.file;
+      if (typeof f === "string" && f && !out.includes(f)) out.push(f);
+    }
+    return out;
+  }
+
+  /* La rilettura di UN file importato: gli stream che lo importano si
+   * risolvono di nuovo dal testo appena letto, come all'apertura
+   * (`resolveImportEntry`), e il resto del documento resta com'e' — gli altri
+   * stream sono gli stessi oggetti. Lo stream riletto tiene cio' che e' del
+   * master, che non si sta rileggendo: l'id, il piazzamento come lo stato lo
+   * ha adesso (un onset toccato e non salvato resta), la voce come era
+   * scritta, il colore. Dal file viene tutto il resto: il contenuto, la testa,
+   * il piazzamento interno, la durata letta. Un file riletto c'e' su disco,
+   * quindi non e' piu' un file da creare (`fresh`).
+   *
+   * Torna `{data}` — lo stesso oggetto se nessuno stream importa il file — o
+   * `{error}` col file nominato se il testo non si risolve (YAML rotto, piu'
+   * di uno stream, una catena): niente documento a meta'. */
+  function rereadImport(data, file, text, opts = {}) {
+    const masterName = `${opts.project || (data && data.project) || "untitled"}.yml`;
+    const samples = opts.samples || (data && data.samples) || [];
+    const streams = (data && data.streams) || [];
+    let touched = false;
+    const out = [];
+    for (let i = 0; i < streams.length; i++) {
+      const s = streams[i];
+      if (!s || !s._import || s._import.file !== file) { out.push(s); continue; }
+      const entry = { ...(s._import.entry || {}), file };
+      const r = resolveImportEntry(entry, i, masterName, { [file]: { text } });
+      if (!r.stream) return { error: r.errors.join("; ") };
+      const ns = streamFromYaml(r.stream, i, samples);
+      ns.id = s.id;
+      ns.color = s.color;
+      ns.onset = s.onset;
+      ns.mute = s.mute;
+      ns.solo = s.solo;
+      // La provenienza e' quella appena letta (senza `fresh`), con la voce
+      // del master com'era scritta: e' da li' che il master si riscrive.
+      ns._import = { ...r.meta, entry: s._import.entry };
+      out.push(ns);
+      touched = true;
+    }
+    if (!touched) return { data };
+    return { data: { ...data, streams: out, duration: computeDuration(out) } };
+  }
+
   /* La copia di uno stream con l'id nuovo. Di uno stream scritto nel master
      cambia solo l'id. Di uno importato anche la provenienza: il file nuovo, la
      voce del master ridotta a `file:` (il piazzamento — onset, mute, solo —
@@ -1864,6 +1930,9 @@
     importCopyFile,
     importIdTaken,
     importFilesOf,
+    // due editor, un file, sui file importati (#185 sui file di #184)
+    importReadFiles,
+    rereadImport,
     copyImport,
     importSplitBase,
     importCreates,

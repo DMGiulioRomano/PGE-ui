@@ -32,25 +32,33 @@
  *                                   se il file e' cambiato su disco da quando e'
  *                                   stato letto: un rifiuto e' una risposta, non
  *                                   un'eccezione. Lancia sugli altri errori
- *   fs.signature(kind, name)      → la firma ricordata di quel file, o null
+ *   fs.signature(kind, name)      → la firma ricordata di quel file, o null. Il kind
+ *                                   `import` e' quello dei file importati con `file:`
  *   fs.fileExists(kind, name)     → Promise<boolean>
- *   fs.readImport(file)           → Promise<{ ok, text } | { ok:false, error }>: un file
- *                                   importato con `file:` (#183), relativo a configs/.
- *                                   Non lancia: l'errore e' un messaggio per l'autore
+ *   fs.readImport(file)           → Promise<{ ok, text, signature } | { ok:false, error }>:
+ *                                   un file importato con `file:` (#183), relativo a
+ *                                   configs/. Ricorda la firma dei byte letti, sotto il
+ *                                   kind `import` (#185 sui file di #184). Non lancia:
+ *                                   l'errore e' un messaggio per l'autore
  *   fs.listImportDir(dir)         → Promise<{ ok:true, files:[path] } | { ok:false, error }>:
  *                                   i documenti YAML di una cartella sotto configs/
  *                                   ("" = configs/ stessa), coi path relativi a
  *                                   configs/ — i nomi che un file nuovo, la copia di
  *                                   uno stream importato (#186) o la coda del suo
  *                                   split (#187), non puo' prendere. Non lancia
- *   fs.save(basename, yaml, imports, {overwrite, create}?)
+ *   fs.save(basename, yaml, imports, {overwrite, create, importFiles, overwriteImports}?)
  *                                 → Promise<{ ok:true, written:[nomi], signature }>:
  *                                   il master e i file importati cambiati
  *                                   ({path: testo}), in un colpo solo (#184). Porta
- *                                   la firma letta del master (#185): su un master
- *                                   cambiato su disco torna, come writeFile,
- *                                   { ok:false, changed:true, files:[name], error }
- *                                   e non scrive niente, import compresi. `create`
+ *                                   la firma letta del master (#185) e quelle dei
+ *                                   file importati del documento (`importFiles`,
+ *                                   scritti o no): su un file cambiato su disco
+ *                                   torna, come writeFile,
+ *                                   { ok:false, changed:true, files:[nomi], error }
+ *                                   — il master per primo — e non scrive niente.
+ *                                   `overwrite` e `overwriteImports` sono le
+ *                                   risposte «sovrascrivi», sul master e sui file
+ *                                   importati. `create`
  *                                   sono i file NUOVI fra gli import (le copie,
  *                                   #186; le code degli split, #187): se uno
  *                                   esiste gia' torna
@@ -59,10 +67,13 @@
  *                                   bridge sugli altri errori
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
- *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml`; con
- *     `opts.overwrite` la sovrascrittura. Su un config cambiato su disco torna
- *     { ok:false, changed:true, files:[name], configWritten:false } senza
- *     evento `done`: il motore non e' partito (#185). `opts.createImports` sono
+ *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml` e quelle
+ *     dei file importati del documento (`opts.importFiles`, come fs.save); con
+ *     `opts.overwrite` / `opts.overwriteImports` la sovrascrittura. Su un file
+ *     cambiato su disco torna { ok:false, changed:true, files:[nomi],
+ *     configWritten:false } senza evento `done`: il motore non e' partito
+ *     (#185). Gli eventi `file-signature` (kind `projects` o `import`) danno la
+ *     firma di cio' che il render ha scritto. `opts.createImports` sono
  *     i file nuovi fra `opts.imports` (#186): se uno esiste gia' torna
  *     { ok:false, exists:true, files:[path], configWritten:false }, ancora
  *     senza `done`.
@@ -357,6 +368,31 @@
       if (typeof sig === "string" && sig) signatures.set(sigKey(kind, name), sig);
       else signatures.delete(sigKey(kind, name));
     }
+    /* I due campi della guardia sui file importati (#185 sui file di #184) in
+       un POST di salvataggio o di render. `importFiles` sono i file di cui il
+       documento tiene il contenuto (`PGEYaml.importReadFiles`): di ognuno si
+       manda la firma letta, se c'e' — anche dei file che la richiesta non
+       scrive, perche' il motore li rilegge dal disco. `overwriteImports` sono
+       le risposte «sovrascrivi» date su quei file. L'elenco resta qui: al
+       bridge vanno le firme. */
+    function _importGuardBody(opts) {
+      const sigs = {};
+      for (const f of (opts && Array.isArray(opts.importFiles)) ? opts.importFiles : []) {
+        const sig = signatures.get(sigKey("import", f));
+        if (sig) sigs[f] = sig;
+      }
+      const over = opts && Array.isArray(opts.overwriteImports) ? opts.overwriteImports : [];
+      return {
+        importSignatures: Object.keys(sigs).length ? sigs : undefined,
+        overwriteImports: over.length ? over : undefined,
+      };
+    }
+    // I file di un rifiuto `changed`: il bridge li elenca in `files` (il master
+    // per primo); uno piu' vecchio della guardia sugli import nomina solo il
+    // master, in `name`.
+    function _changedFiles(body, fallback) {
+      return Array.isArray(body.files) && body.files.length ? body.files : [body.name || fallback];
+    }
 
     async function jget(path) {
       const r = await fetchWithTimeout(baseUrl + path);
@@ -454,13 +490,23 @@
       // cartella del master. Non lancia: l'esito e' la mappa che
       // `PGEYaml.parse` legge (`opts.imports`), e un file che manca e' un
       // messaggio da dare all'autore, non un'apertura fallita.
+      //
+      // Ricorda la firma dei byte letti (#185 sui file di #184), sotto il kind
+      // `import`: e' la lettura che salvataggio e render rispettano. Le regole
+      // sono quelle di readFile — un file che non c'e' (404) non ha una
+      // lettura da ricordare; un errore che non dice niente del file (rete,
+      // file illeggibile) lascia quella di prima, che e' la versione che
+      // l'editor ha ancora in mano; una lettura senza firma (bridge senza la
+      // guardia sugli import) la cancella, e la guardia tace.
       async readImport(file) {
         try {
           const r = await fetchWithTimeout(baseUrl + `/import?file=${encodeURIComponent(file)}`);
           const body = await r.json().catch(() => null);
           if (r.ok && body && body.ok === true && typeof body.text === "string") {
-            return { ok: true, text: body.text };
+            _rememberSignature("import", file, body.signature);
+            return { ok: true, text: body.text, signature: body.signature || null };
           }
+          if (r.status === 404) _rememberSignature("import", file, null);
           return { ok: false, error: (body && body.error) || `HTTP ${r.status}` };
         } catch (e) {
           return { ok: false, error: e.message };
@@ -483,9 +529,11 @@
         }
       },
       // Il master e i file importati cambiati, in una richiesta (#184): il
-      // bridge li valida tutti prima di scriverne uno. La firma e' quella del
-      // master (#185), con le regole di writeFile: un 409 `changed` torna come
-      // risposta e non aggiorna la firma, una scrittura riuscita la rimpiazza
+      // bridge li valida tutti prima di scriverne uno. Le firme sono quella
+      // del master (#185) e quelle dei file importati del documento
+      // (`opts.importFiles`, scritti o no), con le regole di writeFile: un 409
+      // `changed` torna come risposta, nomina i file e non aggiorna nessuna
+      // firma; una scrittura riuscita rimpiazza la firma di ogni file scritto
       // con quella dei byte scritti (o trovati gia' scritti).
       async save(basename, yamlContent, imports, opts = {}) {
         const name = `${basename}.yml`;
@@ -499,11 +547,12 @@
             createImports: create,
             signature: sig || undefined,
             overwrite: opts.overwrite ? true : undefined,
+            ..._importGuardBody(opts),
           }),
         });
         const body = await r.json().catch(() => null);
         if (r.status === 409 && body && body.changed) {
-          return { ok: false, changed: true, files: [body.name || name],
+          return { ok: false, changed: true, files: _changedFiles(body, name),
                    error: body.error || `${name} changed on disk` };
         }
         // Il file nuovo di una copia c'e' gia' su disco (#186): un rifiuto,
@@ -516,6 +565,12 @@
           throw new Error((body && body.error) || `POST /save → HTTP ${r.status}`);
         }
         _rememberSignature("projects", name, body.signature);
+        // Ogni file importato mandato ha una firma nuova, o nessuna: un bridge
+        // senza la guardia sugli import non la rimanda, e allora quella letta
+        // si cancella invece di restare a far rifiutare la volta dopo.
+        const importSigs = (body.importSignatures && typeof body.importSignatures === "object")
+          ? body.importSignatures : {};
+        for (const f of Object.keys(imports || {})) _rememberSignature("import", f, importSigs[f]);
         return { ...body, written: Array.isArray(body.written) ? body.written : [],
                  signature: body.signature || null };
       },
@@ -726,7 +781,11 @@
         const configName = `${opts.yamlBasename}.yml`;
         const body = { ...opts,
                        signature: signatures.get(sigKey("projects", configName)) || undefined,
-                       overwrite: opts.overwrite === true ? true : undefined };
+                       overwrite: opts.overwrite === true ? true : undefined,
+                       // ...e quelle dei file importati del documento (#185 sui
+                       // file di #184), al posto del loro elenco.
+                       importFiles: undefined,
+                       ..._importGuardBody(opts) };
         try {
           const res = await fetch(baseUrl + "/render", {
             method: "POST",
@@ -745,11 +804,13 @@
           if (res.status === 409) {
             const refusal = await res.json().catch(() => null);
             if (refusal && refusal.changed) {
-              const name = refusal.name || configName;
+              // Il master, i file importati, o tutti e due (#185 sui file di
+              // #184): la decisione e' per file, e la riga li nomina tutti.
+              const files = _changedFiles(refusal, configName);
               onEvent && onEvent({ type: "log",
-                line: `[FILE] ${name}: cambiato su disco da quando l'editor l'ha letto — non riscritto` });
-              return { ok: false, changed: true, files: [name],
-                       error: refusal.error || `${name} changed on disk`, configWritten: false };
+                line: `[FILE] ${files.join(", ")}: ${files.length === 1 ? "cambiato" : "cambiati"} su disco da quando l'editor l'ha letto — non riscritto` });
+              return { ok: false, changed: true, files,
+                       error: refusal.error || `${files.join(", ")} changed on disk`, configWritten: false };
             }
             /* Il file nuovo di una copia c'e' gia' su disco (#186): stesso
                rifiuto prima di ogni scrittura, stessa risposta senza `done`. */
