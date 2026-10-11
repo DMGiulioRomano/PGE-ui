@@ -693,6 +693,26 @@ console.log("\n── backend: il render porta le firme degli import, e le ricev
   const r3 = await be.render.run({ ...opts, overwriteImports: [QY] }, () => {});
   assert("sovrascrivi l'import: il POST lo dice, e il render va",
     eq(RENDERS.at(-1).overwriteImports, [QY]) && r3.ok === true, JSON.stringify(r3));
+
+  /* Due file rifiutati insieme: la riga del terminale li nomina tutti e due e
+     li accorda tutti e due — "cambiati ... l'ha letto — non riscritto" ne
+     contava uno nella frase e due nella lista. */
+  await be.fs.readImport(QY);
+  DISK[QX] = "# laboratorio\nqx: 7\n";
+  DISK[QY] = "# laboratorio\nqy: 7\n";
+  const ev4 = [];
+  const r4 = await be.render.run(opts, (e) => ev4.push(e));
+  const line4 = (ev4.find(e => e.type === "log") || {}).line || "";
+  assert("due file rifiutati: la riga li nomina e accorda il plurale",
+    eq(r4.files, [QX, QY])
+      && line4 === `[FILE] ${QX}, ${QY}: cambiati su disco da quando l'editor li ha letti — non riscritti`,
+    line4);
+  const ev5 = [];
+  await be.render.run({ ...opts, importFiles: [QY] }, (e) => ev5.push(e));
+  assert("...e uno solo resta al singolare",
+    ((ev5.find(e => e.type === "log") || {}).line || "")
+      === `[FILE] ${QY}: cambiato su disco da quando l'editor l'ha letto — non riscritto`,
+    JSON.stringify(ev5));
 }
 
 console.log("\n── backend: il cambio di workspace butta le firme ──");
