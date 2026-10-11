@@ -46,7 +46,7 @@
  *                                   configs/ — i nomi che un file nuovo, la copia di
  *                                   uno stream importato (#186) o la coda del suo
  *                                   split (#187), non puo' prendere. Non lancia
- *   fs.save(basename, yaml, imports, {overwrite, create, importFiles, overwriteImports}?)
+ *   fs.save(basename, yaml, imports, {overwrite, create, importFiles, overwriteImports, remove}?)
  *                                 → Promise<{ ok:true, written:[nomi], signature }>:
  *                                   il master e i file importati cambiati
  *                                   ({path: testo}), in un colpo solo (#184). Porta
@@ -60,11 +60,18 @@
  *                                   risposte «sovrascrivi», sul master e sui file
  *                                   importati. `create`
  *                                   sono i file NUOVI fra gli import (le copie,
- *                                   #186; le code degli split, #187): se uno
- *                                   esiste gia' torna
+ *                                   #186; le code degli split, #187; gli stream
+ *                                   rinominati, #208): se uno esiste gia' torna
  *                                   { ok:false, exists:true, files:[path], error }
- *                                   e non scrive niente. Lancia col messaggio del
- *                                   bridge sugli altri errori
+ *                                   e non scrive niente. `remove` sono i file che
+ *                                   il documento non nomina piu' (#208): vanno
+ *                                   con la firma ricordata, e il bridge li
+ *                                   cancella dopo le scritture se sono ancora
+ *                                   quelli e nessuno li importa — la risposta ha
+ *                                   `deleted`, `absent` e `kept` ([{file, reason,
+ *                                   detail, by?}]); `deleted: null` da un bridge
+ *                                   che non conosce il campo. Lancia col
+ *                                   messaggio del bridge sugli altri errori
  *   render.run(opts, onEvent)     → Promise<{ ok, generated:[], cacheHits:[] }>
  *     onEvent({type, line?, streamId?})
  *     Porta al bridge la firma letta di `configs/<yamlBasename>.yml` e quelle
@@ -539,12 +546,20 @@
         const name = `${basename}.yml`;
         const sig = signatures.get(sigKey("projects", name));
         const create = Array.isArray(opts.create) && opts.create.length ? opts.create : undefined;
+        // I file che il documento non nomina piu' (#208), ciascuno con la
+        // firma con cui e' stato letto o scritto: il bridge cancella solo un
+        // file che e' ancora quello. Senza una firma ricordata va la stringa
+        // vuota, cioe' "non so cosa c'e' dentro" — e il file resta.
+        const remove = Array.isArray(opts.remove) && opts.remove.length
+          ? Object.fromEntries(opts.remove.map(f => [f, signatures.get(sigKey("import", f)) || ""]))
+          : undefined;
         const r = await fetchWithTimeout(baseUrl + "/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             basename, yamlContent, imports: imports || {},
             createImports: create,
+            deleteImports: remove,
             signature: sig || undefined,
             overwrite: opts.overwrite ? true : undefined,
             ..._importGuardBody(opts),
@@ -571,8 +586,17 @@
         const importSigs = (body.importSignatures && typeof body.importSignatures === "object")
           ? body.importSignatures : {};
         for (const f of Object.keys(imports || {})) _rememberSignature("import", f, importSigs[f]);
+        // Le cancellazioni (#208): un file cancellato, o che non c'era gia'
+        // piu', non ha piu' una lettura da ricordare; uno rimasto tiene la sua.
+        // Un bridge piu' vecchio di #208 non risponde sul campo: se c'era
+        // qualcosa da cancellare `deleted` torna null, e chi chiama sa che non
+        // e' stato cancellato niente.
+        const list = (x) => (Array.isArray(x) ? x : []);
+        const deleted = Array.isArray(body.deleted) ? body.deleted : (remove ? null : []);
+        for (const f of [...list(deleted), ...list(body.absent)]) _rememberSignature("import", f, null);
         return { ...body, written: Array.isArray(body.written) ? body.written : [],
-                 signature: body.signature || null };
+                 signature: body.signature || null,
+                 deleted, absent: list(body.absent), kept: list(body.kept) };
       },
     };
 

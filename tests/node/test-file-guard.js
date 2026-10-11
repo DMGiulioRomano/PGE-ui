@@ -758,7 +758,7 @@ console.log("\n── app.jsx: le catene ──");
      guardia deve viaggiare li', non su un PUT /file che il salvataggio non
      usa piu'. */
   assert("il salvataggio passa da fs.save con la risposta alla domanda",
-    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\), create: imp\.create,\s*\.\.\.importGuard\(doc, st, name\) \}\)/.test(APP_SRC));
+    /fs\.save\(basename, yaml, imp\.texts,\s*\{ overwrite: FG\.overwrites\(st, name\), create: imp\.create,\s*(?:remove: rem, )?\.\.\.importGuard\(doc, st, name\) \}\)/.test(APP_SRC));
   /* La rilettura riapre il progetto intero, file importati compresi: una
      modifica dentro uno stream importato e' lavoro proprio anche se il master
      (che ne tiene solo il piazzamento) non si muove. */

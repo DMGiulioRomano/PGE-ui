@@ -1199,8 +1199,9 @@
     return s && s._import ? importDefaultId(s._import.file) : null;
   }
 
-  // I file da CREARE: quelli delle copie nuove (incolla, coda di uno split)
-  // che il disco ricordato non ha ancora. In ordine di master, una volta sola.
+  // I file da CREARE: quelli delle copie nuove (incolla, coda di uno split,
+  // stream rinominato) che il disco ricordato non ha ancora. In ordine di
+  // master, una volta sola.
   function importCreates(data, disk) {
     const out = [];
     for (const s of (data && data.streams) || []) {
@@ -1210,6 +1211,86 @@
       if (!out.includes(imp.file)) out.push(imp.file);
     }
     return out;
+  }
+
+  /* ---------- cancellare o rinominare uno stream importato (PGE-ui #208) ----------
+   *
+   * Il nome del file e' l'id dello stream: lo `stream_id` di default del
+   * motore, e quello con cui il laboratorio apre il file (mare-nostrum#2). Due
+   * gesti lo rompevano. Cancellare uno stream importato toglieva la sua voce
+   * dal master e lasciava il file su disco senza che nessuno lo nominasse;
+   * rinominarlo scriveva `stream_id: <nuovo>` nella voce e lasciava il file
+   * col nome vecchio, cosi' il brano suonava una realizzazione e il file
+   * aperto da solo un'altra (l'RNG e' `(seed, stream_id, componente)`).
+   *
+   * Adesso la rinomina SPOSTA il file: `<cartella>/<nuovo>.yml`, un file nuovo
+   * che il bridge crea senza sovrascrivere niente (`fresh`, come la copia di
+   * #186), con lo `stream_id` del suo nome e la voce del master senza
+   * `stream_id`, che e' il default. Il file vecchio diventa cio' che diventa
+   * il file di uno stream cancellato: un file che il master non nomina piu'.
+   * Quei file li dice `importOrphans`, contro il disco ricordato e non contro
+   * la storia — come `importCreates` — e il salvataggio li chiede da
+   * cancellare al bridge, che li cancella solo se nessuno ci ha messo le mani
+   * e nessun altro documento li importa. Un undo riporta lo stream; il file,
+   * assente dal disco ricordato, si riscrive al salvataggio dopo. */
+
+  // I file che il disco ricordato ha e il documento non nomina piu': da
+  // cancellare al salvataggio. Una voce che non si e' risolta nomina ancora il
+  // suo file (`importFilesOf`), e lo stesso file importato da due voci resta
+  // finche' ne resta una. In ordine di disco, una volta sola.
+  function importOrphans(data, disk) {
+    const named = new Set(importFilesOf(data));
+    return Object.keys(disk || {}).filter(f => !named.has(f));
+  }
+
+  // Il file in cui finisce uno stream rinominato `newId`, o null se il file
+  // resta dov'e': lo stream non e' importato, il file ha gia' quel nome (la
+  // voce perde lo `stream_id` e basta), o un'altra voce importa lo stesso file
+  // — e' UN documento, e spostarlo lo toglierebbe all'altra: li' la rinomina
+  // resta nella voce del master, com'era prima di #208.
+  function importRenameFile(s, newId, streams) {
+    const imp = s && s._import;
+    if (!imp) return null;
+    const id = String(newId);
+    if (importDefaultId(imp.file) === id) return null;
+    const shared = (streams || []).some(o =>
+      o && o.id !== s.id && o._import && o._import.file === imp.file);
+    if (shared) return null;
+    return importCopyFile(imp.file, id);
+  }
+
+  /* Lo stream rinominato `newId`. Quando il file si sposta
+     (`importRenameFile`), la provenienza e' quella di una copia — il file
+     nuovo, da creare (`fresh`), la stessa testa, lo stesso piazzamento interno
+     con lo `stream_id` del nome nuovo se il file ne scriveva uno — ma la voce
+     del master tiene le sue chiavi come erano scritte (un onset in forma di
+     espressione, un `mute: false`, una chiave estranea che l'errore deve
+     continuare a mostrare): cambia il file, e lo `stream_id` se ne va. */
+  function renameImport(s, newId, streams) {
+    const id = String(newId);
+    const file = importRenameFile(s, id, streams);
+    if (!file) return { ...s, id };
+    const imp = s._import;
+    const entry = {};
+    for (const k of Object.keys(imp.entry || { file: imp.file })) {
+      if (k === "stream_id") continue;
+      entry[k] = k === "file" ? file : imp.entry[k];
+    }
+    if (!("file" in entry)) entry.file = file;
+    const place = JSON.parse(JSON.stringify(imp.place || {}));
+    if ("stream_id" in place) place.stream_id = id;
+    return {
+      ...s,
+      id,
+      _import: {
+        ...imp,
+        file,
+        entry,
+        head: JSON.parse(JSON.stringify(imp.head || {})),
+        place,
+        fresh: true,
+      },
+    };
   }
 
   /* Le voci di `streams:` del master. Una voce `file:` che non si e' risolta
@@ -1936,5 +2017,9 @@
     copyImport,
     importSplitBase,
     importCreates,
+    // cancellare o rinominare uno stream importato (#208)
+    importOrphans,
+    importRenameFile,
+    renameImport,
   };
 })();
