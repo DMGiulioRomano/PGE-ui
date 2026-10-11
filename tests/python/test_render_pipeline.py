@@ -2069,6 +2069,107 @@ def test_semantics_version_endpoint_without_engine(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Gli assi del fingerprint del motore — engine_fingerprint_axes +
+# /fingerprint-axes (PGE-ui #207, PythonGranularEngine#297)
+#
+# `FINGERPRINT_AXES` dice da cosa dipende uno stem su QUESTO motore. All'editor
+# serve una voce sola, `seed`: su un motore il cui fingerprint non vede il
+# seed, uno `stream-done` con `cached: true` dopo un cambio di seed parla di
+# uno stem che e' la realizzazione del seed di prima, e il record del seed non
+# va scritto. E' una capacita', come `--samples-dir`, ma letta da una tupla
+# che il motore dichiara apposta invece che da un letterale qualunque.
+# ---------------------------------------------------------------------------
+
+def test_engine_fingerprint_axes_parses_source(tmp_path):
+    import server
+    _stub_stream_cache_manager(
+        tmp_path,
+        "FINGERPRINT_AXES = ('semantics', 'stream', 'renderer',\n"
+        "                    'sample_dur_sec', 'seed')\n")
+    assert server.engine_fingerprint_axes(tmp_path) == [
+        "semantics", "stream", "renderer", "sample_dur_sec", "seed"]
+
+
+def test_engine_fingerprint_axes_annotated(tmp_path):
+    """La grafia annotata e' lo stile di casa nel motore: letta come l'altra,
+    o un'annotazione di tipo spegnerebbe la capacita' in silenzio."""
+    import engine_introspect as ei
+    _stub_stream_cache_manager(
+        tmp_path, "FINGERPRINT_AXES: tuple = ('stream', 'seed')\n")
+    assert ei.engine_fingerprint_axes(tmp_path) == ["stream", "seed"]
+
+
+def test_engine_fingerprint_axes_missing_is_none(tmp_path):
+    """Un motore senza la costante (precedente a PythonGranularEngine#297) non
+    dichiara niente: None, non []. Chi legge lo tratta come un motore il cui
+    fingerprint non vede il seed — che per quei motori e' anche la verita'."""
+    import engine_introspect as ei
+    assert ei.engine_fingerprint_axes(tmp_path / "nope") is None
+    _stub_stream_cache_manager(tmp_path, "VARIATION_SEMANTICS_VERSION = 3\n")
+    assert ei.engine_fingerprint_axes(tmp_path) is None
+
+
+@pytest.mark.parametrize("body", [
+    "FINGERPRINT_AXES = tuple(AXES)\n",
+    "FINGERPRINT_AXES = ('stream', 3)\n",
+    "FINGERPRINT_AXES = ('stream', '')\n",
+    "FINGERPRINT_AXES = 'seed'\n",
+    "FINGERPRINT_AXES = None\n",
+], ids=["espressione", "non-stringa", "stringa-vuota", "stringa-nuda", "none"])
+def test_engine_fingerprint_axes_unreadable_is_none(tmp_path, body):
+    """Una forma che non e' una tupla di nomi non si interpreta: None, cioe'
+    "non lo so". Una stringa nuda in particolare non va letta come elenco —
+    `'seed' in 'seed'` e' vero, ed e' esattamente il modo in cui un valore
+    sbagliato accenderebbe la capacita'."""
+    import engine_introspect as ei
+    _stub_stream_cache_manager(tmp_path, body)
+    assert ei.engine_fingerprint_axes(tmp_path) is None
+
+
+def test_engine_fingerprint_axes_sees_a_live_change(tmp_path):
+    """Cache sull'mtime come la versione di semantica, e per la stessa ragione:
+    il motore aggiornato sotto un `make serve` acceso (un pull che porta la
+    #297) e' proprio l'evento che cambia la risposta."""
+    import os
+    import engine_introspect as ei
+    _stub_stream_cache_manager(tmp_path, "FINGERPRINT_AXES = ('stream',)\n")
+    assert ei.engine_fingerprint_axes(tmp_path) == ["stream"]
+
+    src = tmp_path / "src" / "pge" / "rendering" / "stream_cache_manager.py"
+    src.write_text("FINGERPRINT_AXES = ('stream', 'seed')\n")
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert ei.engine_fingerprint_axes(tmp_path) == ["stream", "seed"]
+
+
+def test_fingerprint_axes_endpoint(tmp_path):
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+    _stub_stream_cache_manager(tmp_path, "FINGERPRINT_AXES = ('stream', 'seed')\n")
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/fingerprint-axes").get_json()
+    assert body == {"ok": True, "axes": ["stream", "seed"]}
+
+
+def test_fingerprint_axes_endpoint_without_the_constant(tmp_path):
+    """La route risponde anche su un motore che la costante non ce l'ha, con
+    null: e' la risposta che fa tenere fermo il record del seed sui `cached`."""
+    import server
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "main.py").write_text("# stub\n")
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "refs").mkdir()
+
+    client = server.make_app(tmp_path, render_timeout=600.0).test_client()
+    body = client.get("/fingerprint-axes").get_json()
+    assert body == {"ok": True, "axes": None}
+
+
+# ---------------------------------------------------------------------------
 # Workspace — la cartella dei progetti e' scollegata dal checkout del motore
 #
 # `--root` resta la sorgente del motore (src/main.py, .venv, csound/); il

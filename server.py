@@ -126,8 +126,8 @@ SIGNATURE_HEADER = "X-PGE-Signature"
 # engine_introspect.py (#133): the parity oracle imports it with the standard
 # library alone, which importing this module would not allow. Re-exported here
 # because the routes below — and the python tests — call them as server.*.
-from engine_introspect import (engine_envelope_keys, engine_output_sr,
-                              engine_parameter_bounds,
+from engine_introspect import (engine_envelope_keys, engine_fingerprint_axes,
+                              engine_output_sr, engine_parameter_bounds,
                               engine_relative_range_bounds,
                               engine_renderer_types,
                               engine_sc_synthdef, engine_semantics_version,
@@ -1297,6 +1297,19 @@ def make_app(root: Path, render_timeout: float = 600.0,
         rifara' diverso. `null` = un motore senza la costante; la UI allora non
         pretende niente (mai staleness inventata da un dato che non c'e')."""
         return jsonify({"ok": True, "version": engine_semantics_version(root)})
+
+    @app.get("/fingerprint-axes")
+    def fingerprint_axes():
+        """`FINGERPRINT_AXES` del motore (stream_cache_manager.py), PGE-ui #207.
+
+        Le chiavi da cui il fingerprint del motore dipende. L'editor ne legge
+        una, `seed`: senza, un `stream-done` con `cached: true` non dice niente
+        sul seed dello stem — dopo un cambio di seed il motore risponde
+        `clean` su stem che sono la realizzazione del seed di prima — e il
+        record del seed non si scrive. `null` = un motore senza la costante
+        (precedente a PythonGranularEngine#297), letto come uno il cui
+        fingerprint il seed non lo vede."""
+        return jsonify({"ok": True, "axes": engine_fingerprint_axes(root)})
 
     # --------- listing ---------
 
