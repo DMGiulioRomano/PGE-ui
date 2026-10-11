@@ -62,7 +62,10 @@ Endpoints:
     GET  /import-dir?dir=…      — the YAML documents of a folder under configs/ (#186)
     POST /save                  — the master and the changed imports (#184); 409
                                   {changed, files} if the master, or an import the
-                                  editor read, moved on disk since (#185)
+                                  editor read, moved on disk since (#185); then
+                                  deletes the imports the master no longer names
+                                  (`deleteImports`, #208) when still as read and
+                                  imported by nobody — `kept` says which stayed
     GET  /cache_manifest/<basename>  — read cache/<basename>.json
     POST /render                — run main.py, stream NDJSON events (same 409)
     POST /render/cancel         — terminate the running render
@@ -89,11 +92,12 @@ from pathlib import Path
 try:
     from flask import Flask, jsonify, request, send_file, send_from_directory, Response, abort
     from flask_cors import CORS
-    # PyYAML non lo usa questo file ma `file_signature`, per il confronto per
-    # documento (#185). Chiesto qui perche' una dipendenza che manca dica cosa
+    # PyYAML: `file_signature` lo usa per il confronto per documento (#185), e
+    # questo file per cercare chi importa ancora un file prima di cancellarlo
+    # (#208). Chiesto qui perche' una dipendenza che manca dica cosa
     # installare invece di un traceback — e non importando file_signature
     # dentro il try, che renderebbe "manca una dipendenza" anche un suo errore.
-    import yaml  # noqa: F401
+    import yaml
 except ImportError:
     sys.exit("Missing deps. Run:\n    pip install -r requirements.txt")
 
@@ -109,8 +113,8 @@ from render_pipeline import (
 )
 # Due editor, un file (#185): la firma e la scrittura che la rispetta.
 from file_signature import (read_signed, write_guarded, check_guarded,
-                            apply_guarded, changed_on_disk, signature_of,
-                            is_yaml_name)
+                            apply_guarded, changed_on_disk, signature,
+                            signature_of, is_yaml_name)
 
 # L'header che porta la firma di cio' che GET /file ha letto. Un header e non
 # il corpo, perche' il corpo E' il documento.
@@ -205,12 +209,15 @@ def _exists_payload(files):
     # La forma del rifiuto di #186, accanto a quella di #185: `exists` e' un
     # campo, `files` dice quali.
     names = ", ".join(files)
-    # Il file nuovo nasce da due gesti, la copia (#186) e la coda di uno split
-    # (#187): il rimedio li nomina tutti e due.
+    # Il file nuovo nasce da tre gesti, la copia (#186), la coda di uno split
+    # (#187) e la rinomina di uno stream importato (#208): il rimedio li nomina
+    # tutti, perche' "annulla l'incolla" detto a chi ha rinominato uno stream lo
+    # manda a cercare un gesto che non ha fatto.
     return {"ok": False, "exists": True, "files": files,
             "error": f"{names}: esiste gia' su disco, e un file nuovo (la copia di "
-                     "un incolla, la coda di uno split) non sovrascrive niente. "
-                     "Annulla il gesto e rifallo: il file nuovo prende un nome libero"}
+                     "un incolla, la coda di uno split, uno stream rinominato) non "
+                     "sovrascrive niente. Annulla il gesto e rifallo: il file nuovo "
+                     "prende un nome libero"}
 
 
 def import_guard_fields(opts):
@@ -310,6 +317,175 @@ def write_import_plan(plan, creates=frozenset()):
     """`apply_import_plan` senza verdetti: i file scritti, come prima della
     guardia sugli import."""
     return apply_import_plan(plan, creates)[0]
+
+
+# -------------------------------------------------------------------------
+# Un file importato che il master non nomina piu' (#208)
+#
+# Cancellare uno stream importato toglie la sua voce dal master; rinominarlo
+# gli da' un file nuovo (`streams/<nome>.yml`, creato come la copia di #186).
+# In tutti e due i casi resta su disco un file che il brano non nomina: uno
+# stream che non suona da nessuna parte. Il browser lo chiede in
+# `deleteImports`, e il bridge lo cancella — ma il bridge non cancellava mai
+# niente, e la regola resta per tutto cio' che non passa da qui: si cancella
+# solo un file nominato, e solo se nessuno ci ha messo le mani e nessuno lo
+# importa piu'. Un file che resta non e' un errore del salvataggio: lo dice la
+# risposta (`kept`), con la ragione.
+# -------------------------------------------------------------------------
+
+def plan_import_deletes(base: Path, deletes, master: Path, plan):
+    """I file da cancellare dopo le scritture (#208), validati con gli altri
+    campi della richiesta, PRIMA di ogni scrittura: `([(rel, path, firma)],
+    None)` oppure `(None, messaggio)` — e il messaggio e' un 400 a disco
+    intatto, come per `imports` e `createImports`.
+
+    `deleteImports` e' {path: firma}: il file come l'editor l'ha letto (GET
+    /import) o scritto (la firma che torna dal salvataggio). Una firma vuota
+    vuol dire "non so cosa c'e' dentro", ed e' un file che resta. Il path passa
+    dalla stessa regola delle scritture (`safe_resolve_import`); il master non
+    e' un import, e un file che la stessa richiesta scrive non si cancella —
+    una richiesta che si contraddice non ha un ordine giusto."""
+    if deletes is None:
+        return [], None
+    if not (isinstance(deletes, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in deletes.items())):
+        return None, "deleteImports: atteso un oggetto {path: firma}"
+    written = {path for _rel, path, _text in plan}
+    out = []
+    for rel, sig in deletes.items():
+        path = safe_resolve_import(base, rel)
+        if path is None:
+            return None, (f"deleteImports: {rel!r}: path non valido — relativo alla "
+                          f"cartella del master, senza '..', senza segmenti nascosti, .yml/.yaml")
+        if path == master:
+            return None, f"deleteImports: {rel!r} e' il master stesso"
+        if path in written:
+            return None, f"deleteImports: {rel!r} e' anche fra i file da scrivere"
+        out.append((rel, path, sig))
+    return out, None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Due path per lo stesso file: la stessa grafia normalizzata, o — se ci
+    sono tutti e due — lo stesso file su disco (`samefile`: un disco che non
+    distingue le maiuscole, una cartella raggiunta da un link)."""
+    if os.path.normpath(os.path.abspath(a)) == os.path.normpath(os.path.abspath(b)):
+        return True
+    try:
+        return a.exists() and b.exists() and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def import_referrers(base: Path, target: Path):
+    """Chi importa ancora `target`: `(importatori, illeggibili)`, path
+    relativi a `base`, in ordine.
+
+    Importatore e' ogni documento YAML sotto `base` (non nascosto, a qualunque
+    profondita') con una voce `file:` della sua lista `streams:` che porta a
+    `target`, relativa alla cartella del documento — la regola del motore.
+    Non solo il master che si sta salvando: un altro brano, la copia appena
+    fatta con Save As, un master in una sottocartella. Un documento che non si
+    legge non dice se lo importa: e' illeggibile se lo NOMINA (il nome del
+    file nel testo), e allora il file resta. Uno che non lo nomina non puo'
+    importarlo."""
+    importers, unreadable = [], []
+    needle = target.name.lower()
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for fn in sorted(filenames):
+            if fn.startswith(".") or not fn.lower().endswith((".yml", ".yaml")):
+                continue
+            doc_path = Path(dirpath) / fn
+            if _same_file(doc_path, target):
+                continue
+            rel = doc_path.relative_to(base).as_posix()
+            try:
+                raw = doc_path.read_bytes()
+            except OSError:
+                unreadable.append(rel)
+                continue
+            try:
+                doc = yaml.safe_load(raw)
+            except (ValueError, yaml.YAMLError):
+                # ValueError copre l'UnicodeDecodeError di byte che non sono testo.
+                if needle in raw.decode("utf-8", errors="replace").lower():
+                    unreadable.append(rel)
+                continue
+            streams = doc.get("streams") if isinstance(doc, dict) else None
+            for entry in streams if isinstance(streams, list) else []:
+                f = entry.get("file") if isinstance(entry, dict) else None
+                if not isinstance(f, str) or not f:
+                    continue
+                p = Path(f)
+                if _same_file(p if p.is_absolute() else doc_path.parent / p, target):
+                    importers.append(rel)
+                    break
+    return importers, unreadable
+
+
+def apply_import_deletes(base: Path, deletes):
+    """Cancella i file di `plan_import_deletes`, DOPO le scritture della
+    richiesta: `{deleted, absent, kept}`.
+
+    Un file si cancella solo se e' ancora quello che l'editor ha letto o
+    scritto — la firma dei byte, come per le scritture (#185): un file
+    riscritto dal laboratorio, anche con lo stesso documento, porta il lavoro
+    di qualcun altro — e se nessun documento sotto `base` lo importa piu'
+    (`import_referrers`, sul disco di DOPO le scritture: il master appena
+    scritto conta come gli altri). Altrimenti resta, in `kept` con la ragione:
+
+        unread    l'editor non ne ha una firma: non sa cosa c'e' dentro
+        changed   su disco non e' piu' quello letto o scritto
+        imported  un documento lo importa ancora (`by`)
+        unknown   un documento che non si legge lo nomina (`by`)
+        link      e' un link: cancellarlo toglierebbe il link, non lo stream
+        notfile   non e' un file
+        error     la cancellazione e' fallita (`detail` dice perche')
+
+    `absent` sono i file che non c'erano gia' piu': niente da cancellare, ma
+    nemmeno un file rimasto. Un errore non disfa niente: master e import sono
+    gia' scritti, e il salvataggio e' riuscito."""
+    deleted, absent, kept = [], [], []
+
+    def keep(rel, reason, detail, by=None):
+        item = {"file": rel, "reason": reason, "detail": detail}
+        if by is not None:
+            item["by"] = by
+        kept.append(item)
+
+    for rel, path, sig in deletes:
+        if path.is_symlink():
+            keep(rel, "link", "e' un link: cancellarlo toglierebbe il link, non lo stream")
+            continue
+        if not path.exists():
+            absent.append(rel)
+            continue
+        if not path.is_file():
+            keep(rel, "notfile", "non e' un file")
+            continue
+        if not sig:
+            keep(rel, "unread", "l'editor non ne ha una lettura: non sa cosa c'e' dentro")
+            continue
+        if signature(path) != sig:
+            keep(rel, "changed", "e' cambiato su disco da quando l'editor l'ha letto: "
+                                 "resta, col lavoro di chi l'ha scritto")
+            continue
+        importers, unreadable = import_referrers(base, path)
+        if importers:
+            keep(rel, "imported", f"lo importa ancora {', '.join(importers)}", importers)
+            continue
+        if unreadable:
+            keep(rel, "unknown", f"{', '.join(unreadable)} non si legge e lo nomina: "
+                                 "non si sa se lo importa", unreadable)
+            continue
+        try:
+            os.remove(path)
+        except OSError as e:
+            keep(rel, "error", f"{type(e).__name__}: {e}")
+            continue
+        deleted.append(rel)
+    return {"deleted": deleted, "absent": absent, "kept": kept}
 
 
 def _ensure_venv_events(root: Path):
@@ -1592,6 +1768,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
         import_sigs, import_over, err = import_guard_fields(opts)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        # I file che il documento non nomina piu' (#208): validati qui, con
+        # gli altri campi, e cancellati solo DOPO le scritture riuscite — un
+        # rifiuto qui sotto lascia il disco intatto anche per loro.
+        deletes, err = plan_import_deletes(configs, opts.get("deleteImports"), yml, plan)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
         taken = existing_creates(plan, creates)
         if taken:
             return jsonify(_exists_payload(taken)), 409
@@ -1610,13 +1792,19 @@ def make_app(root: Path, render_timeout: float = 600.0,
             res = apply_guarded(yml, content, verdict)
         except OSError as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        # Le cancellazioni (#208) sul disco di DOPO: il master appena scritto
+        # e' uno dei documenti che possono importare ancora il file. Non
+        # falliscono il salvataggio, che a questo punto e' gia' riuscito: un
+        # file che resta torna in `kept`, con la ragione.
+        removed = apply_import_deletes(configs, deletes)
         # `written` elenca i file davvero scritti: il master (o un import)
         # manca quando conteneva gia' questo documento (passo 1), e la firma
         # torna lo stesso — e' quella che prende il posto della letta.
         return jsonify({"ok": True, "path": str(yml),
                         "written": written + ([yml.name] if res["written"] else []),
                         "signature": res["signature"],
-                        "importSignatures": import_signatures})
+                        "importSignatures": import_signatures,
+                        **removed})
 
     # --------- rendered audio playback ---------
 
