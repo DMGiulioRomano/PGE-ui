@@ -228,6 +228,21 @@ def test_save_lists_every_changed_file_master_first(tmp_path):
     body = r.get_json()
     assert body["files"] == [MASTER, IMPORTED]
     assert body["name"] == MASTER
+    # Il messaggio e' quello che l'editor mostra quando non sa chiedere: due
+    # file, e la frase li accorda tutti e due — "l'ha letto" ne nominava uno.
+    assert body["error"].startswith(f"{MASTER}, {IMPORTED} sono cambiati su disco "
+                                    "da quando l'editor li ha letti")
+
+
+def test_a_single_changed_file_keeps_the_singular(tmp_path):
+    root = _root(tmp_path)
+    c = _client(root)
+    _master_sig, import_sig = _read(c)
+    (root / "configs" / IMPORTED).write_text(IMPORTED_BY_THE_LAB)
+    r = _save(c, importSignatures={IMPORTED: import_sig})
+    assert r.status_code == 409
+    assert r.get_json()["error"].startswith(f"{IMPORTED} e' cambiato su disco "
+                                            "da quando l'editor l'ha letto")
 
 
 def test_save_a_deleted_import_is_not_a_change(tmp_path):

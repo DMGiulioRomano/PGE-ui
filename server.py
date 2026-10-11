@@ -1447,10 +1447,11 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # e' per file. `name` e' il primo, la forma di prima.
         files = [names] if isinstance(names, str) else list(names)
         listed = ", ".join(files)
-        verb = "e' cambiato" if len(files) == 1 else "sono cambiati"
+        verb, read = (("e' cambiato", "l'ha letto") if len(files) == 1
+                      else ("sono cambiati", "li ha letti"))
         return {"ok": False, "changed": True, "name": files[0], "files": files,
                 "error": f"{listed} {verb} su disco da quando l'editor "
-                         "l'ha letto: ricarica o sovrascrivi"}
+                         f"{read}: ricarica o sovrascrivi"}
 
     @app.get("/projects")
     def list_projects():

@@ -47,7 +47,8 @@
  *                                   uno stream importato (#186) o la coda del suo
  *                                   split (#187), non puo' prendere. Non lancia
  *   fs.save(basename, yaml, imports, {overwrite, create, importFiles, overwriteImports}?)
- *                                 → Promise<{ ok:true, written:[nomi], signature }>:
+ *                                 → Promise<{ ok:true, written:[nomi], signature,
+ *                                             importSignatures:{path: firma} }>:
  *                                   il master e i file importati cambiati
  *                                   ({path: testo}), in un colpo solo (#184). Porta
  *                                   la firma letta del master (#185) e quelle dei
@@ -807,8 +808,10 @@
               // Il master, i file importati, o tutti e due (#185 sui file di
               // #184): la decisione e' per file, e la riga li nomina tutti.
               const files = _changedFiles(refusal, configName);
+              const one = files.length === 1;
               onEvent && onEvent({ type: "log",
-                line: `[FILE] ${files.join(", ")}: ${files.length === 1 ? "cambiato" : "cambiati"} su disco da quando l'editor l'ha letto — non riscritto` });
+                line: `[FILE] ${files.join(", ")}: ${one ? "cambiato" : "cambiati"} su disco da quando ` +
+                      `l'editor ${one ? "l'ha letto" : "li ha letti"} — ${one ? "non riscritto" : "non riscritti"}` });
               return { ok: false, changed: true, files,
                        error: refusal.error || `${files.join(", ")} changed on disk`, configWritten: false };
             }

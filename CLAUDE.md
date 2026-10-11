@@ -266,7 +266,8 @@ exists, the fourth only when a browser is installed):
   refused whether the request writes it or not, master and imports named in one
   409 with the disk untouched and before the venv, `overwriteImports`, step 1
   for an import already on disk, a deleted import not a change, a new file
-  never checked, malformed fields a 400, and the signatures given back),
+  never checked, malformed fields a 400, the signatures given back, and the
+  refusal's sentence agreeing in number with the files it names),
   `test_stream_copy.py` (#186: `GET /import-dir` — the YAML
   documents of one folder under `configs/`, hidden and other files left out, a
   missing folder empty, the `/import` boundary —, and `createImports` on
