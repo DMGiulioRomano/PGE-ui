@@ -315,6 +315,13 @@ def _op_fingerprint(args):
                      del motore (test_stream_cache_manager.py). Il patch e'
                      ripristinato sempre, cosi' le chiamate successive sullo
                      stesso processo non ereditano il valore finto.
+        seed         opzionale: il seed di testa che il documento dichiara
+                     (PythonGranularEngine#297), passato com'e' al costruttore
+                     di `StreamCacheManager` — anche `None`, che li' vuol dire
+                     "il documento non ne dichiara uno". Solo su un motore che
+                     lo prende: su uno piu' vecchio la chiamata e' un errore
+                     dell'op, non un hash senza seed, perche' quella risposta
+                     sarebbe la domanda sbagliata con l'aria di quella giusta.
 
     Nota sulla durata implicita: il motore risolve la lunghezza dal file
     audio, e quel path importa `pge.shared.utils`, che importa soundfile. Su
@@ -326,11 +333,21 @@ def _op_fingerprint(args):
     stream = args.get("stream")
     if not isinstance(stream, dict):
         raise OracleError("fingerprint: 'stream' deve essere un dict")
-    mgr = scm.StreamCacheManager(
+    kwargs = dict(
         cache_path=os.path.join(tempfile.gettempdir(), "pge-parity-unused.json"),
         samples_dir=args.get("samples_dir"),
         renderer_type=args.get("renderer", "numpy"),
     )
+    if "seed" in args:
+        kwargs["seed"] = args["seed"]
+    try:
+        mgr = scm.StreamCacheManager(**kwargs)
+    except TypeError as exc:
+        if "seed" not in kwargs:
+            raise
+        raise OracleError(
+            "fingerprint: questo motore non prende 'seed' nel fingerprint "
+            f"(PythonGranularEngine#297): {exc}") from exc
     semantics = args.get("semantics")
     if semantics is None:
         return {"hex": mgr.compute_fingerprint(stream)}
@@ -1139,6 +1156,20 @@ def _op_constants(args):
     except OracleError as exc:
         out["variation_semantics_version_ast"] = None
         out["variation_semantics_version_ast_error"] = str(exc)
+
+    # Gli assi del fingerprint (PythonGranularEngine#297, PGE-ui #207):
+    # importati e letti come li legge il bridge (GET /fingerprint-axes). La UI
+    # ne usa una voce, `seed`, per decidere se uno `stream-done` con
+    # `cached: true` conferma il seed dello stem. Su un motore senza la
+    # costante tutte e due le letture sono None, e devono esserlo insieme.
+    axes = getattr(scm, "FINGERPRINT_AXES", None)
+    out["fingerprint_axes"] = list(axes) if isinstance(axes, (tuple, list)) else None
+    try:
+        out["fingerprint_axes_ast"] = (
+            _introspect("constants").engine_fingerprint_axes(ENGINE.root))
+    except OracleError as exc:
+        out["fingerprint_axes_ast"] = None
+        out["fingerprint_axes_ast_error"] = str(exc)
 
     # Il sample rate di output, importato e letto dall'AST come sopra. E' la
     # costante che restava ricopiata a mano in yaml-bridge.js dopo che la

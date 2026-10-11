@@ -572,6 +572,103 @@ parity({
       },
     },
     {
+      /* Il QUARTO asse: il seed di testa (#207, PythonGranularEngine#297).
+       *
+       * Ogni RNG del motore e' `(seed, rng_group o stream_id, componente)`, e
+       * dalla #297 il seed sta nel fingerprint del motore accanto a semantica e
+       * backend — ma solo quando il documento ne dichiara uno: senza, il
+       * payload e' quello di prima e nessuno stem si invalida. La UI lo tiene
+       * fuori dal suo hash per la ragione del backend (l'hash e' per stream, il
+       * seed e' di testa) e lo giudica con un asse suo.
+       *
+       * La capacita' e' dichiarata (`FINGERPRINT_AXES`), e la UI la legge per
+       * AST (GET /fingerprint-axes): e' cio' che decide se uno `stream-done`
+       * con `cached: true` scrive il record del seed (`seedVouched`). Quindi
+       * due patti, e il secondo vale solo dove il primo dice di si':
+       *   - il lettore AST del bridge legge gli assi che il motore importa — o
+       *     nessuno, su un motore piu' vecchio della #297, da entrambi i lati;
+       *   - dove `seed` e' dichiarato, il seed muove davvero l'hash del motore,
+       *     e l'asse della UI discrimina le stesse coppie che l'hash discrimina
+       *     (con le chiavi di `seedKey`: `1441` e `"1441"` sono un seed solo,
+       *     per la derivazione e quindi per la cache). Una capacita' dichiarata
+       *     e falsa farebbe scrivere alla UI il record su stem che il motore ha
+       *     saltato col seed di prima: il pallino verde dell'issue. */
+      label: "il seed e' un quarto asse, dentro l'hash del motore quando lo dichiara",
+      run: async (ask, assert, ctx) => {
+        const c = (await ask("constants", {})).value;
+        // Le due voci devono ESSERCI, anche a null: un oracolo che non le
+        // portasse farebbe combaciare `undefined` con `undefined`, cioe' un
+        // verde per cecita' proprio sul confronto che regge la capacita'.
+        assert("l'oracolo porta gli assi, importati e letti per AST",
+          "fingerprint_axes" in c && "fingerprint_axes_ast" in c,
+          `voci: ${Object.keys(c).join(", ")}`);
+        assert("il lettore AST del bridge legge gli assi che il motore importa",
+          JSON.stringify(c.fingerprint_axes_ast) === JSON.stringify(c.fingerprint_axes),
+          `ast=${JSON.stringify(c.fingerprint_axes_ast)} ` +
+          `importato=${JSON.stringify(c.fingerprint_axes)}` +
+          (c.fingerprint_axes_ast_error ? ` (${c.fingerprint_axes_ast_error})` : "") +
+          ". La UI riceve il ramo AST: se diverge, decide sui `cached` con una " +
+          "capacita' che il motore non ha (o tace su una che ha).");
+
+        // La meta' che non dipende dal motore: l'hash della UI non sa cosa sia
+        // un seed, come non sa cosa sia un backend.
+        assert("il fingerprint della UI non conosce il seed (voluto)",
+          fingerprintStream.length <= 2,
+          `fingerprintStream ha ${fingerprintStream.length} parametri`);
+
+        const seesSeed = Array.isArray(c.fingerprint_axes) && c.fingerprint_axes.includes("seed");
+        if (!seesSeed) {
+          ctx.note("motore senza il seed nel fingerprint (precedente a PythonGranularEngine#297)",
+            ["un `cached: true` non conferma il seed: la UI tiene fermo il record",
+             `assi dichiarati: ${JSON.stringify(c.fingerprint_axes)}`]);
+          assert("...e la regola della UI li', sui `cached`, e' il no",
+            window.PGEBackend.seedVouched(true, seesSeed) === false &&
+            window.PGEBackend.seedVouched(false, seesSeed) === true);
+          return;
+        }
+
+        // Il corpus delle sonde: niente seed, interi, le loro grafie fra
+        // virgolette, lo zero, una stringa. Le coppie che l'hash del motore
+        // considera uguali sono la risposta, non scritta qui.
+        const corpus = [null, 1441, "1441", 7, 0, "0", "risacca"];
+        const s = base();
+        const answers = await ask(corpus.map(seed => ({
+          op: "fingerprint", args: { stream: yamlDict(s), seed } })));
+        for (const [i, r] of answers.entries()) {
+          if (!r.ok) throw new Error(`seed=${JSON.stringify(corpus[i])}: ${r.error}`);
+        }
+        const hex = answers.map(r => r.value.hex);
+        const plain = await ask("fingerprint", { stream: yamlDict(s) });
+        if (!plain.ok) throw new Error(plain.error);
+        const at = v => hex[corpus.indexOf(v)];
+
+        assert("seed diversi danno hash diversi", at(1441) !== at(7),
+          `${at(1441)} vs ${at(7)}`);
+        assert("senza seed il payload e' quello di prima (nessuna invalidazione)",
+          at(null) === plain.value.hex, `${at(null)} vs ${plain.value.hex}`);
+        assert("...e un seed dichiarato lo sposta", at(1441) !== at(null));
+        assert("lo zero e' un seed", at(0) !== at(null));
+
+        /* La derivata: per ogni coppia (seed con cui lo stem e' stato reso,
+           seed del progetto adesso) la UI dice "seed" esattamente quando l'hash
+           del motore cambia. La chiave e' quella che i tre lettori della UI
+           usano davvero (`seedKey`); "nessun seed" e' `null` da entrambi i
+           lati, che e' anche il record che un render senza seed lascia. */
+        const key = window.PGEBackend.seedKey;
+        const sbagliate = [];
+        for (const a of corpus) {
+          for (const b of corpus) {
+            const atteso = at(a) === at(b) ? null : "seed";
+            const got = RS.staleReason("h", "h", null, null, { rendered: key(a), current: key(b) });
+            if (got !== atteso) sbagliate.push(`${JSON.stringify(a)} → ${JSON.stringify(b)}: ` +
+                                               `atteso ${atteso}, ottenuto ${got}`);
+          }
+        }
+        assert(`l'asse della UI discrimina le stesse ${corpus.length ** 2} coppie dell'hash del motore`,
+          sbagliate.length === 0, sbagliate.join("\n      "));
+      },
+    },
+    {
       /* Lo stream come file (PythonGranularEngine#290, PGE-ui #183/#184).
        *
        * Il motore calcola il fingerprint sullo stream gia' risolto: importato
