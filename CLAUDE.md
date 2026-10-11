@@ -200,7 +200,23 @@ exists, the fourth only when a browser is installed):
   plus source guards on the async split listing the folder only when it cuts
   an imported stream, its oracle, the identity check after the await, the
   shared-file refusal before it, the re-entry guard of `onSplit`, and the
-  conflict message promising no "detach").
+  conflict message promising no "detach"), and `test-stream-orphans.js` (#208:
+  deleting or renaming an imported stream — `importOrphans`, the files the
+  remembered disk has and the document no longer names, a shared file staying
+  named while one entry imports it, an unresolved entry still naming its file;
+  `importRenameFile` / `renameImport`, the rename that moves the file to
+  `<dir>/<new>.yml` — a file to *create*, its `stream_id` renamed, the master
+  entry keeping its keys as written but `stream_id` — and the three cases where
+  it doesn't move: the new name already the file's, a file two entries import,
+  a stream written in the master; renamed and back, undone after a save, a
+  fresh copy renamed, each asked against the disk and not the history; then
+  the backend over a fake bridge — `deleteImports` carrying the signatures
+  read, a deleted or absent file's signature forgotten, `deleted: null` from a
+  bridge older than #208 — plus source guards on the async rename listing the
+  folder before it writes the state, on the save sending the orphans and only
+  the save, on the remembered disk forgetting only after a save that went
+  through, on the `dephase` file kept in that disk, and on the Inspector
+  awaiting the rename).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -274,8 +290,17 @@ exists, the fourth only when a browser is installed):
   with the disk untouched, master and other imports included, before the
   #185 verdict and before the engine; a malformed list is a 400;
   `write_import_plan` opening a new file in exclusive-create mode; and the
-  refusal's remedy naming both gestures that create a new file, the paste and
-  #187's split), and
+  refusal's remedy naming the gestures that create a new file, the paste and
+  #187's split), `test_stream_orphans.py` (#208: `deleteImports` on
+  `POST /save` — a file deleted only when its bytes are still the ones the
+  editor read or wrote, and no YAML document under `configs/` imports it any
+  more, whatever the spelling of the path and wherever the importing master
+  sits, the master just written included; kept, with its reason, when it
+  changed on disk, was never read, is imported elsewhere, is named by a
+  document that doesn't parse, is a link, or the delete fails; absent when
+  already gone; nothing deleted on a 400, a 409 `changed` or a 409 `exists`;
+  the rename's new file created and the old one deleted in one save; the
+  remedy naming the rename too; and `/render` deleting nothing), and
   `test_engine_render.py`
   (an engine render smoke test that skips when the sibling engine checkout/venv
   is absent).
@@ -524,8 +549,18 @@ imported clip at the playhead: the tail gets `streams/onda-2.yml`, not on disk
 until the save, then a lab document with `stream_id: onda-2`, the original's
 seed and `pointer.start` read off the sidecar, the head's file shortened and
 the master with the tail's `file:` entry at the cut; one undo takes the whole
-split back; splitting again lands on `onda-4` (`onda-2.yml` is on disk,
-`onda-3` owns a stem); and a split undone before the save leaves nothing.
+split back, and saved after it the tail's file is deleted (#208, nobody
+imports it); with an `onda-2.yml` the lab wrote in its place — a file the
+editor never read, which it never deletes — splitting again lands on `onda-4`
+(`onda-3` owns a stem); and a split undone before the save leaves nothing.
+The paste of #186 gets the same treatment: undone and saved, the copy's file
+is deleted, and the second paste avoids a name the lab wrote by hand. Then
+#208 itself: the imported clip renamed from the Inspector's `stream_id` field
+moves to `streams/marea.yml`, not on disk until the save, then on disk with
+`stream_id: marea` and the old file gone, the master entry the old one with
+the new file; undo and save bring `onda.yml` back, rewritten, and delete
+`marea.yml`; the lane deleted from its header leaves the file until the save,
+which deletes it; undo and save bring it back.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -2183,9 +2218,10 @@ master imports with a `- file:` entry at the cut. Five rules:
 - **Written at the save or before the render, never at the split** — the
   copy's rule: the tail is `fresh`, travels in `createImports`, and the bridge
   creates it in exclusive mode or refuses with 409 `{exists}`, whose remedy
-  now names both gestures that make a new file. A split undone before the
-  save leaves nothing on disk; once saved, the file stays (data-only, like
-  `deleteStream`) and its name stays taken.
+  names the gestures that make a new file. A split undone before the save
+  leaves nothing on disk; once saved and then undone, the tail's file is one
+  the master no longer names, and the next save deletes it (#208, see "The
+  stream as a file").
 - **The split asks the folder first, so it is async — but only when it cuts
   an imported stream** (`dirs.length ? await listImportNames(…) : []`): a split
   of master streams takes no round trip and is the split it was.
@@ -2650,6 +2686,8 @@ its **placement**. The path is relative to the master's folder, i.e.
   does the tail of a split, `<name>-2.yml` (#187, see "Split at the
   playhead"); the split's head keeps its file and is shortened there. Nothing
   detaches a stream from its file any more — `detachImport` went with #187.
+- **A rename moves the file, and a file the master no longer names is
+  deleted at the save** (#208, below).
 - **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
   edit there lands in the file; the timeline shows the file name beside the
   id, and the Inspector has a `file` row.
@@ -2701,10 +2739,10 @@ beside the original, `streams/<id>.yml`, and the master imports it with a
   `importCreates(data, importDiskRef)` — against the remembered disk, not the
   history, for `changedImports`' reason: after the first write the file is
   ours, and a redo that brings the copy back must rewrite it, not "create" it.
-  So a paste undone before the save writes nothing at all. Once written, the
-  file stays: undoing the paste after a save drops the master entry at the
-  next save but deletes no file — the same data-only rule as `deleteStream`,
-  and the name stays taken.
+  So a paste undone before the save writes nothing at all. Undone after a
+  save, the copy's file is one the master no longer names, and the next save
+  deletes it (#208, below); its name is free again unless a stem still
+  claims it.
 - **From another project, the same rule.** The path is relative to the
   master's folder, so the copy of a stream copied in another piece lands in
   the same subfolder under *this* master's `configs/`; `_srcProject` decides
@@ -2714,6 +2752,88 @@ Save As sends `create` too, beside its `overwrite: true` (which is the
 master's: a new file is created, never overwritten, there as well). The copy is
 own work for #185's question — a new file is never in `importDiskRef` — so a
 lab save of the master asks instead of rereading it away.
+
+**Renaming or deleting an imported stream** (#208, from the review of
+mare-nostrum#2). The file's name is the stream's id — the engine's default
+`stream_id`, and the id the lab opens the file with — and two gestures used to
+break that silently. Deleting an imported stream dropped its master entry and
+left the file in `configs/streams/` with nobody naming it: a stream that plays
+nowhere, which mare-nostrum's `tests/test_brano.py` flags as an error.
+Renaming it wrote `stream_id: <new>` into the master entry and left the file
+under the old name: the piece played the new name's realization, the file
+opened alone in the lab the old one's (`rng = (seed, stream_id, component)`).
+Five rules now:
+
+- **A rename moves the file** (`importRenameFile`, `renameImport` in
+  `yaml-bridge.js`): `<dir>/<new>.yml`, a file to *create* (`fresh`, so the
+  bridge's exclusive create and 409 `{exists}` of #186 apply), its
+  `stream_id` renamed when the file writes one, the master entry keeping its
+  keys as written (an `onset` expression, a `mute: false`, a stray key the
+  error must keep showing) minus `stream_id`, which is the default. Its name
+  is chosen against the paste's oracle — the bridge's listing of the folder,
+  `importDiskRef`, `importFilesOf` — so `renameStream` asks the folder first
+  and is **async**, and the Inspector awaits its answer. It doesn't move in
+  three cases: a stream written in the master; a new name that already *is*
+  the file's (`stream_id: alto` renamed `risacca` over `risacca.yml`: the
+  entry just loses its key); and a file two entries import, which is one
+  document the other entry still imports — there the rename stays in the
+  master entry, as before #208, and the terminal says why. An entry whose
+  `stream_id` diverged from its file and is renamed to a third name moves:
+  from there file and id coincide again.
+- **A file the master no longer names is an orphan**, and the save asks the
+  bridge to delete it: `importOrphans(data, importDiskRef)`, the files the
+  remembered disk has and the document doesn't name (`importFilesOf`, so an
+  unresolved entry still names its file and a shared file stays while one
+  entry imports it). Against the remembered disk and not the history, like
+  `importCreates`: a copy never written is not on disk and there is nothing to
+  delete. The stream deleted, the rename's old name, the paste or the split's
+  tail undone after a save — one rule for all of them. `deleteStream` and
+  `deleteTrack` stay data-only mutations; they only log which file the next
+  save will delete.
+- **Only the save deletes.** Not Save As, whose previous master still imports
+  every file; not the render, which writes what the engine re-reads and
+  nothing else (and leaves `dirty` on, so the save comes). The orphans travel
+  as `deleteImports: {path: signature}` on `POST /save`, the signature being
+  the one the file was read (`GET /import`) or written with.
+- **The bridge deletes only what is still as read and imported by nobody**
+  (`plan_import_deletes`, `apply_import_deletes`, `import_referrers` in
+  `server.py`). Validated with the other fields, before any write (a bad path,
+  the master, a file the same request writes: a 400 with the disk untouched);
+  executed after the writes went through, so a 409 deletes nothing, and judged
+  on the disk *after* them. A file stays — in `kept`, with its reason — when
+  its bytes are no longer the signature sent (the lab saved it meanwhile: its
+  work stays), when there is no signature at all, when any YAML document under
+  `configs/` still imports it (another piece, the copy Save As just made, the
+  master just written; the path read relative to the document's folder, the
+  engine's rule, and compared with `samefile`), when a document that doesn't
+  parse mentions its name (it might import it), when it is a link, or when the
+  delete fails. None of that fails the save: master and imports are already
+  written.
+- **Undo brings the stream back, and the save its file.** A deleted or absent
+  file leaves `importDiskRef`, so a stream that comes back finds its file
+  "never seen" and the next save rewrites it — in this editor's serialization,
+  not the lab's bytes; git keeps those. A kept file stays in the remembered
+  disk with the text it had, so an undo doesn't rewrite a file the lab changed
+  blindly: #185's guard finds it changed and asks. Kept files are asked about
+  again at every save (another piece may stop importing them) but logged once
+  per reason (`keptNotedRef`), and a bridge older than #208 — which ignores the
+  field — is logged once too: `deleted: null` from `fs.save`.
+
+One consequence reaches back into #184: a file still carrying the dead
+`dephase` spelling used to be left *out* of `importDiskRef` so that the first
+save rewrote it. Left out, it was also "not on disk", and an imported stream
+deleted before that first save left its file behind. It now stays in the map
+with the text *read*, which is never the serialization (it carries the dead
+key): still rewritten at the first save, and an orphan like any other. The
+same at #185's reread of a single file.
+
+`tests/node/test-stream-orphans.js` pins the model and the wiring,
+`tests/python/test_stream_orphans.py` what the bridge deletes and what it
+keeps, `tests/parity/test-stream-rename-parity.js` asks the engine
+(`resolve_stream_files`) to find each renamed lab stream under its new id with
+the old file gone — the same fingerprint but for `stream_id`, the other
+streams untouched, the new file alone one stream with the same id — and
+`tests/e2e/test-boot.js` walks the rename and the delete in a browser.
 
 **A lab document comes back whole** (#188, step 4 of the plan, "round-trip
 inverso"). The rules above say where each key goes; what they don't say is
@@ -2935,7 +3055,7 @@ it would crop the drawing to the previous length).
 
 A stream's id is the stem filename (`<basename>__<id>.<ext>`) and the key of the engine's cache manifest. It must **never be recycled**. `allocStreamIds` in `yaml-bridge.js` (node-tested) takes an `isTaken` oracle — `app.jsx`'s `ownsStemFor` → `backend.render.ownsStem` — so an id whose stem is still on disk is skipped. The engine's GC can't cover this: it deletes only stems absent from the YAML, and a recycled id is present again. The paste's oracle (`pasteIdTaken`, #186) asks `ownsStemFor` first and then whether the id is a file name beside an imported original, and so does the split's (`splitIdTaken`, #187, whose tail of an imported stream is `<name>-N`: `allocStreamIds` takes a list of bases for that); `test-stream-id.js` accepts a named oracle only if its declaration starts with that `ownsStemFor(id) ||`.
 
-`deleteStream` is a **data-only** mutation. With ids that never recycle, a leftover cache entry can never be picked up by a different stream — a Ctrl+Z'd stream comes back with its cached data intact.
+`deleteStream` is a **data-only** mutation. With ids that never recycle, a leftover cache entry can never be picked up by a different stream — a Ctrl+Z'd stream comes back with its cached data intact. The file of an imported stream it drops is deleted by the next *save*, not by the gesture (#208, see "The stream as a file"): undo is still a data change, and the save after it writes the file back.
 
 The stem index is keyed by **filename, extension included**:
 - `hasStem(basename, id, format)`: "playable now" — format-specific.
@@ -3078,7 +3198,11 @@ writes no `ui_tracks` at all; a lane the user actually named keeps its name.
 Three refusals, all at the trust boundary: a charset (the id becomes a filename
 and a path segment), a live stream already holding the name, and `ownsStemFor`
 — a stem still on disk under that name would be picked up as the renamed
-stream's audio, the same hazard `allocStreamIds` guards against.
+stream's audio, the same hazard `allocStreamIds` guards against. An imported
+stream adds a fourth (#208): its file moves to `<dir>/<new>.yml`, so the new
+name must also be free as a file name in that folder — which is why the rename
+is async (it lists the folder first) and the Inspector awaits it. See "The
+stream as a file".
 
 **The sound is deliberately not preserved.** `rng_id = rng_group or stream_id`
 (engine `shared/seeding.py`, and every seeding site goes through it), so a
@@ -3341,6 +3465,18 @@ promise the browser asks for, not a protection against a client that doesn't.
 `GET /import-dir?dir=` lists only names, only `.yml`/`.yaml`, only under
 `configs/` (`safe_resolve_import_dir`: every segment through `safe_resolve`,
 `""` for `configs/` itself).
+
+**Since #208 the bridge deletes files, and exactly one kind.** It never did,
+by choice, and the choice holds for everything but this: an imported file
+named in `deleteImports` on `POST /save` (never on `/render`), through the same
+path rule as the writes (`safe_resolve_import`: `.yml`/`.yaml` under
+`configs/`, never the master, never a file the request also writes), deleted
+after the writes and only when its bytes are still the signature the editor
+sent and no YAML document under `configs/` imports it or, unparsable, names
+it. Links are never deleted. Like the 409s above it is a promise between
+cooperating editors, not an access control — a client that sends a
+signature it read can delete that file, which is also a client that could
+rewrite it — and it is one more reason not to pass `--host 0.0.0.0`.
 
 **One spelling of the rule, `safe_resolve`.** `/render`'s basename is the trust
 boundary of a route that *writes a file*, and it used to re-implement the check
