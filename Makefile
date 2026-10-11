@@ -298,7 +298,7 @@ dev-clean:
 	@echo "Reset the editor's cached stem index: open devtools and run"
 	@echo "    localStorage.clear()"
 	@echo "(clears pge-local-stems / pge-local-fp / pge-local-sem /"
-	@echo " pge-local-renderer; the server keeps the real files)."
+	@echo " pge-local-renderer / pge-local-seed; the server keeps the real files)."
 
 # Boot headless dell'editor (#139): apre `PGE Editor.html` in un Chromium
 # guidato da playwright, contro il bridge vero su un motore finto, e verifica

@@ -143,10 +143,17 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     store["pge-local-fp"]  = JSON.stringify({ proj: { stream1: "abc" } });
     store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
     store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "csound" } });
+    // Il seed con cui lo stem e' stato reso (#207) e' della stessa specie: dice
+    // del FILE ("questo stem e' la realizzazione di 1441"), e nella output/
+    // nuova nessuno l'ha visto scrivere. Ereditato, un omonimo con lo stesso
+    // seed passerebbe per verde su stem resi con un altro.
+    store["pge-local-seed"] = JSON.stringify({ proj: { stream1: "1441" } });
     assert("le versioni ci sono, prima",
            (await backend.render.loadSemantics("proj")).stream1 === 3);
     assert("e i backend anche",
            (await backend.render.loadRenderers("proj")).stream1 === "csound");
+    assert("e i seed anche",
+           (await backend.render.loadSeeds("proj")).stream1 === "1441");
 
     const res = await backend.setWorkspace("/brani2");
     assert("la commutazione riesce", res.ok === true);
@@ -156,6 +163,9 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     assert("e i backend con loro",
            Object.keys(await backend.render.loadRenderers("proj")).length === 0,
            store["pge-local-renderer"]);
+    assert("e i seed con loro",
+           Object.keys(await backend.render.loadSeeds("proj")).length === 0,
+           store["pge-local-seed"]);
     assert("le impronte no: dicono dello YAML, non dei file",
            (await backend.render.loadCache("proj")).stream1 === "abc");
   }
@@ -164,6 +174,7 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
   {
     store["pge-local-sem"] = JSON.stringify({ proj: { stream1: 3 } });
     store["pge-local-renderer"] = JSON.stringify({ proj: { stream1: "csound" } });
+    store["pge-local-seed"] = JSON.stringify({ proj: { stream1: "1441" } });
     REFUSE = { status: 400, error: "non esiste: /refuso" };
     await backend.setWorkspace("/refuso");
     REFUSE = null;
@@ -171,8 +182,11 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
            (await backend.render.loadSemantics("proj")).stream1 === 3);
     assert("e i backend pure",
            (await backend.render.loadRenderers("proj")).stream1 === "csound");
+    assert("e i seed pure",
+           (await backend.render.loadSeeds("proj")).stream1 === "1441");
     delete store["pge-local-sem"];
     delete store["pge-local-renderer"];
+    delete store["pge-local-seed"];
   }
 
   console.log("\n── e /stems lo ripopola dalla cartella nuova ──");
@@ -307,6 +321,10 @@ const backend = window.PGEBackend.create({ baseUrl: "http://x" });
     // nuova nessuno ha visto scrivere, e un colore diverso dopo il reload.
     assert("...e i backend registrati in stato",
            /setRenderedRenderer\(\{\}\)/.test(h));
+    // ...e i seed (#207): "questo stem e' la realizzazione di quel seed" e'
+    // un'affermazione sui file della output/ di prima quanto le altre due.
+    assert("...e i seed registrati in stato",
+           /setRenderedSeed\(\{\}\)/.test(h));
     assert("ricarica progetti e media", /refreshProjects\(\)/.test(h) && /refreshMedia\(\)/.test(h));
     // Due cartelle possono avere un progetto omonimo: li' `activeProject` non
     // cambia e l'effetto su [activeProject] non riparte. Senza questa riga

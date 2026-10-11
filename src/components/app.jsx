@@ -325,6 +325,12 @@ function App() {
      reso prima che l'editor lo registrasse, e chi classifica la legge come
      stale. */
   const [renderedRenderer, setRenderedRenderer] = useStateApp({});
+  /* Il quarto asse (#207): il seed di testa con cui e' stato reso ogni stem,
+     come chiave (`PGEBackend.seedKey`). Un solo lato in stato, come il
+     backend: quello vivo e' `data.seed`, che l'editor ha in mano. Voce assente
+     = reso senza seed, o prima che l'editor lo registrasse — `staleReason` le
+     legge allo stesso modo, e la tabella che lo giustifica sta li'. */
+  const [renderedSeed, setRenderedSeed] = useStateApp({});
   /* Il ref accanto allo stato, per la stessa ragione di `mediaFilesRef`: gli
      eventi `stream-done` arrivano dentro un `await` gia' in volo, e leggerebbero
      l'`engineSem` catturato quando `onRender` e' stata definita — cioe' quello
@@ -703,6 +709,11 @@ function App() {
     } else {
       setRenderedRenderer({});
     }
+    if (backend.render.loadSeeds) {
+      backend.render.loadSeeds(basename).then(r => setRenderedSeed(r || {}));
+    } else {
+      setRenderedSeed({});
+    }
   }, [activeProject]);
 
   /* Current fingerprint per stream — recomputed when data changes. The
@@ -762,12 +773,22 @@ function App() {
   const rendererCtx = useMemoApp(
     () => ({ rendered: renderedRenderer, current: window.PGEBackend.rendererName(currentRenderer) }),
     [renderedRenderer, currentRenderer]);
+  /* E la coppia dell'asse "seed" (#207). `current` e' il seed di testa del
+     documento in memoria, cioe' quello che il SeedControl scrive: cambiarlo
+     accende il giallo su ogni stem reso con un altro. Passa da `seedKey`, la
+     stessa regola con cui `run()` e l'handler degli `stream-done` scrivono i
+     record — `1441` e `"1441"` sono lo stesso seed per il motore, e una copia
+     della regola qui li farebbe due. `null` vuol dire "nessun seed dichiarato",
+     un valore e non un ignoto: vedi `staleReason`. */
+  const seedCtx = useMemoApp(
+    () => ({ rendered: renderedSeed, current: window.PGEBackend.seedKey(data.seed) }),
+    [renderedSeed, data.seed]);
 
   /* Aggregate render summary: counts of fresh / stale / never */
   const renderSummary = useMemoApp(
     () => window.PGERenderStatus.summarize(data.streams, currentFps, lastRenderedFps, hasStemFor,
-                                          semCtx, rendererCtx),
-    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendererCtx]);
+                                          semCtx, rendererCtx, seedCtx),
+    [data.streams, currentFps, lastRenderedFps, activeProject, semCtx, rendererCtx, seedCtx]);
 
   function renderStatusForStream(streamId) {
     return window.PGERenderStatus.statusForStream(streamId, {
@@ -776,6 +797,7 @@ function App() {
       currentStreamId: renderStatus.currentStreamId,
       sem: semCtx,
       rend: rendererCtx,
+      seed: seedCtx,
     });
   }
 
@@ -1514,7 +1536,10 @@ function App() {
     setDirty(true);
   }
   // Top-level `seed` (engine #81): project-wide, NOT per-stream — it never
-  // enters the per-stream fingerprint, so changing it doesn't mark stems stale.
+  // enters the per-stream fingerprint. Changing it does mark stems stale, but
+  // through an axis of its own beside the hash (#207, `seedCtx`): every RNG of
+  // the engine is (seed, rng_group or stream_id, component), so another seed
+  // is another stem — and the dot says "seed", not "yaml".
   // Empty/null clears it (key omitted on save = current unseeded behaviour).
   function setSeed(v) {
     const norm = (v === undefined || v === null || v === "") ? undefined : v;
@@ -2200,6 +2225,16 @@ function App() {
        darebbe al pallino il backend nuovo su uno stem che il motore ha scritto
        col vecchio. */
     const rendererOfThisRun = currentRenderer;
+    /* Il fingerprint del motore vede il seed? (#207, PythonGranularEngine#297).
+       Letto UNA volta per giro, accanto al numero e per la stessa ragione: lo
+       usano due consumatori — `run()`, che scrive il record persistito, e
+       l'handler degli `stream-done`, quello in memoria — e devono decidere
+       sulla stessa risposta. Su un motore che il seed non lo vede, uno stem
+       saltato (`cached: true`) non conferma il seed: dopo un cambio di seed e'
+       la realizzazione di quello di prima. Il dubbio (bridge senza la route,
+       motore senza la costante) vale come no. */
+    const axesOfThisRun = backend.fingerprintAxes ? await backend.fingerprintAxes() : null;
+    const seedInFingerprintOfThisRun = Array.isArray(axesOfThisRun) && axesOfThisRun.includes("seed");
     // Terzo punto anche per i clamp, ma SENZA aspettarli: il render non li
     // consuma — li consuma l'editor, dopo — quindi un await qui metterebbe un
     // giro di rete davanti al motore per un dato che a nessuno serve subito.
@@ -2220,6 +2255,14 @@ function App() {
        closure ricorda. */
     let yamlOfThisRun = null;
     let fpsOfThisRun = {};
+    /* ...e il seed di quel documento, come chiave (#207): stessa regola delle
+       impronte, perche' dopo una rilettura il seed puo' essere un altro. */
+    let seedOfThisRun = null;
+    /* Gli stem che il motore ha saltato senza poter confermare il seed (un
+       motore che il seed non lo vede): a fine giro si dice quanti sono rimasti
+       la realizzazione di un altro seed, perche' il pallino giallo che resta
+       dopo un render incrementale va spiegato. */
+    const seedHeldBack = new Set();
     const optsFor = (doc, st, importTexts, importCreate) => ({
       yamlBasename: basename,
       yamlContent: yamlOfThisRun,
@@ -2256,6 +2299,10 @@ function App() {
       streams: doc.streams,
       outputFormat: tweaks.outputFormat || "wav",
       semanticsVersion: semOfThisRun,
+      // Il seed di testa del documento di questo tentativo e la capacita' del
+      // motore di vederlo (#207): finiscono nel record del seed di `run()`.
+      seed: doc.seed,
+      seedInFingerprint: seedInFingerprintOfThisRun,
       // La risposta «sovrascrivi» alla domanda del file cambiato (#185).
       overwrite: FG.overwrites(st, configName) || undefined,
     });
@@ -2318,6 +2365,24 @@ function App() {
           delete next[e.streamId];
           return next;
         });
+        // ...e il seed (#207), con la regola che gli altri tre record non
+        // hanno: uno stem SALTATO conferma il seed solo se il fingerprint del
+        // motore lo vede. La regola e' `seedVouched`, la stessa di `run()` —
+        // due copie darebbero un colore in memoria e un altro al reload. Senza
+        // seed la voce si cancella, come in `run()`. I due valori si fissano
+        // qui fuori: l'updater gira quando React vuole, e il seed del giro non
+        // deve poter essere quello di un tentativo dopo.
+        const seedK = seedOfThisRun;
+        const seedOk = window.PGEBackend.seedVouched(e.cached, seedInFingerprintOfThisRun);
+        if (!seedOk) seedHeldBack.add(e.streamId);
+        setRenderedSeed(m => {
+          if (!seedOk) return m;
+          if (seedK !== null) return m[e.streamId] === seedK ? m : { ...m, [e.streamId]: seedK };
+          if (!(e.streamId in m)) return m;
+          const next = { ...m };
+          delete next[e.streamId];
+          return next;
+        });
       } else if (e.type === "stems-resync") {
         // Il giro e' fallito ma ha trovato stem su disco che il motore puo'
         // aver riscritto prima di morire (#151). Niente record di provenienza
@@ -2347,6 +2412,7 @@ function App() {
         if (plan.error) return { ok: false, error: plan.error, configWritten: false };
         yamlOfThisRun = window.PGEYaml ? window.PGEYaml.serialize(doc) : null;
         fpsOfThisRun = window.PGERenderStatus.fingerprintAll(doc.streams, tweaks.outputFormat || "wav");
+        seedOfThisRun = window.PGEBackend.seedKey(doc.seed);
         /* I file importati che questo tentativo manda sono su disco
            dall'arrivo del POST, non dalla fine del render: si segnano adesso.
            Segnati in fondo, sovrascrivevano cio' che un salvataggio fatto NEL
@@ -2419,6 +2485,31 @@ function App() {
           kind: "ok", title: "Render complete", message: msg, duration: 4000,
           action: { label: "open log", onClick: () => setTerminalOpen(true) },
         });
+      }
+      /* Un render incrementale su un motore che il seed non lo vede (#207):
+         gli stem saltati il cui record non e' il seed di adesso restano gialli,
+         e un "re-render to update" li lascerebbe gialli ancora — il motore li
+         risalterebbe. Lo si dice, con il rimedio: un render senza cache. Il
+         conto si fa sul record persistito, che `run()` ha appena scritto: e'
+         quello che il pallino leggera' al prossimo caricamento. */
+      if (seedHeldBack.size && backend.render.loadSeeds) {
+        const recs = await backend.render.loadSeeds(basename);
+        const behind = [...seedHeldBack].filter(id => (recs[id] == null ? null : recs[id]) !== seedOfThisRun);
+        if (behind.length) {
+          const stems = `${behind.length} stem${behind.length === 1 ? "" : "s"}`;
+          const line = `[SEED] ${stems} the engine skipped may still be another seed's ` +
+                       `realization: this engine's stem cache doesn't see the seed ` +
+                       `(PythonGranularEngine#297). Render with incremental cache off to redo ` +
+                       `them: ${behind.join(", ")}`;
+          setLogLines(ls => [...ls, { text: line, cls: "warn" }]);
+          pushToast({
+            kind: "warn", title: "Seed not confirmed",
+            message: `${stems} may still be another seed's realization — ` +
+                     `render with incremental cache off`,
+            duration: 10000,
+            action: { label: "open log", onClick: () => { setTerminalOpen(true); setTweak("terminalOpen", true); } },
+          });
+        }
       }
     } else {
       pushToast({
@@ -2678,6 +2769,9 @@ function App() {
     // col motore ignoto gli stem della cartella nuova resterebbero verdi sui
     // backend registrati in quella di prima, fino al reload.
     setRenderedRenderer({});
+    // ...e quella di `pge-local-seed` (#207): "questo stem e' la realizzazione
+    // di quel seed" parla dei file della cartella di prima, come le altre due.
+    setRenderedSeed({});
     grainLoadedRef.current = new Set();
     grainRegenRef.current = new Set();
     stemRevRef.current = {};

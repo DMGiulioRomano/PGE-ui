@@ -34,7 +34,7 @@ function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 console.log("\n── module surface ──");
 assert("STATES present", RS.STATES && RS.STATES.FRESH === "fresh" && RS.STATES.STALE === "stale" &&
   RS.STATES.NEVER === "never" && RS.STATES.RUNNING === "running");
-assert("TOOLTIPS present (6 strings)", RS.TOOLTIPS &&
+assert("TOOLTIPS present (7 strings)", RS.TOOLTIPS &&
   RS.TOOLTIPS.staleSemantics ===
     "the engine's reading of this YAML doesn't match this stem — re-render to update" &&
   // Il testo deve essere vero in ENTRAMBI i casi in cui l'asse parla: backend
@@ -44,6 +44,12 @@ assert("TOOLTIPS present (6 strings)", RS.TOOLTIPS &&
   // mandava a cercare un cambio di backend che nessuno ha fatto (#151).
   RS.TOOLTIPS.staleRenderer ===
     "no record that the current backend rendered this stem — re-render to update" &&
+  // Vero nei tre casi in cui il quarto asse parla (#207): un seed registrato
+  // diverso, nessun record col progetto che un seed lo dichiara, e un record
+  // col progetto che non ne dichiara piu' nessuno.
+  RS.TOOLTIPS.staleSeed ===
+    "the seed this stem was rendered with isn't the project's seed, or isn't " +
+    "on record — re-render to update" &&
   RS.TOOLTIPS.running === "rendering this stream…" &&
   RS.TOOLTIPS.never === "this stream has never been rendered" &&
   RS.TOOLTIPS.fresh === "rendered and up-to-date with the YAML" &&
@@ -408,6 +414,154 @@ console.log("\n── classifyStream e il pallino con l'asse del backend ──"
        { fresh: 2, stale: 2, never: 0, total: 4 }));
 }
 
+/* ---------------------------------------------------------------------------
+ * QUARTO ASSE: il seed con cui lo stem e' stato reso (#207).
+ *
+ * Ogni RNG del motore e' `(seed, rng_group o stream_id, componente)`: lo
+ * stesso stream con un altro seed e' un altro stem. Il seed di testa
+ * (`data.seed`) pero' non e' dello stream, quindi l'impronta della UI — che e'
+ * per stream e risponde a «l'utente ha toccato questo stream?» — non lo vede,
+ * e non deve: dentro, il pallino direbbe `yaml` su uno stream che nessuno ha
+ * toccato. Stesso criterio del backend (#134, «raggiunge lo YAML dello
+ * stream?»), stessa risposta.
+ *
+ * La differenza con gli altri due assi e' che qui un lato vivo IGNOTO non
+ * esiste: il seed sta nel documento che l'editor ha in mano. «Nessun seed
+ * dichiarato» e' un valore, ed e' il valore che il motore lascia fuori dal
+ * proprio fingerprint (PythonGranularEngine#297: la chiave entra solo quando
+ * il documento ne dichiara uno). Un record assente vale come lui, per una
+ * ragione che la tabella qui sotto rende visibile: il render senza seed il
+ * record lo CANCELLA, quindi "assente" e "reso senza seed" sono la stessa
+ * voce — e un progetto senza seed non accende niente sugli stem resi prima di
+ * questo asse, che e' la popolazione piu' numerosa.
+ * ------------------------------------------------------------------------- */
+console.log("\n── staleReason: il quarto asse, il seed ──");
+{
+  assert("yaml diverso vince su tutto",
+    RS.staleReason("a", "b", null, null, { rendered: "1441", current: "1441" }) === "yaml");
+  assert("stesso seed a yaml fermo → null",
+    RS.staleReason("a", "a", null, null, { rendered: "1441", current: "1441" }) === null);
+  assert("seed diverso a yaml fermo → 'seed'",
+    RS.staleReason("a", "a", null, null, { rendered: "1441", current: "7" }) === "seed");
+  assert("nessun seed ctx → null (comportamento pre-#207 esatto)",
+    RS.staleReason("a", "a", null, null, undefined) === null);
+
+  /* Il caso vero da cui l'issue nasce (mare-nostrum#8): un brano senza seed a
+     cui il seed viene dato. Gli stem resi prima sono una realizzazione di
+     sessione — il render senza seed non ha scritto record — e il pallino deve
+     dirlo. */
+  assert("seed aggiunto, stem senza record → 'seed'",
+    RS.staleReason("a", "a", null, null, { rendered: undefined, current: "1441" }) === "seed");
+  /* Il verso opposto: il seed tolto. Il motore della #297 toglie la chiave dal
+     payload, quindi l'impronta cambia e rifa' lo stem: verde qui sarebbe un
+     render di meno. */
+  assert("seed tolto, stem reso con un seed → 'seed'",
+    RS.staleReason("a", "a", null, null, { rendered: "1441", current: null }) === "seed");
+  /* E il caso che la regola esiste per NON accendere: nessun seed dichiarato e
+     nessun record. Sono tutti gli stem dei progetti senza seed, resi prima di
+     questo asse o dopo — il fingerprint del motore senza seed e' quello di
+     prima della #297, su qualunque motore, e nessuno di quegli stem si
+     invalida. */
+  assert("nessun seed e nessun record → null",
+    RS.staleReason("a", "a", null, null, { rendered: undefined, current: null }) === null);
+  assert("...e undefined come lato vivo vale come null",
+    RS.staleReason("a", "a", null, null, { rendered: undefined, current: undefined }) === null);
+  /* `"0"` e' un seed (la derivazione e' sha256, non un test di verita'), e la
+     stringa vuota anche: il motore li mette nel payload come qualunque altro. */
+  assert("il seed \"0\" e' un seed, non un'assenza",
+    RS.staleReason("a", "a", null, null, { rendered: undefined, current: "0" }) === "seed" &&
+    RS.staleReason("a", "a", null, null, { rendered: "0", current: "0" }) === null);
+}
+
+// Gli incroci del quarto asse, come per gli altri due: la tabella e' quella su
+// cui la decisione e' stata presa.
+{
+  const M = [
+    // [rendered,   current,  atteso,  cosa e' nel mondo reale]
+    [undefined,     "1441",   "seed",  "seed aggiunto a un brano che non l'aveva (mare-nostrum#8)"],
+    ["7",           "1441",   "seed",  "seed cambiato"],
+    ["1441",        "1441",   null,    "stesso seed"],
+    ["1441",        null,     "seed",  "seed tolto: il motore della #297 rifa' lo stem"],
+    [undefined,     null,     null,    "progetto senza seed: niente da dire"],
+  ];
+  assert("la tabella degli incroci ha davvero cinque righe", M.length === 5, `${M.length}`);
+  const bad = M.filter(([r, c, atteso]) =>
+    RS.staleReason("a", "a", null, null, { rendered: r, current: c }) !== atteso);
+  assert("i cinque incroci rendered x current",
+    bad.length === 0,
+    bad.map(([r, c, atteso, why]) =>
+      `rendered=${r} current=${c}: atteso ${atteso}, ottenuto ` +
+      `${RS.staleReason("a", "a", null, null, { rendered: r, current: c })} (${why})`).join("\n      "));
+}
+
+console.log("\n── il seed convive con gli altri tre assi ──");
+{
+  const sameSem = { rendered: 3, engine: 3 };
+  const sameRend = { rendered: "numpy", current: "numpy" };
+  assert("solo il seed parla",
+    RS.staleReason("a", "a", sameSem, sameRend, { rendered: "7", current: "1441" }) === "seed");
+  assert("un motore ignoto non zittisce il seed",
+    RS.staleReason("a", "a", { rendered: 3, engine: null }, sameRend,
+      { rendered: "7", current: "1441" }) === "seed");
+  /* La precedenza e' quella dell'ordine di arrivo, e per la ragione degli
+     altri due: l'asse nuovo e' additivo — nessun caso che esistesse prima
+     cambia risposta — e un render solo li spegne tutti. */
+  assert("se parlano semantica e seed, la semantica tiene la voce",
+    RS.staleReason("a", "a", { rendered: 2, engine: 3 }, sameRend,
+      { rendered: "7", current: "1441" }) === "semantics");
+  assert("se parlano backend e seed, il backend tiene la voce",
+    RS.staleReason("a", "a", sameSem, { rendered: "csound", current: "numpy" },
+      { rendered: "7", current: "1441" }) === "renderer");
+  assert("...e lo yaml le precede tutte",
+    RS.staleReason("a", "b", { rendered: 2, engine: 3 }, sameRend,
+      { rendered: "7", current: "1441" }) === "yaml");
+}
+
+console.log("\n── classifyStream e il pallino con l'asse del seed ──");
+{
+  const seedChanged = { rendered: "7", current: "1441" };
+  assert("stem mai renderizzato resta 'never' anche a seed diverso",
+    RS.classifyStream(null, "x", true, null, null, seedChanged) === "never");
+  assert("stem senza file su disco resta 'never'",
+    RS.classifyStream("x", "x", false, null, null, seedChanged) === "never");
+  assert("yaml fermo + seed cambiato → 'stale'",
+    RS.classifyStream("x", "x", true, null, null, seedChanged) === "stale");
+  assert("yaml fermo + stesso seed → 'fresh'",
+    RS.classifyStream("x", "x", true, null, null, { rendered: "1441", current: "1441" }) === "fresh");
+  assert("senza seed ctx, la firma a 5 argomenti si comporta come prima",
+    RS.classifyStream("x", "x", true, null, { rendered: "numpy", current: "numpy" }) === "fresh");
+
+  const ctx = {
+    currentFps: { a: "1", b: "2", c: "3", d: "4", e: "5" },
+    lastRenderedFps: { a: "1", b: "9", c: "3", d: "4", e: "5" },
+    hasStem: () => true,
+    running: false, currentStreamId: null,
+    sem: { rendered: { a: 3, b: 3, c: 2, d: 3, e: 3 }, engine: 3 },
+    rend: { rendered: { a: "numpy", b: "numpy", c: "numpy", d: "csound", e: "numpy" },
+            current: "numpy" },
+    seed: { rendered: { a: "1441", b: "1441", c: "1441", d: "1441", e: "7" }, current: "1441" },
+  };
+  assert("seed cambiato a yaml fermo → il quarto testo",
+    eq(RS.statusForStream("e", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleSeed }));
+  assert("gli altri tre motivi tengono il loro testo",
+    eq(RS.statusForStream("b", ctx), { state: "stale", tooltip: RS.TOOLTIPS.stale }) &&
+    eq(RS.statusForStream("c", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleSemantics }) &&
+    eq(RS.statusForStream("d", ctx), { state: "stale", tooltip: RS.TOOLTIPS.staleRenderer }));
+  assert("niente da dire → fresh",
+    eq(RS.statusForStream("a", ctx), { state: "fresh", tooltip: RS.TOOLTIPS.fresh }));
+
+  // Pallino e riepilogo leggono la coppia dalla stessa funzione (seedFor):
+  // divergendo, il riepilogo direbbe "2 rendered" con un pallino giallo in piu'.
+  const streams = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
+  assert("summarize concorda con statusForStream",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem,
+                    ctx.sem, ctx.rend, ctx.seed),
+       { fresh: 1, stale: 4, never: 0, total: 5 }));
+  assert("senza seed, summarize conta come prima di #207",
+    eq(RS.summarize(streams, ctx.currentFps, ctx.lastRenderedFps, ctx.hasStem, ctx.sem, ctx.rend),
+       { fresh: 2, stale: 3, never: 0, total: 5 }));
+}
+
 /* Ogni motivo che `staleReason` puo' dire ha il suo testo — letto dal
  * sorgente, non trascritto qui.
  *
@@ -444,8 +598,8 @@ console.log("\n── ogni motivo ha il suo testo (letto dal sorgente) ──");
   assert("staleReason restituisce solo null o un motivo letterale",
     opaque.length === 0, opaque.join(", "));
   const reasons = [...new Set(returns.filter(r => /^"[^"]*"$/.test(r)).map(r => r.slice(1, -1)))];
-  assert("la raccolta vede almeno i tre assi di oggi",
-    ["yaml", "semantics", "renderer"].every(r => reasons.includes(r)),
+  assert("la raccolta vede almeno i quattro assi di oggi",
+    ["yaml", "semantics", "renderer", "seed"].every(r => reasons.includes(r)),
     JSON.stringify(reasons));
   const table = RS.STALE_TOOLTIP || {};
   const missing = reasons.filter(r => typeof table[r] !== "string" || !table[r]);
@@ -672,6 +826,55 @@ console.log("\n── la catena dal motore al pallino ──");
       `setRenderStatus a ${raise}, await a ${wait}: col timeout di 10 s di jget ` +
       `un click su Render non produce feedback per dieci secondi`);
   }
+  /* Il QUARTO asse (#207), e la catena che lo tiene acceso. Come per il
+   * backend, ogni anello saltato spegne l'asse in silenzio: il pallino torna
+   * verde dopo un cambio di seed, cioe' il difetto dell'issue. */
+  assert("app.jsx ricarica i seed registrati al cambio progetto",
+    /loadSeeds\([\s\S]{0,120}?setRenderedSeed/.test(appSrc),
+    "senza, l'asse vale solo per gli stem resi in questa sessione");
+  assert("...il lato vivo e' la chiave del seed del documento",
+    /current:\s*window\.PGEBackend\.seedKey\(data\.seed\)/.test(appSrc),
+    "il SeedControl cambia `data.seed`: e' quello che il pallino deve confrontare");
+  assert("...e la coppia arriva a ENTRAMBI i lettori",
+    /seed:\s*seedCtx\b/.test(appSrc) &&
+    /summarize\([\s\S]{0,240}?seedCtx\b/.test(appSrc),
+    "pallino e riepilogo devono contare lo stesso stem giallo");
+  /* Il seed del giro e' quello del documento che il tentativo ha MANDATO — dopo
+     una rilettura (#185) e' il documento riletto, non la `data` della closure —
+     quindi si fissa dentro `write`, accanto alle impronte, e lo leggono i due
+     consumatori: il corpo del POST (che finisce nel record persistito) e
+     l'handler degli `stream-done` (il record in memoria). */
+  assert("app.jsx fissa il seed per tentativo, dal documento mandato",
+    /seedOfThisRun = window\.PGEBackend\.seedKey\(doc\.seed\)/.test(appSrc) &&
+    /seed:\s*doc\.seed\b/.test(appSrc),
+    "il seed della closure, dopo una rilettura, e' quello del documento rifiutato");
+  assert("...e l'handler registra quel seed, non quello che si vede adesso",
+    /const seedK = seedOfThisRun;/.test(appSrc) &&
+    /setRenderedSeed\(m => \{[\s\S]{0,120}?seedK\b/.test(appSrc) &&
+    !/setRenderedSeed\([\s\S]{0,300}?data\.seed/.test(appSrc),
+    "un cambio di seed durante il render registrerebbe il seed nuovo su stem " +
+    "che il motore ha appena reso col vecchio");
+  /* La capacita' del motore si chiede UNA volta per render, prima di partire,
+     e arriva ai due lettori della regola: `run()` (via `seedInFingerprint`) e
+     l'handler (via `seedVouched`). Letta due volte, una rilettura a meta' giro
+     — un pull del motore — darebbe due risposte allo stesso giro. */
+  assert("app.jsx legge la capacita' del motore una volta, all'inizio del render",
+    /const axesOfThisRun = [^;]*fingerprintAxes\(\)/.test(appSrc) &&
+    /const seedInFingerprintOfThisRun = Array\.isArray\(axesOfThisRun\) && axesOfThisRun\.includes\("seed"\);/.test(appSrc) &&
+    (appSrc.match(/fingerprintAxes\(\)/g) || []).length === 1,
+    "una sola lettura, e il predicato sul nome dell'asse in un posto solo");
+  assert("...e la passa a run()",
+    /seedInFingerprint:\s*seedInFingerprintOfThisRun\b/.test(appSrc));
+  {
+    const body = appSrc.slice(appSrc.indexOf("async function runRender("));
+    const raise = body.indexOf("setRenderStatus({ running: true");
+    const axes = body.indexOf("fingerprintAxes()");
+    const attempt = body.indexOf("await FG.attempt(");
+    assert("...dopo aver alzato lo stato e prima del primo tentativo",
+      raise >= 0 && axes > raise && attempt > axes,
+      `stato a ${raise}, capacita' a ${axes}, tentativo a ${attempt}`);
+  }
+
   // `semCtx\b` e non `semCtx\)`: la coppia non e' piu' l'ultimo argomento da
   // quando accanto viaggia quella del backend (#151), e pinnare la POSIZIONE
   // invece della presenza rende rossa una firma che si allunga — cioe' fa

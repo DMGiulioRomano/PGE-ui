@@ -1,6 +1,7 @@
 /* =============================================================================
- * test-semantics-store.js — i due assi di provenienza di backend.js
- * (#133 la semantica del motore, #151 il backend che ha scritto lo stem).
+ * test-semantics-store.js — gli assi di provenienza di backend.js
+ * (#133 la semantica del motore, #151 il backend che ha scritto lo stem,
+ * #207 il seed con cui l'ha scritto).
  *
  * `render-status.js` decide il colore del pallino a partire da due numeri: la
  * `VARIATION_SEMANTICS_VERSION` del motore che il bridge ha davanti adesso, e
@@ -48,6 +49,8 @@ let SEM_VERSION = 3;     // cosa risponde GET /semantics-version
 let SEM_DOWN = false;    // ...o non risponde affatto
 let semFetches = 0;      // quante volte e' stato davvero interrogato
 let NDJSON = [];         // le righe che POST /render restituisce
+let AXES = undefined;    // cosa risponde GET /fingerprint-axes (`axes`)
+let AXES_DOWN = false;   // ...o non risponde affatto
 
 // Il body NDJSON come lo vede backend.js: `res.body.getReader()`, una riga per
 // chunk. Non e' una semplificazione — il parser accumula in un buffer e taglia
@@ -71,6 +74,10 @@ global.fetch = (url, init = {}) => {
     semFetches++;
     if (SEM_DOWN) return Promise.reject(new TypeError("Failed to fetch"));
     return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, version: SEM_VERSION }) });
+  }
+  if (u.endsWith("/fingerprint-axes")) {
+    if (AXES_DOWN) return Promise.reject(new TypeError("Failed to fetch"));
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, axes: AXES }) });
   }
   if (u.endsWith("/render")) {
     return Promise.resolve({ ok: true, body: ndjsonBody(NDJSON) });
@@ -102,6 +109,11 @@ function sem(basename) {
 
 function rend(basename) {
   try { return (JSON.parse(store["pge-local-renderer"] || "{}"))[basename] || null; }
+  catch { return null; }
+}
+
+function seeds(basename) {
+  try { return (JSON.parse(store["pge-local-seed"] || "{}"))[basename] || null; }
   catch { return null; }
 }
 
@@ -738,6 +750,256 @@ console.log("\n── una richiesta che non dichiara gli stream resta al comport
          !seen2.some(e => e.type === "stream-done") && !rend("proj"),
          JSON.stringify(seen2.filter(e => e.type === "stream-done")));
   assert("...ma l'indice sa del file", backend2.render.ownsStem("proj", "a") === true);
+}
+
+/* ===========================================================================
+ * 5. Il quarto record: il seed con cui lo stem e' stato reso (#207).
+ *
+ * Mappa parallela alle altre tre, per la ragione del backend: qualcosa da cui
+ * lo stem dipende e che il testo dello STREAM non dice — il seed e' di testa,
+ * l'impronta e' per stream. Qui si verifica da dove arriva il valore e quando
+ * si scrive; `test-render-status.js` verifica cosa ne fa il pallino.
+ *
+ * C'e' una regola che gli altri record non hanno, ed e' il motivo per cui
+ * questa sezione e' piu' lunga della loro: uno `stream-done` con `cached: true`
+ * dice qualcosa sul seed dello stem SOLO se il fingerprint del motore il seed
+ * lo vede (PythonGranularEngine#297). Su un motore che non lo vede, dopo un
+ * cambio di seed il motore risponde `clean` su stem che sono la realizzazione
+ * del seed di prima: scrivere il record li' sarebbe il pallino verde che
+ * l'issue esiste per spegnere.
+ * ========================================================================= */
+console.log("\n── la chiave del seed: una regola, come il nome del backend ──");
+{
+  const key = window.PGEBackend.seedKey;
+  assert("PGEBackend.seedKey esiste", typeof key === "function", `typeof = ${typeof key}`);
+  if (typeof key === "function") {
+    assert("nessun seed → null", key(undefined) === null && key(null) === null);
+    // La derivazione degli RNG scrive il seed in una stringa
+    // (`f"{seed}:{stream_id}:..."`): 1441 e "1441" sono lo stesso seed per il
+    // motore, e lo sono per la sua cache dalla #297. Lo stesso qui, o passare
+    // da un seed scritto a mano nel Raw a quello del SeedControl accenderebbe
+    // il giallo su stem identici.
+    assert("1441 e \"1441\" sono lo stesso seed", key(1441) === "1441" && key("1441") === "1441");
+    assert("0 e' un seed, non un'assenza", key(0) === "0");
+    assert("i negativi pure", key(-3) === "-3");
+    assert("la stringa vuota e' un seed dichiarato (il motore la mette nel payload)",
+           key("") === "");
+    assert("\"1441.0\" (scritto fra virgolette) non e' 1441, come per il motore",
+           key("1441.0") !== key(1441));
+    assert("una forma qualunque ha una chiave stabile",
+           key({ a: 1 }) === key({ a: 1 }) && typeof key({ a: 1 }) === "string");
+
+    /* La divergenza dichiarata: per il motore `1441` e `1441.0` sono due seed
+       (la derivazione scrive `f"{seed}"`), qui una chiave sola — in JS sono lo
+       stesso Number. Regge perche' il motore non vede mai `1441.0` da un render
+       dell'editor: `/render` scrive su disco il documento serializzato, e il
+       serializzatore scrive `1441`. Il seed che la chiave descrive e' quello
+       che il motore legge. Se un giorno il serializzatore conservasse la
+       grafia del float, questa riga parla. */
+    const doc = window.PGEYaml.parse("seed: 1441.0\nstreams: []\n");
+    const seedLines = window.PGEYaml.serialize(doc).split("\n").filter(l => /^seed:/.test(l));
+    assert("`seed: 1441.0` esce dal serializzatore come `seed: 1441`",
+           JSON.stringify(seedLines) === JSON.stringify(["seed: 1441"]) && key(doc.seed) === key(1441),
+           JSON.stringify(seedLines));
+  }
+}
+
+console.log("\n── un render registra il seed dello stem ──");
+{
+  store = {};
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      seed: 1441, streams: [{ id: "stream1" }] },
+    () => {});
+  assert("pge-local-seed porta la chiave del seed dello stem",
+         JSON.stringify(seeds("proj")) === JSON.stringify({ stream1: "1441" }),
+         `pge-local-seed = ${store["pge-local-seed"]}`);
+  const loaded = await backend.render.loadSeeds("proj");
+  assert("loadSeeds lo rilegge",
+         JSON.stringify(loaded) === JSON.stringify({ stream1: "1441" }),
+         `loadSeeds = ${JSON.stringify(loaded)}`);
+  assert("e gli altri record sono al loro posto, separati",
+         (rend("proj") || {}).stream1 === "numpy" && (sem("proj") || {}).stream1 === 3,
+         `renderer ${store["pge-local-renderer"]} · sem ${store["pge-local-sem"]}`);
+}
+
+console.log("\n── su un motore che il seed lo vede, anche un `cached: true` lo registra ──");
+{
+  // Il percorso su cui poggia "il giallo si spegne al primo giro, anche a
+  // vuoto": con il seed nel fingerprint del motore, `clean` vuol dire che lo
+  // stem e' la realizzazione del seed di adesso.
+  store = { "pge-local-seed": JSON.stringify({ proj: { stream1: "7" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: true },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+      seed: 1441, seedInFingerprint: true, streams: [{ id: "stream1" }] },
+    () => {});
+  assert("il record passa al seed di adesso",
+         (seeds("proj") || {}).stream1 === "1441", JSON.stringify(seeds("proj")));
+}
+
+console.log("\n── su un motore che non lo vede, un `cached: true` non dice niente del seed ──");
+{
+  // Il caso di mare-nostrum#8 sul motore di oggi: il seed e' cambiato, il
+  // motore non lo vede e risponde `clean`, lo stem su disco e' quello del seed
+  // di prima. Il record resta quello che era — qui "7", e in fondo l'assenza —
+  // e il pallino resta giallo finche' un render lo rifa' davvero.
+  for (const seesSeed of [false, undefined, "yes", 1]) {
+    store = { "pge-local-seed": JSON.stringify({ proj: { stream1: "7" } }) };
+    const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+    NDJSON = [
+      { type: "stream-done", streamId: "stream1", cached: true },
+      { type: "stream-done", streamId: "stream2", cached: true },
+      { type: "done", ok: true, generated: [] },
+    ];
+    await backend.render.run(
+      { yamlBasename: "proj", outputFormat: "wav", renderer: "numpy", semanticsVersion: 3,
+        seed: 1441, seedInFingerprint: seesSeed,
+        streams: [{ id: "stream1" }, { id: "stream2" }] },
+      () => {});
+    const now = seeds("proj") || {};
+    assert(`seedInFingerprint=${JSON.stringify(seesSeed)}: il record di prima resta`,
+           now.stream1 === "7", JSON.stringify(now));
+    assert(`seedInFingerprint=${JSON.stringify(seesSeed)}: e quello assente resta assente`,
+           !("stream2" in now), JSON.stringify(now));
+  }
+  // ...e gli altri tre record non c'entrano: la semantica e il backend stanno
+  // gia' nel fingerprint di quel motore, e un `clean` li conferma.
+  const fps = await window.PGEBackend.create({ baseUrl: "http://x" }).render.loadCache("proj");
+  assert("l'impronta di uno stem `cached` si scrive comunque",
+         "stream1" in fps && "stream2" in fps, JSON.stringify(fps));
+  assert("...e il backend pure",
+         (rend("proj") || {}).stream1 === "numpy" && (rend("proj") || {}).stream2 === "numpy",
+         JSON.stringify(rend("proj")));
+}
+
+console.log("\n── uno stem rifatto davvero prende il seed, su qualunque motore ──");
+{
+  // `cached: false` e' un render vero col seed di adesso: la capacita' del
+  // motore non c'entra. E' la strada per cui un render senza cache spegne il
+  // giallo anche sul motore che il seed non lo vede.
+  store = { "pge-local-seed": JSON.stringify({ proj: { stream1: "7", stream2: "7" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "stream-done", streamId: "stream2", cached: true },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", seed: 1441, seedInFingerprint: false,
+      streams: [{ id: "stream1" }, { id: "stream2" }] },
+    () => {});
+  const now = seeds("proj") || {};
+  assert("lo stem rifatto prende il seed di adesso", now.stream1 === "1441", JSON.stringify(now));
+  assert("quello saltato tiene il suo", now.stream2 === "7", JSON.stringify(now));
+
+  // Senza --cache non ci sono righe [CACHE]: ogni `stream-done` viene dal
+  // fallback di `done`, ed e' sempre `cached: false` — e lo e' davvero, il
+  // motore senza cache rende tutto.
+  store = { "pge-local-seed": JSON.stringify({ proj: { a: "7" } }) };
+  const backend2 = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [{ type: "done", ok: true, generated: ["output/proj__a.wav"] }];
+  await backend2.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", seed: 1441, seedInFingerprint: false,
+      streams: [{ id: "a" }] },
+    () => {});
+  assert("il fallback di `done` registra il seed", (seeds("proj") || {}).a === "1441",
+         JSON.stringify(seeds("proj")));
+}
+
+console.log("\n── un render senza seed cancella la voce ──");
+{
+  // "Nessun seed dichiarato" non si registra: e' l'assenza, ed e' cio' che
+  // `staleReason` confronta con un progetto senza seed. Una voce vecchia
+  // lasciata li' direbbe che lo stem e' la realizzazione di un seed che il
+  // render non aveva.
+  store = { "pge-local-seed": JSON.stringify({ proj: { stream1: "1441", stream2: "1441" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [
+    { type: "stream-done", streamId: "stream1", cached: false },
+    { type: "done", ok: true, generated: [] },
+  ];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", seedInFingerprint: true,
+      streams: [{ id: "stream1" }, { id: "stream2" }] },
+    () => {});
+  const now = seeds("proj") || {};
+  assert("lo stem reso senza seed perde la voce", !("stream1" in now), JSON.stringify(now));
+  assert("quello non toccato tiene la sua", now.stream2 === "1441", JSON.stringify(now));
+}
+
+console.log("\n── un giro fallito non scrive il seed ──");
+{
+  store = { "pge-local-seed": JSON.stringify({ proj: { a: "7" } }) };
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  NDJSON = [{ type: "done", ok: false, returncode: 1, generated: ["output/proj__a.wav"] }];
+  await backend.render.run(
+    { yamlBasename: "proj", outputFormat: "wav", seed: 1441, seedInFingerprint: true,
+      streams: [{ id: "a" }] },
+    () => {});
+  assert("il seed registrato resta quello che ha scritto il file",
+         (seeds("proj") || {}).a === "7", JSON.stringify(seeds("proj")));
+}
+
+console.log("\n── la capacita' del motore la legge il bridge ──");
+{
+  const backend = window.PGEBackend.create({ baseUrl: "http://x" });
+  AXES_DOWN = false;
+  AXES = ["semantics", "stream", "renderer", "sample_dur_sec", "seed"];
+  assert("l'elenco del motore arriva com'e'",
+         JSON.stringify(await backend.fingerprintAxes()) === JSON.stringify(AXES));
+  AXES = null;
+  assert("un motore senza la costante → null", await backend.fingerprintAxes() === null);
+  // Una forma che non e' un elenco di nomi non si interpreta: `"seed"` nudo
+  // risponderebbe si' a `.includes("seed")`, cioe' accenderebbe la capacita'.
+  for (const bad of ["seed", ["seed", 3], {}, 7]) {
+    AXES = bad;
+    assert(`axes=${JSON.stringify(bad)} → null`, await backend.fingerprintAxes() === null);
+  }
+  AXES_DOWN = true;
+  assert("bridge giu' → null", await backend.fingerprintAxes() === null);
+  AXES_DOWN = false; AXES = undefined;
+}
+
+console.log("\n── seedVouched: una regola, due lettori ──");
+{
+  /* Chi scrive il record del seed sono due: `run()` qui (il localStorage) e
+     l'handler degli `stream-done` in app.jsx (lo stato in memoria). Se la
+     regola sui `cached` stesse scritta due volte, il giorno che una copia
+     cambia i due record dicono due colori diversi — uno fino al reload, l'altro
+     dopo. Quindi una funzione sola, e i due lettori la chiamano. */
+  const v = window.PGEBackend.seedVouched;
+  assert("PGEBackend.seedVouched esiste", typeof v === "function", `typeof = ${typeof v}`);
+  if (typeof v === "function") {
+    assert("uno stem rifatto parla del seed, su qualunque motore",
+           v(false, false) === true && v(undefined, false) === true && v(false, true) === true);
+    assert("uno stem `cached` parla del seed solo se il motore lo vede",
+           v(true, true) === true && v(true, false) === false);
+    assert("...e il dubbio vale come no (un render di troppo, mai uno di meno)",
+           v(true, undefined) === false && v(true, "yes") === false && v(true, 1) === false);
+  }
+  assert("run() chiama la regola",
+         /seedVouched\(/.test(BACKEND_SRC.slice(BACKEND_SRC.indexOf("async run(opts, onEvent)"))),
+         "una copia della regola dentro run() e' il modo in cui i due record divergono");
+  assert("...e prende il seed dalla stessa chiave",
+         /seedKey\(opts\.seed\)/.test(BACKEND_SRC));
+  assert("l'handler in memoria chiama la stessa regola",
+         /seedVouched\(e\.cached,\s*seedInFingerprintOfThisRun\)/.test(APP_SRC),
+         "col test di verita' fatto a mano qui e la regola la', un `cached` " +
+         "resterebbe verde in memoria e giallo al reload");
+  assert("e i due lati del confronto passano dalla stessa chiave",
+         /seedKey\(data\.seed\)/.test(APP_SRC) && /seedKey\(doc\.seed\)/.test(APP_SRC),
+         "il lato vivo e il seed del giro devono essere chiavi della stessa regola, " +
+         "o 1441 e \"1441\" diventano due seed");
 }
 
   bodyDone = true;
