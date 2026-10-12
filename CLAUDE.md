@@ -2314,8 +2314,8 @@ two hashes answer different questions ("did the user edit this" vs "must the
 engine redo this stem") — but the *dot* answers the engine's, and at the 2→3 bump
 (PGE #222) it showed 🟢 on stems the engine was about to rewrite. So the version
 is a second axis beside the hash, never a field inside it: `staleReason` in
-`render-status.js` returns `"yaml"`, `"semantics"` or `"renderer"` (the third
-axis, below), the version is recorded
+`render-status.js` returns `"yaml"`, `"semantics"`, `"renderer"` or `"seed"`
+(the third and fourth axes, below), the version is recorded
 per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
@@ -2504,9 +2504,11 @@ without incremental cache redoes it — so at the end of an incremental render
 that held some back, `runRender` counts those whose record isn't the current
 seed and says so: a `[SEED]` line in the log and a "Seed not confirmed" toast
 naming the remedy. A real render (`cached: false`, including every synthetic
-`stream-done` of the `done` fallback, which only fires without `--cache`)
-vouches on any engine. The seed of the run is fixed **per attempt** from the
-document that attempt sent (`seedOfThisRun = seedKey(doc.seed)`, beside
+`stream-done` of the `done` fallback, which claims only the stems no
+`stream-done` closed — all of them without `--cache`, and with it a DIRTY one
+whose summary line was missed: rewritten either way) vouches on any engine.
+The seed of the run is fixed **per attempt** from the document that attempt
+sent (`seedOfThisRun = seedKey(doc.seed)`, beside
 `fpsOfThisRun`): after a #185 reread it is the reread document's.
 `test-fingerprint-parity.js` pins the pact against the engine: the AST read
 equals the imported tuple (or both `null`), and where `seed` is declared the
