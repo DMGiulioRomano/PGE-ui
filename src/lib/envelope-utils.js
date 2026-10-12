@@ -144,13 +144,30 @@
   // del dict, quello del gruppo per i suoi punti interni, lo step imposto a
   // read_direction. Assente, e' lineare.
   function truncateEnvArray(arr, snap, inherited) {
-    // object-form {type, points}: clip points beyond x=1.0, add closing BP
+    // object-form {type, points}: clip points beyond x=1.0, add closing BP.
+    // Senza `type` il dict e' lineare, anche con un blocco che dichiara un
+    // interp: nel dict il motore lo ignora (#191) — e la lista dei suoi points
+    // non deve andarlo a cercare li'.
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
       return { ...arr, points: truncateEnvArray(arr.points, snap,
-        typeof arr.type === "string" ? arr.type : inherited) };
+        typeof arr.type === "string" ? arr.type : (inherited || "linear")) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap, inherited));
+    /* Il tipo globale di una LISTA e' lo slot 3 del primo blocco che ne
+       dichiara uno (#191, PGEEnv.listInterp): e' l'ereditato dei suoi punti
+       nudi, e il bordo si chiude con quello — su uno step tiene il valore. E
+       il taglio puo' togliere proprio quel blocco, se comincia oltre il bordo:
+       la lista che resta direbbe `linear`, e la testa che il taglio esiste per
+       conservare suonerebbe diversa. Li' il tipo passa nel `type` di un dict.
+       Su read_direction l'ereditato arriva dal chiamante (lo step imposto). */
+    if (inherited == null) {
+      const g = PGEEnv.listInterp(arr);
+      if (g) {
+        const out = truncateEnvArray(arr, snap, g);
+        return (PGEEnv.listInterp(out) || "linear") === g ? out : { type: g, points: out };
+      }
+    }
     const result = [];
     let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
