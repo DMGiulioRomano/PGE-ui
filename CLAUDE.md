@@ -2824,6 +2824,24 @@ Five rules now:
   per reason (`keptNotedRef`), and a bridge older than #208 — which ignores the
   field — is logged once too: `deleted: null` from `fs.save`.
 
+**What #185's guard does not follow: a file that moves or disappears.** The
+guard watches the files the document holds, and a rename takes the old file
+out of the document: the new one is created from this editor's state, and the
+old one is only an orphan carrying the signature it was read with. So if the
+lab saved the stream after this editor read it, the rename writes *this
+editor's* version under the new name and the old file stays with the lab's
+work (`kept`, `changed`, logged): nothing is lost, but the piece now plays the
+new file. And a lab holding the old file open writes it back at its next save
+— for its guard a file that is no longer there is not a changed one
+(DMGiulioRomano/mare-nostrum#6) — and the orphan returns, which
+mare-nostrum's `tests/test_brano.py` flags. The order that avoids both is the
+one mare-nostrum's CLAUDE.md states (DMGiulioRomano/mare-nostrum#19): save
+here first, so the guard rereads what the lab changed, then rename or delete,
+and open the new name in the lab. Following the move would take a reread that
+knows the stream came from the old file; declared rather than built, since
+the two gestures on a stream the lab is working on are rare and nothing is
+lost.
+
 One consequence reaches back into #184: a file still carrying the dead
 `dephase` spelling used to be left *out* of `importDiskRef` so that the first
 save rewrote it. Left out, it was also "not on disk", and an imported stream
