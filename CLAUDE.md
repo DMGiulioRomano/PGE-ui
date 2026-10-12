@@ -213,7 +213,8 @@ exists, the fourth only when a browser is installed):
   the backend over a fake bridge — `deleteImports` carrying the signatures
   read, a deleted or absent file's signature forgotten, `deleted: null` from a
   bridge older than #208 — plus source guards on the async rename listing the
-  folder before it writes the state, on the save sending the orphans and only
+  folder before it writes the state and re-reading the state of now after the
+  listing, on the save sending the orphans and only
   the save, on the remembered disk forgetting only after a save that went
   through, on the `dephase` file kept in that disk, and on the Inspector
   awaiting the rename).
@@ -2777,7 +2778,13 @@ Five rules now:
   error must keep showing) minus `stream_id`, which is the default. Its name
   is chosen against the paste's oracle — the bridge's listing of the folder,
   `importDiskRef`, `importFilesOf` — so `renameStream` asks the folder first
-  and is **async**, and the Inspector awaits its answer. It doesn't move in
+  and is **async**, and the Inspector awaits its answer. Across that await the
+  state can move (the stream deleted or undone, the name taken by a paste or a
+  second rename), so after it the rename asks the state of *now* — the stream
+  still there, the name still free — and answers with a message otherwise, the
+  split's rule: the updater alone would write nothing, while the log of a move,
+  the dirty flag, the clip's dropped drawings and a `null` to the Inspector
+  described a rename that never happened. It doesn't move in
   three cases: a stream written in the master; a new name that already *is*
   the file's (`stream_id: alto` renamed `risacca` over `risacca.yml`: the
   entry just loses its key); and a file two entries import, which is one

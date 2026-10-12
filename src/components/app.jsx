@@ -1686,6 +1686,16 @@ function App() {
       // last word anyway (#186).
       const dir = PY.importDirOf(moving);
       const listed = await listImportNames([dir], "del file rinominato");
+      // Across the await the state can have moved: the stream deleted or
+      // undone, the name taken by a paste or by a second rename. The updater
+      // below would then write nothing, and everything after it — the log of
+      // a move, the dirty flag, the clip's drawings dropped, `null` to the
+      // Inspector — would describe a rename that never happened. Asked of the
+      // state of NOW, the split's rule (#187).
+      if (!dataRef.current.streams.some(s => s.id === oldId))
+        return `"${oldId}" changed while the folder was being read — try again`;
+      if (dataRef.current.streams.some(s => s.id === newId))
+        return `"${newId}" is already a stream`;
       const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(dataRef.current)];
       if (PY.importIdTaken(newId, [dir], knownFiles))
         return `${moving}: a file by that name is already there (case aside)`;

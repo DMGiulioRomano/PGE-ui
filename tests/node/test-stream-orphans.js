@@ -382,6 +382,20 @@ console.log("\n── app.jsx: la rinomina sposta il file, il salvataggio cancel
     /setData\(d => \{[\s\S]*?renameImport\(s, newId, d\.streams\)/.test(rn));
   assert("...l'elenco solo quando il file si sposta (uno stream nel master non fa giri di rete)",
     /importRenameFile\(/.test(rn) && rn.indexOf("importRenameFile(") < list);
+  // Dopo l'await lo stato puo' essere un altro (lo stream cancellato, un undo,
+  // il nome preso da un incolla o da un'altra rinomina): l'updater qui sotto
+  // non scriverebbe niente, ma la funzione andava avanti lo stesso — il log di
+  // uno spostamento mai avvenuto, il progetto sporco, i disegni della clip
+  // buttati, e null all'Inspector, che lasciava nel campo un nome che lo
+  // stream non ha. La regola dello split (#187): dopo l'await si rilegge lo
+  // stato di ADESSO (`dataRef.current`), e se non regge si rinuncia con un
+  // messaggio, prima di setData.
+  const after = rn.slice(list, upd);
+  assert("...e dopo l'elenco rilegge lo stato di ADESSO: lo stream c'e' ancora, il nome e' ancora libero",
+    /dataRef\.current\.streams\.some\(s => s\.id === oldId\)/.test(after)
+      && /dataRef\.current\.streams\.some\(s => s\.id === newId\)/.test(after), after.slice(0, 400));
+  assert("...e se non regge risponde un messaggio all'Inspector, prima di scrivere lo stato",
+    /return\s*`/.test(after.slice(after.indexOf("dataRef.current.streams.some(s => s.id === oldId)"))));
 
   const save = fnBody("async function saveProject(");
   assert("il salvataggio manda al bridge i file orfani (importOrphans contro il disco ricordato)",
