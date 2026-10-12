@@ -984,11 +984,18 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
                          defaultValue={stream.id}
                          onFocus={() => setIdError(null)}
                          onBlur={e => {
-                           const err = onRename(e.target.value);
-                           setIdError(err);
-                           // Rejected: put the old id back rather than leaving a
-                           // value in the box that is not the stream's name.
-                           if (err) e.target.value = stream.id;
+                           const input = e.target;
+                           // The answer may come later: renaming an imported
+                           // stream moves its file, and the new name is free
+                           // only once the bridge has listed the folder (#208).
+                           Promise.resolve(onRename(input.value))
+                             .catch(e => String((e && e.message) || e))
+                             .then(err => {
+                               setIdError(err || null);
+                               // Rejected: put the old id back rather than leaving a
+                               // value in the box that is not the stream's name.
+                               if (err) input.value = stream.id;
+                             });
                          }}
                          onKeyDown={e => {
                            e.stopPropagation();

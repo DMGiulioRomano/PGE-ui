@@ -758,8 +758,9 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         entries7.length === 3 && entries7.some(e => e.file === copyFile && !("stream_id" in e))
           && JSON.stringify(entries7[0]) === JSON.stringify(entries4[0]), JSON.stringify(entries7));
 
-      // Undo della modifica e dell'incolla: la voce sparisce dal master. Il
-      // file, scritto, resta — ed e' un nome che la copia dopo non prende.
+      // Undo della modifica e dell'incolla: la voce sparisce dal master, e il
+      // file scritto — che il master non nomina piu' — si cancella al
+      // salvataggio (#208).
       await page.keyboard.press("Control+z");
       await wait(300);
       await page.keyboard.press("Control+z");
@@ -767,6 +768,15 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       await save();
       assert("annullato l'incolla, la voce sparisce dal master",
         JSON.stringify(await entriesOf()) === JSON.stringify(entries4), JSON.stringify(await entriesOf()));
+      assert("...e il file della copia, che nessuno importa piu', si cancella (#208)",
+        !(await streamsDir()).includes(copyFile), JSON.stringify(await streamsDir()));
+      // Un file con quel nome lo scrive il laboratorio: l'editor non l'ha mai
+      // letto, non lo cancella, e la copia dopo non ne prende il nome.
+      const labCopy = path.join(session.paths.workspace, "configs", copyFile);
+      fs.writeFileSync(labCopy, "# dal laboratorio\nstreams:\n- stream_id: " +
+        copyFile.replace(/^streams\//, "").replace(/\.yml$/, "") + "\n");
+      await save();
+      assert("un file che l'editor non ha mai letto non si cancella", fs.existsSync(labCopy));
       await page.keyboard.press("Control+v");
       await wait(600);
       const copyFile2 = (await fileLabels()).find(t => t !== FILE);
@@ -780,6 +790,161 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       assert("undo del duplica prima del salvataggio: niente nel master, niente su disco",
         JSON.stringify(await entriesOf()) === JSON.stringify(entries4)
           && !(await streamsDir()).includes(copyFile2), JSON.stringify(await streamsDir()));
+
+      // 4c — due editor, un file, sul file IMPORTATO (#185 sui file di #184).
+      // Il laboratorio scrive i file degli stream, non il master: e' il caso
+      // comune. Un file importato cambiato su disco si rilegge da solo — gli
+      // stream di quel file e basta, senza riaprire il progetto — e il lavoro
+      // non salvato altrove, master compreso, resta e si salva. Con modifiche
+      // proprie in quel file si chiede, di quel file solo.
+      {
+        const lab = require("js-yaml");
+        const importPath = path.join(session.paths.workspace, "configs", FILE);
+        const masterPath4 = path.join(session.paths.workspace, "configs", MASTER);
+        const labWritesFile = (p, mutate) => {
+          const doc = lab.load(fs.readFileSync(p, "utf8"));
+          mutate(doc);
+          fs.writeFileSync(p, "# scritto dal laboratorio\n" + lab.dump(doc, { flowLevel: 3 }));
+          return fs.readFileSync(p, "utf8");
+        };
+        const questions = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+            title: (t.querySelector(".tt-title") || {}).textContent || "",
+            acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+          })));
+        const toastTitles = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+        const canUndo = () => page.evaluate(() => window.PGEHistory && window.PGEHistory.canUndo);
+        const rivaClip = async () => { await page.click(".lane .clip:not(:has(.clip-file))"); await wait(200); };
+        const ondaWidth = () => page.evaluate(() => {
+          const c = document.querySelector(".lane .clip:has(.clip-file)");
+          return c ? c.getBoundingClientRect().width : null;
+        });
+        // Il volume dello stream importato, come lo mostra l'Inspector: e' cio'
+        // che il laboratorio cambia, e cio' che dice se la rilettura e' arrivata.
+        const ondaVolume = async () => {
+          await importedClip();
+          return page.evaluate(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "volume");
+            const v = r && r.querySelector(".val");
+            return v ? v.textContent : null;
+          });
+        };
+        const rivaOnsetOnDisk = () => lab.load(fs.readFileSync(masterPath4, "utf8")).streams[1].onset;
+        const reread = async () => { await save(); await wait(500); };
+
+        // (a) niente di proprio nel file, un lavoro non salvato nel master
+        // (l'onset di riva), e il laboratorio riscrive il file.
+        const riva0 = rivaOnsetOnDisk();
+        await rivaClip();
+        await page.keyboard.press("Shift+ArrowRight");
+        await wait(300);
+        const labA = labWritesFile(importPath, d => { d.streams[0].volume = -3; });
+        await reread();
+        assert("file importato cambiato, senza modifiche proprie in lui: non si chiede niente",
+          (await questions()).length === 0, JSON.stringify(await questions()));
+        assert("...si rilegge quel file, e lo dice", (await toastTitles()).includes(`${FILE} riletto`),
+          JSON.stringify(await toastTitles()));
+        assert("...gli stream di quel file sono la versione del laboratorio", (await ondaVolume()) === "-3",
+          String(await ondaVolume()));
+        assert("...il file resta del laboratorio, byte per byte", fs.readFileSync(importPath, "utf8") === labA);
+        assert("...e il lavoro nel master non si perde: si salva", rivaOnsetOnDisk() === riva0 + 1,
+          `${riva0} → ${rivaOnsetOnDisk()}`);
+        assert("...la rilettura azzera la storia", (await canUndo()) === false);
+
+        // (b) modifiche proprie nel file (la durata) e nel master (riva), e il
+        // laboratorio riscrive il file: si chiede di quel file, e basta.
+        const w0 = await ondaWidth();
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        await rivaClip();
+        await page.keyboard.press("Shift+ArrowRight");
+        await wait(300);
+        const labB = labWritesFile(importPath, d => { d.streams[0].volume = -9; });
+        await reread();
+        const qb = await questions();
+        assert("modifiche proprie nel file importato: si chiede, di quel file",
+          qb.length === 1 && qb[0].title === `${FILE} e' cambiato su disco`
+            && qb[0].acts.join(",") === "ricarica,sovrascrivi", JSON.stringify(qb));
+        assert("...e intanto non si scrive niente", fs.readFileSync(importPath, "utf8") === labB
+          && rivaOnsetOnDisk() === riva0 + 1);
+        await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+        await wait(1200);
+        assert("ricarica: la domanda si chiude", (await questions()).length === 0);
+        assert("...il file si rilegge: la versione del laboratorio", (await ondaVolume()) === "-9"
+          && Math.abs((await ondaWidth()) - w0) < 2, `${await ondaVolume()} · ${w0} → ${await ondaWidth()}`);
+        assert("...il salvataggio riprende: il lavoro nel master si salva", rivaOnsetOnDisk() === riva0 + 2,
+          `${riva0} → ${rivaOnsetOnDisk()}`);
+        assert("...e il file resta del laboratorio, byte per byte", fs.readFileSync(importPath, "utf8") === labB);
+
+        // (c) «sovrascrivi»: il file prende la versione dell'editor.
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        labWritesFile(importPath, d => { d.streams[0].volume = -12; });
+        await reread();
+        assert("ancora modifiche proprie nel file: si chiede", (await questions()).length === 1);
+        await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+        await wait(1200);
+        const docC = lab.load(fs.readFileSync(importPath, "utf8"));
+        assert("sovrascrivi: su disco c'e' la versione dell'editor, con la sua durata",
+          docC.streams[0].volume === -9 && docC.streams[0].duration === 4
+            && !fs.readFileSync(importPath, "utf8").startsWith("# scritto dal laboratorio"),
+          JSON.stringify([docC.streams[0].volume, docC.streams[0].duration]));
+        // La durata torna 3: lo split del passo 6 taglia a meta' uno stream di 3 s.
+        await page.keyboard.press("Control+z");
+        await wait(300);
+        await save();
+        assert("...e un undo salvato la riporta", lab.load(fs.readFileSync(importPath, "utf8")).streams[0].duration === 3);
+
+        // (d) il render, senza modifiche proprie: il motore rilegge gli import
+        // dal disco, e partito su un file riscritto dal laboratorio suonerebbe
+        // una versione che l'editor non mostra. Il bridge rifiuta anche se il
+        // render quel file non lo scrive; si rilegge e si rende.
+        const renders4 = [];
+        const onResponse = (r) => { if (new URL(r.url()).pathname === "/render") renders4.push(r.status()); };
+        page.on("response", onResponse);
+        const labD = labWritesFile(importPath, d => { d.streams[0].volume = -6; });
+        await importedClip();
+        await page.keyboard.press("r");
+        await wait(1800);
+        page.off("response", onResponse);
+        assert("render su un file importato riscritto: nessuna domanda", (await questions()).length === 0,
+          JSON.stringify(await questions()));
+        assert("...un rifiuto, la rilettura, una riprova accettata", renders4.join(",") === "409,200",
+          `risposte di /render: ${renders4.join(",")}`);
+        assert("...sulla versione del laboratorio, che resta sua byte per byte",
+          (await ondaVolume()) === "-6" && fs.readFileSync(importPath, "utf8") === labD, String(await ondaVolume()));
+
+        // (e) master e file cambiati insieme, con modifiche proprie nel file:
+        // una domanda sola. La rilettura del master riapre il brano intero,
+        // file importati compresi, quindi la sua risposta vale per tutti e due.
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        const labEm = labWritesFile(masterPath4, d => { d.title = "dal laboratorio, 4c"; });
+        const labEf = labWritesFile(importPath, d => { d.streams[0].volume = -15; });
+        await reread();
+        const qe = await questions();
+        assert("master e file importato cambiati, con modifiche proprie: una domanda sola, per tutti e due",
+          qe.length === 1 && qe[0].title === `${MASTER}, ${FILE} sono cambiati su disco`, JSON.stringify(qe));
+        await page.click(".pge-toast.ask .tt-act:text-is('ricarica')");
+        await wait(1500);
+        assert("ricarica: il brano si riapre dal disco, file importato compreso",
+          (await questions()).length === 0 && (await ondaVolume()) === "-15"
+            && Math.abs((await ondaWidth()) - w0) < 2, `${await ondaVolume()} · ${await ondaWidth()}`);
+        assert("...e il salvataggio che riprende non riscrive niente: i due file restano del laboratorio",
+          fs.readFileSync(masterPath4, "utf8") === labEm && fs.readFileSync(importPath, "utf8") === labEf);
+
+        // I 409 di POST /save e /render sono provocati da questo passo: si
+        // contano, uno per rifiuto, e si tolgono dagli errori in console.
+        const refused4 = seen.errors.filter(e => / 409 /.test(e) && /\/(save|render)\b/.test(e));
+        assert("i rifiuti in console sono quelli provocati dal laboratorio (5)", refused4.length === 5,
+          refused4.join("\n      "));
+        seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused4.includes(e)));
+      }
 
       // 5 — due editor, un file (#185) su un brano con import. Una modifica
       // dentro lo stream importato non muove il master, che ne tiene solo il
@@ -909,7 +1074,12 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
           && JSON.stringify(await yamlOf(await importText())) === JSON.stringify(await yamlOf(head8)),
         JSON.stringify(await entriesOf()));
-      // Di nuovo: onda-2.yml c'e' su disco, onda-3 ha uno stem. Si passa a -4.
+      assert("...e il file della coda, che nessuno importa piu', si cancella (#208)",
+        !(await streamsDir()).includes("streams/onda-2.yml"), JSON.stringify(await streamsDir()));
+      // Di nuovo, con un onda-2.yml scritto dal laboratorio (che l'editor non
+      // ha mai letto, e non tocca) e onda-3 che ha uno stem. Si passa a -4.
+      fs.writeFileSync(path.join(session.paths.workspace, "configs", "streams", "onda-2.yml"),
+        "# dal laboratorio\nstreams:\n- stream_id: onda-2\n");
       await splitHere();
       const labels10 = await fileLabels();
       assert("tagliato di nuovo: onda-2.yml esiste, onda-3 ha uno stem — la coda e' onda-4",
@@ -922,6 +1092,184 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
       assert("undo dello split prima del salvataggio: niente nel master, niente su disco",
         JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
           && !(await streamsDir()).includes("streams/onda-4.yml"), JSON.stringify(await streamsDir()));
+
+      // 7 — rinominare e cancellare lo stream importato (#208). Il nome del
+      // file e' l'id: rinominato, lo stream cambia file (`streams/marea.yml`,
+      // creato al salvataggio come la copia) e il file vecchio, che il master
+      // non nomina piu', si cancella; cancellato, il suo file si cancella al
+      // salvataggio. Un undo riporta lo stream, e il salvataggio dopo il file.
+      const dir11 = await streamsDir();
+      const entry8 = entries8.find(e => e.file === FILE);
+      await importedClip();
+      if (!(await page.$(".pge-inspector"))) { await page.keyboard.press("i"); await wait(400); }
+      const idInput = await page.evaluateHandle(() => {
+        const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+          .find(p => (p.querySelector(".k") || {}).textContent === "stream_id");
+        return r ? r.querySelector("input") : null;
+      });
+      assert("l'Inspector ha il campo stream_id", !!idInput.asElement());
+      await idInput.asElement().fill("marea");
+      await page.keyboard.press("Enter");
+      await wait(600);                            // la rinomina aspetta GET /import-dir
+      const labels11 = await fileLabels();
+      assert("rinominato, lo stream importato cambia file: streams/marea.yml",
+        labels11.includes("streams/marea.yml") && !labels11.includes(FILE), JSON.stringify(labels11));
+      assert("...che alla rinomina non si scrive", JSON.stringify(await streamsDir()) === JSON.stringify(dir11),
+        JSON.stringify(await streamsDir()));
+      await save();
+      const dir12 = await streamsDir();
+      assert("salvato: il file nuovo c'e', il vecchio no",
+        dir12.includes("streams/marea.yml") && !dir12.includes(FILE), JSON.stringify(dir12));
+      const mareaDoc = await yamlOf(await importOf("streams/marea.yml"));
+      const ondaDoc = await yamlOf(head8);
+      const sansId = (d) => ({ ...d, streams: d.streams.map(({ stream_id, ...rest }) => rest) });
+      assert("...e dice cio' che diceva il vecchio, con lo stream_id del suo nome",
+        !!mareaDoc && mareaDoc.streams[0].stream_id === "marea"
+          && JSON.stringify(sansId(mareaDoc)) === JSON.stringify(sansId(ondaDoc)), JSON.stringify(mareaDoc));
+      const entries12 = await entriesOf();
+      assert("la voce del master e' il file nuovo, col suo piazzamento e senza stream_id",
+        JSON.stringify(entries12.find(e => e.file === "streams/marea.yml")) ===
+          JSON.stringify({ ...entry8, file: "streams/marea.yml" })
+          && !entries12.some(e => e.file === FILE), JSON.stringify(entries12));
+
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      const dir13 = await streamsDir();
+      assert("undo e salvataggio: torna il file di prima, riscritto, e quello rinominato si cancella",
+        dir13.includes(FILE) && !dir13.includes("streams/marea.yml")
+          && JSON.stringify(await yamlOf(await importText())) === JSON.stringify(ondaDoc), JSON.stringify(dir13));
+      assert("...e il master e' quello di prima", JSON.stringify(await entriesOf()) === JSON.stringify(entries8),
+        JSON.stringify(await entriesOf()));
+
+      // Cancellare: la corsia dalla sua testata, poi Delete (con l'editor
+      // degli inviluppi aperto, Delete su una clip e' dei breakpoint).
+      const laneOf = await page.evaluate(() =>
+        [...document.querySelectorAll(".lane")].findIndex(l => l.querySelector(".clip .clip-file")));
+      await (await page.$$(".track-head .sub"))[laneOf].click();
+      await wait(200);
+      await page.keyboard.press("Delete");
+      await wait(300);
+      assert("cancellata la corsia, lo stream importato non c'e' piu'", (await fileLabels()).length === 0,
+        JSON.stringify(await fileLabels()));
+      assert("...e il suo file resta finche' non si salva", (await streamsDir()).includes(FILE));
+      await save();
+      assert("salvato: il file dello stream cancellato si cancella",
+        !(await streamsDir()).includes(FILE), JSON.stringify(await streamsDir()));
+      assert("...e il master non ha piu' la sua voce",
+        JSON.stringify(await entriesOf()) === JSON.stringify(entries8.filter(e => e.file !== FILE)),
+        JSON.stringify(await entriesOf()));
+      await page.keyboard.press("Control+z");
+      await wait(300);
+      await save();
+      assert("undo e salvataggio: lo stream torna, e il suo file pure",
+        (await streamsDir()).includes(FILE) && JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
+          && JSON.stringify(await yamlOf(await importText())) === JSON.stringify(ondaDoc),
+        JSON.stringify(await entriesOf()));
+
+      // 8 — rinominare uno stream che il laboratorio tiene aperto (#208 con
+      // #185). Il file vecchio resta una lettura da rispettare finche' il
+      // salvataggio non lo cancella: se il laboratorio lo salva nel mezzo, il
+      // file nuovo nasce dalla sua versione e il vecchio si cancella; con
+      // modifiche proprie nello stream si chiede di quel file, e «sovrascrivi»
+      // scrive la versione di qui lasciando il vecchio col lavoro del
+      // laboratorio.
+      {
+        const jy = require("js-yaml");
+        const cfg = (f) => path.join(session.paths.workspace, "configs", f);
+        const labSaves = (f, mutate) => {
+          const doc = jy.load(fs.readFileSync(cfg(f), "utf8"));
+          mutate(doc);
+          fs.writeFileSync(cfg(f), "# scritto dal laboratorio\n" + jy.dump(doc, { flowLevel: 3 }));
+          return fs.readFileSync(cfg(f), "utf8");
+        };
+        const asks = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+            title: (t.querySelector(".tt-title") || {}).textContent || "",
+            acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+          })));
+        const titles = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+        const renameTo = async (name) => {
+          await importedClip();
+          if (!(await page.$(".pge-inspector"))) { await page.keyboard.press("i"); await wait(400); }
+          const input = await page.evaluateHandle(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "stream_id");
+            return r ? r.querySelector("input") : null;
+          });
+          await input.asElement().fill(name);
+          await page.keyboard.press("Enter");
+          await wait(600);                        // la rinomina aspetta GET /import-dir
+        };
+        const volumeShown = async () => {
+          await importedClip();
+          return page.evaluate(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "volume");
+            const v = r && r.querySelector(".val");
+            return v ? v.textContent : null;
+          });
+        };
+
+        // (a) niente di proprio nello stream: la rinomina sola non e' lavoro
+        // sul file vecchio. Si rilegge, e si salva.
+        await renameTo("marea");
+        assert("rinominato in marea: lo stream cambia file, e il vecchio c'e' ancora",
+          (await fileLabels()).includes("streams/marea.yml") && (await streamsDir()).includes(FILE),
+          JSON.stringify(await fileLabels()));
+        labSaves(FILE, d => { d.streams[0].volume = -4; });
+        await save();
+        await wait(500);
+        assert("il laboratorio salva il file vecchio dopo la rinomina: non si chiede niente",
+          (await asks()).length === 0, JSON.stringify(await asks()));
+        assert("...il file vecchio si rilegge, e lo dice", (await titles()).includes(`${FILE} riletto`),
+          JSON.stringify(await titles()));
+        assert("...lo stream rinominato ha la versione del laboratorio", (await volumeShown()) === "-4",
+          String(await volumeShown()));
+        const mareaA = await yamlOf(await importOf("streams/marea.yml"));
+        assert("...il file nuovo nasce da quella, con lo stream_id del suo nome",
+          !!mareaA && mareaA.streams[0].stream_id === "marea" && mareaA.streams[0].volume === -4,
+          JSON.stringify(mareaA && mareaA.streams[0]));
+        const dirA = await streamsDir();
+        assert("...e il vecchio, riletto, si cancella: niente lavoro rimasto in un orfano",
+          dirA.includes("streams/marea.yml") && !dirA.includes(FILE), JSON.stringify(dirA));
+
+        // (b) modifiche proprie (la durata, dopo la rinomina): si chiede del
+        // file vecchio, e «sovrascrivi» scrive la versione di qui. Il vecchio
+        // resta, col lavoro del laboratorio: il bridge non cancella un file
+        // cambiato.
+        // (Non `onda`: il passo 6 ha scritto uno stem con quel nome, e un id
+        // che possiede uno stem non si riprende.)
+        await renameTo("bonaccia");
+        assert("rinominato di nuovo, in bonaccia", (await fileLabels()).includes("streams/bonaccia.yml"),
+          JSON.stringify(await fileLabels()));
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        const labB = labSaves("streams/marea.yml", d => { d.streams[0].volume = -8; });
+        await save();
+        const qb = await asks();
+        assert("con modifiche proprie nello stream rinominato: si chiede, del file vecchio",
+          qb.length === 1 && qb[0].title === "streams/marea.yml e' cambiato su disco"
+            && qb[0].acts.join(",") === "ricarica,sovrascrivi", JSON.stringify(qb));
+        assert("...e intanto non si scrive niente",
+          !(await streamsDir()).includes("streams/bonaccia.yml")
+            && fs.readFileSync(cfg("streams/marea.yml"), "utf8") === labB);
+        await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+        await wait(1200);
+        const bonacciaB = await yamlOf(await importOf("streams/bonaccia.yml"));
+        assert("sovrascrivi: il file nuovo e' la versione dell'editor",
+          !!bonacciaB && bonacciaB.streams[0].stream_id === "bonaccia" && bonacciaB.streams[0].volume === -4,
+          JSON.stringify(bonacciaB && bonacciaB.streams[0]));
+        assert("...e il vecchio resta, col lavoro del laboratorio byte per byte",
+          fs.readFileSync(cfg("streams/marea.yml"), "utf8") === labB);
+
+        // I due 409 di POST /save sono provocati da questo passo.
+        const refused8 = seen.errors.filter(e => / 409 /.test(e) && /\/save\b/.test(e));
+        assert("...due rifiuti in console, uno per salvataggio", refused8.length === 2, refused8.join("\n      "));
+        seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused8.includes(e)));
+      }
     }
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni

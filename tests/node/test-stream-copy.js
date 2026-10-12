@@ -440,8 +440,13 @@ console.log("\n── app.jsx: l'incolla crea un file nuovo, salvataggio e rende
   assert("...spegne lo stato senza dire fallito, e lo dice come rifiuto",
     !!refused && /running:\s*false/.test(refused[0]) && !/lastOk/.test(refused[0])
       && /title:\s*"Render refused"/.test(refused[0]), refused ? refused[0] : "");
-  const saveAs = fnBody("async function onSaveAs(");
-  assert("Save As non annuncia un salvataggio rifiutato", /\.ok\s*===\s*false|!res\.ok|!\w+\.ok/.test(saveAs));
+  /* Save As passa dal giro della guardia (#185 sui file di #184), come il
+     salvataggio: "Saved as" solo su un giro andato a buon fine, e un file
+     nuovo gia' su disco e' un rifiuto detto all'utente. */
+  const saveAs = fnBody("async function saveProjectAs(");
+  assert("Save As non annuncia un salvataggio rifiutato",
+    /out\.result\.exists/.test(saveAs) &&
+    /if \(out\.outcome !== "done"\) \{[\s\S]*?return;\s*\}[\s\S]*title: "Saved as"/.test(saveAs), saveAs.slice(0, 200));
   const save = fnBody("async function saveProject(");
   assert("un file nuovo gia' su disco e' un rifiuto detto all'utente, non un 'Save failed'",
     /\.exists/.test(save));

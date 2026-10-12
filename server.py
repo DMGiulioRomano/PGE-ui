@@ -57,8 +57,17 @@ Endpoints:
                                   its signature in the X-PGE-Signature header
     PUT  /file?kind=…&name=…    — write a file; &signature=… is the one read,
                                   409 {changed} if the disk moved since (#185)
+    GET  /import?file=…         — a stream file imported with `file:` (#183),
+                                  relative to configs/, with the signature read
+    GET  /import-dir?dir=…      — the YAML documents of a folder under configs/ (#186)
+    POST /save                  — the master and the changed imports (#184); 409
+                                  {changed, files} if the master, or an import the
+                                  editor read, moved on disk since (#185); then
+                                  deletes the imports the master no longer names
+                                  (`deleteImports`, #208) when still as read and
+                                  imported by nobody — `kept` says which stayed
     GET  /cache_manifest/<basename>  — read cache/<basename>.json
-    POST /render                — run main.py, stream NDJSON events
+    POST /render                — run main.py, stream NDJSON events (same 409)
     POST /render/cancel         — terminate the running render
     GET  /output/<fname>        — serve a rendered .aif for browser playback
     GET  /audio/<fname>         — same but transcoded to WAV (Firefox-friendly)
@@ -83,11 +92,12 @@ from pathlib import Path
 try:
     from flask import Flask, jsonify, request, send_file, send_from_directory, Response, abort
     from flask_cors import CORS
-    # PyYAML non lo usa questo file ma `file_signature`, per il confronto per
-    # documento (#185). Chiesto qui perche' una dipendenza che manca dica cosa
+    # PyYAML: `file_signature` lo usa per il confronto per documento (#185), e
+    # questo file per cercare chi importa ancora un file prima di cancellarlo
+    # (#208). Chiesto qui perche' una dipendenza che manca dica cosa
     # installare invece di un traceback — e non importando file_signature
     # dentro il try, che renderebbe "manca una dipendenza" anche un suo errore.
-    import yaml  # noqa: F401
+    import yaml
 except ImportError:
     sys.exit("Missing deps. Run:\n    pip install -r requirements.txt")
 
@@ -103,7 +113,8 @@ from render_pipeline import (
 )
 # Due editor, un file (#185): la firma e la scrittura che la rispetta.
 from file_signature import (read_signed, write_guarded, check_guarded,
-                            apply_guarded, is_yaml_name)
+                            apply_guarded, changed_on_disk, signature,
+                            signature_of, is_yaml_name)
 
 # L'header che porta la firma di cio' che GET /file ha letto. Un header e non
 # il corpo, perche' il corpo E' il documento.
@@ -198,30 +209,283 @@ def _exists_payload(files):
     # La forma del rifiuto di #186, accanto a quella di #185: `exists` e' un
     # campo, `files` dice quali.
     names = ", ".join(files)
-    # Il file nuovo nasce da due gesti, la copia (#186) e la coda di uno split
-    # (#187): il rimedio li nomina tutti e due.
+    # Il file nuovo nasce da tre gesti, la copia (#186), la coda di uno split
+    # (#187) e la rinomina di uno stream importato (#208): il rimedio li nomina
+    # tutti, perche' "annulla l'incolla" detto a chi ha rinominato uno stream lo
+    # manda a cercare un gesto che non ha fatto.
     return {"ok": False, "exists": True, "files": files,
             "error": f"{names}: esiste gia' su disco, e un file nuovo (la copia di "
-                     "un incolla, la coda di uno split) non sovrascrive niente. "
-                     "Annulla il gesto e rifallo: il file nuovo prende un nome libero"}
+                     "un incolla, la coda di uno split, uno stream rinominato) non "
+                     "sovrascrive niente. Annulla il gesto e rifallo: il file nuovo "
+                     "prende un nome libero"}
 
 
-def write_import_plan(plan, creates=frozenset()):
-    """Scrive il piano di `plan_import_writes`. Le sottocartelle si creano (un
-    file nuovo in `streams/`, #186), sempre sotto la cartella del master: il
-    path e' gia' passato dalla validazione.
+def import_guard_fields(opts):
+    """I due campi della guardia sui file importati (#185 sugli stream come
+    file di #184) in una richiesta JSON (`/save`, `/render`):
+    `(firme, sovrascrivi, None)` oppure `(None, None, messaggio)`.
 
-    I file in `creates` si aprono in creazione esclusiva (`"x"`): il controllo
+    `importSignatures` e' {path: firma}, la firma con cui l'editor ha letto
+    OGNI file importato del suo documento (GET /import), scritto o no da questa
+    richiesta. `overwriteImports` e' [path], i file che l'utente ha detto di
+    sovrascrivere. Assenti valgono "nessuna firma" e "nessuna sovrascrittura":
+    un browser piu' vecchio di questa guardia scrive come prima. Malformati
+    sono un 400, come `createImports`: un campo che non si legge non e' una
+    decisione presa da qualcuno."""
+    sigs = opts.get("importSignatures")
+    if sigs is None:
+        sigs = {}
+    elif not (isinstance(sigs, dict)
+              and all(isinstance(k, str) and isinstance(v, str) for k, v in sigs.items())):
+        return None, None, "importSignatures: atteso un oggetto {path: firma}"
+    over = opts.get("overwriteImports")
+    if over is None:
+        over = []
+    elif not (isinstance(over, list) and all(isinstance(x, str) for x in over)):
+        return None, None, "overwriteImports: attesa una lista di path"
+    return sigs, set(over), None
+
+
+def check_import_plan(base: Path, plan, creates, signatures, overwrite):
+    """La guardia di #185 sui file importati, decisa PRIMA di scrivere qualunque
+    cosa: `(verdetti {path: verdetto}, rifiutati [path])`.
+
+    Un file da scrivere passa dai passi 1 e 2 di `write_guarded`
+    (`check_guarded`): gia' su disco, cambiato, o via libera. Un file che la
+    richiesta non scrive ma di cui l'editor ha mandato la firma e' cambiato se
+    su disco non e' piu' quello letto: l'editor ne ha davanti una versione
+    vecchia, e il render suonerebbe quella del disco col pallino di quella
+    vecchia — lo deve rileggere prima. Un file nuovo (`creates`, #186) non ha
+    una lettura da rispettare: ha la sua regola, la creazione esclusiva. I
+    rifiutati sono in ordine di richiesta, poi i firmati non scritti."""
+    verdicts, refused = {}, []
+    in_plan = set()
+    for rel, path, text in plan:
+        in_plan.add(rel)
+        if rel in creates:
+            continue
+        verdict = check_guarded(path, text, read_signature=signatures.get(rel, ""),
+                                overwrite=rel in overwrite)
+        verdicts[rel] = verdict
+        if not verdict["ok"]:
+            refused.append(rel)
+    for rel, sig in signatures.items():
+        if rel in in_plan or rel in overwrite:
+            continue
+        path = safe_resolve_import(base, rel)
+        # Un path che non sta sotto la cartella del master non si e' mai letto
+        # da GET /import: non c'e' una lettura da confrontare.
+        if path is not None and changed_on_disk(path, sig):
+            refused.append(rel)
+    return verdicts, refused
+
+
+def apply_import_plan(plan, creates=frozenset(), verdicts=None):
+    """Scrive il piano di `plan_import_writes` coi verdetti di
+    `check_import_plan`: `(scritti, firme {path: firma})`. Le sottocartelle si
+    creano (un file nuovo in `streams/`, #186), sempre sotto la cartella del
+    master: il path e' gia' passato dalla validazione.
+
+    Si scrivono i BYTE utf-8, come il master (`apply_guarded`): la firma che
+    torna e' quella dei byte sul disco, ed e' quella che l'editor manda la
+    volta dopo. Un file che contiene gia' il documento (passo 1) non si
+    riscrive, ma la sua firma torna lo stesso.
+
+    I file in `creates` si aprono in creazione esclusiva (`"xb"`): il controllo
     di `existing_creates` precede la scrittura, e un file comparso nel mezzo
     fa fallire la scrittura (FileExistsError, un OSError che le route rendono
     JSON) invece di finire sovrascritto."""
-    written = []
+    written, signatures = [], {}
     for rel, path, text in plan:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "x" if rel in creates else "w", encoding="utf-8") as f:
-            f.write(text)
-        written.append(rel)
-    return written
+        if rel in creates:
+            raw = text.encode("utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "xb") as f:
+                f.write(raw)
+            written.append(rel)
+            signatures[rel] = signature_of(raw)
+            continue
+        verdict = (verdicts or {}).get(rel) or {"ok": True, "write": True}
+        res = apply_guarded(path, text, verdict)
+        if res.get("written"):
+            written.append(rel)
+        signatures[rel] = res.get("signature")
+    return written, signatures
+
+
+def write_import_plan(plan, creates=frozenset()):
+    """`apply_import_plan` senza verdetti: i file scritti, come prima della
+    guardia sugli import."""
+    return apply_import_plan(plan, creates)[0]
+
+
+# -------------------------------------------------------------------------
+# Un file importato che il master non nomina piu' (#208)
+#
+# Cancellare uno stream importato toglie la sua voce dal master; rinominarlo
+# gli da' un file nuovo (`streams/<nome>.yml`, creato come la copia di #186).
+# In tutti e due i casi resta su disco un file che il brano non nomina: uno
+# stream che non suona da nessuna parte. Il browser lo chiede in
+# `deleteImports`, e il bridge lo cancella — ma il bridge non cancellava mai
+# niente, e la regola resta per tutto cio' che non passa da qui: si cancella
+# solo un file nominato, e solo se nessuno ci ha messo le mani e nessuno lo
+# importa piu'. Un file che resta non e' un errore del salvataggio: lo dice la
+# risposta (`kept`), con la ragione.
+# -------------------------------------------------------------------------
+
+def plan_import_deletes(base: Path, deletes, master: Path, plan):
+    """I file da cancellare dopo le scritture (#208), validati con gli altri
+    campi della richiesta, PRIMA di ogni scrittura: `([(rel, path, firma)],
+    None)` oppure `(None, messaggio)` — e il messaggio e' un 400 a disco
+    intatto, come per `imports` e `createImports`.
+
+    `deleteImports` e' {path: firma}: il file come l'editor l'ha letto (GET
+    /import) o scritto (la firma che torna dal salvataggio). Una firma vuota
+    vuol dire "non so cosa c'e' dentro", ed e' un file che resta. Il path passa
+    dalla stessa regola delle scritture (`safe_resolve_import`); il master non
+    e' un import, e un file che la stessa richiesta scrive non si cancella —
+    una richiesta che si contraddice non ha un ordine giusto."""
+    if deletes is None:
+        return [], None
+    if not (isinstance(deletes, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in deletes.items())):
+        return None, "deleteImports: atteso un oggetto {path: firma}"
+    written = {path for _rel, path, _text in plan}
+    out = []
+    for rel, sig in deletes.items():
+        path = safe_resolve_import(base, rel)
+        if path is None:
+            return None, (f"deleteImports: {rel!r}: path non valido — relativo alla "
+                          f"cartella del master, senza '..', senza segmenti nascosti, .yml/.yaml")
+        if path == master:
+            return None, f"deleteImports: {rel!r} e' il master stesso"
+        if path in written:
+            return None, f"deleteImports: {rel!r} e' anche fra i file da scrivere"
+        out.append((rel, path, sig))
+    return out, None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Due path per lo stesso file: la stessa grafia normalizzata, o — se ci
+    sono tutti e due — lo stesso file su disco (`samefile`: un disco che non
+    distingue le maiuscole, una cartella raggiunta da un link)."""
+    if os.path.normpath(os.path.abspath(a)) == os.path.normpath(os.path.abspath(b)):
+        return True
+    try:
+        return a.exists() and b.exists() and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def import_referrers(base: Path, target: Path):
+    """Chi importa ancora `target`: `(importatori, illeggibili)`, path
+    relativi a `base`, in ordine.
+
+    Importatore e' ogni documento YAML sotto `base` (non nascosto, a qualunque
+    profondita') con una voce `file:` della sua lista `streams:` che porta a
+    `target`, relativa alla cartella del documento — la regola del motore.
+    Non solo il master che si sta salvando: un altro brano, la copia appena
+    fatta con Save As, un master in una sottocartella. Un documento che non si
+    legge non dice se lo importa: e' illeggibile se lo NOMINA (il nome del
+    file nel testo), e allora il file resta. Uno che non lo nomina non puo'
+    importarlo."""
+    importers, unreadable = [], []
+    needle = target.name.lower()
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for fn in sorted(filenames):
+            if fn.startswith(".") or not fn.lower().endswith((".yml", ".yaml")):
+                continue
+            doc_path = Path(dirpath) / fn
+            if _same_file(doc_path, target):
+                continue
+            rel = doc_path.relative_to(base).as_posix()
+            try:
+                raw = doc_path.read_bytes()
+            except OSError:
+                unreadable.append(rel)
+                continue
+            try:
+                doc = yaml.safe_load(raw)
+            except (ValueError, yaml.YAMLError):
+                # ValueError copre l'UnicodeDecodeError di byte che non sono testo.
+                if needle in raw.decode("utf-8", errors="replace").lower():
+                    unreadable.append(rel)
+                continue
+            streams = doc.get("streams") if isinstance(doc, dict) else None
+            for entry in streams if isinstance(streams, list) else []:
+                f = entry.get("file") if isinstance(entry, dict) else None
+                if not isinstance(f, str) or not f:
+                    continue
+                p = Path(f)
+                if _same_file(p if p.is_absolute() else doc_path.parent / p, target):
+                    importers.append(rel)
+                    break
+    return importers, unreadable
+
+
+def apply_import_deletes(base: Path, deletes):
+    """Cancella i file di `plan_import_deletes`, DOPO le scritture della
+    richiesta: `{deleted, absent, kept}`.
+
+    Un file si cancella solo se e' ancora quello che l'editor ha letto o
+    scritto — la firma dei byte, come per le scritture (#185): un file
+    riscritto dal laboratorio, anche con lo stesso documento, porta il lavoro
+    di qualcun altro — e se nessun documento sotto `base` lo importa piu'
+    (`import_referrers`, sul disco di DOPO le scritture: il master appena
+    scritto conta come gli altri). Altrimenti resta, in `kept` con la ragione:
+
+        unread    l'editor non ne ha una firma: non sa cosa c'e' dentro
+        changed   su disco non e' piu' quello letto o scritto
+        imported  un documento lo importa ancora (`by`)
+        unknown   un documento che non si legge lo nomina (`by`)
+        link      e' un link: cancellarlo toglierebbe il link, non lo stream
+        notfile   non e' un file
+        error     la cancellazione e' fallita (`detail` dice perche')
+
+    `absent` sono i file che non c'erano gia' piu': niente da cancellare, ma
+    nemmeno un file rimasto. Un errore non disfa niente: master e import sono
+    gia' scritti, e il salvataggio e' riuscito."""
+    deleted, absent, kept = [], [], []
+
+    def keep(rel, reason, detail, by=None):
+        item = {"file": rel, "reason": reason, "detail": detail}
+        if by is not None:
+            item["by"] = by
+        kept.append(item)
+
+    for rel, path, sig in deletes:
+        if path.is_symlink():
+            keep(rel, "link", "e' un link: cancellarlo toglierebbe il link, non lo stream")
+            continue
+        if not path.exists():
+            absent.append(rel)
+            continue
+        if not path.is_file():
+            keep(rel, "notfile", "non e' un file")
+            continue
+        if not sig:
+            keep(rel, "unread", "l'editor non ne ha una lettura: non sa cosa c'e' dentro")
+            continue
+        if signature(path) != sig:
+            keep(rel, "changed", "e' cambiato su disco da quando l'editor l'ha letto: "
+                                 "resta, col lavoro di chi l'ha scritto")
+            continue
+        importers, unreadable = import_referrers(base, path)
+        if importers:
+            keep(rel, "imported", f"lo importa ancora {', '.join(importers)}", importers)
+            continue
+        if unreadable:
+            keep(rel, "unknown", f"{', '.join(unreadable)} non si legge e lo nomina: "
+                                 "non si sa se lo importa", unreadable)
+            continue
+        try:
+            os.remove(path)
+        except OSError as e:
+            keep(rel, "error", f"{type(e).__name__}: {e}")
+            continue
+        deleted.append(rel)
+    return {"deleted": deleted, "absent": absent, "kept": kept}
 
 
 def _ensure_venv_events(root: Path):
@@ -1352,13 +1616,18 @@ def make_app(root: Path, render_timeout: float = 600.0,
                              read_signature=read_sig if isinstance(read_sig, str) else "",
                              overwrite=opts.get("overwrite") is True)
 
-    def _changed_payload(name):
+    def _changed_payload(names):
         # La forma del rifiuto (#185): `changed` e' un campo a parte, non un
-        # errore da riconoscere dal testo; `name` dice QUALE file, perche' i
-        # file di una scrittura saranno N (#184) e la decisione e' per file.
-        return {"ok": False, "changed": True, "name": name,
-                "error": f"{name} e' cambiato su disco da quando l'editor "
-                         "l'ha letto: ricarica o sovrascrivi"}
+        # errore da riconoscere dal testo; `files` dice QUALI file, perche' una
+        # scrittura tocca il master e i file importati (#184) e la decisione
+        # e' per file. `name` e' il primo, la forma di prima.
+        files = [names] if isinstance(names, str) else list(names)
+        listed = ", ".join(files)
+        verb, read = (("e' cambiato", "l'ha letto") if len(files) == 1
+                      else ("sono cambiati", "li ha letti"))
+        return {"ok": False, "changed": True, "name": files[0], "files": files,
+                "error": f"{listed} {verb} su disco da quando l'editor "
+                         f"{read}: ricarica o sovrascrivi"}
 
     @app.get("/projects")
     def list_projects():
@@ -1434,11 +1703,15 @@ def make_app(root: Path, render_timeout: float = 600.0,
         if not path.is_file():
             return jsonify({"ok": False, "error": f"{configs.name}/{rel} non esiste"}), 404
         try:
-            text = path.read_text(encoding="utf-8")
+            # Testo e firma da UNA lettura, come GET /file: e' la firma che
+            # l'editor manda quando scrive (o rende) questo file, e deve essere
+            # quella del testo che ha davanti (#185 sui file importati).
+            text, sig = read_signed(path)
         except (OSError, UnicodeDecodeError) as e:
             return jsonify({"ok": False,
                             "error": f"{configs.name}/{rel} non si legge: {type(e).__name__}: {e}"}), 422
-        return jsonify({"ok": True, "file": rel, "path": str(path), "text": text})
+        return jsonify({"ok": True, "file": rel, "path": str(path), "text": text,
+                        "signature": sig})
 
     @app.get("/import-dir")
     def get_import_dir():
@@ -1493,26 +1766,46 @@ def make_app(root: Path, render_timeout: float = 600.0,
         creates, err = plan_import_creates(plan, opts.get("createImports"))
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        import_sigs, import_over, err = import_guard_fields(opts)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        # I file che il documento non nomina piu' (#208): validati qui, con
+        # gli altri campi, e cancellati solo DOPO le scritture riuscite — un
+        # rifiuto qui sotto lascia il disco intatto anche per loro.
+        deletes, err = plan_import_deletes(configs, opts.get("deleteImports"), yml, plan)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
         taken = existing_creates(plan, creates)
         if taken:
             return jsonify(_exists_payload(taken)), 409
-        # Due editor, un file (#185): il master si decide qui, prima di ogni
-        # scrittura — un rifiuto e' un 409 a disco intatto, file importati
-        # compresi, come un path cattivo e' un 400 a disco intatto.
+        # Due editor, un file (#185): il master E i file importati si decidono
+        # qui, prima di ogni scrittura — un rifiuto e' un 409 a disco intatto,
+        # come un path cattivo e' un 400 a disco intatto. Il 409 nomina tutti
+        # i file cambiati, il master per primo: la decisione e' per file.
         verdict = _master_verdict(yml, content, opts)
-        if not verdict["ok"]:
-            return jsonify(_changed_payload(yml.name)), 409
+        import_verdicts, import_refused = check_import_plan(
+            configs, plan, creates, import_sigs, import_over)
+        refused = ([] if verdict["ok"] else [yml.name]) + import_refused
+        if refused:
+            return jsonify(_changed_payload(refused)), 409
         try:
-            written = write_import_plan(plan, creates)
+            written, import_signatures = apply_import_plan(plan, creates, import_verdicts)
             res = apply_guarded(yml, content, verdict)
         except OSError as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
-        # `written` elenca i file davvero scritti: il master manca quando
-        # conteneva gia' questo documento (passo 1), e la firma torna lo stesso
-        # — e' quella che prende il posto della letta.
+        # Le cancellazioni (#208) sul disco di DOPO: il master appena scritto
+        # e' uno dei documenti che possono importare ancora il file. Non
+        # falliscono il salvataggio, che a questo punto e' gia' riuscito: un
+        # file che resta torna in `kept`, con la ragione.
+        removed = apply_import_deletes(configs, deletes)
+        # `written` elenca i file davvero scritti: il master (o un import)
+        # manca quando conteneva gia' questo documento (passo 1), e la firma
+        # torna lo stesso — e' quella che prende il posto della letta.
         return jsonify({"ok": True, "path": str(yml),
                         "written": written + ([yml.name] if res["written"] else []),
-                        "signature": res["signature"]})
+                        "signature": res["signature"],
+                        "importSignatures": import_signatures,
+                        **removed})
 
     # --------- rendered audio playback ---------
 
@@ -1853,6 +2146,9 @@ def make_app(root: Path, render_timeout: float = 600.0,
         import_creates, import_err = plan_import_creates(import_plan, opts.get("createImports"))
         if import_err:
             return jsonify({"ok": False, "error": import_err}), 400
+        import_sigs, import_over, import_err = import_guard_fields(opts)
+        if import_err:
+            return jsonify({"ok": False, "error": import_err}), 400
         taken = existing_creates(import_plan, import_creates)
         if taken:
             return jsonify(_exists_payload(taken)), 409
@@ -1874,23 +2170,37 @@ def make_app(root: Path, render_timeout: float = 600.0,
         # vero e' il render subito dopo una rilettura, dove riscriverlo col
         # nostro serializzatore farebbe dire "cambiato" al laboratorio al giro
         # dopo, su un documento che nessuno ha cambiato.
+        #
+        # I file importati passano dalla stessa guardia, file per file: quelli
+        # che il render scrive coi tre passi del master, e quelli che non scrive
+        # ma che l'editor ha letto (`importSignatures`) se su disco non sono
+        # piu' quelli letti. Il motore li rilegge dal disco: partito su un
+        # import che il laboratorio ha appena riscritto, suonerebbe la versione
+        # del laboratorio mentre l'editor ne mostra e ne registra un'altra.
         verdict = None
         if yaml_content:
             verdict = _master_verdict(yml, yaml_content, opts)
-            if not verdict["ok"]:
-                return jsonify(_changed_payload(yml.name)), 409
         elif not yml.exists():
             return jsonify({"ok": False,
                             "error": f"configs/{basename}.yml not found"}), 404
+        import_verdicts, import_refused = check_import_plan(
+            configs, import_plan, import_creates, import_sigs, import_over)
+        refused = ([yml.name] if verdict is not None and not verdict["ok"] else []) + import_refused
+        if refused:
+            return jsonify(_changed_payload(refused)), 409
         # Come /save: un errore del disco e' un JSON col messaggio, non una
         # traceback HTML, e il master non si scrive dopo un import fallito.
-        signed = None
+        signed = []
         try:
-            write_import_plan(import_plan, import_creates)
+            import_written, import_signatures = apply_import_plan(
+                import_plan, import_creates, import_verdicts)
             if verdict is not None:
                 res = apply_guarded(yml, yaml_content, verdict)
-                signed = {"type": "file-signature", "kind": "projects", "name": yml.name,
-                          "signature": res["signature"], "written": res["written"]}
+                signed.append({"type": "file-signature", "kind": "projects", "name": yml.name,
+                               "signature": res["signature"], "written": res["written"]})
+            signed.extend({"type": "file-signature", "kind": "import", "name": rel,
+                           "signature": sig, "written": rel in import_written}
+                          for rel, sig in import_signatures.items())
         except OSError as e:
             return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
 
@@ -1932,12 +2242,12 @@ def make_app(root: Path, render_timeout: float = 600.0,
             rs.enter()
             try:
                 # La firma di cio' che questo render ha scritto (o trovato gia'
-                # scritto), come PRIMA riga: prende il posto di quella letta, o
+                # scritto), come PRIME righe: prende il posto di quella letta, o
                 # il render o il salvataggio dopo si accuserebbero da soli di
-                # aver cambiato il file. Un evento per file, cosi' i file di un
-                # render possono diventare N senza che cambi forma (#184).
-                if signed is not None:
-                    yield json.dumps(signed) + "\n"
+                # aver cambiato il file. Un evento per file: il master, poi i
+                # file importati che il render ha scritto o trovato gia' scritti.
+                for ev in signed:
+                    yield json.dumps(ev) + "\n"
                 # Ensure engine venv exists before running main.py.
                 venv_py = root / ".venv" / "bin" / "python"
                 if not venv_py.exists():

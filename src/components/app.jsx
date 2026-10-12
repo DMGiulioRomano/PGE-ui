@@ -163,21 +163,42 @@ function App() {
     if (typeof yaml === "string") syncedDocRef.current[name] = yaml;
     else delete syncedDocRef.current[name];
   }
-  function fileHasOwnChanges(name) {
+  /* `name` e' un file di un rifiuto: il master (`master`, `<brano>.yml`) o un
+     file importato con `file:` (`streams/x.yml`, relativo a configs/). */
+  function fileHasOwnChanges(name, master) {
     const PY = window.PGEYaml;
     if (!PY) return true;
     const d = dataRef.current;
+    const imp = PY.serializeImports(d);
+    /* Un file importato (#185 sui file di #184): lavoro proprio e' il SUO
+       testo di adesso che non e' quello che si sa su disco (`importDiskRef`),
+       o due copie che non dicono la stessa cosa. Il master e gli altri file
+       non entrano: la sua rilettura rimpiazza solo i suoi stream
+       (`rereadImportFile`). Il file vecchio di uno stream rinominato (#208)
+       si confronta come l'editor lo scriverebbe adesso (`importMoveSources`):
+       la rinomina da sola non e' lavoro su quel file, un volume toccato si'.
+       Un file che il documento non importa piu' e da cui nessuno stream e'
+       venuto non ha niente da perdere. La grafia morta `dephase` conta come
+       sotto. */
+    if (name !== master) {
+      if (imp.conflicts.includes(name)) return true;
+      if (!Object.prototype.hasOwnProperty.call(imp.files, name)) {
+        const moved = PY.importMoveSources(d, importDiskRef.current);
+        if (!Object.prototype.hasOwnProperty.call(moved, name)) return false;
+        return Object.keys(PY.changedImports({ [name]: moved[name] }, importDiskRef.current)).length > 0;
+      }
+      return Object.keys(PY.changedImports({ [name]: imp.files[name] }, importDiskRef.current)).length > 0;
+    }
     if (FG.ownChanges(PY.serialize(d), syncedDocRef.current[name])) return true;
     /* ...e gli stream importati con `file:` (#184). Nel master di uno stream
        importato c'e' solo il piazzamento, quindi una modifica al suo contenuto
-       non muove la serializzazione qui sopra; ma la rilettura e' un "apri"
-       del progetto intero, file importati compresi, e la butterebbe via senza
-       chiedere. Lavoro proprio e' anche un file importato che non e' quello
-       che si sa su disco (`importDiskRef`) — o due copie che non dicono la
-       stessa cosa. Un file con la grafia morta `dephase`, che il disco
-       ricordato lascia fuori apposta per migrarlo, conta come modificato: la
-       domanda in piu' e' il verso sicuro. */
-    const imp = PY.serializeImports(d);
+       non muove la serializzazione qui sopra; ma la rilettura del master e' un
+       "apri" del progetto intero, file importati compresi, e la butterebbe via
+       senza chiedere. Lavoro proprio e' anche un file importato che non e'
+       quello che si sa su disco (`importDiskRef`) — o due copie che non dicono
+       la stessa cosa. Un file con la grafia morta `dephase`, che il disco
+       ricordato tiene col testo letto (mai uguale alla serializzazione) per
+       migrarlo, conta come modificato: la domanda in piu' e' il verso sicuro. */
     if (imp.conflicts.length) return true;
     return Object.keys(PY.changedImports(imp.files, importDiskRef.current)).length > 0;
   }
@@ -304,6 +325,11 @@ function App() {
      annullata. Fuori dalla storia, l'undo cambia lo stato e non il disco, e il
      salvataggio successivo riscrive il file com'era. */
   const importDiskRef = useRefApp({});
+  /* I file che il master non nomina piu' e che il bridge ha lasciato su disco
+     (#208), gia' detti nel log: uno che un altro brano importa resta a ogni
+     salvataggio, e ridirlo ogni volta sarebbe rumore. Si azzera dove si azzera
+     il disco ricordato: un progetto aperto, un workspace nuovo. */
+  const keptNotedRef = useRefApp(new Set());
   const [projectsList, setProjectsList] = useStateApp({ loading: false, path: null, files: [], error: null });
 
   /* ============ Render state ============ */
@@ -1628,8 +1654,22 @@ function App() {
    * The id is hashed on both sides, so the stem goes stale on its own: the 🟡
    * dot says so and the next render is the whole story.
    *
-   * Returns null on success, or a message for the field to show. */
-  function renameStream(oldId, rawName) {
+   * An imported stream (`- file: streams/risacca.yml`, #183) is a file, and
+   * the file's name IS its id: the engine's default `stream_id`, and the id
+   * the lab opens it with (mare-nostrum#2). Renaming it used to write
+   * `stream_id: <new>` into the master entry and leave the file as it was, so
+   * the piece played one realization and the file opened alone another. Now
+   * the file moves too (#208): `streams/<new>.yml`, created like a pasted
+   * copy (#186) — exclusive create, a name nobody holds, which is why this
+   * asks the bridge for the folder first and is async — and the old file is
+   * one the master no longer names, deleted at the next save. Not when the
+   * file already has the new name (the entry just loses its `stream_id`), and
+   * not when another entry imports the same file: that is ONE document, and
+   * moving it would take it from the other; there the rename stays in the
+   * master entry, as before.
+   *
+   * Returns (a Promise of) null on success, or a message for the field to show. */
+  async function renameStream(oldId, rawName) {
     const newId = String(rawName == null ? "" : rawName).trim();
     if (!newId || newId === oldId) return null;
     // The id becomes a filename (`<basename>__<id>.<ext>`) and a path segment
@@ -1643,14 +1683,52 @@ function App() {
     // same oracle — and it is format-agnostic on purpose.
     if (ownsStemFor(newId)) return `a stem on disk still claims "${newId}"`;
 
+    const PY = window.PGEYaml;
+    const src = data.streams.find(s => s.id === oldId);
+    const moving = src && PY.importRenameFile(src, newId, data.streams);
+    if (moving) {
+      // The new file must take a name nobody holds in that folder: the
+      // bridge's listing, the files this editor wrote (`importDiskRef`) and
+      // the ones the document names — the paste's oracle. Read after the
+      // await, from the state of NOW. The bridge's exclusive create is the
+      // last word anyway (#186).
+      const dir = PY.importDirOf(moving);
+      const listed = await listImportNames([dir], "del file rinominato");
+      // Across the await the state can have moved: the stream deleted or
+      // undone, the name taken by a paste or by a second rename. The updater
+      // below would then write nothing, and everything after it — the log of
+      // a move, the dirty flag, the clip's drawings dropped, `null` to the
+      // Inspector — would describe a rename that never happened. Asked of the
+      // state of NOW, the split's rule (#187).
+      if (!dataRef.current.streams.some(s => s.id === oldId))
+        return `"${oldId}" changed while the folder was being read — try again`;
+      if (dataRef.current.streams.some(s => s.id === newId))
+        return `"${newId}" is already a stream`;
+      const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(dataRef.current)];
+      if (PY.importIdTaken(newId, [dir], knownFiles))
+        return `${moving}: a file by that name is already there (case aside)`;
+    }
+
     setData(d => {
       // Re-checked inside the updater: `data` in the closure may be a snapshot
       // behind, and this is the one mutation where a stale read would produce
-      // two streams sharing an id.
+      // two streams sharing an id. The file move is decided again here too,
+      // on the streams of now (`renameImport`).
       if (!d.streams.some(s => s.id === oldId) || d.streams.some(s => s.id === newId)) return d;
-      const next = { ...d, streams: d.streams.map(s => s.id === oldId ? { ...s, id: newId } : s) };
+      // The remembered disk says whether the file the stream leaves is on
+      // disk: then it stays a read the next write respects (`_import.from`) —
+      // the lab may save it before this editor does.
+      const next = { ...d, streams: d.streams.map(s => s.id === oldId
+        ? PY.renameImport(s, newId, d.streams, importDiskRef.current) : s) };
       return TR.applyTracks(next, TR.renameStreamId(TR.deriveTracks(d), oldId, newId));
     });
+    if (moving) {
+      logToTerminal(`[file] ${src._import.file} → ${moving}: lo stream rinominato cambia file, ` +
+                    `creato al salvataggio o prima del render; ${src._import.file} si cancella al salvataggio`);
+    } else if (src && src._import && PY.importDefaultId(src._import.file) !== newId) {
+      logToTerminal(`[file] ${src._import.file} e' importato anche da un'altra voce: il file resta, ` +
+                    `il nome nuovo va nella voce del master (stream_id: ${newId})`, "warn");
+    }
     setSelectedIds(ids => ids.map(x => x === oldId ? newId : x));
     if (anchorIdRef.current === oldId) anchorIdRef.current = newId;
     // The render sidecars are keyed by stream id. Nothing reads the old key any
@@ -1666,8 +1744,26 @@ function App() {
     setDirty(true);
     return null;
   }
+  /* Uno stream importato cancellato lascia un file che il master non nomina
+     piu' (#208): si cancella al salvataggio. Lo si dice adesso, quando l'undo
+     e' a un tasto, e non solo dopo: solo un messaggio — il disco lo tocca il
+     salvataggio, e la cancellazione resta una mutazione di soli dati. */
+  function noteDroppedImports(ids) {
+    const PY = window.PGEYaml;
+    if (!PY || !PY.importOrphans) return;
+    const gone = new Set(ids);
+    const before = PY.importOrphans(data, importDiskRef.current);
+    const after = PY.importOrphans({ ...data, streams: data.streams.filter(s => !gone.has(s.id)) },
+                                   importDiskRef.current);
+    const files = after.filter(f => !before.includes(f));
+    if (files.length) {
+      logToTerminal(`[file] ${files.join(", ")}: il master non ${files.length === 1 ? "lo" : "li"} importa piu' — ` +
+                    `si cancella${files.length === 1 ? "" : "no"} al salvataggio (un undo riporta lo stream)`);
+    }
+  }
   function deleteStream(id) {
     if (!id) return;
+    noteDroppedImports([id]);
     // Data only: setData is undoable, everything else here would not be. The
     // per-id caches (lastRenderedFps, waveforms, grainData, the grain refs, the
     // backend stem index) are deliberately left alone — wiping them made the
@@ -1764,6 +1860,7 @@ function App() {
     const t = tracks.find(x => x.id === trackId);
     if (!t) return;
     const ids = new Set(t.streamIds);
+    noteDroppedImports([...ids]);
     setData(d => {
       const rest = TR.deriveTracks(d).filter(x => x.id !== trackId);
       return TR.applyTracks({ ...d, streams: d.streams.filter(s => !ids.has(s.id)) }, rest);
@@ -1827,19 +1924,38 @@ function App() {
     fileQuestionRef.current = null;
     for (const id of Object.values(q.ids)) dismissToast(id);
   }
-  function askFileQuestion(op, files, state) {
+  const FILE_OP_WHAT = { render: "il render non e' partito", save: "non salvato", saveAs: "copia non salvata" };
+  /* `ctx.master` e' il master della scrittura (il file aperto; per Save As il
+     nome nuovo), `ctx.target` il nome con cui Save As riprende. */
+  function askFileQuestion(op, files, state, ctx = {}) {
     closeFileQuestion();
-    const q = { op, state, pending: new Set(files), ids: {} };
-    const what = op === "render" ? "il render non e' partito" : "non salvato";
-    for (const name of files) {
-      q.ids[name] = pushToast({
+    const master = ctx.master || null;
+    /* Una domanda per gruppo di file che si rispondono insieme. Di norma un
+       file, una domanda. Il master no: la sua rilettura riapre il brano
+       intero, file importati compresi, quindi la risposta sul master vale
+       anche per gli import di cui si sta chiedendo — e due domande separate
+       farebbero dipendere l'esito dall'ordine dei clic («sovrascrivi»
+       sull'importato, poi «ricarica» sul master, e le modifiche appena difese
+       se ne andrebbero con la rilettura). */
+    const groups = master && files.includes(master)
+      ? [[master, ...files.filter(f => f !== master)]]
+      : files.map(f => [f]);
+    const q = { op, state, master, target: ctx.target || null, pending: new Map(), ids: {} };
+    const what = FILE_OP_WHAT[op] || FILE_OP_WHAT.save;
+    for (const group of groups) {
+      const key = group[0];
+      q.pending.set(key, group);
+      const reload = key === master && window.PGEYaml && window.PGEYaml.importReadFiles(dataRef.current).length
+        ? "«ricarica» riapre il brano dal disco, stream importati compresi, e le perde"
+        : "«ricarica» le perde e riparte dal file";
+      q.ids[key] = pushToast({
         kind: "warn", persistent: true,
-        title: `${name} e' cambiato su disco`,
+        title: group.length === 1 ? `${key} e' cambiato su disco` : `${group.join(", ")} sono cambiati su disco`,
         message: `${what}: un altro editor l'ha riscritto e qui ci sono modifiche non salvate. ` +
-                 "«ricarica» le perde e riparte dal file, «sovrascrivi» scrive le tue, × non scrive niente",
+                 `${reload}, «sovrascrivi» scrive le tue, × non scrive niente`,
         actions: [
-          { label: "ricarica",    onClick: () => latestRef.current.answerFileQuestion(q, name, "reload") },
-          { label: "sovrascrivi", onClick: () => latestRef.current.answerFileQuestion(q, name, "overwrite") },
+          { label: "ricarica",    onClick: () => latestRef.current.answerFileQuestion(q, key, "reload") },
+          { label: "sovrascrivi", onClick: () => latestRef.current.answerFileQuestion(q, key, "overwrite") },
         ],
         onClose: () => latestRef.current.dropFileQuestion(q),
       });
@@ -1850,30 +1966,41 @@ function App() {
   function dropFileQuestion(q) {
     if (fileQuestionRef.current !== q) return;
     closeFileQuestion();
-    logToTerminal(`[file] ${[...q.pending].join(", ")}: niente di scritto`, "warn");
+    logToTerminal(`[file] ${[...q.pending.values()].flat().join(", ")}: niente di scritto`, "warn");
   }
-  async function answerFileQuestion(q, name, choice) {
-    if (fileQuestionRef.current !== q || !q.pending.has(name)) return;   // superata
-    q.pending.delete(name);
-    dismissToast(q.ids[name]);
-    delete q.ids[name];
+  async function answerFileQuestion(q, key, choice) {
+    if (fileQuestionRef.current !== q || !q.pending.has(key)) return;   // superata
+    const group = q.pending.get(key);
+    q.pending.delete(key);
+    dismissToast(q.ids[key]);
+    delete q.ids[key];
     if (choice === "reload") {
-      // «ricarica» e' un "apri" dello stesso file: rilettura, storia azzerata.
-      const doc = await rereadProject(name);
+      /* «ricarica» e' una rilettura: il master si riapre (un "apri" dello
+         stesso file), un import si rilegge da solo; storia azzerata in tutti e
+         due i casi. Sullo stato di ADESSO e non sul documento del giro: la
+         domanda non ferma la tastiera, e il documento del giro e' quello di
+         quando e' stata posta. */
+      const doc = await rereadFile(key, { ...q.state, doc: null }, q.master);
       if (!doc) { if (fileQuestionRef.current === q) closeFileQuestion(); return; }
-      q.state = FG.afterReread(q.state, name, doc);
+      for (const f of group) q.state = FG.afterReread(q.state, f, doc);
     } else {
-      q.state = FG.afterOverwrite(q.state, name);
+      for (const f of group) q.state = FG.afterOverwrite(q.state, f);
     }
     if (q.pending.size || fileQuestionRef.current !== q) return;
     fileQuestionRef.current = null;
     if (q.op === "render") await latestRef.current.renderAgain(q.state);
+    else if (q.op === "saveAs") await latestRef.current.saveProjectAs(q.target, q.state);
     else await latestRef.current.saveProject(q.state);
   }
-  /* La rilettura: un "apri" dello stesso file, cioe' `onProjectSelect` — non una
-     seconda copia del caricamento, che e' il modo in cui due strade divergono.
-     Azzera la storia: un undo riporterebbe indietro una versione che su disco
-     non c'e' piu', e la scrittura dopo la riscriverebbe sopra quella
+  /* La rilettura di un file rifiutato: il master si riapre, un file importato
+     si rilegge da solo. */
+  function rereadFile(name, st, master) {
+    return name === master ? rereadProject(name) : rereadImportFile(name, st);
+  }
+  /* La rilettura del master: un "apri" dello stesso file, cioe' `onProjectSelect`
+     — non una seconda copia del caricamento, che e' il modo in cui due strade
+     divergono. Azzera la storia: un undo riporterebbe indietro una versione che
+     su disco non c'e' piu', e la scrittura dopo la riscriverebbe sopra quella
      dell'altro editor. Torna il documento letto, o `null` se la lettura non ne
      ha prodotto uno (allora la scrittura si ferma: riprovare scriverebbe il
      progetto di ripiego sopra il file). */
@@ -1887,12 +2014,89 @@ function App() {
     }
     return doc;
   }
+  /* La rilettura di un file importato (#185 sui file di #184): GET /import di
+     quel file, e gli stream che lo importano rimpiazzati dal testo appena letto
+     (`PGEYaml.rereadImport`) — il resto resta com'e'. Riaprire il progetto
+     intero, come per il master, butterebbe il lavoro non salvato negli altri
+     file, master compreso, e la domanda e' stata fatta su questo file solo.
+
+     Come la rilettura del master azzera la storia: un undo riporterebbe una
+     versione del file che su disco non c'e' piu', e la scrittura dopo la
+     riscriverebbe sopra quella dell'altro editor. E il "disco" ricordato di
+     quel file (`importDiskRef`) e' quello appena letto, nella forma in cui
+     l'editor lo riscriverebbe: la riprova trova il documento gia' su disco e
+     lascia il file all'altro editor, byte per byte.
+
+     Il documento da cui si parte e' quello del giro (`st.doc`), se una
+     rilettura di questo giro lo ha gia' rimpiazzato: lo stato di React non e'
+     sincrono. Lo stato invece si aggiorna su quello di ADESSO, con la stessa
+     rilettura: una modifica arrivata mentre la lettura era in volo resta. Torna
+     il documento riletto, o `null` (la lettura non riesce, il testo non e' piu'
+     uno stream: la scrittura si ferma). */
+  async function rereadImportFile(file, st) {
+    const PY = window.PGEYaml;
+    const backend = window.PGEBackend.current;
+    if (!PY) return null;
+    const r = await backend.fs.readImport(file);
+    if (!r.ok) {
+      logToTerminal(`[file] ${file}: rilettura non riuscita — ${r.error}`, "err");
+      return null;
+    }
+    const opts = { project: activeProject.replace(/\.yml$/, ""), samples: mediaFilesRef.current || [] };
+    const out = PY.rereadImport((st && st.doc) || dataRef.current, file, r.text, opts);
+    if (out.error) {
+      logToTerminal(`[file] ${out.error}`, "err");
+      return null;
+    }
+    _setDataRaw(cur => PY.rereadImport(cur, file, r.text, opts).data || cur);
+    // La `data` di adesso, per chi la legge prima del prossimo render (la
+    // domanda "modifiche proprie?" di un giro che riprova): e' quella appena
+    // scritta nello stato.
+    dataRef.current = out.data;
+    resetHistory();
+    {
+      const files = PY.serializeImports(out.data).files;
+      const disk = { ...importDiskRef.current };
+      // Il file vecchio di uno stream rinominato (#208): nessuno stream lo
+      // importa, ma il suo contenuto e' appena entrato in quello rinominato, e
+      // resta una lettura da rispettare finche' il salvataggio non lo cancella.
+      const moved = PY.importMoveSources(out.data, importDiskRef.current);
+      if (Object.prototype.hasOwnProperty.call(files, file)) disk[file] = files[file];
+      else if (Object.prototype.hasOwnProperty.call(moved, file)) disk[file] = moved[file];
+      else delete disk[file];
+      // La grafia morta `dephase` si migra alla prima scrittura, come
+      // all'apertura: nel disco ricordato col testo letto, che non e' mai la
+      // serializzazione (#208, vedi onProjectSelect).
+      if (out.data.streams.some(x => x._import && x._import.file === file && x.deviationProbabilityLegacy)) {
+        disk[file] = r.text;
+      }
+      importDiskRef.current = disk;
+    }
+    logToTerminal(`[file] ${file}: era cambiato su disco — riletto, gli stream di quel file sono la versione su disco`, "warn");
+    pushToast({ kind: "info", title: `${file} riletto`,
+                message: "era cambiato su disco: gli stream di quel file sono la versione su disco, il resto non si tocca",
+                duration: 5000 });
+    return out.data;
+  }
+  /* Le letture dei file importati che una scrittura deve rispettare (#185 sui
+     file di #184), da mandare con il master: i file di cui il documento tiene
+     il contenuto, di cui il backend manda la firma letta — tutti, scritti o no,
+     perche' il motore li rilegge dal disco — e le risposte «sovrascrivi» date
+     su quei file. Con loro il file vecchio di uno stream rinominato (#208),
+     finche' e' nel disco ricordato: il laboratorio puo' averlo riscritto, e il
+     file nuovo nascerebbe dalla versione di qui. */
+  function importGuard(doc, st, master) {
+    return {
+      importFiles: window.PGEYaml ? window.PGEYaml.importReadFiles(doc, importDiskRef.current) : [],
+      overwriteImports: ((st && st.overwrite) || []).filter(f => f !== master),
+    };
+  }
   // Gli altri esiti del giro: il file che cambia mentre lo si rilegge, e una
   // rilettura che non ha dato un documento. Nessuno dei due scrive niente.
-  function reportFileOutcome(op, out) {
+  function reportFileOutcome(op, out, ctx) {
     const files = (out.files || []).join(", ");
-    const what = op === "render" ? "il render non e' partito" : "non salvato";
-    if (out.outcome === "asked") { askFileQuestion(op, out.files, out.state); return; }
+    const what = FILE_OP_WHAT[op] || FILE_OP_WHAT.save;
+    if (out.outcome === "asked") { askFileQuestion(op, out.files, out.state, ctx); return; }
     if (out.outcome === "stopped") {
       logToTerminal(`[file] ${files}: cambia mentre lo rileggo — ${what}`, "warn");
       pushToast({ kind: "warn", title: `${files} sta cambiando`,
@@ -1900,14 +2104,18 @@ function App() {
                   duration: 8000 });
       return;
     }
+    // Il master si rilegge come un progetto, un file importato come uno
+    // stream (un documento con uno stream solo, #183).
+    const master = ctx && ctx.master;
+    const asWhat = (out.files || []).every(f => f === master) ? "un progetto" : "uno stream (vedi il log)";
     logToTerminal(`[file] ${files}: rilettura non riuscita — ${what}`, "err");
     pushToast({ kind: "err", title: `${files}: rilettura non riuscita`,
-                message: `${what}: il file su disco non si legge come un progetto`,
+                message: `${what}: il file su disco non si legge come ${asWhat}`,
                 persistent: true });
   }
 
   // Le funzioni di questo render, per le risposte che arrivano dopo (vedi sopra).
-  latestRef.current = { answerFileQuestion, dropFileQuestion, renderAgain, saveProject };
+  latestRef.current = { answerFileQuestion, dropFileQuestion, renderAgain, saveProject, saveProjectAs };
 
   /* ============ Save / SaveAs ============ */
   /* I file importati con `file:` da scrivere per lo stato `d` (#184): quelli
@@ -1943,6 +2151,54 @@ function App() {
     importDiskRef.current = { ...importDiskRef.current, ...bodies };
   }
   const importCount = (n) => n ? ` + ${n} file importat${n === 1 ? "o" : "i"}` : "";
+  /* I file che il documento `d` non nomina piu' (#208): lo stream importato
+     cancellato, il nome vecchio di uno rinominato, la copia incollata e poi
+     annullata dopo un salvataggio. Decisi contro il disco ricordato, come
+     `importCreates`: un file mai scritto non e' su disco, e non c'e' niente da
+     cancellare. Li manda solo il salvataggio — non Save As, il cui master di
+     prima li importa ancora tutti, e non il render, che scrive cio' che il
+     motore rilegge e basta. */
+  function importRemovals(d) {
+    return window.PGEYaml.importOrphans(d, importDiskRef.current);
+  }
+  // Cancellati, o che non c'erano gia' piu': il disco ricordato non li ha
+  // piu'. Un undo che riporta lo stream li trova assenti, e il salvataggio dopo
+  // li riscrive.
+  function forgetImports(files) {
+    if (!files.length) return;
+    const disk = { ...importDiskRef.current };
+    for (const f of files) delete disk[f];
+    importDiskRef.current = disk;
+  }
+  /* L'esito delle cancellazioni chieste (`asked`) nella risposta del
+     salvataggio. Un file rimasto (`kept`) resta anche nel disco ricordato,
+     col testo di prima: se il laboratorio l'ha cambiato, un undo che riporta
+     lo stream non lo riscrive alla cieca — la guardia di #185 lo trova
+     cambiato e chiede. Si ridomanda a ogni salvataggio (puo' smettere di
+     essere importato altrove), ma si dice una volta per ragione: un file che
+     un altro brano importa resta per sempre, e a ogni salvataggio sarebbe
+     rumore. Torna quanti file sono stati cancellati. */
+  function settleRemovals(asked, res) {
+    if (!asked.length) return 0;
+    if (res.deleted === null) {
+      if (!keptNotedRef.current.has("#bridge")) {
+        keptNotedRef.current.add("#bridge");
+        logToTerminal(`[file] ${asked.join(", ")}: il master non li nomina piu', ma il bridge non ` +
+                      `cancella file (piu' vecchio della #208) — restano su disco`, "warn");
+      }
+      return 0;
+    }
+    forgetImports([...res.deleted, ...res.absent]);
+    for (const f of res.deleted) logToTerminal(`[file] ${f}: cancellato — il master non lo nomina piu'`);
+    for (const k of res.kept) {
+      const key = `${k.file}\n${k.reason}\n${(k.by || []).join(",")}`;
+      if (keptNotedRef.current.has(key)) continue;
+      keptNotedRef.current.add(key);
+      logToTerminal(`[file] ${k.file}: il master non lo nomina piu', ma resta su disco — ${k.detail}`, "warn");
+    }
+    return res.deleted.length;
+  }
+  const removedCount = (n) => n ? ` − ${n} file cancellat${n === 1 ? "o" : "i"}` : "";
 
   // L'ingresso della UI (Cmd+S, la topbar) prende zero argomenti di proposito:
   // va a `onClick`, che gli consegnerebbe un MouseEvent come stato del giro.
@@ -1960,25 +2216,31 @@ function App() {
     }
     let yaml = null;
     let imp = null;
+    let rem = [];
     let res = null;
     try {
       const out = await FG.attempt({
         /* Documento e file importati si serializzano a ogni tentativo: dopo una
            rilettura il documento e' quello riletto, e il "disco" degli import
            (`importDiskRef`) e' quello appena letto con lui (#184). Master e
-           import cambiati vanno in una richiesta (POST /save), e il bridge
-           decide la guardia del master prima di scriverne uno (#185). */
+           import cambiati vanno in una richiesta (POST /save), con le letture
+           del master e di ogni file importato del documento, e il bridge
+           decide la guardia di tutti prima di scriverne uno (#185). */
         write: async (st) => {
           const doc = st.doc || data;
           yaml = window.PGEYaml.serialize(doc);
           imp = importWrites(doc);
           if (imp.error) return { ok: false, refused: imp.error };
+          // ...e i file che il documento non nomina piu' (#208), cancellati
+          // dal bridge dopo le scritture se nessuno li ha toccati ne' importati.
+          rem = importRemovals(doc);
           res = await backend.fs.save(basename, yaml, imp.texts,
-                                      { overwrite: FG.overwrites(st, name), create: imp.create });
+                                      { overwrite: FG.overwrites(st, name), create: imp.create,
+                                        remove: rem, ...importGuard(doc, st, name) });
           return res;
         },
-        ownChanges: fileHasOwnChanges,
-        reread: rereadProject,
+        ownChanges: (f) => fileHasOwnChanges(f, name),
+        reread: (f, st) => rereadFile(f, st, name),
       }, state);
       if (out.outcome === "failed" && out.result && out.result.refused) {
         pushToast({ kind: "err", title: "Save refused", message: out.result.refused, persistent: true });
@@ -1991,8 +2253,14 @@ function App() {
         pushToast({ kind: "err", title: "Save refused", message: out.result.error, persistent: true });
         return;
       }
-      if (out.outcome !== "done") { reportFileOutcome("save", out); return; }
+      if (out.outcome !== "done") { reportFileOutcome("save", out, { master: name }); return; }
       markImportsWritten(imp.bodies);
+      const nRemoved = settleRemovals(rem, res);
+      // Il file vecchio di uno stream rinominato (#208) e' fra quelli chiesti
+      // da cancellare: cancellato o rimasto, lo spostamento e' chiuso, e da qui
+      // quel file non e' piu' una lettura di questo stream. Sullo stato di
+      // ADESSO e fuori dalla storia, come la migrazione qui sotto.
+      _setDataRaw(d => window.PGEYaml.settleImportMoves(d, rem));
       markSynced(name, yaml);
       setDirty(false);
       // Il file appena scritto porta `deviation_probability`: la migrazione da
@@ -2006,7 +2274,7 @@ function App() {
       // scritto a modo suo dall'altro editor) e il bridge non l'ha riscritto
       // (#185) — `written` elenca solo i file davvero scritti.
       const size = res.written.includes(name) ? `${(yaml.length / 1024).toFixed(1)}kb` : "gia' su disco";
-      pushToast({ kind: "ok", title: "Saved", message: `configs/${name} · ${size}${importCount(Object.keys(imp.bodies).length)}`, duration: 2200 });
+      pushToast({ kind: "ok", title: "Saved", message: `configs/${name} · ${size}${importCount(Object.keys(imp.bodies).length)}${removedCount(nRemoved)}`, duration: 2200 });
       refreshProjects();
     } catch (e) {
       pushToast({ kind: "err", title: "Save failed", message: e.message, persistent: true });
@@ -2016,34 +2284,58 @@ function App() {
      relativi a configs/, e la copia sta li'. Quindi le modifiche non salvate a
      uno stream importato si scrivono nel suo file anche qui — senza, la copia
      appena salvata non direbbe cio' che l'editor mostra. Il file e' uno, per
-     entrambi i master: e' la regola 4, non una scelta di Save As. */
+     entrambi i master: e' la regola 4, non una scelta di Save As.
+
+     Per la stessa ragione Save As passa dal giro della guardia (#185 sui file
+     di #184): i file importati che riscrive sono quelli letti con l'originale,
+     e il laboratorio puo' averne riscritto uno. Uno pulito si rilegge e si
+     riprova, uno con modifiche proprie chiede, come nel salvataggio. Il
+     master no: e' un nome appena digitato, sovrascritto per costruzione.
+
+     L'ingresso della UI chiede il nome e basta; `saveProjectAs` e' quello che
+     porta lo stato del giro, e da cui riprende la risposta alla domanda. */
   async function onSaveAs() {
     const name = prompt("Save a copy as…", activeProject.replace(/\.yml$/, "_copy.yml"));
     if (!name) return;
     const fullName = name.endsWith(".yml") ? name : name + ".yml";
+    return saveProjectAs(fullName, FG.initialState());
+  }
+  async function saveProjectAs(fullName, state) {
+    closeFileQuestion();
     const backend = window.PGEBackend.current;
     if (!window.PGEYaml) {
       pushToast({ kind: "err", title: "Save As failed", message: "yaml bridge not loaded", persistent: true });
       return;
     }
-    const yaml = window.PGEYaml.serialize(data);
-    const imp = importWrites(data);
-    if (imp.error) {
-      pushToast({ kind: "err", title: "Save As refused", message: imp.error, persistent: true });
-      return;
-    }
+    let imp = null;
     try {
-      // Un nome appena digitato, non il file aperto: dietro al documento non
-      // c'e' una lettura di QUEL file, quindi non c'e' una firma da rispettare
-      // (#185). Senza, un nome aperto prima nella sessione avrebbe la sua firma
-      // registrata, e il rifiuto arriverebbe a un chiamante che annuncia
-      // "Saved as" comunque. E' la regola del `salva con nome` del laboratorio.
-      // Sovrascrive il MASTER (un nome appena digitato), non i file nuovi delle
-      // copie (#186): quelli si creano e basta, anche qui.
-      const res = await backend.fs.save(fullName.replace(/\.yml$/, ""), yaml, imp.texts,
-                                        { overwrite: true, create: imp.create });
-      if (res.ok === false) {
-        pushToast({ kind: "err", title: "Save As refused", message: res.error, persistent: true });
+      const out = await FG.attempt({
+        write: async (st) => {
+          const doc = st.doc || data;
+          const yaml = window.PGEYaml.serialize(doc);
+          imp = importWrites(doc);
+          if (imp.error) return { ok: false, refused: imp.error };
+          // Un nome appena digitato, non il file aperto: dietro al documento
+          // non c'e' una lettura di QUEL file, quindi non c'e' una firma da
+          // rispettare (#185). Senza, un nome aperto prima nella sessione
+          // avrebbe la sua firma registrata, e il rifiuto arriverebbe a un
+          // chiamante che annuncia "Saved as" comunque. E' la regola del
+          // `salva con nome` del laboratorio. Sovrascrive il MASTER, non i file
+          // nuovi delle copie (#186), che si creano e basta, ne' i file
+          // importati, che passano dalla loro guardia (`importGuard`).
+          return backend.fs.save(fullName.replace(/\.yml$/, ""), yaml, imp.texts,
+                                 { overwrite: true, create: imp.create, ...importGuard(doc, st, fullName) });
+        },
+        ownChanges: (f) => fileHasOwnChanges(f, fullName),
+        reread: (f, st) => rereadFile(f, st, fullName),
+      }, state);
+      if (out.outcome === "failed" && out.result && (out.result.refused || out.result.exists)) {
+        pushToast({ kind: "err", title: "Save As refused",
+                    message: out.result.refused || out.result.error, persistent: true });
+        return;
+      }
+      if (out.outcome !== "done") {
+        reportFileOutcome("saveAs", out, { master: fullName, target: fullName });
         return;
       }
       markImportsWritten(imp.bodies);
@@ -2258,6 +2550,11 @@ function App() {
       semanticsVersion: semOfThisRun,
       // La risposta «sovrascrivi» alla domanda del file cambiato (#185).
       overwrite: FG.overwrites(st, configName) || undefined,
+      // ...e la guardia dei file importati: le letture di tutti quelli del
+      // documento, scritti o no — il motore li rilegge dal disco, e partito su
+      // uno che il laboratorio ha riscritto suonerebbe quella versione mentre
+      // l'editor ne mostra (e ne registrerebbe) un'altra.
+      ...importGuard(doc, st, configName),
     });
     const onRenderEvent = (e) => {
       if (e.type === "log") {
@@ -2353,8 +2650,8 @@ function App() {
            MEZZO aveva scritto, e il "disco" tornava al testo del render, piu'
            vecchio — un undo verso quel testo non avrebbe riscritto il file
            (#184). Se il bridge non li ha scritti (`configWritten === false`:
-           un 400, o il rifiuto del master di #185, che arriva prima di ogni
-           scrittura) si rendono SUBITO, dentro il tentativo: la domanda
+           un 400, o un rifiuto di #185 — del master o di un file importato —,
+           che arriva prima di ogni scrittura) si rendono SUBITO, dentro il tentativo: la domanda
            "modifiche proprie?" che segue un rifiuto deve vederli non scritti. */
         const importDiskBefore = importDiskRef.current;
         markImportsWritten(plan.bodies);
@@ -2364,8 +2661,8 @@ function App() {
         }
         return r;
       },
-      ownChanges: fileHasOwnChanges,
-      reread: rereadProject,
+      ownChanges: (f) => fileHasOwnChanges(f, configName),
+      reread: (f, st) => rereadFile(f, st, configName),
     }, guardState);
     const result = out.result || { ok: false };
 
@@ -2374,7 +2671,7 @@ function App() {
        c'e'. Lo stato si spegne, e a dire cosa e' successo e' la guardia. */
     if (out.outcome !== "done" && out.outcome !== "failed") {
       setRenderStatus(s => ({ ...s, running: false, currentStreamId: null }));
-      reportFileOutcome("render", out);
+      reportFileOutcome("render", out, { master: configName });
       return;
     }
     /* Il file nuovo di una copia c'e' gia' su disco (#186): anche questo e' un
@@ -2562,12 +2859,18 @@ function App() {
         // la stessa del master: un file che porta ancora la grafia morta
         // `dephase` si riscrive al primo salvataggio, perche' la migrazione e'
         // proprio quella riscrittura e l'avviso dell'Inspector si spegne dopo.
+        // Quel file resta nel disco ricordato col testo LETTO, che non e' mai
+        // la serializzazione (porta la chiave morta), quindi e' "cambiato" e si
+        // riscrive: toglierlo dalla mappa diceva lo stesso, ma diceva anche
+        // "non e' su disco", e se lo stream si cancellava prima del primo
+        // salvataggio il file non risultava orfano e restava (#208).
         {
           const disk = window.PGEYaml.serializeImports(parsed).files;
           for (const st of parsed.streams) {
-            if (st._import && st.deviationProbabilityLegacy) delete disk[st._import.file];
+            if (st._import && st.deviationProbabilityLegacy) disk[st._import.file] = imports[st._import.file].text;
           }
           importDiskRef.current = disk;
+          keptNotedRef.current = new Set();
         }
         // L'allineamento col file: il documento come questo editor lo
         // scriverebbe, appena letto. Da qui "modifiche proprie" (#185).
@@ -2624,6 +2927,7 @@ function App() {
     _setDataRaw(({ _unresolvedImports, importErrors, ...d }) =>
       ({ ...d, project: meta.project, title: meta.title, duration: meta.duration, streams: [] }));
     importDiskRef.current = {};
+    keptNotedRef.current = new Set();
     resetHistory();
     setDirty(false);
     // Il ripiego non e' il file: nessun allineamento noto, e una scrittura su
@@ -2688,6 +2992,7 @@ function App() {
     // nominerebbe file che qui non esistono. Vuoto, si scrivono tutti; se un
     // progetto si apre, onProjectSelect lo riempie con quello appena letto.
     importDiskRef.current = {};
+    keptNotedRef.current = new Set();
     if (window.PGEAudio) window.PGEAudio.engine.invalidateAll();
 
     // I campi informativi in Settings vanno riscritti a forza: qui le path

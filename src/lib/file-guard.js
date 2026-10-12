@@ -17,10 +17,12 @@
  * cambia ancora fra la rilettura e la scrittura, qualcuno ci sta scrivendo
  * adesso, e rincorrerlo non finisce mai — lo si dice e si lascia riprovare.
  *
- * Per file e non "sul file" dal primo giorno: oggi l'editor scrive un file
- * solo, il master, ma con #184 una scrittura toccera' anche gli stream
- * importati, e un importato pulito si rilegge anche quando il master ha da
- * chiedere. La decisione va richiamata, non riscritta.
+ * Per file e non "sul file" dal primo giorno: una scrittura tocca il master e
+ * gli stream importati con `file:` (#184), e il bridge li guarda tutti — anche
+ * quelli che la richiesta non scrive, che il motore rilegge dal disco. Un
+ * importato pulito si rilegge anche quando il master ha da chiedere, e la sua
+ * rilettura rimpiazza solo i suoi stream: la decisione e' la stessa, cambia
+ * solo cosa vuol dire rileggere (app.jsx).
  *
  * Due meta':
  *   - la decisione pura (`decide`, `plan`, `ownChanges`), che non sa niente di
@@ -127,9 +129,14 @@
                          `state.doc` se c'e' e la sovrascrittura dei file in
                          `state.overwrite`;
        ownChanges(name)→ boolean: lavoro proprio su quel file, adesso;
-       reread(name)    → Promise<doc | null>: rilegge il file e torna il
+       reread(name, state)
+                       → Promise<doc | null>: rilegge il file e torna il
                          documento dell'editor dopo la rilettura; `null` se la
-                         rilettura non ha prodotto un documento.
+                         rilettura non ha prodotto un documento. `state` e' lo
+                         stato del giro: con due file da rileggere, il
+                         secondo riparte dal documento che ha lasciato il
+                         primo (`state.doc`), non dallo stato di React, che
+                         non e' sincrono.
      Torna { outcome, result, state, files? } con outcome:
        "done"          — scritto (o gia' su disco);
        "failed"        — un fallimento che non e' un rifiuto: passa com'e';
@@ -159,7 +166,7 @@
         return { outcome: "stopped", result, state: st, files: p.stop.length ? p.stop : files };
       }
       for (const name of p.reread) {
-        const doc = await hooks.reread(name);
+        const doc = await hooks.reread(name, st);
         if (doc === null || doc === undefined) {
           return { outcome: "reread-failed", result, state: st, files: [name] };
         }
