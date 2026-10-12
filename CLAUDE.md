@@ -3324,6 +3324,13 @@ the pattern drag and the double click.
 Declared: points written out of order are drawn as written (the engine sorts
 inside a segment), and a cut cubic still changes its tangents at the border
 (they are computed on points the cut removes) — `boundaryY`'s known limit.
+And one divergence the engine makes by itself, asserted in the eval suite: a
+pattern that **starts with a jump** (two points at the same x first) gets
+`DISCONTINUITY_OFFSET` on its first point only, which from the second cycle on
+lands after the second; with no per-point type the engine sorts its single
+segment and plays that cycle flat, with one it plays the ramp in every cycle.
+The editor reads the ramp — a redundant tag changing the sound is the engine's
+inconsistency, not a reading to copy.
 
 ### Audio playback (`audio-engine.js`)
 

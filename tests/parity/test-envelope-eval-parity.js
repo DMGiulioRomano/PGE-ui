@@ -294,6 +294,33 @@ parity({
       },
     },
     {
+      label: "la divergenza dichiarata: un pattern che comincia con un salto",
+      run: async (ask, assert) => {
+        /* Due punti alla stessa x in testa al pattern: un salto all'attacco del
+           ciclo. Il builder aggiunge DISCONTINUITY_OFFSET al solo PRIMO punto
+           di ogni ciclo dopo il primo, che finisce cosi' 1e-6 DOPO il secondo.
+           Senza un tipo per punto il motore fa un segmento solo e lo ordina
+           (`NormalSegment`: `sorted`), quindi dal secondo ciclo il salto si
+           inverte e il ciclo si appiattisce sul primo y; con un tipo su un
+           punto fa un segmento per coppia e suona la rampa in ogni ciclo, come
+           nel primo. L'editor legge e disegna la rampa: e' un'incoerenza del
+           motore — un tipo ridondante cambia il suono — e la lettura non la
+           copia. Asserita perche' il giorno che il motore la toglie, questo
+           caso parli (tests/parity/README.md, divergenze dichiarate). */
+        const AT = [0.25, 0.75];
+        const SALTO = [[[0, 0], [0, 1], [100, 0]], 1, 2];
+        const CON_TIPO = [[[0, 0], [0, 1, "linear"], [100, 0]], 1, 2];
+        const [nudo, tipato] = await engine(ask, [SALTO, CON_TIPO], AT);
+        const u = ui(SALTO, AT);
+        assert("l'editor legge la rampa in ogni ciclo", same(u, [0.5, 0.5], AT), JSON.stringify(u));
+        assert("…come il motore quando un punto porta un tipo (un segmento per coppia)",
+          same(u, tipato, AT), `${JSON.stringify(u)} contro ${JSON.stringify(tipato)}`);
+        assert("…e senza, il motore appiattisce dal secondo ciclo (la divergenza dichiarata)",
+          same(nudo.slice(0, 1), u.slice(0, 1), AT.slice(0, 1)) && !same(nudo.slice(1), u.slice(1), AT.slice(1)),
+          `${JSON.stringify(nudo)} contro ${JSON.stringify(u)}`);
+      },
+    },
+    {
       label: "il disegno e' la curva che il cursore legge",
       run: async (ask, assert) => {
         /* envPath porta in pixel la stessa curva: valutati come li traccia
