@@ -1153,6 +1153,26 @@
     return { items: [nb], interp: type };
   }
 
+  /* Un punto nuovo nel pattern di un blocco — il doppio click dentro il loop
+     — al suo posto in x, col tipo del punto PRIMA: e' il segmento di quel
+     punto che il nuovo spezza, e le due meta' restano quello che il segmento
+     era, come per il breakpoint nudo inserito in una zona (onCanvasDblClick).
+     Da #191 l'interp di un blocco sono i tag dei punti del suo pattern
+     (setBlockInterp), quindi un punto senza tag seguiva il globale: il doppio
+     click su un blocco `step` dentro una curva cubica rendeva cubica la meta'
+     dopo il punto, e il blocco `mixed`. Dopo l'ultimo punto vale lo stesso
+     (spezza il segmento in uscita, che e' del tag dell'ultimo); prima del
+     primo un punto prima non c'e', e niente tag. Torna `{pattern, index}`: il
+     pattern nuovo — quello di prima non si tocca — e dove sta il punto. */
+  function insertPatternPoint(pattern, x, y) {
+    const pat = Array.isArray(pattern) ? pattern : [];
+    let index = pat.findIndex((p) => p[0] > x);
+    if (index < 0) index = pat.length;
+    const left = index > 0 ? pat[index - 1] : null;
+    const pt = left && typeof left[2] === "string" ? [x, y, left[2]] : [x, y];
+    return { pattern: [...pat.slice(0, index), pt, ...pat.slice(index)], index };
+  }
+
   /* L'interp globale cambiato dal selettore in testata. Si scrive dove il
      motore lo legge: nel dict e' il `type` (wrapEnv), nella lista lo slot 3
      dei blocchi che ne dichiarano uno — il primo e' il globale, gli altri il
@@ -1660,7 +1680,7 @@
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
     isTypedEnv, unwrapEnv, wrapEnv, listInterp,
-    blockInterp, setBlockInterp, setGlobalInterp,
+    blockInterp, setBlockInterp, setGlobalInterp, insertPatternPoint,
     computeCycleDurations, isPreviewFallback, expandMixed, envExpand, envSketch, envCount,
     cubicTangents, hermite, envValueAt, envPath,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX, TIME_DIST_OVERFLOW_WHY,

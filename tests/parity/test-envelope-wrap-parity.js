@@ -19,8 +19,12 @@
 
 const { parity, loadUiLibs } = require("./harness.js");
 
-const window = loadUiLibs(["envelope-loops.js"]);
+/* envelope-utils.js per remapEnvY, la proporzione del paste: il paste e' una
+   delle porte da cui esce un envelope, e da #191 deve portare i tag del
+   pattern. Carica dopo envelope-loops.js, come nell'editor. */
+const window = loadUiLibs(["envelope-loops.js", "deviation-probability.js", "envelope-utils.js"]);
 const E = window.PGEEnv;
+const U = window.PGEEnvUtils;
 
 /* Una griglia fitta, piu' un margine fuori da [0, 1] (prima del primo punto
    e dopo l'ultimo il motore tiene gli estremi, e anche quello deve restare). */
@@ -255,6 +259,63 @@ parity({
         assert("…e la lista resta lista: lo slot 3 del blocco dice step",
           Array.isArray(scritto) && scritto[2][3] === "step", JSON.stringify(scritto));
         assert("…e cambiare il globale cambia davvero il suono (il caso discrimina)", !same(v, o), fmtWorst(v, o));
+      },
+    },
+    {
+      label: "l'interp di un blocco sopravvive al paste e al doppio click nel loop (#191)",
+      run: async (ask, assert) => {
+        /* Da #191 l'interp di un blocco sono i tag dei punti interni del suo
+           pattern (setBlockInterp): due gesti che toccano il pattern lo
+           perdevano, perche' scrivevano punti senza tag, che seguono il
+           globale. La curva e' quella del caso del pannello: un blocco step
+           dentro una curva cubica. */
+        const PAT = [[0, 0], [50, 1], [100, 0]];
+        const CURVA = { type: "cubic", points: [[0, 0.2], [0.2, 1], [0.4, 0.6], [PAT, 0.9, 2], [1, 0.3]] };
+        const w0 = E.unwrapEnv(CURVA);
+        const r0 = E.setBlockInterp(E.desugarBPGroups(w0.items), 3, "step", w0.interp, { dict: true });
+        const SRC = commitPath(r0.items, r0.interp, CURVA);
+        const untag = (pattern) => pattern.map((p) => [p[0], p[1]]);
+
+        /* Il paste (handlePasteEnv in EnvelopeEditor.jsx) riporta i valori dal
+           dominio della sorgente a quello della destinazione, qui da [0, 1] a
+           [-5, 5]. La proporzione e' affine e il motore e' lineare nei valori,
+           tangenti della cubica comprese: l'incollato deve suonare come la
+           sorgente riportata, punto per punto. remapEnvY ricostruiva ogni punto
+           del pattern come `[x, y]`. */
+        const paste = (src) => {
+          const u = E.unwrapEnv(src);
+          const r = U.remapEnvY(u.items, 0, 1, -5, 5);
+          return E.wrapEnv(E.resugarBPGroups(E.desugarBPGroups(r), u.interp || "linear"), u.interp, src);
+        };
+        const incollato = paste(SRC);
+        const primaPaste = JSON.parse(JSON.stringify(incollato));
+        primaPaste.points[3][0] = untag(primaPaste.points[3][0]);
+        const [s, p, pp] = await evaluate(ask, [SRC, incollato, primaPaste]);
+        const riportata = s.map((v) => -5 + 10 * v);
+        assert("il paste: il blocco incollato suona la sorgente riportata nel dominio nuovo", same(riportata, p),
+          `${fmtWorst(riportata, p)}; incollato ${JSON.stringify(incollato)}`);
+        assert("…e il pattern senza tag che il paste scriveva no (il caso discrimina)",
+          !same(riportata, pp), fmtWorst(riportata, pp));
+
+        /* Il doppio click dentro il loop aggiunge un punto al pattern. Messo
+           SULLA curva — a x = 25%, dove lo step tiene ancora il primo punto,
+           y = 0 — non deve cambiare niente di cio' che suona: le due meta' del
+           segmento che spezza restano step. Senza tag la seconda seguiva il
+           globale, cubica. */
+        const items = E.desugarBPGroups(E.unwrapEnv(SRC).items);
+        const blk = items[3];
+        const ins = E.insertPatternPoint(blk[0], 25, 0);
+        const conPunto = (pattern) => {
+          const nb = blk.slice(); nb[0] = pattern;
+          return commitPath(items.map((it, i) => (i === 3 ? nb : it)), E.unwrapEnv(SRC).interp, SRC);
+        };
+        const scritto = conPunto(ins.pattern);
+        const primaDbl = conPunto([...blk[0], [25, 0]].sort((a, b) => a[0] - b[0]));
+        const [o, d, pd] = await evaluate(ask, [SRC, scritto, primaDbl]);
+        assert("il doppio click: un punto sulla curva non cambia il suono del blocco", same(o, d),
+          `${fmtWorst(o, d)}; scritto ${JSON.stringify(scritto)}`);
+        assert("…e il punto senza tag che si inseriva prima si' (il caso discrimina)",
+          !same(o, pd), fmtWorst(o, pd));
       },
     },
   ],

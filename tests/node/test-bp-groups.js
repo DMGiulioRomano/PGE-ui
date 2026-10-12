@@ -883,6 +883,33 @@ console.log("\n── l'interp di un blocco compatto (#191) ──");
   assert("…e si rilegge con la distribuzione nello slot 4",
     E.parseEnvLiteral(E.fmtCompact([PAT, 1, 2, null, "exponential"]))[4] === "exponential");
 
+  /* insertPatternPoint: il punto che il doppio click mette dentro un loop.
+     Da #191 l'interp di un blocco sono i tag dei punti del suo pattern
+     (setBlockInterp), quindi un punto nuovo senza tag seguiva il globale: il
+     doppio click su un blocco `step` dentro una curva cubica rendeva cubica la
+     meta' del segmento dopo il punto, e il blocco `mixed`. Il punto prende il
+     tipo del punto prima, come il breakpoint nudo inserito in una zona. */
+  const STEP_PAT = [[0, 0, "step"], [50, 1, "step"], [100, 0]];
+  const ins = E.insertPatternPoint(STEP_PAT, 25, 0.5);
+  assert("insertPatternPoint: il punto va al suo posto in x, e torna l'indice",
+    ins.index === 1 && ins.pattern.length === 4 && ins.pattern[1][0] === 25, JSON.stringify(ins));
+  assert("…e prende il tag del punto prima: le due meta' del segmento restano step",
+    eq(ins.pattern[1], [25, 0.5, "step"]), JSON.stringify(ins.pattern));
+  assert("…cosi' il blocco resta step dentro la curva cubica",
+    E.blockInterp([ins.pattern, 1, 2], "cubic") === "step");
+  assert("…e il pattern di prima non si tocca (l'undo lo ritrova com'era)",
+    eq(STEP_PAT, [[0, 0, "step"], [50, 1, "step"], [100, 0]]));
+  assert("dopo un punto senza tag: niente tag, segue il globale come il segmento che spezza",
+    eq(E.insertPatternPoint(PAT, 25, 0.5).pattern[1], [25, 0.5]));
+  assert("dopo l'ultimo punto: ne prende il tag, cioe' il segmento in uscita che spezza",
+    eq(E.insertPatternPoint([[0, 0], [80, 1, "step"]], 90, 0.2).pattern,
+       [[0, 0], [80, 1, "step"], [90, 0.2, "step"]]));
+  assert("prima del primo punto: nessun punto prima, nessun tag",
+    eq(E.insertPatternPoint([[10, 0, "step"], [100, 1]], 5, 0.3),
+       { pattern: [[5, 0.3], [10, 0, "step"], [100, 1]], index: 0 }));
+  assert("un tag che non e' una stringa non si eredita",
+    eq(E.insertPatternPoint([[0, 0, null], [100, 1]], 50, 0.5).pattern[1], [50, 0.5]));
+
   /* Il cablaggio nell'EnvelopeEditor, che in node non gira: il pannello del
      loop scrive l'interp per setBlockInterp, il selettore globale per
      setGlobalInterp ed e' visibile anche con un loop, i setter del pannello
@@ -897,6 +924,20 @@ console.log("\n── l'interp di un blocco compatto (#191) ──");
     /const showGlobalInterp\s*=\s*!interpIsFixed\s*;/.test(eeSrc));
   assert("i setter del pannello non dichiarano lo slot 3 da soli",
     !/interp\s*\|\|\s*"linear"\s*,\s*dist/.test(eeSrc) && !/cleanPat/.test(eeSrc));
+  /* Il trascinamento di un punto del pattern ricostruiva il blocco con i soli
+     slot 0..4 (`[newPattern, block.raw[1], …, block.raw[4]]`): perdeva `wrap`,
+     lo slot 5, il difetto che #191 ha tolto ai setter del pannello e al menu
+     del segmento. Il blocco si copia, e cambia solo il pattern. */
+  const dragAt = eeSrc.indexOf("function startPatternDrag(");
+  const drag = dragAt < 0 ? "" : eeSrc.slice(dragAt, eeSrc.indexOf("function startLoopEndDrag(", dragAt));
+  assert("il trascinamento di un punto del pattern copia il blocco: nessuno slot si perde",
+    drag.length > 0 && /block\.raw\.slice\(\)/.test(drag) && !/\braw\[[1-5]\]/.test(drag), drag.slice(-400));
+  assert("…e nessun altro punto dell'editor ricostruisce un blocco elencandone gli slot",
+    !/block\.raw\[3\]\s*,\s*block\.raw\[4\]/.test(eeSrc));
+  const dbl = eeSrc.slice(eeSrc.indexOf("function onCanvasDblClick("),
+    eeSrc.indexOf("function rescaleZoneItems("));
+  assert("il doppio click dentro un loop inserisce il punto per insertPatternPoint (il tipo del punto prima)",
+    /PGEEnv\.insertPatternPoint\(\s*pattern\b/.test(dbl) && !/\[\.\.\.pattern,\s*newPt\]/.test(dbl), dbl.slice(0, 200));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

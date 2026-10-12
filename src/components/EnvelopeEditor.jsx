@@ -1064,7 +1064,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       newVal = clampY(newVal);
       const newPattern = pattern.map((p, i) => i === patIdx ?
       (p.length >= 3 ? [+xPct.toFixed(2), +newVal.toFixed(yPrec), p[2]] : [+xPct.toFixed(2), +newVal.toFixed(yPrec)]) : p);
-      const newBlock = [newPattern, block.raw[1], block.raw[2], block.raw[3], block.raw[4]].filter((x) => x !== undefined);
+      // Il blocco si copia e cambia solo il pattern. Ricostruito slot per slot
+      // (0..4) perdeva `wrap`, lo slot 5: il difetto dei setter del pannello
+      // del loop e del menu del segmento (#191), che qui era rimasto.
+      const newBlock = block.raw.slice();
+      newBlock[0] = newPattern;
       const updated = rawEnv.map((it, i) => i === blockOrigIdx ? newBlock : it);
       commit(updated);
     }
@@ -1175,14 +1179,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const COLLIDE = 0.5;
       if (pattern.some((p) => Math.abs(p[0] - xPct) < COLLIDE)) return;
       xPct = Math.max(minPct, Math.min(maxPct, xPct));
-      const newPt = [+xPct.toFixed(2), +val.toFixed(yPrec)];
-      const newPattern = [...pattern, newPt].sort((a, b) => a[0] - b[0]);
+      // Il punto prende il tipo del punto prima, come il breakpoint nudo qui
+      // sotto (PGEEnv.insertPatternPoint): da #191 l'interp del blocco sta nei
+      // tag del pattern, e un punto senza tag seguiva il globale — la meta'
+      // del segmento dopo il punto cambiava suono.
+      const ins = PGEEnv.insertPatternPoint(pattern, +xPct.toFixed(2), +val.toFixed(yPrec));
       const newBlock = rawBlock.slice();
-      newBlock[0] = newPattern;
+      newBlock[0] = ins.pattern;
       const next = rawEnv.map((it, i) => i === hostBlock.originalIdx ? newBlock : it);
       commit(next);
-      const newPatIdx = newPattern.findIndex((p) => p === newPt);
-      setSelectedPattern({ blockIdx: hostBlock.originalIdx, patIdx: newPatIdx });
+      setSelectedPattern({ blockIdx: hostBlock.originalIdx, patIdx: ins.index });
       setSelectedBlock(null);
       setSelectedBP(null);
       return;

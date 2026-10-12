@@ -635,7 +635,14 @@
     return items.map(it => {
       if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
       if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
-      if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
+      // Il punto del pattern si copia e se ne cambia la y, come il breakpoint
+      // qui sopra: il tag `[x, y, type]` e' l'interp del segmento che ne parte,
+      // e da #191 quelli dei punti interni SONO l'interp del blocco
+      // (PGEEnv.setBlockInterp). Ricostruito `[x, y]`, il paste lo perdeva e
+      // il blocco incollato tornava a seguire il globale.
+      if (PGEEnv.isCompactBlock(it)) {
+        return [it[0].map(pt => { const r = pt.slice(); r[1] = remap(pt[1]); return r; }), ...it.slice(1)];
+      }
       return it;
     });
   }

@@ -3301,6 +3301,20 @@ console.log("\n── remapEnvY: il copia/incolla fra parametri, con un dominio 
   assert("blocco compatto: dominio aperto → finito, clamp e niente NaN",
     ok(blk) && eq(blk, [[[[0, 1], [100, 1]], 1, 4]]), JSON.stringify(blk));
   assert("non muta l'input", eq(DENS, [[0, 8], [0.5, 6000], [1, 0.5]]));
+
+  /* Il tag sul punto del pattern e' l'interp del segmento che ne parte, e da
+     #191 quelli dei punti interni SONO l'interp del blocco: il pannello del
+     loop lo scrive li' (PGEEnv.setBlockInterp). Il paste ricostruiva ogni
+     punto del pattern come `[x, y]`, e il blocco incollato tornava a seguire
+     il globale — un blocco step dentro una curva cubica incollato cubico. */
+  const TAGGED = [[[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]];
+  const pasted = R(TAGGED, 0, 1, 0, 10);
+  assert("blocco compatto: i tag del pattern restano, e sono l'interp del blocco (#191)",
+    eq(pasted, [[[[0, 0, "step"], [50, 10, "step"], [100, 0]], 1, 2]]), JSON.stringify(pasted));
+  assert("…cosi' il blocco incollato suona ancora step dentro una curva cubica",
+    window.PGEEnv.blockInterp(pasted[0], "cubic") === "step");
+  assert("…e la sorgente non si tocca",
+    eq(TAGGED, [[[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]]));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

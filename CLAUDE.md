@@ -3290,7 +3290,17 @@ engine, write a block's interp on its pattern**:
   `null`, which the engine reads as undeclared. The context menu on a pattern
   segment copies the block slot by slot (it rebuilt it from the non-null slots,
   so a null slot 3 let the distribution slide into it), and `fmtCompact` keeps
-  that `null`.
+  that `null`. So does the drag of a pattern point, which rebuilt the block
+  from slots 0..4 and dropped `wrap` the same way.
+- **The gestures that write pattern points carry the block's interp.** With
+  the interp in the pattern's tags, a point written without one follows the
+  global, and two gestures wrote them so. The paste (`remapEnvY`) rebuilt every
+  pattern point as `[x, y]`: a `step` block pasted into a cubic curve came out
+  cubic. It copies the point and changes its y now, as it always did for bare
+  points. The double click inside a loop (`insertPatternPoint`) gives the new
+  point the tag of the point before it, the rule a bare breakpoint inserted in
+  a zone already had: it splits that point's segment, and both halves keep its
+  type — untagged, the half after the point turned cubic and the block `mixed`.
 - **The freeze cut** (`truncateEnvArray`) closes a list's border with the
   list's global, and when the cut drops the block that spelled it, writes it
   in a dict's `type`: the head the cut exists to preserve would otherwise play
@@ -3304,10 +3314,13 @@ distributions, a discontinuity asked at its exact instant), with a presidio
 that is the old reading itself — expansion, cursor and drawing, frozen in the
 test — required to differ from the engine on the rows that say so.
 `test-envelope-wrap-parity.js` asks the dict with a block, the loop panel
-gesture and the global selector against their intent;
+gesture and the global selector against their intent, and a block set to `step`
+through the paste (the pasted curve plays the source mapped onto the new
+domain) and through a double click on the curve (nothing it plays changes);
 `test-envelope-cut-parity.js` the list whose global sits in a block.
 `tests/node/test-bp-groups.js` pins the shapes, the rules that need no engine
-(drawing and readout are one curve) and the wiring of the panel and selector.
+(drawing and readout are one curve) and the wiring of the panel, the selector,
+the pattern drag and the double click.
 Declared: points written out of order are drawn as written (the engine sorts
 inside a segment), and a cut cubic still changes its tangents at the border
 (they are computed on points the cut removes) — `boundaryY`'s known limit.
