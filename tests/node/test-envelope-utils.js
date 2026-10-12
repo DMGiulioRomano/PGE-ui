@@ -3081,10 +3081,12 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
       && /setModesOwner\(stream\.id\)/.test(block));
     const fire = (modesOwner, id, paramModes) => {
       const seen = { owner: NIENTE, modes: NIENTE };
+      // Il rifiuto del «file suo» (#205) si azzera nello stesso raccordo.
       new Function("modesOwner", "stream", "paramModes", "setModesOwner", "setParamModes",
-        block)(
+        "fileError", "setFileError", block)(
         modesOwner, { id }, paramModes,
-        (v) => { seen.owner = v; }, (v) => { seen.modes = v; });
+        (v) => { seen.owner = v; }, (v) => { seen.modes = v; },
+        null, () => {});
       return seen;
     };
     const cambio = fire("s1", "s2", { pan: "env" });

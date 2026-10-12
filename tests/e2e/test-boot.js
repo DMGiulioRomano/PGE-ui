@@ -1270,6 +1270,148 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         assert("...due rifiuti in console, uno per salvataggio", refused8.length === 2, refused8.join("\n      "));
         seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused8.includes(e)));
       }
+
+      // 9 — un file importato da due voci, e il file suo (#205). Lo stesso
+      // file importato da due voci del master e' un documento solo: una
+      // modifica di contenuto su una voce sola fa divergere le copie, e il
+      // salvataggio si rifiuta (#184). Il rimedio e' sulla riga `file`
+      // dell'Inspector: «file suo» da' allo stream `streams/<id>.yml` —
+      // creato al salvataggio, come la copia (#186) e la rinomina (#208) —
+      // tenendo l'id, cioe' la realizzazione; il file condiviso resta
+      // all'altra voce, byte per byte. Su un file che una voce sola importa,
+      // col nome che non e' il suo id, il gesto sposta il file: il vecchio,
+      // che nessuno importa piu', si cancella al salvataggio. Il disco lo si
+      // legge da qui (fs): un GET /import di un file che non c'e' sarebbe un
+      // 404, cioe' un errore in console messo dal test.
+      {
+        const jy = require("js-yaml");
+        const SHARED = "PGE_smoke_shared.yml";
+        const VOCI = "streams/voci.yml";
+        const cfg = (f) => path.join(session.paths.workspace, "configs", f);
+        const docOf = (f) => (fs.existsSync(cfg(f)) ? jy.load(fs.readFileSync(cfg(f), "utf8")) : null);
+        const vociBytes = fs.readFileSync(cfg(VOCI), "utf8");
+        const vociDoc = jy.load(vociBytes);
+        const entriesOfShared = () => docOf(SHARED).streams;
+        const entries0 = entriesOfShared();
+        // Il documento a meno dello stream_id, con le chiavi in ordine: e'
+        // il contenuto che si confronta, non la forma in cui e' scritto.
+        const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x)
+          ? Object.fromEntries(Object.keys(x).sort().map(j => [j, x[j]])) : x));
+        const sansId = (d) => ({ ...d, streams: d.streams.map(({ stream_id, ...rest }) => rest) });
+        const clipOf = async (id) => {
+          await page.locator(".lane .clip", { has: page.locator(".lbl", { hasText: new RegExp(`^${id} · `) }) }).click();
+          await wait(200);
+          if (!(await page.$(".pge-inspector"))) { await page.keyboard.press("i"); await wait(400); }
+        };
+        const OWN = ".pge-inspector .pge-prow button:text-is('file suo')";
+        const ownFileOf = async (id) => {
+          await clipOf(id);
+          await page.click(OWN);
+          await wait(600);                        // il gesto aspetta GET /import-dir
+        };
+        const fileOf = (id) => page.evaluate((x) => {
+          const l = [...document.querySelectorAll(".lane .clip .lbl")].find(e => e.textContent.startsWith(`${x} · `));
+          const f = l && l.querySelector(".clip-file");
+          return f ? f.textContent.trim() : null;
+        }, id);
+
+        await page.click(".bw-tabs button:nth-child(2)");
+        await page.evaluate((n) => {
+          const it = [...document.querySelectorAll(".pge-browser .it.proj")]
+            .find(e => (e.querySelector(".nm") || {}).textContent === n);
+          if (it) it.click();
+        }, SHARED);
+        let openedShared = true;
+        try {
+          await page.waitForFunction(() => {
+            const f = [...document.querySelectorAll(".lane .clip .clip-file")].map(e => e.textContent.trim());
+            return f.length === 2 && f.every(x => x === "streams/voci.yml");
+          }, null, { timeout: 10000 });
+        } catch { openedShared = false; }
+        assert("un file importato da due voci: coro e alto, tutti e due da streams/voci.yml",
+          openedShared && (await fileOf("coro")) === VOCI && (await fileOf("alto")) === VOCI,
+          JSON.stringify(await fileLabels()));
+
+        await clipOf("coro");
+        const btn0 = await page.$(OWN);
+        const title0 = btn0 ? await btn0.getAttribute("title") : null;
+        assert("la riga file dell'Inspector offre «file suo»: streams/coro.yml, e voci.yml resta ad alto",
+          !!btn0 && !(await btn0.isDisabled()) && /streams\/coro\.yml/.test(title0 || "")
+            && /resta a alto/.test(title0 || ""), String(title0));
+
+        // Una modifica di contenuto su una voce sola: la durata di coro.
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        await clipOf("coro");
+        await save();
+        const refusedC = await page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast")].map(t => ({
+            title: (t.querySelector(".tt-title") || {}).textContent || "",
+            msg: (t.querySelector(".tt-msg") || {}).textContent || "",
+          })).find(t => t.title === "Save refused" && /voci\.yml/.test(t.msg)));
+        assert("coro allungato da solo: il salvataggio si rifiuta, e il messaggio nomina il file suo",
+          !!refusedC && /file suo/.test(refusedC.msg), JSON.stringify(refusedC));
+        assert("...e niente e' scritto",
+          fs.readFileSync(cfg(VOCI), "utf8") === vociBytes && !fs.existsSync(cfg("streams/coro.yml"))
+            && canon(entriesOfShared()) === canon(entries0), JSON.stringify(entriesOfShared()));
+        // Il rifiuto e' persistente: un clic lo chiude.
+        await page.click(".pge-toast:has(.tt-title:text-is('Save refused'))");
+        await wait(200);
+
+        await ownFileOf("coro");
+        assert("«file suo»: coro passa a streams/coro.yml, alto resta su streams/voci.yml",
+          (await fileOf("coro")) === "streams/coro.yml" && (await fileOf("alto")) === VOCI,
+          JSON.stringify(await fileLabels()));
+        assert("...che al gesto non si scrive", !(await streamsDir()).includes("streams/coro.yml"),
+          JSON.stringify(await streamsDir()));
+        await clipOf("coro");
+        await save();
+        const coroDoc = docOf("streams/coro.yml");
+        assert("salvato: il conflitto e' sciolto, e streams/coro.yml e' un documento del laboratorio col nome dell'id",
+          !!coroDoc && coroDoc.streams.length === 1 && coroDoc.streams[0].stream_id === "coro"
+            && coroDoc.seed === vociDoc.seed, JSON.stringify(coroDoc));
+        assert("...con la modifica di coro, nella testa e nello stream",
+          !!coroDoc && coroDoc.duration === 4 && coroDoc.streams[0].duration === 4,
+          JSON.stringify(coroDoc && [coroDoc.duration, coroDoc.streams[0].duration]));
+        assert("...e streams/voci.yml resta ad alto, byte per byte", fs.readFileSync(cfg(VOCI), "utf8") === vociBytes);
+        const entriesC = entriesOfShared();
+        assert("la voce di coro nel master e' il file nuovo, senza stream_id; quella di alto non cambia",
+          canon(entriesC) === canon([{ file: "streams/coro.yml", onset: 0 }, entries0[1]]), JSON.stringify(entriesC));
+
+        // alto, ora l'unico che importa voci.yml: il gesto c'e' ancora, ed e'
+        // lo spostamento del file. Annullato prima del salvataggio, niente.
+        await clipOf("alto");
+        const btnA = await page.$(OWN);
+        const titleA = btnA ? await btnA.getAttribute("title") : null;
+        assert("su alto, che ora lo importa da solo, il gesto sposta voci.yml: si cancellera' al salvataggio",
+          /streams\/alto\.yml/.test(titleA || "") && /si cancella al salvataggio/.test(titleA || ""), String(titleA));
+        await ownFileOf("alto");
+        assert("«file suo» su alto: streams/alto.yml", (await fileOf("alto")) === "streams/alto.yml",
+          JSON.stringify(await fileLabels()));
+        await clipOf("alto");
+        await page.keyboard.press("Control+z");
+        await wait(300);
+        await save();
+        assert("annullato prima del salvataggio: niente su disco, e voci.yml resta",
+          (await fileOf("alto")) === VOCI && !fs.existsSync(cfg("streams/alto.yml"))
+            && fs.readFileSync(cfg(VOCI), "utf8") === vociBytes && canon(entriesOfShared()) === canon(entriesC),
+          JSON.stringify(await streamsDir()));
+
+        await ownFileOf("alto");
+        await clipOf("alto");
+        await save();
+        const altoDoc = docOf("streams/alto.yml");
+        assert("salvato: streams/alto.yml dice cio' che diceva voci.yml, con lo stream_id del suo nome",
+          !!altoDoc && altoDoc.streams[0].stream_id === "alto" && canon(sansId(altoDoc)) === canon(sansId(vociDoc)),
+          JSON.stringify(altoDoc));
+        assert("...e voci.yml, che il master non nomina piu', si cancella (#208)",
+          !fs.existsSync(cfg(VOCI)) && !(await streamsDir()).includes(VOCI), JSON.stringify(await streamsDir()));
+        assert("le due voci del master sono i due file nuovi, senza stream_id",
+          canon(entriesOfShared()) === canon([{ file: "streams/coro.yml", onset: 0 }, { file: "streams/alto.yml", onset: 4 }]),
+          JSON.stringify(entriesOfShared()));
+        await clipOf("alto");
+        assert("ogni stream ha il file del suo nome: il gesto non c'e' piu'", !(await page.$(OWN)));
+      }
     }
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni

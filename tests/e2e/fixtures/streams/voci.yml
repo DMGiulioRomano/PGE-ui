@@ -1,0 +1,22 @@
+seed: 1441
+duration: 3
+bpm: 120
+streams:
+- stream_id: voci
+  onset: 0
+  duration: 3
+  sample: smoke.wav
+  time_mode: normalized
+  density: 10
+  distribution: 0
+  grain:
+    duration: 0.05
+    envelope: hanning
+  pointer:
+    start: 0
+    speed_ratio: 1
+    loop_unit: normalized
+  pitch:
+    ratio: 1
+  pan: 0
+  volume: -6
