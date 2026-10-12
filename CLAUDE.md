@@ -2634,9 +2634,11 @@ its **placement**. The path is relative to the master's folder, i.e.
   stream's duration is declared and differs from the one read; an implicit one
   (PGE #205) is not materialized. The master's own top-level `duration` is the
   piece's length, derived from the streams like always — not a stream key.
-  A rename is placement: `stream_id` goes in the master and the file name
-  doesn't change — the sound changes, as on every rename, and the dot goes
-  yellow.
+  A rename is not placement any more: since #208 it moves the file to the
+  new name, the master entry losing its `stream_id` (see below). Only where
+  the file can't move — a file two entries import — does `stream_id` go in
+  the master entry. Either way the sound changes, as on every rename, and the
+  dot goes yellow.
 - **What gets written is decided against the disk, not against history.**
   `serializeImports(data).files` is how each file would read now (no header, so
   two calls on one state give one string); `changedImports(files, disk)` is the
@@ -2653,10 +2655,12 @@ its **placement**. The path is relative to the master's folder, i.e.
   render's older text, and an undo to that text then wrote nothing. If the
   bridge wrote nothing (`configWritten === false`), `releaseImports` gives the
   claim back, file by file, only where the map still holds the render's text:
-  a save in between keeps the last word. One deliberate
-  exception: a file still carrying the dead `dephase` spelling is left out of
-  the disk map, so the first save migrates it — the same rewrite the master
-  gets, after which the Inspector's notice goes quiet.
+  a save in between keeps the last word. A file still carrying the dead
+  `dephase` spelling is mapped to the text *read*, not to its serialization
+  (which never carries the dead key), so the first save migrates it — the
+  same rewrite the master gets, after which the Inspector's notice goes
+  quiet. It used to be left out of the map, which also made it "not on disk"
+  for #208's orphans (see below).
 - **Save and render write master and changed files together.** `onSave` /
   `onSaveAs` go through `POST /save` (`backend.fs.save`), and `runRender` puts
   the changed files in the POST body as `imports`: the engine re-reads the
