@@ -1166,6 +1166,110 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         (await streamsDir()).includes(FILE) && JSON.stringify(await entriesOf()) === JSON.stringify(entries8)
           && JSON.stringify(await yamlOf(await importText())) === JSON.stringify(ondaDoc),
         JSON.stringify(await entriesOf()));
+
+      // 8 — rinominare uno stream che il laboratorio tiene aperto (#208 con
+      // #185). Il file vecchio resta una lettura da rispettare finche' il
+      // salvataggio non lo cancella: se il laboratorio lo salva nel mezzo, il
+      // file nuovo nasce dalla sua versione e il vecchio si cancella; con
+      // modifiche proprie nello stream si chiede di quel file, e «sovrascrivi»
+      // scrive la versione di qui lasciando il vecchio col lavoro del
+      // laboratorio.
+      {
+        const jy = require("js-yaml");
+        const cfg = (f) => path.join(session.paths.workspace, "configs", f);
+        const labSaves = (f, mutate) => {
+          const doc = jy.load(fs.readFileSync(cfg(f), "utf8"));
+          mutate(doc);
+          fs.writeFileSync(cfg(f), "# scritto dal laboratorio\n" + jy.dump(doc, { flowLevel: 3 }));
+          return fs.readFileSync(cfg(f), "utf8");
+        };
+        const asks = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast.ask")].map(t => ({
+            title: (t.querySelector(".tt-title") || {}).textContent || "",
+            acts: [...t.querySelectorAll(".tt-act")].map(b => b.textContent),
+          })));
+        const titles = () => page.evaluate(() =>
+          [...document.querySelectorAll(".pge-toast .tt-title")].map(e => e.textContent));
+        const renameTo = async (name) => {
+          await importedClip();
+          if (!(await page.$(".pge-inspector"))) { await page.keyboard.press("i"); await wait(400); }
+          const input = await page.evaluateHandle(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "stream_id");
+            return r ? r.querySelector("input") : null;
+          });
+          await input.asElement().fill(name);
+          await page.keyboard.press("Enter");
+          await wait(600);                        // la rinomina aspetta GET /import-dir
+        };
+        const volumeShown = async () => {
+          await importedClip();
+          return page.evaluate(() => {
+            const r = [...document.querySelectorAll(".pge-inspector .pge-prow")]
+              .find(p => (p.querySelector(".k") || {}).textContent === "volume");
+            const v = r && r.querySelector(".val");
+            return v ? v.textContent : null;
+          });
+        };
+
+        // (a) niente di proprio nello stream: la rinomina sola non e' lavoro
+        // sul file vecchio. Si rilegge, e si salva.
+        await renameTo("marea");
+        assert("rinominato in marea: lo stream cambia file, e il vecchio c'e' ancora",
+          (await fileLabels()).includes("streams/marea.yml") && (await streamsDir()).includes(FILE),
+          JSON.stringify(await fileLabels()));
+        labSaves(FILE, d => { d.streams[0].volume = -4; });
+        await save();
+        await wait(500);
+        assert("il laboratorio salva il file vecchio dopo la rinomina: non si chiede niente",
+          (await asks()).length === 0, JSON.stringify(await asks()));
+        assert("...il file vecchio si rilegge, e lo dice", (await titles()).includes(`${FILE} riletto`),
+          JSON.stringify(await titles()));
+        assert("...lo stream rinominato ha la versione del laboratorio", (await volumeShown()) === "-4",
+          String(await volumeShown()));
+        const mareaA = await yamlOf(await importOf("streams/marea.yml"));
+        assert("...il file nuovo nasce da quella, con lo stream_id del suo nome",
+          !!mareaA && mareaA.streams[0].stream_id === "marea" && mareaA.streams[0].volume === -4,
+          JSON.stringify(mareaA && mareaA.streams[0]));
+        const dirA = await streamsDir();
+        assert("...e il vecchio, riletto, si cancella: niente lavoro rimasto in un orfano",
+          dirA.includes("streams/marea.yml") && !dirA.includes(FILE), JSON.stringify(dirA));
+
+        // (b) modifiche proprie (la durata, dopo la rinomina): si chiede del
+        // file vecchio, e «sovrascrivi» scrive la versione di qui. Il vecchio
+        // resta, col lavoro del laboratorio: il bridge non cancella un file
+        // cambiato.
+        // (Non `onda`: il passo 6 ha scritto uno stem con quel nome, e un id
+        // che possiede uno stem non si riprende.)
+        await renameTo("bonaccia");
+        assert("rinominato di nuovo, in bonaccia", (await fileLabels()).includes("streams/bonaccia.yml"),
+          JSON.stringify(await fileLabels()));
+        await importedClip();
+        await page.keyboard.press("Control+Shift+ArrowRight");
+        await wait(300);
+        const labB = labSaves("streams/marea.yml", d => { d.streams[0].volume = -8; });
+        await save();
+        const qb = await asks();
+        assert("con modifiche proprie nello stream rinominato: si chiede, del file vecchio",
+          qb.length === 1 && qb[0].title === "streams/marea.yml e' cambiato su disco"
+            && qb[0].acts.join(",") === "ricarica,sovrascrivi", JSON.stringify(qb));
+        assert("...e intanto non si scrive niente",
+          !(await streamsDir()).includes("streams/bonaccia.yml")
+            && fs.readFileSync(cfg("streams/marea.yml"), "utf8") === labB);
+        await page.click(".pge-toast.ask .tt-act:text-is('sovrascrivi')");
+        await wait(1200);
+        const bonacciaB = await yamlOf(await importOf("streams/bonaccia.yml"));
+        assert("sovrascrivi: il file nuovo e' la versione dell'editor",
+          !!bonacciaB && bonacciaB.streams[0].stream_id === "bonaccia" && bonacciaB.streams[0].volume === -4,
+          JSON.stringify(bonacciaB && bonacciaB.streams[0]));
+        assert("...e il vecchio resta, col lavoro del laboratorio byte per byte",
+          fs.readFileSync(cfg("streams/marea.yml"), "utf8") === labB);
+
+        // I due 409 di POST /save sono provocati da questo passo.
+        const refused8 = seen.errors.filter(e => / 409 /.test(e) && /\/save\b/.test(e));
+        assert("...due rifiuti in console, uno per salvataggio", refused8.length === 2, refused8.join("\n      "));
+        seen.errors.splice(0, seen.errors.length, ...seen.errors.filter(e => !refused8.includes(e)));
+      }
     }
 
     /* Il conteggio si rifa' alla fine: un errore nato durante le interazioni

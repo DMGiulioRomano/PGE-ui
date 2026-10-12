@@ -307,6 +307,116 @@ console.log("\n── avanti e indietro: il disco ricordato decide, non la stori
     JSON.stringify([Y.importCreates(p1, disk), Y.importOrphans(p1, disk)]));
 }
 
+console.log("\n── la rinomina ricorda da quale file viene: la guardia segue lo spostamento ──");
+{
+  /* Rinominare sposta lo stream in un file nuovo, e il vecchio diventa un
+   * orfano da cancellare. Ma il vecchio e' anche cio' che il laboratorio puo'
+   * avere aperto: se lo salva fra la rinomina e il salvataggio qui, il file
+   * nuovo nasceva dalla versione di PGE-ui e il lavoro del laboratorio restava
+   * nell'orfano (`kept`, cambiato). La rinomina ricorda la sua provenienza
+   * (`_import.from`): finche' il file vecchio e' nel disco ricordato, e' una
+   * lettura che le scritture rispettano come quella di ogni file importato —
+   * si manda la sua firma, e se e' cambiato si rilegge DENTRO lo stream
+   * rinominato, o si chiede. */
+  const d0 = open(), disk = diskOf(d0);
+  const d1 = { ...d0, streams: d0.streams.map(s => (s.id === "risacca" ? Y.renameImport(s, "marea", d0.streams, disk) : s)) };
+  const s1 = d1.streams.find(s => s.id === "marea");
+  assert("renameImport col disco ricordato: lo stream rinominato sa da quale file viene",
+    !!s1 && !!s1._import.from && s1._import.from.file === "streams/risacca.yml",
+    JSON.stringify(s1 && s1._import.from));
+  assert("...e col piazzamento che aveva DENTRO quel file (lo stream_id vecchio)",
+    !!s1 && s1._import.from && s1._import.from.place.stream_id === "risacca"
+      && s1._import.place.stream_id === "marea", JSON.stringify(s1 && s1._import));
+
+  // Il file vecchio come l'editor lo scriverebbe adesso: senza modifiche
+  // proprie e' quello che si sa su disco.
+  const src1 = Y.importMoveSources(d1, disk);
+  assert("importMoveSources: il file vecchio, com'era — la rinomina da sola non e' lavoro su quel file",
+    eq(Object.keys(src1), ["streams/risacca.yml"]) && src1["streams/risacca.yml"] === disk["streams/risacca.yml"],
+    JSON.stringify(Object.keys(src1)));
+  const edited = { ...d1, streams: d1.streams.map(s => (s.id === "marea" ? { ...s, volume: -1 } : s)) };
+  assert("...un volume toccato dopo la rinomina e' lavoro proprio anche sul file vecchio",
+    Object.keys(Y.changedImports(Y.importMoveSources(edited, disk), disk)).length === 1);
+  assert("importReadFiles col disco: le letture da rispettare comprendono il file vecchio",
+    eq(Y.importReadFiles(d1, disk), ["streams/marea.yml", "streams/onda.yml", "streams/risacca.yml"]),
+    JSON.stringify(Y.importReadFiles(d1, disk)));
+  assert("...senza disco, sono i file degli stream e basta (com'era)",
+    eq(Y.importReadFiles(d1), ["streams/marea.yml", "streams/onda.yml"]));
+  assert("il file vecchio resta orfano: la provenienza non lo nomina",
+    eq(Y.importOrphans(d1, disk), ["streams/risacca.yml"]));
+
+  // Finche' il file vecchio e' su disco, anche dopo un render che ha gia'
+  // scritto quello nuovo: il render non cancella, il laboratorio puo' ancora
+  // salvare il vecchio, e la prossima scrittura deve vederlo.
+  const afterRender = { ...disk, ...diskOf(d1) };
+  assert("dopo un render (il file nuovo scritto, il vecchio no), il vecchio e' ancora una provenienza",
+    eq(Object.keys(Y.importMoveSources(d1, afterRender)), ["streams/risacca.yml"]));
+  // Cancellato dal salvataggio, il file vecchio esce dal disco ricordato e
+  // con lui la provenienza.
+  const afterSave = { ...diskOf(d1) };
+  assert("cancellato il file vecchio, niente piu' provenienza",
+    eq(Y.importMoveSources(d1, afterSave), {}) && eq(Y.importReadFiles(d1, afterSave), ["streams/marea.yml", "streams/onda.yml"]));
+  // Un salvataggio che chiude lo spostamento (il file vecchio cancellato o
+  // rimasto) lo dice allo stato: `settleImportMoves`.
+  const settled = Y.settleImportMoves(d1, ["streams/risacca.yml"]);
+  assert("settleImportMoves toglie la provenienza dei file chiusi",
+    !settled.streams.find(s => s.id === "marea")._import.from
+      && eq(Y.importMoveSources(settled, afterRender), {}));
+  assert("...e lascia lo stesso oggetto quando non c'e' niente da chiudere",
+    Y.settleImportMoves(d0, ["streams/risacca.yml"]) === d0
+      && Y.settleImportMoves(d1, ["streams/onda.yml"]) === d1);
+
+  // Una copia mai salvata, rinominata: il nome di prima non e' mai stato su
+  // disco, e non c'e' una lettura da rispettare.
+  const src = d0.streams.find(s => s.id === "risacca");
+  const pasted = { ...d0, streams: [...d0.streams, Y.copyImport(JSON.parse(JSON.stringify(src)), "stream7")] };
+  const p1 = { ...pasted, streams: pasted.streams.map(s => (s.id === "stream7" ? Y.renameImport(s, "eco", pasted.streams, disk) : s)) };
+  assert("una copia mai salvata, rinominata, non ha provenienza",
+    !p1.streams.find(s => s.id === "eco")._import.from && eq(Y.importMoveSources(p1, disk), {}));
+  // Rinominata due volte prima di salvare: la provenienza e' il file che c'e'
+  // su disco, non il nome di passaggio.
+  const twice = { ...d1, streams: d1.streams.map(s => (s.id === "marea" ? Y.renameImport(s, "bonaccia", d1.streams, disk) : s)) };
+  const tw = twice.streams.find(s => s.id === "bonaccia");
+  assert("rinominata due volte: la provenienza resta il file su disco",
+    tw._import.file === "streams/bonaccia.yml" && tw._import.from.file === "streams/risacca.yml"
+      && tw._import.from.place.stream_id === "risacca", JSON.stringify(tw._import.from));
+  // ...e riportata al nome di prima: il file e' di nuovo il suo, niente da
+  // seguire.
+  const backAgain = { ...d1, streams: d1.streams.map(s => (s.id === "marea" ? Y.renameImport(s, "risacca", d1.streams, disk) : s)) };
+  assert("riportata al nome di prima, la provenienza se ne va: il file e' di nuovo il suo",
+    !backAgain.streams.find(s => s.id === "risacca")._import.from && eq(Y.importMoveSources(backAgain, disk), {}));
+  // Senza disco (un chiamante di prima), conta come su disco un file letto
+  // all'apertura: non `fresh`.
+  assert("renameImport senza disco: un file letto all'apertura e' una provenienza",
+    Y.renameImport(src, "marea", d0.streams)._import.from.file === "streams/risacca.yml");
+}
+
+console.log("\n── la rilettura del file vecchio entra nello stream rinominato ──");
+{
+  const d0 = open(), disk = diskOf(d0);
+  const d1 = { ...d0, streams: d0.streams.map(s => (s.id === "risacca" ? Y.renameImport(s, "marea", d0.streams, disk) : s)) };
+  // Il laboratorio salva il file vecchio: il volume cambia.
+  const labText = lab("risacca").replace("volume: -6", "volume: -3");
+  const out = Y.rereadImport(d1, "streams/risacca.yml", labText, { project: "brano" });
+  assert("rereadImport sul file vecchio: torna un documento", !!out.data && !out.error, out.error);
+  const s = out.data.streams.find(x => x.id === "marea");
+  assert("...lo stream rinominato prende il contenuto del laboratorio", !!s && s.volume === -3, JSON.stringify(s && s.volume));
+  assert("...e resta rinominato: l'id, il file nuovo da creare, la voce del master",
+    s.id === "marea" && s._import.file === "streams/marea.yml" && s._import.fresh === true
+      && eq(masterDoc(out.data).streams[0], { file: "streams/marea.yml", onset: 2.5 }),
+    JSON.stringify(s._import));
+  const doc = fileDoc(out.data, "streams/marea.yml");
+  assert("...il file nuovo dice cio' che dice quello del laboratorio, con lo stream_id del suo nome",
+    doc.streams[0].stream_id === "marea" && doc.streams[0].volume === -3, JSON.stringify(doc));
+  const src = Y.importMoveSources(out.data, disk);
+  assert("...e il file vecchio, come l'editor lo scriverebbe adesso, e' quello del laboratorio",
+    !!src["streams/risacca.yml"] && jsyaml.load(src["streams/risacca.yml"]).streams[0].volume === -3
+      && jsyaml.load(src["streams/risacca.yml"]).streams[0].stream_id === "risacca",
+    src["streams/risacca.yml"]);
+  assert("...gli altri stream sono gli stessi oggetti",
+    out.data.streams.filter(x => x.id !== "marea").every((x, i) => x === d1.streams.filter(y => y.id !== "marea")[i]));
+}
+
 /* ===========================================================================
  * 2. Il backend
  * ======================================================================== */
@@ -379,7 +489,9 @@ console.log("\n── app.jsx: la rinomina sposta il file, il salvataggio cancel
   assert("...con i file su disco ricordati e quelli del documento, non solo l'elenco",
     /importDiskRef\.current/.test(rn) && /importFilesOf\(/.test(rn));
   assert("...e la provenienza nuova la da' renameImport, dentro l'updater, sullo stato di ADESSO",
-    /setData\(d => \{[\s\S]*?renameImport\(s, newId, d\.streams\)/.test(rn));
+    /setData\(d => \{[\s\S]*?renameImport\(s, newId, d\.streams[,)]/.test(rn));
+  assert("...col disco ricordato: e' lui a dire se il file vecchio e' una lettura da seguire",
+    /setData\(d => \{[\s\S]*?renameImport\(s, newId, d\.streams, importDiskRef\.current\)/.test(rn));
   assert("...l'elenco solo quando il file si sposta (uno stream nel master non fa giri di rete)",
     /importRenameFile\(/.test(rn) && rn.indexOf("importRenameFile(") < list);
   // Dopo l'await lo stato puo' essere un altro (lo stream cancellato, un undo,
@@ -434,6 +546,24 @@ console.log("\n── app.jsx: la rinomina sposta il file, il salvataggio cancel
   const rri = fnBody("async function rereadImportFile(");
   assert("...anche alla rilettura di quel file (#185)",
     /deviationProbabilityLegacy\)\)\s*\{\s*disk\[file\]\s*=\s*r\.text/.test(rri), "");
+
+  // La guardia segue lo spostamento: il file vecchio di uno stream rinominato
+  // e' una lettura da rispettare finche' e' nel disco ricordato.
+  const guard = fnBody("function importGuard(");
+  assert("importGuard manda anche la firma del file vecchio: importReadFiles col disco ricordato",
+    /importReadFiles\(doc, importDiskRef\.current\)/.test(guard), guard.slice(0, 300));
+  const own = fnBody("function fileHasOwnChanges(");
+  const ownImp = own.slice(own.indexOf("if (name !== master)"));
+  assert("fileHasOwnChanges: un file che nessuno stream importa ma da cui uno e' venuto si confronta com'e' adesso",
+    /importMoveSources\(d, importDiskRef\.current\)/.test(ownImp.slice(0, ownImp.indexOf("FG.ownChanges("))),
+    ownImp.slice(0, 600));
+  assert("rereadImportFile: il disco ricordato del file vecchio e' quello appena letto, nella forma dell'editor",
+    /importMoveSources\(out\.data, importDiskRef\.current\)/.test(rri), "");
+  const saveOk = save.slice(save.indexOf('out.outcome !== "done"'));
+  assert("il salvataggio chiude gli spostamenti dei file che ha chiesto di cancellare",
+    /settleImportMoves\([^)]*rem\)/.test(saveOk), "");
+  assert("...Save As e il render no: il file vecchio non l'hanno toccato",
+    !/settleImportMoves\(/.test(saveAs) && !/settleImportMoves\(/.test(rr));
 
   const insp = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
   assert("l'Inspector aspetta la risposta della rinomina (ora una Promise)",

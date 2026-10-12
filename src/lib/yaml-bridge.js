@@ -1098,12 +1098,18 @@
   // scrittura deve rispettare. Diversamente da `importFilesOf`, una voce che
   // non si e' risolta non conta: di quel file l'editor non tiene niente — ne'
   // da perdere ne' da mostrare — e il master la riscrive com'era.
-  function importReadFiles(data) {
+  //
+  // Col disco ricordato (`disk`) anche i file da cui uno stream rinominato e'
+  // venuto (`importMoveSources`, #208): l'editor non ne tiene piu' uno stream
+  // col loro nome, ma ne tiene il contenuto, e il laboratorio puo' averli
+  // riscritti.
+  function importReadFiles(data, disk) {
     const out = [];
     for (const s of (data && data.streams) || []) {
       const f = s && s._import && s._import.file;
       if (typeof f === "string" && f && !out.includes(f)) out.push(f);
     }
+    if (disk) for (const f of Object.keys(importMoveSources(data, disk))) if (!out.includes(f)) out.push(f);
     return out;
   }
 
@@ -1128,8 +1134,12 @@
     const out = [];
     for (let i = 0; i < streams.length; i++) {
       const s = streams[i];
-      if (!s || !s._import || s._import.file !== file) { out.push(s); continue; }
-      const entry = { ...(s._import.entry || {}), file };
+      const imp = s && s._import;
+      // Uno stream rinominato (#208) il cui file vecchio e' quello riletto: il
+      // contenuto viene da li', il resto della rinomina resta.
+      const moved = !!imp && imp.file !== file && !!imp.from && imp.from.file === file;
+      if (!imp || (imp.file !== file && !moved)) { out.push(s); continue; }
+      const entry = { ...(imp.entry || {}), file };
       const r = resolveImportEntry(entry, i, masterName, { [file]: { text } });
       if (!r.stream) return { error: r.errors.join("; ") };
       const ns = streamFromYaml(r.stream, i, samples);
@@ -1138,9 +1148,21 @@
       ns.onset = s.onset;
       ns.mute = s.mute;
       ns.solo = s.solo;
-      // La provenienza e' quella appena letta (senza `fresh`), con la voce
-      // del master com'era scritta: e' da li' che il master si riscrive.
-      ns._import = { ...r.meta, entry: s._import.entry };
+      if (moved) {
+        // Il file resta quello nuovo, da creare finche' non e' scritto, con la
+        // testa e il piazzamento interno appena letti — lo `stream_id` del suo
+        // nome, se il file ne scrive uno — e la provenienza resta il file
+        // riletto, col piazzamento che ha adesso.
+        const place = JSON.parse(JSON.stringify(r.meta.place || {}));
+        if ("stream_id" in place) place.stream_id = s.id;
+        ns._import = { ...r.meta, file: imp.file, entry: imp.entry, place,
+                       from: { file, place: JSON.parse(JSON.stringify(r.meta.place || {})) } };
+        if (imp.fresh) ns._import.fresh = true;
+      } else {
+        // La provenienza e' quella appena letta (senza `fresh`), con la voce
+        // del master com'era scritta: e' da li' che il master si riscrive.
+        ns._import = { ...r.meta, entry: imp.entry };
+      }
       out.push(ns);
       touched = true;
     }
@@ -1266,7 +1288,7 @@
      del master tiene le sue chiavi come erano scritte (un onset in forma di
      espressione, un `mute: false`, una chiave estranea che l'errore deve
      continuare a mostrare): cambia il file, e lo `stream_id` se ne va. */
-  function renameImport(s, newId, streams) {
+  function renameImport(s, newId, streams, disk) {
     const id = String(newId);
     const file = importRenameFile(s, id, streams);
     if (!file) return { ...s, id };
@@ -1279,17 +1301,73 @@
     if (!("file" in entry)) entry.file = file;
     const place = JSON.parse(JSON.stringify(imp.place || {}));
     if ("stream_id" in place) place.stream_id = id;
+    /* Da dove viene (`from`): il file che lo stream lascia, se e' su disco —
+       nel disco ricordato, o letto all'apertura per chi non lo passa — col
+       piazzamento che lo stream ha DENTRO quel file. Un nome di passaggio, mai
+       scritto, non lo e': la provenienza resta quella di prima. Riportato al
+       file da cui veniva, non c'e' piu' niente da seguire. */
+    const onDisk = disk ? Object.prototype.hasOwnProperty.call(disk, imp.file) : imp.fresh !== true;
+    const from = onDisk ? { file: imp.file, place: JSON.parse(JSON.stringify(imp.place || {})) } : imp.from;
+    const out = {
+      ...imp,
+      file,
+      entry,
+      head: JSON.parse(JSON.stringify(imp.head || {})),
+      place,
+      fresh: true,
+    };
+    if (from && from.file !== file) out.from = from;
+    else delete out.from;
+    return { ...s, id, _import: out };
+  }
+
+  /* ---------- il file che uno stream rinominato ha lasciato (#208 + #185) ----------
+   *
+   * La rinomina sposta lo stream in un file nuovo, e il vecchio diventa un
+   * orfano che il salvataggio cancella. Ma il vecchio e' anche il documento
+   * che il laboratorio puo' avere aperto, col nome di prima: se lo salva fra
+   * la rinomina e il salvataggio qui, il file nuovo nasceva dalla versione di
+   * PGE-ui e il lavoro del laboratorio restava nell'orfano, che il bridge non
+   * cancella perche' cambiato. Finche' il file vecchio e' nel disco ricordato,
+   * la rinomina lo segue: e' una lettura che le scritture rispettano come
+   * quella di ogni file importato (`importReadFiles`), e un rifiuto su di lui
+   * si rilegge DENTRO lo stream rinominato (`rereadImport`) o chiede, se lo
+   * stream ha modifiche proprie. Il salvataggio che lo cancella — o lo lascia
+   * — chiude lo spostamento (`settleImportMoves`). */
+
+  // Il file vecchio di ogni stream rinominato, come l'editor lo scriverebbe
+  // adesso: `{[file]: testo}`, lo stream di adesso col piazzamento che aveva
+  // dentro quel file. Solo per un file che il disco ricordato ha e che nessuno
+  // stream del documento importa. Confrontato col disco ricordato dice se lo
+  // stream ha modifiche proprie anche per quel file.
+  function importMoveSources(data, disk) {
+    const out = {};
+    if (!disk) return out;
+    const named = new Set(importFilesOf(data));
+    for (const s of (data && data.streams) || []) {
+      const imp = s && s._import;
+      const from = imp && imp.from;
+      if (!from || typeof from.file !== "string" || !from.file) continue;
+      if (!Object.prototype.hasOwnProperty.call(disk, from.file)) continue;
+      if (named.has(from.file) || Object.prototype.hasOwnProperty.call(out, from.file)) continue;
+      out[from.file] = dumpWithInlineEnvelopes(importedFileDoc({ ...s, _import: { ...imp, file: from.file, place: from.place } }));
+    }
+    return out;
+  }
+
+  // Lo stato senza la provenienza dei file in `files`: lo spostamento e'
+  // chiuso. Lo stesso oggetto se non c'e' niente da chiudere.
+  function settleImportMoves(data, files) {
+    const done = new Set(files || []);
+    const streams = (data && data.streams) || [];
+    if (!done.size || !streams.some(s => s && s._import && s._import.from && done.has(s._import.from.file))) return data;
     return {
-      ...s,
-      id,
-      _import: {
-        ...imp,
-        file,
-        entry,
-        head: JSON.parse(JSON.stringify(imp.head || {})),
-        place,
-        fresh: true,
-      },
+      ...data,
+      streams: streams.map(s => {
+        if (!(s && s._import && s._import.from && done.has(s._import.from.file))) return s;
+        const { from, ...rest } = s._import;
+        return { ...s, _import: rest };
+      }),
     };
   }
 
@@ -2021,5 +2099,7 @@
     importOrphans,
     importRenameFile,
     renameImport,
+    importMoveSources,
+    settleImportMoves,
   };
 })();

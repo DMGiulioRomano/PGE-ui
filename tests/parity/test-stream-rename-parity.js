@@ -108,5 +108,67 @@ parity({
         }
       },
     },
+    {
+      /* Il laboratorio salva il file VECCHIO fra la rinomina e il salvataggio
+         qui: il bridge rifiuta (la firma letta del file vecchio non e' piu'
+         quella), l'editor rilegge quel file dentro lo stream rinominato
+         (`rereadImport`) e riprova. Cio' che il salvataggio lascia su disco —
+         il file nuovo scritto da quello stato, il vecchio cancellato — deve
+         suonare per il motore come il brano NON rinominato col file del
+         laboratorio, a parte l'id: il lavoro del laboratorio non si perde
+         nello spostamento. */
+      label: "il file vecchio salvato dal laboratorio dopo la rinomina: il motore trova il suo stream nel file nuovo",
+      run: async (ask, assert) => {
+        const load = (t) => window.jsyaml.load(t);
+        const resolve = async (master, files) => {
+          const r = await ask("resolve_stream_files", { master, files });
+          if (!r.ok) throw new Error(`resolve_stream_files: ${r.error}`);
+          return r.value;
+        };
+        const hexOf = async (stream) => {
+          const r = await ask("fingerprint", { stream });
+          if (!r.ok) throw new Error(`fingerprint: ${r.error}`);
+          return r.value.hex;
+        };
+        const loadAll = (files) => Object.fromEntries(Object.entries(files).map(([f, t]) => [f, load(t)]));
+        const d0 = open();
+        const disk0 = Y.serializeImports(d0).files;
+
+        for (const src of d0.streams.filter(s => s._import)) {
+          const newId = `${src.id}-r`;
+          const old = src._import.file;
+          const data = { ...d0, streams: d0.streams.map(s => (s === src ? Y.renameImport(s, newId, d0.streams, disk0) : s)) };
+          // Il laboratorio riscrive il file vecchio a modo suo, col volume cambiato.
+          const labDoc = load(DISK[old]);
+          labDoc.streams[0].volume = -7.5;
+          const labText = "# scritto dal laboratorio\n" + window.jsyaml.dump(labDoc);
+          assert(`${src.id}: il file vecchio e' una lettura da rispettare`,
+            Y.importReadFiles(data, disk0).includes(old), JSON.stringify(Y.importReadFiles(data, disk0)));
+          const out = Y.rereadImport(data, old, labText, { project: "master" });
+          assert(`${src.id}: la rilettura del file vecchio non da' errori`, !out.error, out.error);
+          if (out.error) continue;
+          const reread = out.data;
+          const moved = reread.streams.find(s => s.id === newId);
+          // Il disco dopo il salvataggio che riprova.
+          const disk1 = { ...disk0, ...Y.importMoveSources(reread, disk0) };
+          const gone = Y.importOrphans(reread, disk1);
+          const files = { ...DISK, [old]: labText, ...Y.serializeImports(reread).files };
+          for (const f of gone) delete files[f];
+          assert(`${src.id}: il file vecchio si cancella, quello nuovo c'e'`,
+            gone.length === 1 && gone[0] === old && moved._import.file in files, JSON.stringify(gone));
+
+          const after = (await resolve(load(Y.serialize(reread)), loadAll(files))).streams;
+          const byId = Object.fromEntries(after.map(s => [String(s.stream_id), s]));
+          const withLab = (await resolve(load(MASTER), loadAll({ ...DISK, [old]: labText }))).streams;
+          const labStream = withLab.find(s => String(s.stream_id) === String(src.id));
+          assert(`${src.id}: per il motore lo stream nel file nuovo e' quello del laboratorio, con l'id nuovo`,
+            !!byId[newId] && !!labStream
+              && (await hexOf(byId[newId])) === (await hexOf({ ...labStream, stream_id: newId })),
+            JSON.stringify({ volume: byId[newId] && byId[newId].volume }));
+          assert(`${src.id}: ...e non quello di prima della rinomina`,
+            !!byId[newId] && byId[newId].volume === -7.5, String(byId[newId] && byId[newId].volume));
+        }
+      },
+    },
   ],
 });

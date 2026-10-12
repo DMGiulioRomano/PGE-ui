@@ -806,8 +806,10 @@ console.log("\n── app.jsx: le catene ──");
   {
     const at = APP_SRC.indexOf("function importGuard(");
     const body = at < 0 ? "" : APP_SRC.slice(at, APP_SRC.indexOf("\n  }\n", at));
+    // Col disco ricordato: e' lui a dire quali file vecchi degli stream
+    // rinominati sono ancora letture da rispettare (#208, test-stream-orphans.js).
     assert("importGuard: i file letti del documento, e le sovrascritture che non sono del master",
-      /importReadFiles\(doc\)/.test(body) && /overwrite[\s\S]*filter\([\s\S]*!== master/.test(body),
+      /importReadFiles\(doc, importDiskRef\.current\)/.test(body) && /overwrite[\s\S]*filter\([\s\S]*!== master/.test(body),
       body.slice(0, 300));
     assert("...e il render la porta nel suo POST",
       /const optsFor = \(doc, st,[\s\S]*?\.\.\.importGuard\(doc, st, configName\)/.test(APP_SRC));

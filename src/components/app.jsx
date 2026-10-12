@@ -174,11 +174,19 @@ function App() {
        testo di adesso che non e' quello che si sa su disco (`importDiskRef`),
        o due copie che non dicono la stessa cosa. Il master e gli altri file
        non entrano: la sua rilettura rimpiazza solo i suoi stream
-       (`rereadImportFile`). Un file che il documento non importa piu' non ha
-       niente da perdere. La grafia morta `dephase` conta come sotto. */
+       (`rereadImportFile`). Il file vecchio di uno stream rinominato (#208)
+       si confronta come l'editor lo scriverebbe adesso (`importMoveSources`):
+       la rinomina da sola non e' lavoro su quel file, un volume toccato si'.
+       Un file che il documento non importa piu' e da cui nessuno stream e'
+       venuto non ha niente da perdere. La grafia morta `dephase` conta come
+       sotto. */
     if (name !== master) {
       if (imp.conflicts.includes(name)) return true;
-      if (!Object.prototype.hasOwnProperty.call(imp.files, name)) return false;
+      if (!Object.prototype.hasOwnProperty.call(imp.files, name)) {
+        const moved = PY.importMoveSources(d, importDiskRef.current);
+        if (!Object.prototype.hasOwnProperty.call(moved, name)) return false;
+        return Object.keys(PY.changedImports({ [name]: moved[name] }, importDiskRef.current)).length > 0;
+      }
       return Object.keys(PY.changedImports({ [name]: imp.files[name] }, importDiskRef.current)).length > 0;
     }
     if (FG.ownChanges(PY.serialize(d), syncedDocRef.current[name])) return true;
@@ -1707,7 +1715,11 @@ function App() {
       // two streams sharing an id. The file move is decided again here too,
       // on the streams of now (`renameImport`).
       if (!d.streams.some(s => s.id === oldId) || d.streams.some(s => s.id === newId)) return d;
-      const next = { ...d, streams: d.streams.map(s => s.id === oldId ? PY.renameImport(s, newId, d.streams) : s) };
+      // The remembered disk says whether the file the stream leaves is on
+      // disk: then it stays a read the next write respects (`_import.from`) —
+      // the lab may save it before this editor does.
+      const next = { ...d, streams: d.streams.map(s => s.id === oldId
+        ? PY.renameImport(s, newId, d.streams, importDiskRef.current) : s) };
       return TR.applyTracks(next, TR.renameStreamId(TR.deriveTracks(d), oldId, newId));
     });
     if (moving) {
@@ -2045,7 +2057,12 @@ function App() {
     {
       const files = PY.serializeImports(out.data).files;
       const disk = { ...importDiskRef.current };
+      // Il file vecchio di uno stream rinominato (#208): nessuno stream lo
+      // importa, ma il suo contenuto e' appena entrato in quello rinominato, e
+      // resta una lettura da rispettare finche' il salvataggio non lo cancella.
+      const moved = PY.importMoveSources(out.data, importDiskRef.current);
       if (Object.prototype.hasOwnProperty.call(files, file)) disk[file] = files[file];
+      else if (Object.prototype.hasOwnProperty.call(moved, file)) disk[file] = moved[file];
       else delete disk[file];
       // La grafia morta `dephase` si migra alla prima scrittura, come
       // all'apertura: nel disco ricordato col testo letto, che non e' mai la
@@ -2065,10 +2082,12 @@ function App() {
      file di #184), da mandare con il master: i file di cui il documento tiene
      il contenuto, di cui il backend manda la firma letta — tutti, scritti o no,
      perche' il motore li rilegge dal disco — e le risposte «sovrascrivi» date
-     su quei file. */
+     su quei file. Con loro il file vecchio di uno stream rinominato (#208),
+     finche' e' nel disco ricordato: il laboratorio puo' averlo riscritto, e il
+     file nuovo nascerebbe dalla versione di qui. */
   function importGuard(doc, st, master) {
     return {
-      importFiles: window.PGEYaml ? window.PGEYaml.importReadFiles(doc) : [],
+      importFiles: window.PGEYaml ? window.PGEYaml.importReadFiles(doc, importDiskRef.current) : [],
       overwriteImports: ((st && st.overwrite) || []).filter(f => f !== master),
     };
   }
@@ -2237,6 +2256,11 @@ function App() {
       if (out.outcome !== "done") { reportFileOutcome("save", out, { master: name }); return; }
       markImportsWritten(imp.bodies);
       const nRemoved = settleRemovals(rem, res);
+      // Il file vecchio di uno stream rinominato (#208) e' fra quelli chiesti
+      // da cancellare: cancellato o rimasto, lo spostamento e' chiuso, e da qui
+      // quel file non e' piu' una lettura di questo stream. Sullo stato di
+      // ADESSO e fuori dalla storia, come la migrazione qui sotto.
+      _setDataRaw(d => window.PGEYaml.settleImportMoves(d, rem));
       markSynced(name, yaml);
       setDirty(false);
       // Il file appena scritto porta `deviation_probability`: la migrazione da
