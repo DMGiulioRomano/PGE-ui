@@ -225,7 +225,18 @@ exists, the fourth only when a browser is installed):
   the save, on the remembered disk forgetting only after a save that went
   through, on the `dephase` file kept in that disk, on the old file going
   through `importGuard`, `fileHasOwnChanges` and `rereadImportFile`, on only
-  the save closing the move, and on the Inspector awaiting the rename).
+  the save closing the move, and on the Inspector awaiting the rename), and
+  `test-stream-own-file.js` (#205: a file of its own for an imported stream —
+  `importOwnFile` saying where the gesture is, a file another entry imports or
+  one not named after the stream's id, and why it isn't anywhere else;
+  `ownFileImport` moving the stream to `<dir>/<id>.yml` with its id, the
+  shared file left to the other entries with no `from` towards it, a lone
+  file followed and deleted at the save like a rename's, the conflict it
+  resolves and nothing to create once undone; plus source guards on the async
+  gesture listing the folder before it writes and re-reading the state of now,
+  on the one alphabet of ids (`STREAM_ID_RE`), on the Inspector being the one
+  element that gets the gesture, and on the conflict and split messages naming
+  it).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -576,7 +587,16 @@ into the renamed stream, creates the new file from the lab's version and
 deletes the old one; with a duration edited after the rename it asks about
 the old file, and «sovrascrivi» leaves it with the lab's bytes. The new name
 there is not `onda` again: the split step wrote a stem under that id, and an
-id that owns a stem is not taken back.
+id that owns a stem is not taken back. Then #205, on a master importing
+`streams/voci.yml` twice (`fixtures/PGE_smoke_shared.yml`, as `coro` and
+`alto`): `coro` lengthened alone and the save refused — the conflict, its
+message naming the gesture, nothing written —; «file suo» on its Inspector
+row gives it `streams/coro.yml`, not on disk until the save, then a lab
+document with `stream_id: coro` and the edit, the master entry without
+`stream_id`, `voci.yml` left to `alto` byte for byte; on `alto`, now its only
+importer, the gesture moves the file: undone before the save it leaves
+nothing, saved `streams/alto.yml` says what `voci.yml` said but for
+`stream_id`, `voci.yml` is deleted (#208), and the button is gone.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -2258,9 +2278,11 @@ master imports with a `- file:` entry at the cut. Five rules:
   copies diverge — a `conflict`, and save and render refuse. The split asks
   first (`importConflictsAdded(data, withHeads)`, the conflicts the heads would
   add, not the ones already there) and refuses with a toast naming the file
-  and the streams that import it (`importConflictText`), instead of leaving a
-  state that can't be saved. Entries cut together at the same point stay equal
-  and pass; the tails don't enter, each has a new file.
+  and the streams that import it (`importConflictText`) and the way out —
+  give the stream a file of its own first (#205), or cut every entry at the
+  same point — instead of leaving a state that can't be saved. Entries cut
+  together at the same point stay equal and pass; the tails don't enter, each
+  has a new file.
 - **One split at a time** (`onSplit`, the shortcut's entry): a ref raised
   before any await and dropped in a `finally`, `renderAgain`'s shape. Without
   it a `d` pressed while the first split waited for the folder started from
@@ -2757,10 +2779,9 @@ its **placement**. The path is relative to the master's folder, i.e.
   written once, when they diverge it is a `conflict` and save and render
   refuse rather than pick one. The refusal names the file and the streams
   that import it (`importConflictText`) and the remedies the editor really
-  has — undo the edit, or make it on every one of those streams; no gesture
-  detaches a stream from its file, so the message doesn't promise one. The
-  split refuses *before* creating such a conflict (see "Split at the
-  playhead").
+  has — undo the edit, make it on every one of those streams, or give one of
+  them a file of its own (#205, below). The split refuses *before* creating
+  such a conflict (see "Split at the playhead").
 - **Errors name the master and the file, and the editor doesn't crash.** A file
   that is missing, unreadable, malformed, holds no stream or more than one, or
   chains another `file:` leaves its entry unresolved: it is not a timeline
@@ -2774,13 +2795,16 @@ its **placement**. The path is relative to the master's folder, i.e.
 - **A copy and a split's tail are new files.** A paste of an imported
   stream gets a file of its own beside the original (#186, below), and so
   does the tail of a split, `<name>-2.yml` (#187, see "Split at the
-  playhead"); the split's head keeps its file and is shortened there. Nothing
-  detaches a stream from its file any more — `detachImport` went with #187.
+  playhead"); the split's head keeps its file and is shortened there.
+  `detachImport` went with #187: nothing writes an imported stream back into
+  the master. What resolves a shared file is the stream's own file (#205,
+  below), which keeps the id where the copy and the tail take a new one.
 - **A rename moves the file, and a file the master no longer names is
   deleted at the save** (#208, below).
 - **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
   edit there lands in the file; the timeline shows the file name beside the
-  id, and the Inspector has a `file` row.
+  id, and the Inspector has a `file` row, with the «file suo» button where
+  #205's gesture applies.
 
 `roundTripDiff` ignores `_import` (the master entry is rewritten from the state
 and, re-read, says what was just written) and compares the imported files
@@ -2988,6 +3012,54 @@ new file once the old one is reread into it; `tests/e2e/test-boot.js` walks
 the rename and the delete in a browser, and the rename with the lab saving the
 old file in between — reread and deleted without own changes, asked about with
 them, «sovrascrivi» leaving it with the lab's bytes.
+
+**A file of its own** (#205). The same file imported by two entries of the
+master is one document — the engine allows it, and the entries differ in
+placement only — so the first content edit made on one of them leaves two
+copies that say different things, and save and render refuse (the `conflict`
+above). The message used to promise a remedy no gesture performed. It is on
+the Inspector's `file` row now: «file suo» gives the stream `<dir>/<id>.yml`.
+Five rules:
+
+- **The stream keeps its id**, so its realization (`(seed, stream_id,
+  component)`) and the engine's fingerprint: no stem goes yellow. It is not a
+  copy (#186: a new id, another realization) but a move, the rename's
+  (`_moveImport`, shared with `renameImport`): a file to *create* (`fresh`,
+  `createImports`, the bridge's exclusive create), its `stream_id` the id when
+  the file writes one, the master entry keeping its keys as written minus
+  `stream_id`, which becomes the default.
+- **Where the gesture is** (`importOwnFile`): on a file another entry
+  imports, and on a file one entry imports under a name that isn't the
+  stream's id (`- file: streams/voci.yml` with `stream_id: coro`) — the rule
+  the lab and #208 take for true, `stream_id` = file name, put back without
+  changing the sound. Not on a stream written in the master, not on an id
+  that can't be a file name (`STREAM_ID_RE`: a hand-written YAML can carry
+  one), and not on a file already named after the id; there, if another
+  entry imports it, the button is shown disabled and its reason names the
+  other streams, the ones the gesture is for.
+- **The shared file stays the other entries'**, so the stream that leaves
+  doesn't follow it: no `from` (#208's provenance), because a reread of that
+  file belongs to the streams that still import it. A lone file is followed
+  like a rename's old file — a read to respect until the save deletes it,
+  since nobody imports it any more.
+- **The name is the id, or nothing.** Asked of the folder first, like the
+  paste and the rename (`listImportNames`, then the state of *now*): if
+  `<dir>/<id>.yml` is taken (`importIdTaken`) the gesture refuses. A
+  `<id>-2.yml` carrying `stream_id: <id>` would keep the realization in the
+  piece, but the lab writes the id from the file name: it would open the file
+  already modified, with another realization.
+- **Written at the save or before the render, never at the gesture**, and
+  undone before the save it leaves nothing on disk.
+
+The id it names a file with has one alphabet, `PGEYaml.STREAM_ID_RE`, which
+`renameStream` reads too. The conflict message and the split's fourth refusal
+name the gesture. `tests/node/test-stream-own-file.js` pins the model and the
+wiring, `tests/parity/test-stream-own-file-parity.js` asks the engine
+(`resolve_stream_files`) to find the stream that moved with the same id and
+fingerprint, the other streams untouched, the shared file still the other
+entry's, the edit that conflicted resolved into the new file, and the new
+file alone one stream with the same id; `tests/e2e/test-boot.js` walks the
+gesture in a browser.
 
 **A lab document comes back whole** (#188, step 4 of the plan, "round-trip
 inverso"). The rules above say where each key goes; what they don't say is
@@ -3454,7 +3526,8 @@ keep naming the same stream.
 that is what keeps `isTrivial` true, so a plain rename on an ungrouped project
 writes no `ui_tracks` at all; a lane the user actually named keeps its name.
 Three refusals, all at the trust boundary: a charset (the id becomes a filename
-and a path segment), a live stream already holding the name, and `ownsStemFor`
+and a path segment; `PGEYaml.STREAM_ID_RE`, the alphabet #205's own file is
+named with too), a live stream already holding the name, and `ownsStemFor`
 — a stem still on disk under that name would be picked up as the renamed
 stream's audio, the same hazard `allocStreamIds` guards against. An imported
 stream adds a fourth (#208): its file moves to `<dir>/<new>.yml`, so the new
