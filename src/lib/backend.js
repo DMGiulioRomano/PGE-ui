@@ -87,6 +87,9 @@
  *     senza `done`.
  *     `opts.renderer` e `opts.semanticsVersion` sono il backend e la semantica
  *     di QUESTO giro, fissati dal chiamante: finiscono nei due record qui sotto.
+ *     `opts.seed` e' il seed di testa del documento di questo giro (#207), e
+ *     `opts.seedInFingerprint` dice se il fingerprint del motore lo vede: senza,
+ *     uno `stream-done` con `cached: true` non scrive il record del seed.
  *     Oltre agli eventi del bridge, `run()` ne emette due suoi: `stream-done`
  *     sintetici dal fallback di `done`, e `{type: "stems-resync", streamIds}`
  *     dopo un giro fallito che ha trovato stem su disco — niente reclamo, ma
@@ -95,11 +98,18 @@
  *   render.loadCache(yamlBasename)→ Promise<{[streamId]: fingerprint}>
  *   render.loadSemantics(yamlBasename) → Promise<{[streamId]: version}>
  *   render.loadRenderers(yamlBasename) → Promise<{[streamId]: backend}>
- *                                   I due record di provenienza (#133, #151):
- *                                   con quale semantica e con quale backend il
- *                                   motore ha scritto ogni stem. Voce assente =
- *                                   non registrato: col lato vivo noto, chi
- *                                   classifica la legge stale (render-status.js).
+ *   render.loadSeeds(yamlBasename)     → Promise<{[streamId]: seedKey}>
+ *                                   I record di provenienza (#133, #151, #207):
+ *                                   con quale semantica, con quale backend e con
+ *                                   quale seed il motore ha scritto ogni stem.
+ *                                   Voce assente = non registrato: col lato vivo
+ *                                   noto, chi classifica la legge stale
+ *                                   (render-status.js) — per il seed, assente
+ *                                   vale anche "reso senza seed" (seedKey null).
+ *   fingerprintAxes()             → Promise<[string] | null>: le chiavi da cui il
+ *                                   fingerprint del motore dipende (GET
+ *                                   /fingerprint-axes, PythonGranularEngine#297).
+ *                                   null = un motore che non le dichiara.
  *   renderers()                   → Promise<[{ name, available, detail }]>: i backend
  *                                   del motore, nel suo ordine (GET /renderers, #150).
  *                                   `available` a tre valori: false = manca qualcosa,
@@ -275,6 +285,47 @@
      arriva da una preferenza, ed e' li' che tre copie divergono. */
   function rendererName(x) {
     return (typeof x === "string" && x) ? x : null;
+  }
+
+  /* Il seed di testa come chiave di record (#207): una stringa, o `null` se il
+     documento non ne dichiara uno. UNA regola con tre lettori, come
+     `rendererName`: il record persistito (`run()` qui sotto), quello in memoria
+     (l'handler degli `stream-done` in app.jsx) e il lato vivo dell'asse
+     (`seedCtx.current`, sempre in app.jsx). Due copie che non concordano danno
+     un colore fino al reload e un altro dopo.
+     La derivazione degli RNG del motore scrive il seed in una stringa
+     (`f"{seed}:{stream_id}:..."`, shared/seeding.py), e la sua cache lo legge
+     cosi' dalla PythonGranularEngine#297: `1441` e `"1441"` sono lo stesso seed,
+     e qui hanno la stessa chiave. `1441` e `1441.0` per il motore no, e qui
+     si': in JS sono lo stesso Number — ma e' anche cio' che il serializzatore
+     scrive, quindi il motore legge il seed che questa chiave descrive, non
+     quello che c'era sul disco prima.
+     Il resto (una data YAML, un booleano, una lista scritti nel Raw) prende il
+     suo JSON: stabile, e collide solo con la sua grafia fra virgolette — un
+     caso che il SeedControl, che scrive interi o stringhe, non produce. */
+  function seedKey(x) {
+    if (x === undefined || x === null) return null;
+    if (typeof x === "string") return x;
+    if (typeof x === "number") return String(x);
+    try {
+      const j = JSON.stringify(x);
+      return typeof j === "string" ? j : null;
+    } catch { return null; }
+  }
+
+  /* Uno `stream-done` dice qualcosa sul seed dello stem? (#207). Uno stem
+     rifatto si' (`cached` falso: il motore l'ha appena scritto col seed di
+     questo giro), su qualunque motore. Uno saltato (`cached: true`) solo se il
+     fingerprint del motore il seed lo vede (`'seed'` in FINGERPRINT_AXES,
+     PythonGranularEngine#297): su un motore che non lo vede, dopo un cambio di
+     seed `clean` e' la risposta su stem che sono la realizzazione del seed di
+     prima, e scrivere il record lo farebbe passare per buono — il pallino
+     verde che l'asse esiste per spegnere. Li' il record resta quello che era,
+     e il giallo si spegne al primo render senza cache.
+     Il dubbio vale come no: un render di troppo, mai uno di meno. Due lettori,
+     `run()` e l'handler in app.jsx, che devono dire la stessa cosa. */
+  function seedVouched(cached, seedInFingerprint) {
+    return cached !== true || seedInFingerprint === true;
   }
 
   /* Gli id degli stream che il motore COSTRUISCE in un giro: il mirror di
@@ -728,6 +779,30 @@
           localStorage.setItem("pge-local-renderer", JSON.stringify(all));
         } catch {}
       },
+
+      // Il seed di testa con cui e' stato reso ogni stem (#207), come chiave
+      // (`seedKey`). Quarta mappa parallela, per la ragione del backend: lo stem
+      // ne dipende — ogni RNG del motore e' `(seed, rng_group o stream_id,
+      // componente)` — e il testo dello stream non lo dice, perche' il seed sta
+      // in testa al documento e l'impronta e' per stream.
+      //
+      // Voce assente = reso senza seed, o prima che l'editor lo registrasse:
+      // `staleReason` le legge allo stesso modo, e la tabella che lo giustifica
+      // sta li'.
+      async loadSeeds(yamlBasename) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-seed") || "{}");
+          const one = all[yamlBasename];
+          return (one && typeof one === "object") ? one : {};
+        } catch { return {}; }
+      },
+      _persistSeeds(yamlBasename, seeds) {
+        try {
+          const all = JSON.parse(localStorage.getItem("pge-local-seed") || "{}");
+          all[yamlBasename] = seeds;
+          localStorage.setItem("pge-local-seed", JSON.stringify(all));
+        } catch {}
+      },
       cancel() {
         if (cancelAbort) cancelAbort.abort();
         // fire-and-forget POST so the server kills the subprocess too
@@ -794,6 +869,11 @@
         // ogni stream DIRTY del giro, che dipende tutto dalla sua riga di path
         // stampata in fondo (render_pipeline.py).
         const doneThisRun = new Set();
+        // ...e quelli che il motore ha SALTATO (`cached: true`). Per tre record
+        // su quattro e' la stessa cosa di un render: semantica e backend stanno
+        // nel fingerprint del motore, e `clean` li conferma. Per il seed no, su
+        // un motore che non ce lo mette (#207): vedi `seedVouched`.
+        const cachedThisRun = new Set();
         // Un giro fallito che ha elencato file su disco: impronta, semantica e
         // backend non si reclamano, ma le durate si rileggono (vedi il `done`).
         let resyncDurations = false;
@@ -972,6 +1052,8 @@
                     _markStemFresh(`${opts.yamlBasename}__${ev.streamId}${EXT_OF[opts.outputFormat] || EXT_OF.wav}`);
                     _persistStemIndex();
                     doneThisRun.add(ev.streamId);
+                    if (ev.cached === true) cachedThisRun.add(ev.streamId);
+                    else cachedThisRun.delete(ev.streamId);
                     // freeze the browser-side fingerprint for this stream so the
                     // UI can mark it fresh (and detect later edits as stale).
                     localFps[s.id] = fingerprintStream(s, opts.outputFormat);
@@ -1044,6 +1126,28 @@
               else nextRenderers[id] = rend;
             }
             this._persistRenderers(opts.yamlBasename, nextRenderers);
+
+            // ...e il seed (#207), nello stesso blocco per la stessa ragione.
+            // Arriva dal chiamante come il backend: e' il seed del documento che
+            // QUESTO POST ha mandato, non quello che l'editor mostra quando il
+            // giro finisce. Senza seed la voce si cancella: "nessun seed" e'
+            // l'assenza, ed e' cio' con cui `staleReason` confronta un progetto
+            // senza seed.
+            //
+            // Con una differenza dagli altri tre: uno stem SALTATO dal motore
+            // conferma il seed solo se il fingerprint del motore lo vede
+            // (`seedVouched`). Altrimenti la voce resta quella che era — non si
+            // cancella, perche' lo stem su disco non e' cambiato, e quello che
+            // il record diceva di lui e' vero quanto prima.
+            const seedK = seedKey(opts.seed);
+            const prevSeeds = await this.loadSeeds(opts.yamlBasename);
+            const nextSeeds = { ...prevSeeds };
+            for (const id of Object.keys(localFps)) {
+              if (!seedVouched(cachedThisRun.has(id), opts.seedInFingerprint)) continue;
+              if (seedK === null) delete nextSeeds[id];
+              else nextSeeds[id] = seedK;
+            }
+            this._persistSeeds(opts.yamlBasename, nextSeeds);
           } else if (resyncDurations) {
             // Nessuno stem reclamato, quindi niente `loadCache` qui sopra: si
             // chiede al disco solo la misura dei file. E' la verita' in
@@ -1290,10 +1394,11 @@
       // verde vuole uno stem nell'indice, e l'indice e' quello che la riga
       // qui sotto svuota.
       //
-      // I due record di provenienza NO — la semantica in `pge-local-sem` e il
-      // backend in `pge-local-renderer` (#151) — e la differenza sta in cosa
-      // affermano: non parlano dello YAML ma dei FILE — "lo stem l'ha
-      // scritto un motore che leggeva cosi'", "l'ha scritto quel backend" —
+      // I record di provenienza NO — la semantica in `pge-local-sem`, il
+      // backend in `pge-local-renderer` (#151) e il seed in `pge-local-seed`
+      // (#207) — e la differenza sta in cosa affermano: non parlano dello YAML
+      // ma dei FILE — "lo stem l'ha scritto un motore che leggeva cosi'",
+      // "l'ha scritto quel backend", "e' la realizzazione di quel seed" —
       // cioe' degli stessi file di cui
       // l'indice qui sopra e' l'inventario, quelli della output/ di prima.
       // Ereditate in una cartella nuova affermano una lettura che li' nessuno
@@ -1312,6 +1417,7 @@
       signatures.clear();
       try { localStorage.removeItem("pge-local-sem"); } catch {}
       try { localStorage.removeItem("pge-local-renderer"); } catch {}
+      try { localStorage.removeItem("pge-local-seed"); } catch {}
       cachedConfig = null;      // /health portava le path di prima
       return body;
     }
@@ -1400,16 +1506,42 @@
       return v;
     }
 
+    // Le chiavi da cui dipende il fingerprint del motore (`FINGERPRINT_AXES`,
+    // PythonGranularEngine#297), lette dal bridge per AST (#207). L'editor ne
+    // chiede una, `seed`, e una volta per render: e' cio' che decide se uno
+    // `stream-done` con `cached: true` scrive il record del seed
+    // (`seedVouched`). Nessuna cella: si chiede all'inizio di ogni render, che
+    // e' l'unico momento in cui serve, e il bridge tiene la sua cache
+    // sull'mtime.
+    //
+    // `null` per un motore che non le dichiara, un server.py senza la route, un
+    // bridge giu' o una forma che non e' un elenco di nomi: chi legge lo tratta
+    // come un motore che il seed non lo vede, cioe' tiene fermo il record dei
+    // `cached`. Una stringa nuda in particolare non passa: `"seed".includes(
+    // "seed")` e' vero, ed e' il modo in cui un valore sbagliato accenderebbe la
+    // capacita'.
+    async function fingerprintAxes() {
+      try {
+        const d = await jget("/fingerprint-axes");
+        const axes = d && d.axes;
+        return (Array.isArray(axes) && axes.every(a => typeof a === "string" && a))
+          ? axes : null;
+      } catch { return null; }
+    }
+
     // Eagerly pull config so currentPath() works without an await.
     ensureConfig().catch(() => {});
 
     return { kind: "local", fs, render, media, fingerprintStream, baseUrl, diagnose, setup,
-             envelopeKeys, renderers, bounds, semanticsVersion, workspace, setWorkspace };
+             envelopeKeys, renderers, bounds, semanticsVersion, fingerprintAxes,
+             workspace, setWorkspace };
   }
 
   window.PGEBackend = {
     fingerprintStream,
     rendererName,
+    seedKey,
+    seedVouched,
     defaultServerUrl,
     streamsEngineBuilds,
     // Single backend: always the local HTTP client. `opts` may carry { baseUrl }.

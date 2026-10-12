@@ -481,6 +481,53 @@ def engine_semantics_version(root: Path):
     return version
 
 
+_FINGERPRINT_AXES_CACHE: dict = {}
+
+
+def engine_fingerprint_axes(root: Path):
+    """`FINGERPRINT_AXES` del motore (`stream_cache_manager.py`), o None.
+
+    E' l'elenco di cio' da cui il motore dichiara che uno stem dipende: le
+    chiavi che il payload del suo fingerprint puo' contenere
+    (PythonGranularEngine#297). All'editor ne serve una voce, `seed`, e per una
+    domanda sola: uno `stream-done` con `cached: true` dice qualcosa sul seed
+    dello stem? Su un motore che il seed lo mette nel fingerprint si', e il
+    record del seed si scrive; su uno che non ce lo mette, dopo un cambio di
+    seed il motore risponde `clean` su stem che sono la realizzazione del seed
+    di prima, e scrivere il record sarebbe un pallino verde su audio che
+    nessuno ha rifatto (PGE-ui #207).
+
+    Una capacita' come `engine_supports_samples_dir`, ma letta da una costante
+    che il motore dichiara apposta per chi lo legge senza importarlo, invece
+    che da un letterale incontrato nel sorgente.
+
+    None = un motore senza la costante (precedente alla #297), o con una forma
+    che non e' una tupla di nomi non vuoti. Chi legge lo tratta come un motore
+    il cui fingerprint non vede il seed, che per i motori senza la costante e'
+    anche la verita'. Una stringa nuda non e' un elenco: `'seed' in 'seed'` e'
+    vero, ed e' il modo in cui un valore sbagliato accenderebbe la capacita'.
+
+    Cache sull'mtime come `engine_semantics_version` — e' lo stesso file — e
+    per la stessa ragione: il pull che porta la #297 sotto un `make serve`
+    acceso e' esattamente l'evento che cambia la risposta."""
+    candidates = (
+        root / "src" / "pge" / "rendering" / "stream_cache_manager.py",
+        root / "src" / "rendering" / "stream_cache_manager.py",
+    )
+    key = str(root)
+    stamp = _source_stamp(candidates)
+    cached = _FINGERPRINT_AXES_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    value = _module_constant(candidates, "FINGERPRINT_AXES")
+    axes = None
+    if isinstance(value, (tuple, list)) and all(
+            isinstance(a, str) and a for a in value):
+        axes = list(value)
+    _FINGERPRINT_AXES_CACHE[key] = (stamp, axes)
+    return axes
+
+
 _SAMPLES_DIR_CACHE: dict = {}
 
 

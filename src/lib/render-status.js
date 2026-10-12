@@ -27,6 +27,10 @@
   // different recorded backend, and no record at all — the second being every
   // stem rendered before #151, i.e. the only case that fires while the UI
   // writes numpy alone. "Another backend rendered this stem" was false there.
+  // `staleSeed` (#207) has three branches to be true on, and is worded for
+  // all of them: a different recorded seed, no record while the project
+  // declares one (every stem rendered before a seed was added, the case the
+  // issue came from), and a record while the project no longer declares any.
   const TOOLTIPS = {
     running: "rendering this stream…",
     never:   "this stream has never been rendered",
@@ -36,6 +40,8 @@
                     "stem — re-render to update",
     staleRenderer:  "no record that the current backend rendered this stem — " +
                     "re-render to update",
+    staleSeed:      "the seed this stem was rendered with isn't the project's " +
+                    "seed, or isn't on record — re-render to update",
   };
 
   // Per-stream fingerprints for the live editor state. Wraps the backend hash;
@@ -47,7 +53,7 @@
     return out;
   }
 
-  // Perche' uno stem e' stale, o null se non lo e'. Tre assi indipendenti:
+  // Perche' uno stem e' stale, o null se non lo e'. Quattro assi indipendenti:
   //
   //   "yaml"      — l'utente ha modificato lo stream dall'ultimo render. E'
   //                 l'hash della UI a dirlo, ed e' l'unica cosa che sa dire.
@@ -64,6 +70,12 @@
   //                 motore audio. Tre backend esistono per essere confrontati,
   //                 quindi renderizzare con uno e rilanciare con un altro e' lo
   //                 scenario d'uso, non il caso limite.
+  //   "seed"      — il seed di testa con cui lo stem e' stato reso non e' quello
+  //                 che il progetto dichiara adesso (#207). Ogni RNG del motore
+  //                 e' `(seed, rng_group o stream_id, componente)`: stesso
+  //                 stream, altro seed, altro stem. Il motore lo mette nel
+  //                 proprio fingerprint da PythonGranularEngine#297, e solo
+  //                 quando il documento ne dichiara uno.
   //
   // Ne' il numero ne' il nome entrano nell'hash della UI, e non e' una svista:
   // l'hash risponde a "l'utente ha toccato qualcosa", che a un bump del motore
@@ -113,7 +125,34 @@
   // l'asse nuovo e' additivo — nessun caso che esistesse prima cambia risposta
   // — e un render solo li spegne comunque entrambi, quindi la precedenza non
   // costa un giro a nessuno.
-  function staleReason(lastFp, currentFp, sem, rend) {
+  //
+  // IL SEED (#207) e' fuori dall'hash per la ragione del backend — l'hash e'
+  // per stream e risponde a "l'utente ha toccato questo stream?", e il seed di
+  // testa non e' dello stream — ma i suoi ignoti non sono quelli degli altri
+  // due, e conviene dirlo invece di forzarli nello stesso stampo. Un lato vivo
+  // ignoto qui non c'e': il seed sta nel documento che l'editor ha in mano.
+  // C'e' invece "nessun seed dichiarato", che e' un VALORE — quello che il
+  // motore lascia fuori dal proprio fingerprint — e il record assente vale come
+  // lui, perche' e' cio' che un render senza seed lascia (`run()` in
+  // backend.js cancella la voce). Quindi la regola e' un confronto secco fra
+  // due "seed o nessuno":
+  //
+  //   - seed dichiarato, stem senza record → "seed". E' il caso da cui l'issue
+  //     nasce (mare-nostrum#8: un brano a cui il seed e' stato appena dato,
+  //     con gli stem resi senza); ed e' anche ogni stem reso prima di questo
+  //     asse in un progetto che un seed l'ha gia'. Si spegne al primo giro se
+  //     il motore il seed lo vede, al primo giro senza cache se no (vedi
+  //     `seedVouched` in backend.js);
+  //   - record di un seed, progetto senza → "seed": il seed tolto. Il motore
+  //     della #297 toglie la chiave dal payload e rifa' lo stem;
+  //   - nessun seed e nessun record → niente. Sono tutti gli stem dei progetti
+  //     senza seed, la popolazione piu' numerosa: il fingerprint del motore
+  //     senza seed e' quello di prima della #297, e non ne invalida nessuno.
+  //
+  // Il confronto e' fra CHIAVI (`seedKey` in backend.js), non fra valori grezzi:
+  // `1441` e `"1441"` sono lo stesso seed per la derivazione degli RNG, che lo
+  // scrive in una stringa, e lo sono anche qui.
+  function staleReason(lastFp, currentFp, sem, rend, seed) {
     if (lastFp !== currentFp) return "yaml";
     const engine = sem && sem.engine;
     if (engine != null) {
@@ -125,6 +164,11 @@
       const renderedBy = rend.rendered;
       if (renderedBy == null || renderedBy !== current) return "renderer";
     }
+    if (seed) {
+      const now = seed.current == null ? null : seed.current;
+      const was = seed.rendered == null ? null : seed.rendered;
+      if (now !== was) return "seed";
+    }
     return null;
   }
 
@@ -132,20 +176,22 @@
   // hasStem is a boolean. !lastFp uses falsiness on purpose (undefined / "" / 0
   // all read as never), matching the original `!last` guard in app.jsx.
   // `sem` is optional (omitting it is the pre-#133 behaviour exactly), and so
-  // is `rend` (pre-#151).
-  function classifyStream(lastFp, currentFp, hasStem, sem, rend) {
+  // are `rend` (pre-#151) and `seed` (pre-#207).
+  function classifyStream(lastFp, currentFp, hasStem, sem, rend, seed) {
     if (!lastFp || !hasStem) return STATES.NEVER;
-    return staleReason(lastFp, currentFp, sem, rend) === null ? STATES.FRESH : STATES.STALE;
+    return staleReason(lastFp, currentFp, sem, rend, seed) === null ? STATES.FRESH : STATES.STALE;
   }
 
   // Aggregate fresh/stale/never counts across all streams. hasStem is (id)=>bool.
   // `sem` is optional: { rendered: {[streamId]: version}, engine: version|null }.
   // `rend` likewise: { rendered: {[streamId]: backend}, current: backend|null }.
-  function summarize(streams, currentFps, lastRenderedFps, hasStem, sem, rend) {
+  // `seed` likewise: { rendered: {[streamId]: seedKey}, current: seedKey|null }.
+  function summarize(streams, currentFps, lastRenderedFps, hasStem, sem, rend, seed) {
     let fresh = 0, stale = 0, never = 0;
     for (const s of streams) {
       const state = classifyStream(lastRenderedFps[s.id], currentFps[s.id], hasStem(s.id),
-                                   semFor(sem, s.id), rendererFor(rend, s.id));
+                                   semFor(sem, s.id), rendererFor(rend, s.id),
+                                   seedFor(seed, s.id));
       if (state === STATES.FRESH) fresh++;
       else if (state === STATES.STALE) stale++;
       else never++;
@@ -165,10 +211,14 @@
     if (!rend) return null;
     return { rendered: (rend.rendered || {})[streamId], current: rend.current };
   }
+  function seedFor(seed, streamId) {
+    if (!seed) return null;
+    return { rendered: (seed.rendered || {})[streamId], current: seed.current };
+  }
 
   // Per-stream status object consumed by Timeline.jsx (ClipRenderStatus).
   // ctx = { currentFps, lastRenderedFps, hasStem:(id)=>bool, running:bool,
-  //         currentStreamId, sem, rend }.
+  //         currentStreamId, sem, rend, seed }.
   //
   // Lo stato RUNNING non porta un `progress` (#162). Lo portava, letto da una
   // mappa `streamProgress` che solo l'evento `stream-progress` riempiva — e
@@ -193,6 +243,7 @@
     yaml:      TOOLTIPS.stale,
     semantics: TOOLTIPS.staleSemantics,
     renderer:  TOOLTIPS.staleRenderer,
+    seed:      TOOLTIPS.staleSeed,
   };
   function statusForStream(streamId, ctx) {
     if (ctx.running && ctx.currentStreamId === streamId) {
@@ -200,10 +251,12 @@
     }
     const sem = semFor(ctx.sem, streamId);
     const rend = rendererFor(ctx.rend, streamId);
+    const seed = seedFor(ctx.seed, streamId);
     const lastFp = ctx.lastRenderedFps[streamId];
-    const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId), sem, rend);
+    const state = classifyStream(lastFp, ctx.currentFps[streamId], ctx.hasStem(streamId),
+                                 sem, rend, seed);
     if (state === STATES.STALE) {
-      const why = staleReason(lastFp, ctx.currentFps[streamId], sem, rend);
+      const why = staleReason(lastFp, ctx.currentFps[streamId], sem, rend, seed);
       return { state, tooltip: STALE_TOOLTIP[why] || TOOLTIPS.stale };
     }
     return { state, tooltip: TOOLTIPS[state] };

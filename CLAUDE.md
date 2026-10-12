@@ -37,8 +37,8 @@ exists, the fourth only when a browser is installed):
   the graphies the time walk used to miss, each asked by comparison against its
   own nested or array twin), `test-fingerprint.js` (fingerprint parity: which
   fields mark a stem stale), `test-render-status.js` (the stale/fresh/never
-  classification + render summary, incl. the engine-semantics and renderer
-  axes, source guards on the chain that carries the version from the engine to
+  classification + render summary, incl. the engine-semantics, renderer and
+  seed axes, source guards on the chain that carries the version from the engine to
   the dot and on the single read of the backend choice (`currentRenderer`)
   its readers share,
   a live two-overlapping-renders check that `run()` refuses re-entry, and the
@@ -89,10 +89,12 @@ exists, the fourth only when a browser is installed):
   format; and a failed run re-reading from disk what isn't provenance — the
   durations, and the drawing through `stems-resync`, executed on the backend
   side and source-guarded on the three media effects), and
-  `test-semantics-store.js` (where the two
+  `test-semantics-store.js` (where the
   provenance records come from: `semanticsVersion` re-reading the
-  bridge, and a whole `render.run()` writing/reading `pge-local-sem` and
-  `pge-local-renderer` — the real
+  bridge, and a whole `render.run()` writing/reading `pge-local-sem`,
+  `pge-local-renderer` and `pge-local-seed` — the last one held still on a
+  `cached: true` when the engine's fingerprint doesn't see the seed
+  (`seedVouched`, #207) — the real
   backend driven with a fake `fetch` and `localStorage`; the renderer half
   lives beside the semantics one because both are written in the same block of
   `run()`, and a second copy of that harness would drift — plus the `done`
@@ -871,7 +873,9 @@ the dot is 🟡 ("a stem whose reading I don't know") and clears itself on the
 first pass, even an empty one. The backend records (`pge-local-renderer`, #150)
 go with them for the identical reason — "supercollider wrote this stem" is a
 statement about the previous `output/` — and `onWorkspaceChange` drops their
-in-memory half too. What deliberately survives is `pge-local-fp`: it
+in-memory half too. So do the seed records (`pge-local-seed`, #207): "this stem
+is the realization of seed 1441" is a statement about a file as much as the
+other two. What deliberately survives is `pge-local-fp`: it
 records what a stream looked like when it was rendered — a statement about the
 YAML, not about the files — so a same-named project with different content
 hashes differently (stale, the safe direction). Identical content, where the
@@ -2110,7 +2114,9 @@ Engine-source introspection (`engine_introspect.py`) was split out of
 bridge and the oracle can use it. It reads the envelope keys, the parameter
 bounds, `VARIATION_SEMANTICS_VERSION`, `DEFAULT_OUTPUT_SR`, `LOOP_UNITS`,
 `RANGE_UNITS` and `RELATIVE_RANGE_BOUNDS` (#163), the
-backend list (`RendererFactory._VALID_TYPES`, #150) and where the SuperCollider
+backend list (`RendererFactory._VALID_TYPES`, #150), what the engine's stem
+fingerprint depends on (`FINGERPRINT_AXES`, #207 — a capability, read for one
+entry: `seed`) and where the SuperCollider
 SynthDef lives (`DEFAULT_SYNTHDEF_SOURCE` / `_DIR`, `SYNTH_NAME`);
 each returns an empty/`None` result for an engine that doesn't have the thing,
 and every caller must treat that as "don't know", never as a value. For the sample rate that
@@ -2430,7 +2436,7 @@ drops out entirely: in the YAML it isn't distinguishable from an absent one.
 
 The fresh/stale/never *classification* lives in `render-status.js` (`window.PGERenderStatus`, node-tested). **If you change what affects the hash on one side, mirror it on the other or stems will read stale.** `tests/parity/test-fingerprint-parity.js` enforces it: the two hashes differ by construction, but their *derivative* (which edits move them) must agree, `onset` excepted.
 
-**Staleness has two more axes, and neither is in the hash.** The first: the engine's
+**Staleness has three more axes, and none is in the hash.** The first: the engine's
 `VARIATION_SEMANTICS_VERSION` (`stream_cache_manager.py`) says *how* it reads
 the YAML; it sits inside the engine's fingerprint, so a bump marks every stem of
 every project dirty at rest. The UI hash deliberately has no counterpart — the
@@ -2438,8 +2444,8 @@ two hashes answer different questions ("did the user edit this" vs "must the
 engine redo this stem") — but the *dot* answers the engine's, and at the 2→3 bump
 (PGE #222) it showed 🟢 on stems the engine was about to rewrite. So the version
 is a second axis beside the hash, never a field inside it: `staleReason` in
-`render-status.js` returns `"yaml"`, `"semantics"` or `"renderer"` (the third
-axis, below), the version is recorded
+`render-status.js` returns `"yaml"`, `"semantics"`, `"renderer"` or `"seed"`
+(the third and fourth axes, below), the version is recorded
 per stream next to the fingerprints (`loadSemantics` / `_persistSem` in
 `backend.js`, localStorage key `pge-local-sem`), and it comes from the engine via
 `GET /semantics-version` → `engine_introspect.engine_semantics_version` (AST, no
@@ -2572,6 +2578,72 @@ is a *known* `current` (`"" != null`) against records `run()` never writes, i.e.
 every stem yellow forever, and a truthy non-string stays in memory and vanishes
 from localStorage — one colour until the reload, another after.
 `test-semantics-store.js` runs the rule and requires the three sites to call it.
+
+**And a fourth axis: the seed the stem was rendered with** (#207). Every RNG of
+the engine is `(seed, rng_group or stream_id, component)`, so the same stream
+under another seed is another stem; since PythonGranularEngine#297 the engine
+puts the top-level seed in its fingerprint — only when the document declares
+one, so a seedless project hashes as before and invalidates nothing. The UI
+keeps it out of its own hash for the backend's reason (the hash is per stream,
+the seed is top-level: folded in, the dot would say `yaml` on a stream nobody
+touched), and mirrors it the same way: `staleReason` returns `"seed"`, the seed
+is recorded per stream (`loadSeeds` / `_persistSeeds`, localStorage key
+`pge-local-seed`), with its own tooltip worded for all three branches it fires
+on.
+
+**Its unknowns are not the other axes' unknowns, and the rule says so instead
+of forcing the shape.** There is no unknown live side: the seed is in the
+document the editor holds (`data.seed`, what the TopBar's SeedControl writes).
+There is "no seed declared", which is a *value* — the one the engine leaves out
+of its fingerprint — and an absent record reads as that value, because it is
+what a seedless render leaves behind (`run()` deletes the entry). So the rule
+is a plain comparison of "a seed or none": a declared seed over a stem with no
+record is `stale` (the case the issue came from, mare-nostrum#8: a piece that
+was just given a seed, its stems rendered without one); a record over a
+project with no seed is `stale` (the seed removed: the engine drops the key and
+redoes the stem); no seed and no record says nothing — every stem of every
+seedless project, the largest population, untouched.
+
+**What counts as the seed is one rule, `PGEBackend.seedKey`**, with the three
+readers `rendererName` has (the persisted record, the in-memory one, the live
+`seedCtx.current`). It is the seed as the engine's RNG derivation reads it, a
+string: `1441` and `"1441"` are one seed there, and one key here. `1441` and
+`1441.0` are two seeds for the engine and one key here — the same Number in JS
+— and that divergence never reaches the engine, because `/render` writes the
+serialized document and the serializer writes `1441`
+(`test-semantics-store.js` pins it).
+
+**A `cached: true` vouches for the seed only if the engine's fingerprint sees
+it** (`PGEBackend.seedVouched`). That is the one rule this record has and the
+other three don't: semantics and backend have been in the engine's fingerprint
+since before their axes existed, so a `clean` confirms them; the seed is not in
+the fingerprint of an engine older than #297, where after a seed change the
+engine answers `clean` on stems that are the previous seed's realization —
+recording the seed there is the green dot the issue is about. The capability is
+declared by the engine (`FINGERPRINT_AXES` in `stream_cache_manager.py`, a
+literal tuple of strings), read by AST (`engine_introspect.engine_fingerprint_axes`,
+`GET /fingerprint-axes`, `backend.fingerprintAxes()`), and read **once per
+render** in `runRender` (`seedInFingerprintOfThisRun`, beside
+`rendererOfThisRun`, for the same "fix the value for this run" reason), going
+to both writers: `run()` as `opts.seedInFingerprint`, and the `stream-done`
+handler through `seedVouched`. Doubt reads as no — a bridge without the route,
+an engine without the constant, a shape that isn't a list of names (a bare
+`"seed"` string would answer yes to `.includes`). A held-back stem keeps its
+record as it was (the file didn't change), and stays yellow until a render
+without incremental cache redoes it — so at the end of an incremental render
+that held some back, `runRender` counts those whose record isn't the current
+seed and says so: a `[SEED]` line in the log and a "Seed not confirmed" toast
+naming the remedy. A real render (`cached: false`, including every synthetic
+`stream-done` of the `done` fallback, which claims only the stems no
+`stream-done` closed — all of them without `--cache`, and with it a DIRTY one
+whose summary line was missed: rewritten either way) vouches on any engine.
+The seed of the run is fixed **per attempt** from the document that attempt
+sent (`seedOfThisRun = seedKey(doc.seed)`, beside
+`fpsOfThisRun`): after a #185 reread it is the reread document's.
+`test-fingerprint-parity.js` pins the pact against the engine: the AST read
+equals the imported tuple (or both `null`), and where `seed` is declared the
+UI's axis discriminates exactly the pairs of seeds the engine's hash does; on
+an engine without the capability the case notes it and stops.
 
 ### YAML round-trip (`yaml-bridge.js`)
 

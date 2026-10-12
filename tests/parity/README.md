@@ -350,6 +350,8 @@ commento.
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |
 | bounds | `loop_*` con un tetto statico | nel motore `max_val` è `null`: il tetto vero è la durata del sample. Dichiarato in `ENGINE_PARAM_MAP` (`ceiling: "sample"`) e qui in `MAX_EXCEPTIONS`, e la suite pretende che le due liste coincidano |
 | fingerprint | nessuna `VARIATION_SEMANTICS_VERSION` dentro l'hash della UI | i due hash rispondono a domande diverse; la versione è un **secondo asse** di staleness, non un campo dell'hash — vedi sotto |
+| fingerprint | il `seed` di testa è nell'hash del motore (da PythonGranularEngine#297, e solo se il documento lo dichiara) e **fuori** da quello della UI | come il backend: l'hash della UI è per stream, il seed è di testa. È un quarto asse accanto all'hash (`staleReason` → `"seed"`, record per stem in `pge-local-seed`) — vedi sotto |
+| fingerprint | `1441` e `1441.0`: due seed per il motore, una chiave sola per la UI | in JS sono lo stesso Number. Non arriva al motore: `/render` scrive il documento serializzato, e il serializzatore scrive `1441`. Lo pretende `tests/node/test-semantics-store.js`, che non ha bisogno del motore |
 
 Lo stesso `max_val: null` sui parametri che **non** sono in quell'elenco non è
 una divergenza: è `density` da PGE #272 (#170), e li' la UI non ha tetto, né
@@ -400,6 +402,34 @@ ha bisogno del numero: dirlo qui rimetterebbe in questo repo la costante che
 `ATTESA` ci aveva già messo una volta. Quel giallo si spegne da solo al primo
 giro, anche a vuoto, perché il motore emette `stream-done` anche per gli stream
 che salta (`cached: true`).
+
+## Il seed di testa, e la capacità che lo regge (#207)
+
+Ogni RNG del motore è `(seed, rng_group o stream_id, componente)`, e dalla
+PythonGranularEngine#297 il seed sta nel fingerprint del motore — solo quando
+il documento ne dichiara uno: senza, il payload è quello di prima e nessuno
+stem si invalida. La UI lo giudica con un quarto asse accanto all'hash, per la
+ragione del backend.
+
+Quell'asse ha un pezzo che gli altri non hanno: uno `stream-done` con
+`cached: true` conferma il seed dello stem solo se il fingerprint del motore il
+seed lo vede. Il motore lo dichiara in `FINGERPRINT_AXES`, una tupla letterale
+che il bridge legge per AST (`engine_introspect.engine_fingerprint_axes`,
+`GET /fingerprint-axes`), e la UI la usa in `seedVouched`. Una capacità
+dichiarata e falsa farebbe scrivere il record su stem che il motore ha saltato
+col seed di prima — il pallino verde dell'issue — quindi la sonda in
+`test-fingerprint-parity.js` pretende due cose:
+
+- che il lettore AST e la costante importata dicano lo stesso elenco, o
+  `null` tutti e due su un motore senza la costante;
+- dove `seed` è dichiarato, che il seed muova davvero l'hash del motore, e che
+  l'asse della UI — con le chiavi di `seedKey`, dove `1441` e `"1441"` sono un
+  seed solo come per la derivazione — discrimini esattamente le coppie che
+  l'hash discrimina, `null` (nessun seed) compreso.
+
+Sul motore che la capacità non ce l'ha la sonda lo **annota** e si ferma,
+invece di saltare: è un motore legittimo, il ramo di default fino al merge
+della #297, e lì la regola della UI è tenere fermo il record dei `cached`.
 
 ## Il sample rate, l'ultima costante ricopiata (e la peggiore)
 
