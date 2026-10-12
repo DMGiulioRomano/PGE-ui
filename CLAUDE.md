@@ -3055,14 +3055,12 @@ What the round trip does now, and what it doesn't:
   segments, and here the run is the whole envelope — the same thing it has
   always done to a flat list, and the same expansion the builder does
   (`_expand_bp_group`). The shape moves, the reading doesn't.
-- **A loop block among the items keeps the list**, as before: the declared case,
-  PGE-ui #191. The engine reads a compact block's interp by *form* — in a list
-  the **first** block's interp becomes the envelope's global type
-  (`EnvelopeBuilder.extract_interp_type`), in a dict it is ignored and the `type`
-  governs — while `expandMixed` and `buildEnvelopeD` draw it per block. Keeping
-  the dict there would make the engine's reading identical and the drawing of
-  the block just added with "add loop" false; the decision is about that model,
-  not about `wrapEnv`.
+- **A loop block among the items no longer forces the list** (#191, decided —
+  see the next section). It used to: the engine reads a compact block's interp
+  by *form*, the editor drew it per block, and the dict would have made the
+  block just added with "add loop" draw one thing and play another. Now the
+  editor reads it the engine's way, and `wrapEnv` keeps the dict unless the
+  list already says the same global type.
 
 **The dict now carries what used to be only in lists, so every reader that
 measured an envelope as a list had to learn it.** `.length` on a dict is
@@ -3077,9 +3075,11 @@ curve that isn't there — and a BP group in the list put `NaN` in its polyline.
 They all read through `unwrapEnv` now: the two sparklines through the editor's
 own path (`unwrapEnv` → `desugarBPGroups` → `expandMixed`), written once as
 `PGEEnv.envSketch` so the two rows can't drift apart again — and the editor's
-path down to the third field: the dict is rebuilt around the desugared items,
-as in the editor's own `exp`, or `expandMixed` tags the untyped points `linear`
-and the sketch loses the very `type` this section is about. Its `count` is
+path down to the third field: the desugared items inside a dict carrying the
+global type, or `expandMixed` tags the untyped points `linear` and the sketch
+loses the very `type` this section is about. Since #191 that path is one
+function, `PGEEnv.envExpand`, which the editor's `exp` and `envSketch` both
+call. Its `count` is
 `PGEEnv.envCount`, which the Inspector badges read too: written elements, with
 a **bare** block or group (the whole value, or a dict's `points`) counting as
 one, not as the three or two fields `unwrapEnv` hands back — `↻1 · 3 el` on an
@@ -3106,9 +3106,9 @@ a contract). `tests/parity/test-envelope-wrap-parity.js` asks the engine the
 real question — the same body before and after `wrapEnv ∘ unwrapEnv` and the
 commit path, evaluated on the same grid by `Envelope.evaluate`, plus the
 `setZoneInterp` gesture against its intent — with a guard that the corpus
-discriminates (the flat list of the same items must play differently), and the
-loop case asserted as a divergence, so the day #191 is decided that suite
-speaks.
+discriminates (the flat list of the same items must play differently). The loop
+case was asserted there as a divergence until #191 decided it; it is now three
+assertions of parity (next section).
 
 **The other keys of the dict survive too** (`wrapEnv(items, interp, like)`).
 `wrapEnv` rebuilt the dict out of `type` and `points` alone, and without a
@@ -3135,6 +3135,110 @@ One consequence outside this repo: mare-nostrum's lab writes a touched
 *not* as the mixed form, because PGE-ui used to lose the global type on re-read
 (mare-nostrum's CLAUDE.md, "Gli inviluppi `{type, points}`"). That reason is
 gone; whether to change it is that repo's call.
+
+### EnvelopeEditor: drawn and read as the engine plays it (#190, #191)
+
+What the EnvelopeEditor draws, the value its playhead readout shows and what
+the engine plays are one reading now, written once in `envelope-loops.js`
+(`window.PGEEnv`):
+
+- **`envExpand(raw, imposed)`** — the editor's one reading: `unwrapEnv` →
+  `desugarBPGroups` → `expandMixed`, inside a dict carrying the engine's global
+  type (or the one the engine imposes: read_direction's `step`, which the YAML
+  doesn't carry). The EnvelopeEditor's `exp`, `envSketch` and the parity suites
+  call it; nobody rebuilds it.
+- **`expandMixed`** is the mirror of `EnvelopeBuilder.parse` plus the global
+  type `Envelope.__init__` puts on top: the same points at the same instants,
+  each tagged with the type of the segment that leaves it — its own tag, else
+  the global. Three readings of the builder it lacked: a `{t, v}` point is a
+  point (drawn, not draggable — `isBreakpoint` still says what the canvas
+  drags); the block after a block starts at the previous one's **last expanded
+  point** (`current_time = compact_expanded[-1][0]`), not at its `end_time`;
+  `wrap` (slot 5) adds its closing points. `perPoint` says whether any point
+  has a type of its own — the engine then builds one segment per pair,
+  otherwise one with the global type, and the two differ on a `step` at the
+  exact instant of a discontinuity.
+- **`cubicTangents`** (`_compute_fritsch_carlson_tangents`, operation for
+  operation, over **all** expanded points), **`hermite`**, **`envValueAt`**
+  (`Envelope.evaluate`, both paths) and **`envPath`** (`M`/`L`/`C` commands in
+  the (time, value) domain; `buildEnvelopeD` only maps them to pixels, and
+  `valueAtTime` is `envValueAt`).
+
+**#190, the cubic of two points.** With two points the engine sets both
+tangents to zero — Hermite becomes the smoothstep `v0 + (v1 − v0)(3s² − 2s³)`,
+"for the straight line there is `type: linear`" — while `emitGroup` and
+`valueAtTime`, each with its own copy of the tangents, gave both ends the
+segment's slope: a straight line. `cubic` and `linear` looked identical and the
+render differed (on `[[0, 0.001], [1, 0.016]]` the readout at `t = 0.1` was 76%
+above what played). The drawing also computed tangents per run of bare
+breakpoints and per cycle, each with its own ends, joined by straight
+connectors, where the engine computes them over every expanded point: at the
+boundary between a group and a block, and between cycles, the drawn curve
+wasn't the played one (0.10–0.15 off in the parity corpus).
+
+**#191, the interp of a compact block.** The engine has no per-block interp.
+Slot 3 is one spelling of the envelope's **global** type: in a list, the first
+block that declares one (`extract_interp_type`), governing the bare points
+outside the block and every other block's points; in a dict, nothing (the
+`type` governs). The editor drew it per block and read every list as `linear`:
+a `step` block after two bare points drew the points straight while the engine
+stepped them; in a `{type: cubic}` dict the block drew stepped and played
+cubic. The issue offered two roads; it takes both halves — **read like the
+engine, write a block's interp on its pattern**:
+
+- **Reading.** `listInterp` (the mirror of `extract_interp_type`, with the
+  engine's compact recognition) gives a list its global type, and
+  `unwrapEnv(list).interp` is that, not `linear`. The loop panel and the loop
+  band show the block's **effective** interp (`blockInterp`: the tags of its
+  internal pattern points, else the global; `mixed` when not uniform), and the
+  panel says what a written slot 3 does when it isn't what plays — ignored (a
+  dict, or not the first declared) or "the global type of the whole envelope".
+- **A block's interp** (`setBlockInterp`, the loop panel) is written as tags on
+  the pattern's **internal** points — not the last, whose segment leaves the
+  cycle and follows the global, the BP group rule — and none where it equals
+  the global. The engine reads a pattern tag the same way in both forms, so
+  "add loop" on a cubic curve and then `step` on the block steps the block and
+  leaves the curve cubic, list or dict. The one exception is the block that
+  **is** the whole envelope: there the block's interp is the global, written
+  in slot 3 (`[pattern, 1, 4, cubic]`, the documented compact form) or in the
+  dict's `type`, and the internal tags are cleared.
+- **The global** (`setGlobalInterp` + `wrapEnv`; the header selector, shown
+  with loops too now and hidden only on read_direction, where the engine
+  imposes `step`): every declared slot 3 follows it, so the list keeps saying
+  it and removing the first block can't change the type of everything else.
+  `wrapEnv` with a block among the items keeps the list only when the list
+  already says the editor's global (`listInterp(items) === interp`; from a dict,
+  only when linear), else writes `{type, points}`. Deleting the block that
+  spelled the global keeps the global: the commit writes it in the dict.
+- **The writers that declared a slot 3 by themselves.** `defaultCompactBlock`
+  ("add loop") is `[pattern, 1, 4]` now: the new block follows the global. The
+  loop panel's setters change their own slot only — they rebuilt five slots
+  with `interp || "linear"`, dropping `wrap` and, in a list, letting an
+  `n_reps` edit on the first block change the global; a skipped slot is
+  `null`, which the engine reads as undeclared. The context menu on a pattern
+  segment copies the block slot by slot (it rebuilt it from the non-null slots,
+  so a null slot 3 let the distribution slide into it), and `fmtCompact` keeps
+  that `null`.
+- **The freeze cut** (`truncateEnvArray`) closes a list's border with the
+  list's global, and when the cut drops the block that spelled it, writes it
+  in a dict's `type`: the head the cut exists to preserve would otherwise play
+  `linear`.
+
+`tests/parity/test-envelope-eval-parity.js` asks the engine: `envValueAt ∘
+envExpand` and `envPath` against `Envelope.evaluate` over a corpus (two-point
+cubics in both spellings, group/block and cycle boundaries, the four rows of
+#191's table, two blocks, a bare block inside a dict, `wrap`, `{t, v}`, time
+distributions, a discontinuity asked at its exact instant), with a presidio
+that is the old reading itself — expansion, cursor and drawing, frozen in the
+test — required to differ from the engine on the rows that say so.
+`test-envelope-wrap-parity.js` asks the dict with a block, the loop panel
+gesture and the global selector against their intent;
+`test-envelope-cut-parity.js` the list whose global sits in a block.
+`tests/node/test-bp-groups.js` pins the shapes, the rules that need no engine
+(drawing and readout are one curve) and the wiring of the panel and selector.
+Declared: points written out of order are drawn as written (the engine sorts
+inside a segment), and a cut cubic still changes its tangents at the border
+(they are computed on points the cut removes) — `boundaryY`'s known limit.
 
 ### Audio playback (`audio-engine.js`)
 
