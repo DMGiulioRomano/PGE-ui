@@ -209,15 +209,21 @@ exists, the fourth only when a browser is installed):
   entry keeping its keys as written but `stream_id` — and the three cases where
   it doesn't move: the new name already the file's, a file two entries import,
   a stream written in the master; renamed and back, undone after a save, a
-  fresh copy renamed, each asked against the disk and not the history; then
+  fresh copy renamed, each asked against the disk and not the history; the
+  rename's provenance (`_import.from`): the old file a read to respect while
+  the remembered disk has it — after a render too, not after the save that
+  deletes it — `importMoveSources` saying how this editor would write it now,
+  the rename alone being no work on it, `rereadImport` of the old file landing
+  inside the renamed stream, `settleImportMoves`; then
   the backend over a fake bridge — `deleteImports` carrying the signatures
   read, a deleted or absent file's signature forgotten, `deleted: null` from a
   bridge older than #208 — plus source guards on the async rename listing the
   folder before it writes the state and re-reading the state of now after the
   listing, on the save sending the orphans and only
   the save, on the remembered disk forgetting only after a save that went
-  through, on the `dephase` file kept in that disk, and on the Inspector
-  awaiting the rename).
+  through, on the `dephase` file kept in that disk, on the old file going
+  through `importGuard`, `fileHasOwnChanges` and `rereadImportFile`, on only
+  the save closing the move, and on the Inspector awaiting the rename).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -562,7 +568,13 @@ moves to `streams/marea.yml`, not on disk until the save, then on disk with
 `stream_id: marea` and the old file gone, the master entry the old one with
 the new file; undo and save bring `onda.yml` back, rewritten, and delete
 `marea.yml`; the lane deleted from its header leaves the file until the save,
-which deletes it; undo and save bring it back.
+which deletes it; undo and save bring it back. Last, the rename with the lab
+saving the *old* file in between: without own changes the save rereads it
+into the renamed stream, creates the new file from the lab's version and
+deletes the old one; with a duration edited after the rename it asks about
+the old file, and «sovrascrivi» leaves it with the lab's bytes. The new name
+there is not `onda` again: the split step wrote a stem under that id, and an
+id that owns a stem is not taken back.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -2791,7 +2803,10 @@ Five rules now:
   document the other entry still imports — there the rename stays in the
   master entry, as before #208, and the terminal says why. An entry whose
   `stream_id` diverged from its file and is renamed to a third name moves:
-  from there file and id coincide again.
+  from there file and id coincide again. The stream that moves remembers the
+  file it left (`_import.from`) until the save that deletes it, so a lab save
+  of that file in between is reread *into* it, not left in the orphan (see
+  "#185's guard follows a rename" below).
 - **A file the master no longer names is an orphan**, and the save asks the
   bridge to delete it: `importOrphans(data, importDiskRef)`, the files the
   remembered disk has and the document doesn't name (`importFilesOf`, so an
@@ -2831,23 +2846,56 @@ Five rules now:
   per reason (`keptNotedRef`), and a bridge older than #208 — which ignores the
   field — is logged once too: `deleted: null` from `fs.save`.
 
-**What #185's guard does not follow: a file that moves or disappears.** The
-guard watches the files the document holds, and a rename takes the old file
-out of the document: the new one is created from this editor's state, and the
-old one is only an orphan carrying the signature it was read with. So if the
-lab saved the stream after this editor read it, the rename writes *this
-editor's* version under the new name and the old file stays with the lab's
-work (`kept`, `changed`, logged): nothing is lost, but the piece now plays the
-new file. And a lab holding the old file open writes it back at its next save
-— for its guard a file that is no longer there is not a changed one
-(DMGiulioRomano/mare-nostrum#6) — and the orphan returns, which
-mare-nostrum's `tests/test_brano.py` flags. The order that avoids both is the
-one mare-nostrum's CLAUDE.md states (DMGiulioRomano/mare-nostrum#19): save
-here first, so the guard rereads what the lab changed, then rename or delete,
-and open the new name in the lab. Following the move would take a reread that
-knows the stream came from the old file; declared rather than built, since
-the two gestures on a stream the lab is working on are rare and nothing is
-lost.
+**#185's guard follows a rename.** A rename takes the old file out of the
+document, not out of the lab, which may hold it open under the old name and
+save it before this editor saves. Followed by nothing, the new file was
+created from *this editor's* version and the lab's work stayed in the orphan
+(`kept`, `changed`): nothing lost, but the piece played the other version.
+So the renamed stream remembers where it came from: `_import.from`, the old
+file and the placement the stream had *inside* it, recorded by
+`renameImport(s, newId, streams, disk)` only when the old file is in the
+remembered disk — a passing name never written is not a source, and renamed
+back to the file it came from there is nothing to follow. While that file is
+in `importDiskRef`:
+
+- **it is a read the writes respect**: `importReadFiles(data, disk)` lists it
+  (through `importMoveSources`), so its signature goes out on `/save`,
+  `/render` and Save As and the bridge refuses with 409 if the lab rewrote
+  it — after a render that already wrote the new file too, since the render
+  deletes nothing;
+- **its own changes** are the old file as this editor would write it now
+  (`importMoveSources`: the stream of now, with the placement it had in the
+  old file) against the remembered disk. The rename alone is no work on it; a
+  volume touched afterwards is;
+- **its reread lands inside the renamed stream** (`rereadImport`): content,
+  head and internal placement from the lab's text, the `stream_id` the file
+  writes renamed; id, new file (still to create), master entry and colour as
+  they are. Its remembered disk becomes that text as this editor would write
+  it, so the retry creates the new file from the lab's version and deletes the
+  old one, whose signature is now the reread one.
+
+With own changes the question is the old file's, and «sovrascrivi» writes
+this editor's version: the old file stays with the lab's work (`kept`,
+`changed`, logged), and mare-nostrum's `tests/test_brano.py` flags it. The
+save that asks to delete the old file closes the move, deleted or kept
+(`settleImportMoves`, on the state of now and outside history, like the
+`dephase` migration); Save As and the render don't — the previous master
+still imports it. Declared: an undo back past that save to a snapshot still
+carrying `from`, with the old file kept on disk, makes it a read again; and a
+renamed stream whose old file still carries `dephase` has that file in the
+remembered disk as the text *read* (below), never this editor's form, so a lab
+save of it asks rather than rereads — the safe direction.
+
+**What it does not follow: a file that disappears under the lab.** A stream
+*deleted* here while the lab holds its file is deleted at the save only if its
+bytes are still those read, so a lab save in between keeps it (`kept`,
+`changed`). The other way round — the rename or delete saved here first, the
+lab saving the old name after — the lab used to write the file back, since
+for its guard a file that is no longer there is not a changed one
+(DMGiulioRomano/mare-nostrum#6); since DMGiulioRomano/mare-nostrum#21 it asks
+instead (`ricrea` / `salva con nome…`). mare-nostrum's CLAUDE.md states the
+order that avoids every question (DMGiulioRomano/mare-nostrum#19): save here
+first, then rename or delete, and open the new name in the lab.
 
 One consequence reaches back into #184: a file still carrying the dead
 `dephase` spelling used to be left *out* of `importDiskRef` so that the first
@@ -2862,8 +2910,12 @@ same at #185's reread of a single file.
 keeps, `tests/parity/test-stream-rename-parity.js` asks the engine
 (`resolve_stream_files`) to find each renamed lab stream under its new id with
 the old file gone — the same fingerprint but for `stream_id`, the other
-streams untouched, the new file alone one stream with the same id — and
-`tests/e2e/test-boot.js` walks the rename and the delete in a browser.
+streams untouched, the new file alone one stream with the same id — and, with
+the lab saving the old file after the rename, to find the lab's stream in the
+new file once the old one is reread into it; `tests/e2e/test-boot.js` walks
+the rename and the delete in a browser, and the rename with the lab saving the
+old file in between — reread and deleted without own changes, asked about with
+them, «sovrascrivi» leaving it with the lab's bytes.
 
 **A lab document comes back whole** (#188, step 4 of the plan, "round-trip
 inverso"). The rules above say where each key goes; what they don't say is
