@@ -3129,11 +3129,12 @@ point — lost its type on the first unrelated edit the same way.
 What the round trip does now, and what it doesn't:
 
 - **The mixed form comes back identical** through the whole commit path.
-- **A BP group between bare points comes back as its 3-tuples**, inside the same
-  dict. `resugarBPGroups` re-forms a group only from a *whole* run of uniform
-  segments, and here the run is the whole envelope — the same thing it has
-  always done to a flat list, and the same expansion the builder does
-  (`_expand_bp_group`). The shape moves, the reading doesn't.
+- **A BP group between bare points comes back as a group**, inside the same
+  dict. It used to come back as its 3-tuples — `resugarBPGroups` re-formed a
+  group only from a *whole* run of uniform segments, and there the run was the
+  whole envelope — on the claim that the shape moves and the reading doesn't.
+  On the edge of a jump that claim was false; the resugar now carries the
+  zones of the value it is given (see "the commit keeps the zones" below).
 - **A loop block among the items no longer forces the list** (#191, decided —
   see the next section). It used to: the engine reads a compact block's interp
   by *form*, the editor drew it per block, and the dict would have made the
@@ -3347,6 +3348,78 @@ lands after the second; with no per-point type the engine sorts its single
 segment and plays that cycle flat, with one it plays the ramp in every cycle.
 The editor reads the ramp — a redundant tag changing the sound is the engine's
 inconsistency, not a reading to copy.
+
+### EnvelopeEditor: the commit keeps the zones (`resugarBPGroups`)
+
+For the engine a BP group is not just a spelling on the edge of a jump. The
+first point of a group that falls on the instant of the point before it — or
+earlier — is moved to that instant plus `DISCONTINUITY_OFFSET`
+(`_expand_bp_group`); a bare point there stays put, and two points on one
+instant are a jump of zero width. With `linear` and `step` the difference lives
+inside that microsecond. With `cubic` it changes the shape: Fritsch-Carlson sees
+the microsecond as a huge slope and the curve leaves the jump at about twice the
+chord's slope, while over a zero-width jump that slope is 0 and the curve leaves
+flat — −0.29 at `t = 0.7` on `[[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], cubic]]`,
+nearly a third of the zone's range. A group that starts *before* the point it
+follows is moved past it, and there the bare point stays out of order, for any
+type.
+
+The editor works on the flat form, and `resugarBPGroups` chose the spelling from
+the tags alone, so the first commit of anything on that envelope — a one-pixel
+drag of another point, an arrow, Delete, the global selector — swapped it, in
+both directions: a zone on a jump among bare points was flattened, and tagged
+bare points starting where a block ends (or on a `{t, v}`) became a zone and
+gained the microsecond. No error, and since #190 the drawing follows the value,
+so the curve after the jump changed shape on its own.
+
+Two rules now, both in `resugarBPGroups(items, globalDefault, like)`:
+
+- **The zones of `like` come back as zones.** `like` is the value the items came
+  from — the one the five write doors already pass to `wrapEnv` (the paste
+  passes the clipboard's, whose structure `remapEnvY` keeps), and a second
+  source guard requires it at all five. `_carryGroupSpans` reads the zones
+  (start, end and interp on the flat indices) and carries them onto the new
+  items: at equal length by index (a drag, an arrow, a retag, the selector),
+  with one item added or removed through the prefix and suffix the two flat
+  forms share. A point added inside a zone lengthens it, one removed shortens
+  it; when the zone's *last* point goes, the new last point loses the zone's
+  type the desugar wrote on it — on a last point that tag governs the outgoing
+  gap, which in the YAML minus that point is global — and a zone left with one
+  point dissolves. The zone's interp is its inner segments' type when they
+  agree, else the one it had; an inner segment that says another type — the
+  global included, since inside a group a bare point belongs to the group —
+  becomes an exception on the point. What can't be carried goes to the
+  inference.
+- **A new zone is born only where it reads like its bare points**: not when its
+  first point falls on a jump (the builder's `current_time` and
+  `has_preceding`, tracked while writing — the maximum for points, the *last*
+  point for a group, the last expanded point for a block), and not when the run
+  is out of order, where a group would carry `current_time` forward with its
+  last point instead of the maximum and move whatever follows. This rule needs
+  no `like`.
+
+The same walk had a sibling, found by the random comparison below: **a tag equal
+to the global was always dropped**, even the envelope's only per-point type.
+With none the engine builds one segment instead of one per pair
+(`_parse_segments`: `has_per_point_type`), and on the exact instant of a jump
+the two read the other point of it — with `step` the first jump and the inner
+ones, with `linear` and `cubic` the last one; `t = 0` is where the first grain
+falls. A redundant tag is now dropped only while the envelope keeps a per-point
+type: another exception, a zone, a `{t, v, type}` point, a tagged pattern point.
+
+So the YAML comes out as it was with only the gesture applied, and the sound
+changes only through the gesture. `tests/node/test-bp-groups.js` pins the
+shapes — the no-op commit in both directions, the gestures, a point added or
+removed inside and outside a zone, the zone's last point removed, the paste —
+and that the five doors pass `like` to `resugarBPGroups` too.
+`tests/parity/test-envelope-wrap-parity.js` asks the engine: a corpus of jumps in
+both directions and of envelopes whose only per-point type is redundant, six
+gestures against their intent, and 300 seeded random envelopes (points,
+`{t, v}`, groups on and before the point they follow, blocks with slot 3,
+distribution and `wrap`, in the list and in both dicts) on a grid plus every
+written instant. The old resugar, frozen in the test, is the presidio: it
+changed the sound of 23 of the 300, and with the previous `envelope-loops.js` in
+place the suite had 15 red cases.
 
 ### Audio playback (`audio-engine.js`)
 

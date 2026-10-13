@@ -421,9 +421,9 @@
        has_per_point_type), e sull'istante esatto di un salto — due punti
        sullo stesso istante — i due leggono l'altro punto: con step quello
        all'inizio e quelli in mezzo, con linear e cubic quello in fondo. A
-       t = 0 cade il primo grano. Lo danno una zona (i suoi punti interni hanno sempre il tipo), un tag
-       diverso dal globale, un punto {t, v, type}, un punto del pattern di un
-       blocco col suo tag. */
+       t = 0 cade il primo grano. Il tipo sul punto lo danno una zona (i suoi
+       punti interni ce l'hanno sempre), un tag diverso dal globale, un punto
+       {t, v, type}, un punto del pattern di un blocco col suo tag. */
     const keepsPerPoint = spans.length > 0 || items.some((it) =>
       (isBreakpoint(it) && typeof it[2] === "string" && it[2] !== g) ||
       isBPGroup(it) ||
