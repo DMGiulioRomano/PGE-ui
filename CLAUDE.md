@@ -1489,8 +1489,9 @@ Three things in it are easy to get wrong, and each has its case:
   as the builder asks it: `{t: pattern, v: end_time, type: n_reps}` normalizes
   into a compact too, and looking for the last compact among the items as
   written missed it — the next block restarted from 0, silent where the engine
-  rejects. `expandMixed` restarts from `end_time` — the preview is not what
-  decides rejection.
+  rejects. Since #191 `expandMixed` restarts from the same point (it is the
+  editor's reading of the builder, see "drawn and read as the engine plays
+  it"); the preview still is not what decides rejection.
 - **The int/float blind spot.** For Python `n_reps: 2.0` is a float, hence not
   a compact, hence an error; here `2.0` and `2` are the same Number, and the
   mirror stays silent — the safe direction, like `power.exponent` in
