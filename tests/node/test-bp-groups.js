@@ -329,12 +329,13 @@ console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189)
 {
   const rewrap = (x) => { const w = E.unwrapEnv(x); return E.wrapEnv(w.items, w.interp); };
   // Il percorso di ogni commit dell'EnvelopeEditor (commit, commitCur, frecce,
-  // paste): desugar per lavorare, resugar + wrap per scrivere.
-  const commitPath = (items, interp) =>
-    E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp);
+  // paste): desugar per lavorare, resugar + wrap per scrivere, tutti e due col
+  // valore da cui gli item vengono.
+  const commitPath = (items, interp, like) =>
+    E.wrapEnv(E.resugarBPGroups(items, interp || "linear", like), interp, like);
   const roundTrip = (x) => {
     const w = E.unwrapEnv(x);
-    return commitPath(E.desugarBPGroups(w.items), w.interp);
+    return commitPath(E.desugarBPGroups(w.items), w.interp, x);
   };
 
   // la forma mista: tipo globale ed eccezioni sul punto (la riproduzione della issue)
@@ -347,16 +348,14 @@ console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189)
   const CON_GRUPPO = { type: "cubic", points: [[0, 2], [[[0.1, 1], [0.2, 3], [0.3, 0]], "step"], [1, 1]] };
   assert("BP group dentro il dict: wrapEnv ∘ unwrapEnv lo rende identico",
     eq(rewrap(CON_GRUPPO), CON_GRUPPO), JSON.stringify(rewrap(CON_GRUPPO)));
-  /* Il gruppo fra due breakpoint nudi non si ricompatta: resugarBPGroups
-     rifa un gruppo solo da un run INTERO di segmenti uniformi, e qui il run e'
-     tutto l'envelope. Esce come i suoi 3-tuple — la stessa cosa che fa sulla
-     lista piatta da sempre, e la stessa espansione che fa il builder
-     (`_expand_bp_group`). La forma cambia, la semantica no; e il type globale
-     resta, che e' il punto. */
-  assert("BP group dentro il dict: dopo il commit il type resta, il gruppo diventa i suoi 3-tuple",
-    eq(roundTrip(CON_GRUPPO),
-       { type: "cubic", points: [[0, 2], [0.1, 1, "step"], [0.2, 3, "step"], [0.3, 0], [1, 1]] }),
-    JSON.stringify(roundTrip(CON_GRUPPO)));
+  /* Il gruppo fra due breakpoint nudi usciva come i suoi 3-tuple:
+     resugarBPGroups rifaceva un gruppo solo da un run INTERO di segmenti
+     uniformi, e qui il run e' tutto l'envelope. Sul bordo di un salto quella
+     forma suona diversa (il blocco qui sotto, "il commit sul bordo del
+     salto"), e ora il resugar riceve il valore d'origine e ne riporta le zone:
+     il gruppo resta gruppo, e col type globale resta tutto. */
+  assert("BP group dentro il dict: dopo il commit il type resta, e il gruppo pure",
+    eq(roundTrip(CON_GRUPPO), CON_GRUPPO), JSON.stringify(roundTrip(CON_GRUPPO)));
 
   const STEP_CON_CUBIC = { type: "step", points: [[0, 0], [0.5, 1, "cubic"], [0.7, 0.2, "cubic"], [1, 1]] };
   assert("anche con step globale e cubic sul punto",
@@ -376,7 +375,7 @@ console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189)
       if (!internal.has(i) || !E.isBreakpoint(it)) return it;
       return "step" === g ? [it[0], it[1]] : [it[0], it[1], "step"];
     });
-    const scritto = commitPath(next, g);
+    const scritto = commitPath(next, g, FF);
     assert("setZoneInterp su un {type: cubic}: esce il dict con le due eccezioni step",
       eq(scritto, { type: "cubic", points: [[0, 2], [0.0926, 2.01, "step"], [0.1631, 0.46, "step"], [0.2586, 0.4], [0.3133, 2.75], [1, 1]] }),
       JSON.stringify(scritto));
@@ -422,6 +421,125 @@ console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189)
     inline);
   assert("parseEnvLiteral ∘ fmtEnvInline round-trip sul dict con gruppo",
     eq(E.parseEnvLiteral(inline), CON_GRUPPO), inline);
+}
+
+/* ── il commit sul bordo del salto: zona e punti nudi non si scambiano ───────
+   Per l'editor zona e punti nudi erano grafia: lavora sulla forma piatta, e
+   al commit resugarBPGroups rifaceva un gruppo da ogni run di punti
+   consecutivi con lo stesso tipo, e solo da quello. Per il motore non lo sono
+   sul bordo di un salto: il primo punto di un BP group che cade sull'istante
+   del punto prima — o prima ancora — si sposta a quell'istante piu'
+   DISCONTINUITY_OFFSET (`_expand_bp_group`), un punto nudo li' resta dov'e'.
+   Con `cubic` cambia la forma: le tangenti di Fritsch-Carlson vedono il
+   microsecondo come una pendenza enorme e la curva riparte dal salto col
+   doppio della pendenza della corda; sul salto largo zero la pendenza vale 0 e
+   la curva riparte piatta. Un commit qualunque su quell'inviluppo scambiava le
+   due grafie, nelle due direzioni: la zona sul salto, fra punti nudi, si
+   appiattiva; i punti nudi taggati dopo un blocco diventavano una zona.
+   Adesso il resugar riceve il valore da cui gli item vengono (`like`, lo
+   stesso che wrapEnv riceve gia') e ne riporta le zone sugli item nuovi, e una
+   zona nuova nasce solo dove non cambia il suono. Che il motore suoni lo
+   stesso lo chiede tests/parity/test-envelope-wrap-parity.js; qui la forma. */
+console.log("\n── il commit sul bordo del salto: zona e punti nudi non si scambiano ──");
+{
+  const commit = (items, interp, like) =>
+    E.wrapEnv(E.resugarBPGroups(items, interp || "linear", like), interp, like);
+  const rt = (x) => { const w = E.unwrapEnv(x); return commit(E.desugarBPGroups(w.items), w.interp, x); };
+
+  const SALTO = [[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], "cubic"]];
+  assert("la zona che comincia sul salto: il commit senza modifiche la rende identica",
+    eq(rt(SALTO), SALTO), JSON.stringify(rt(SALTO)));
+  const SALTO_DICT = { type: "cubic", points: SALTO };
+  assert("…anche dentro un {type, points}", eq(rt(SALTO_DICT), SALTO_DICT), JSON.stringify(rt(SALTO_DICT)));
+  const PRIMA = [[0, 0], [0.5, 1], [[[0.3, 2], [0.8, 2.5], [1, 3]], "cubic"]];
+  assert("…e quella che comincia prima del punto precedente (il motore la porta dopo)",
+    eq(rt(PRIMA), PRIMA), JSON.stringify(rt(PRIMA)));
+  const LIBERA = { type: "cubic", points: [[0, 2], [[[0.1, 1], [0.2, 3], [0.3, 0]], "step"], [1, 1]] };
+  assert("una zona lontana dal salto resta zona anche lei: lo YAML esce come l'autore l'ha scritto",
+    eq(rt(LIBERA), LIBERA), JSON.stringify(rt(LIBERA)));
+  assert("…senza il valore d'origine l'inferenza e' quella di sempre: il run misto resta piatto",
+    eq(E.resugarBPGroups(E.desugarBPGroups(LIBERA.points), "cubic"),
+       [[0, 2], [0.1, 1, "step"], [0.2, 3, "step"], [0.3, 0], [1, 1]]));
+  assert("…e le zone dell'esempio della issue #108, blocco in mezzo, tornano le stesse",
+    eq(E.resugarBPGroups(E.desugarBPGroups(MIXED), "linear", MIXED), MIXED));
+
+  // L'altra direzione: punti nudi taggati che cominciano su un salto.
+  const BLK = [[[0, 0], [100, 1]], 0.5, 1];
+  const DOPO_BLOCCO = [BLK, [0.5, 2, "cubic"], [1, 3]];
+  assert("punti nudi taggati dove finisce un blocco: restano nudi",
+    eq(rt(DOPO_BLOCCO), DOPO_BLOCCO), JSON.stringify(rt(DOPO_BLOCCO)));
+  assert("…anche senza il valore d'origine: la regola non ha bisogno di sapere cosa c'era",
+    eq(E.resugarBPGroups(DOPO_BLOCCO, "linear"), DOPO_BLOCCO),
+    JSON.stringify(E.resugarBPGroups(DOPO_BLOCCO, "linear")));
+  const DOPO_DICT = [{ t: 0.5, v: 1 }, [0.5, 2, "cubic"], [1, 3]];
+  assert("…e dopo un punto {t, v} sullo stesso istante",
+    eq(E.resugarBPGroups(DOPO_DICT, "linear"), DOPO_DICT),
+    JSON.stringify(E.resugarBPGroups(DOPO_DICT, "linear")));
+  assert("lontano dal salto un run uniforme diventa ancora zona",
+    eq(E.resugarBPGroups([BLK, [0.6, 2, "cubic"], [1, 3]], "linear"), [BLK, [[[0.6, 2], [1, 3]], "cubic"]]));
+  /* Il builder porta avanti `current_time` col solo ULTIMO punto di una zona,
+     coi punti nudi col massimo di ognuno: un run fuori ordine fatto zona
+     sposterebbe l'inizio del blocco che segue. */
+  const FUORI_ORDINE = [[0, 0, "cubic"], [0.9, 1, "cubic"], [0.8, 2], [[[0, 0], [100, 1]], 2, 2]];
+  assert("…ma non un run fuori ordine: la zona rileggerebbe diverso cio' che la segue",
+    eq(E.resugarBPGroups(FUORI_ORDINE, "linear"), FUORI_ORDINE),
+    JSON.stringify(E.resugarBPGroups(FUORI_ORDINE, "linear")));
+
+  // I gesti: la zona segue i suoi punti, e cambia solo cio' che il gesto tocca.
+  const Z = [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "cubic"]];
+  const f = E.desugarBPGroups(Z);
+  const at = (i, p) => f.map((it, k) => (k === i ? p : it));
+  assert("un punto trascinato fuori dalla zona: la zona resta",
+    eq(commit(at(0, [0.1, 0.4]), "linear", Z), [[0.1, 0.4], [0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(at(0, [0.1, 0.4]), "linear", Z)));
+  assert("una freccia su un punto della zona: la zona resta, col valore nuovo",
+    eq(commit(at(3, [0.75, 2.7, "cubic"]), "linear", Z), [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.7], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(at(3, [0.75, 2.7, "cubic"]), "linear", Z)));
+  assert("un segmento della zona portato al tipo globale (il menu lo scrive nudo): un'eccezione dentro la zona",
+    eq(commit(at(3, [0.75, 2.5]), "linear", Z), [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.5, "linear"], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(at(3, [0.75, 2.5]), "linear", Z)));
+  const tuttiStep = f.map((it, k) => (k === 2 || k === 3 ? [it[0], it[1], "step"] : it));
+  assert("tutti i segmenti della zona portati a un altro tipo: la zona prende quel tipo",
+    eq(commit(tuttiStep, "linear", Z), [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "step"]]),
+    JSON.stringify(commit(tuttiStep, "linear", Z)));
+  assert("il selettore del tipo globale: la zona tiene il suo",
+    eq(commit(E.setGlobalInterp(f, "step"), "step", Z),
+       { type: "step", points: [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "cubic"]] }),
+    JSON.stringify(commit(E.setGlobalInterp(f, "step"), "step", Z)));
+
+  // Un punto aggiunto (il doppio click: prende il tag del punto prima) o tolto.
+  const ins = (i, p) => [...f.slice(0, i), p, ...f.slice(i)];
+  const del = (i) => f.filter((_, k) => k !== i);
+  assert("un punto aggiunto dentro la zona: la zona si allunga",
+    eq(commit(ins(3, [0.6, 2.2, "cubic"]), "linear", Z),
+       [[0, 0], [0.5, 1], [[[0.5, 2], [0.6, 2.2], [0.75, 2.5], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(ins(3, [0.6, 2.2, "cubic"]), "linear", Z)));
+  assert("un punto aggiunto prima della zona: resta fuori",
+    eq(commit(ins(1, [0.25, 0.5]), "linear", Z),
+       [[0, 0], [0.25, 0.5], [0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(ins(1, [0.25, 0.5]), "linear", Z)));
+  assert("un punto tolto prima della zona: la zona resta",
+    eq(commit(del(0), "linear", Z), [[0.5, 1], [[[0.5, 2], [0.75, 2.5], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(del(0), "linear", Z)));
+  assert("tolto il primo punto della zona: la zona riparte dal secondo",
+    eq(commit(del(2), "linear", Z), [[0, 0], [0.5, 1], [[[0.75, 2.5], [1, 3]], "cubic"]]),
+    JSON.stringify(commit(del(2), "linear", Z)));
+  /* Tolto l'ultimo, il penultimo diventa l'ultimo: il suo tag era il tipo
+     della zona messo dal desugar, e sull'ultimo punto governerebbe il gap in
+     uscita. Nello YAML di prima, col solo punto tolto, quel gap e' globale. */
+  assert("tolto l'ultimo punto della zona: il nuovo ultimo esce senza il tipo della zona",
+    eq(commit(del(4), "linear", Z), [[0, 0], [0.5, 1], [[[0.5, 2], [0.75, 2.5]], "cubic"]]),
+    JSON.stringify(commit(del(4), "linear", Z)));
+  const S2 = E.desugarBPGroups(SALTO);
+  assert("una zona di due punti che ne perde l'ultimo non c'e' piu': il punto che resta esce nudo",
+    eq(commit(S2.slice(0, 3), "linear", SALTO), [[0, 0], [0.5, 1], [0.5, 2]]),
+    JSON.stringify(commit(S2.slice(0, 3), "linear", SALTO)));
+
+  // Il paste: il valore d'origine e' quello degli appunti, con la sua struttura.
+  const incollato = U.remapEnvY(E.unwrapEnv(SALTO).items, 0, 3, 0, 6);
+  assert("il paste: la zona sul salto arriva zona",
+    eq(commit(E.desugarBPGroups(incollato), "linear", SALTO), [[0, 0], [0.5, 2], [[[0.5, 4], [1, 6]], "cubic"]]),
+    JSON.stringify(commit(E.desugarBPGroups(incollato), "linear", SALTO)));
 }
 
 /* ── l'anteprima dell'editor sul dict che porta gruppi (#189) ────────────────
@@ -573,7 +691,7 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
 console.log("\n── wrapEnv: le altre chiavi del dict (time_unit) restano ──");
 {
   const commitPath = (items, interp, like) =>
-    E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp, like);
+    E.wrapEnv(E.resugarBPGroups(items, interp || "linear", like), interp, like);
   const roundTrip = (x) => {
     const w = E.unwrapEnv(x);
     return commitPath(E.desugarBPGroups(w.items), w.interp, x);
@@ -611,22 +729,32 @@ console.log("\n── wrapEnv: le altre chiavi del dict (time_unit) restano ─�
   /* Ogni commit dell'EnvelopeEditor passa a wrapEnv il valore da cui gli item
      vengono: senza, la chiave si perde da quella porta. Le porte sono cinque
      (commit, commitWithInterp, il Delete, le frecce, il paste) e il guard le
-     conta tutte: ogni chiamata ha tre argomenti. */
+     conta tutte: ogni chiamata ha tre argomenti. Lo stesso per
+     resugarBPGroups, che da quel valore riporta le zone (il blocco "il commit
+     sul bordo del salto"): una porta senza scambierebbe di nuovo zona e punti
+     nudi, e il suono con loro. */
   const SG = require("./source-guard.js");
   const eeMask = SG.maskOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
-  const calls = [];
-  for (const m of eeMask.matchAll(/(?<![\w])wrapEnv\(/g)) {
-    let depth = 0, args = 1, i = m.index + m[0].length - 1;
-    for (; i < eeMask.length; i++) {
-      const ch = eeMask[i];
-      if ("([{".includes(ch)) depth++;
-      else if (")]}".includes(ch)) { depth--; if (depth === 0) break; }
-      else if (ch === "," && depth === 1) args++;
+  const argsOf = (re) => {
+    const calls = [];
+    for (const m of eeMask.matchAll(re)) {
+      let depth = 0, args = 1, i = m.index + m[0].length - 1;
+      for (; i < eeMask.length; i++) {
+        const ch = eeMask[i];
+        if ("([{".includes(ch)) depth++;
+        else if (")]}".includes(ch)) { depth--; if (depth === 0) break; }
+        else if (ch === "," && depth === 1) args++;
+      }
+      calls.push(args);
     }
-    calls.push(args);
-  }
+    return calls;
+  };
+  const calls = argsOf(/(?<![\w])wrapEnv\(/g);
   assert("le cinque porte di scrittura dell'EnvelopeEditor passano il valore d'origine a wrapEnv",
     calls.length === 5 && calls.every((n) => n === 3), JSON.stringify(calls));
+  const resugars = argsOf(/(?<![\w])resugarBPGroups\(/g);
+  assert("…e a resugarBPGroups, che ne riporta le zone",
+    resugars.length === 5 && resugars.every((n) => n === 3), JSON.stringify(resugars));
 }
 
 /* ── la curva di blend multistate: ogni grafia cambia scala ──────────────────
@@ -875,7 +1003,7 @@ console.log("\n── l'interp di un blocco compatto (#191) ──");
   assert("…e niente da cambiare: lo stesso oggetto", E.setGlobalInterp(g2, "linear") === g2);
 
   // wrapEnv con un blocco: la forma che dice il globale
-  const cp = (items, interp, like) => E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp, like);
+  const cp = (items, interp, like) => E.wrapEnv(E.resugarBPGroups(items, interp || "linear", like), interp, like);
   const rt = (x) => { const w = E.unwrapEnv(x); return cp(E.desugarBPGroups(w.items), w.interp, x); };
   const LISTA = [[0, 0], [0.2, 1], [PAT, 1, 2, "step"]];
   assert("wrapEnv: la lista che dice gia' il globale resta lista (niente migrazione)",
