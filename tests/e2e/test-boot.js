@@ -1358,10 +1358,21 @@ const wait = (ms) => new Promise(r => setTimeout(r, ms));
         await page.click(".pge-toast:has(.tt-title:text-is('Save refused'))");
         await wait(200);
 
-        await ownFileOf("coro");
+        // Con un doppio click (review): il gesto aspetta la cartella e il
+        // bottone resta acceso, quindi i click sono due e i gesti pure. Il
+        // secondo, partito dallo stato di prima, arrivava dopo il ridisegno e
+        // diceva «e' cambiato mentre si leggeva la cartella — riprova» sotto un
+        // gesto riuscito. La guardia di rientro lo ferma (onGiveOwnFile).
+        await clipOf("coro");
+        await page.dblclick(OWN);
+        await wait(600);                          // il gesto aspetta GET /import-dir
         assert("«file suo»: coro passa a streams/coro.yml, alto resta su streams/voci.yml",
           (await fileOf("coro")) === "streams/coro.yml" && (await fileOf("alto")) === VOCI,
           JSON.stringify(await fileLabels()));
+        const inspText = await page.evaluate(() =>
+          (document.querySelector(".pge-inspector") || {}).textContent || "");
+        assert("...e un doppio click non lascia un errore sotto un gesto riuscito",
+          !/mentre si leggeva la cartella/.test(inspText), inspText.slice(0, 300));
         assert("...che al gesto non si scrive", !(await streamsDir()).includes("streams/coro.yml"),
           JSON.stringify(await streamsDir()));
         await clipOf("coro");

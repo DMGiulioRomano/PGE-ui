@@ -373,6 +373,9 @@ function App() {
   /* La stessa guardia per lo split (#187), che da quando taglia uno stream
      importato aspetta la cartella dal bridge: vedi `onSplit`. */
   const splittingRef = useRefApp(false);
+  /* E per il «file suo» (#205), che aspetta la cartella allo stesso modo:
+     vedi `onGiveOwnFile`. */
+  const owningFileRef = useRefApp(false);
 
   /* La versione di semantica del motore, richiesta al bridge.
    *
@@ -1815,6 +1818,23 @@ function App() {
                     : `${src._import.file} si cancella al salvataggio`));
     setDirty(true);
     return null;
+  }
+  /* L'ingresso del «file suo», con la sua guardia di rientro — lo schema di
+     `onSplit`. Il gesto aspetta la cartella dal bridge, e il bottone resta
+     acceso durante l'attesa: un doppio click faceva partire un secondo gesto
+     dallo stato di prima, e se la sua risposta arrivava dopo il ridisegno il
+     controllo sullo stato di adesso diceva «e' cambiato mentre si leggeva la
+     cartella — riprova» sotto un gesto riuscito (prima del ridisegno, un
+     secondo log del trasloco). Un ref si alza nello stesso tick e vale per
+     ogni chiusura: durante l'attesa un secondo gesto non parte. */
+  async function onGiveOwnFile(id) {
+    if (owningFileRef.current) return null;
+    owningFileRef.current = true;
+    try {
+      return await giveOwnFile(id);
+    } finally {
+      owningFileRef.current = false;
+    }
   }
   /* Uno stream importato cancellato lascia un file che il master non nomina
      piu' (#208): si cancella al salvataggio. Lo si dice adesso, quando l'undo
@@ -3299,7 +3319,7 @@ function App() {
                onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
                ownFile={selected() && selected()._import && window.PGEYaml
                  ? window.PGEYaml.importOwnFile(selected(), data.streams) : null}
-               onOwnFile={() => selectedId ? giveOwnFile(selectedId) : null}
+               onOwnFile={() => selectedId ? onGiveOwnFile(selectedId) : null}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab}
                samples={mediaList.files}

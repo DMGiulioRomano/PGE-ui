@@ -204,6 +204,23 @@ console.log("\n── app.jsx e Inspector: il gesto ──");
     /setData\(d\s*=>[\s\S]*ownFileImport\(/.test(g));
   assert("la rinomina usa lo stesso alfabeto del gesto (una regola sola)",
     /STREAM_ID_RE\.test\(/.test(fnBody("async function renameStream(")));
+  /* (review) La guardia di rientro, quella dello split (`onSplit`): su un ref,
+     alzata prima di ogni attesa, riabbassata in un finally. Il gesto aspetta
+     la cartella e il bottone resta acceso durante l'attesa: un doppio click
+     faceva partire il secondo dallo stato di prima, e quando la sua risposta
+     arrivava dopo il ridisegno il controllo sullo stato di adesso diceva
+     «e' cambiato mentre si leggeva la cartella — riprova» sotto un gesto
+     riuscito (prima del ridisegno, un secondo log del trasloco). */
+  const entry = fnBody("async function onGiveOwnFile(");
+  assert("onGiveOwnFile e' l'ingresso del gesto, con la sua guardia di rientro su un ref",
+    /owningFileRef\.current\) return null;/.test(entry)
+      && entry.indexOf("owningFileRef.current = true") >= 0
+      && entry.indexOf("owningFileRef.current = true") < entry.indexOf("await giveOwnFile("), entry);
+  assert("...riabbassata in un finally", /finally\s*\{\s*owningFileRef\.current = false;/.test(entry), entry);
+  // Le chiamate, non la dichiarazione: l'unica deve essere quella dell'ingresso.
+  const directOwn = app.match(/(?<!function )\bgiveOwnFile\(/g) || [];
+  assert("...e nessun altro chiama il gesto direttamente",
+    directOwn.length === 1 && /await giveOwnFile\(/.test(entry), `${directOwn.length} chiamate dirette`);
   // L'elemento JSX intero, dagli attributi alla chiusura: le graffe contano,
   // perche' dentro un attributo `=>` ha il suo `>`.
   const elementsOf = (tag) => {
@@ -223,7 +240,7 @@ console.log("\n── app.jsx e Inspector: il gesto ──");
   const inspectors = elementsOf("Inspector");
   assert("l'Inspector riceve il piano e il gesto, su ogni suo elemento",
     inspectors.length > 0
-      && inspectors.every(e => /\bownFile=\{[\s\S]*importOwnFile\(/.test(e) && /\bonOwnFile=\{[\s\S]*giveOwnFile\(/.test(e)),
+      && inspectors.every(e => /\bownFile=\{[\s\S]*importOwnFile\(/.test(e) && /\bonOwnFile=\{[\s\S]*\bonGiveOwnFile\(/.test(e)),
     `${inspectors.length} elementi`);
   assert("...e nessun altro componente: il gesto e' una riga dell'Inspector",
     elementsOf("EnvelopeEditor").every(e => !/\bownFile=|\bonOwnFile=/.test(e)));

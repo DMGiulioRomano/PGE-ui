@@ -234,7 +234,7 @@ exists, the fourth only when a browser is installed):
   file followed and deleted at the save like a rename's, the conflict it
   resolves and nothing to create once undone; plus source guards on the async
   gesture listing the folder before it writes and re-reading the state of now,
-  on the one alphabet of ids (`STREAM_ID_RE`), on the Inspector being the one
+  on its re-entry guard (`onGiveOwnFile`), on the one alphabet of ids (`STREAM_ID_RE`), on the Inspector being the one
   element that gets the gesture, and on the conflict and split messages naming
   it).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
@@ -591,7 +591,7 @@ id that owns a stem is not taken back. Then #205, on a master importing
 `streams/voci.yml` twice (`fixtures/PGE_smoke_shared.yml`, as `coro` and
 `alto`): `coro` lengthened alone and the save refused — the conflict, its
 message naming the gesture, nothing written —; «file suo» on its Inspector
-row gives it `streams/coro.yml`, not on disk until the save, then a lab
+row, double-clicked (one gesture, no error under it), gives it `streams/coro.yml`, not on disk until the save, then a lab
 document with `stream_id: coro` and the edit, the master entry without
 `stream_id`, `voci.yml` left to `alto` byte for byte; on `alto`, now its only
 importer, the gesture moves the file: undone before the save it leaves
@@ -3051,6 +3051,12 @@ Five rules:
   already modified, with another realization.
 - **Written at the save or before the render, never at the gesture**, and
   undone before the save it leaves nothing on disk.
+- **One gesture at a time** (`onGiveOwnFile`, the entry the Inspector calls):
+  a ref raised before any await and dropped in a `finally`, `onSplit`'s shape.
+  The button stays lit while the folder is asked, so a double click ran two
+  gestures from the same state, and the second, answered after the redraw,
+  printed «e' cambiato mentre si leggeva la cartella — riprova» under a
+  gesture that had gone through.
 
 The id it names a file with has one alphabet, `PGEYaml.STREAM_ID_RE`, which
 `renameStream` reads too. The conflict message and the split's fourth refusal
