@@ -271,11 +271,28 @@
      L'editor lavora sulla forma piatta (indici stabili) e ricompatta al commit.
 
      desugar:  [[pts, 'cubic'], …] → [t, v, 'cubic'] per i punti interni
-     resugar:  un run di BP consecutivi i cui segmenti interni hanno tutti lo
-               stesso type effettivo T ≠ default globale torna [points, T];
-               altrimenti resta piatto (i tag == default vengono normalizzati
-               via, come fa il context-menu per-segmento). Il ciclo
-               desugar∘resugar è idempotente sugli indici. */
+     resugar:  le zone del valore da cui gli item vengono (`like`) tornano
+               zone (_carryGroupSpans); fuori da quelle, un run di BP
+               consecutivi i cui segmenti interni hanno tutti lo stesso type
+               effettivo T ≠ default globale torna [points, T] — se non
+               comincia su un salto ed e' in ordine; altrimenti resta piatto
+               (i tag == default vengono normalizzati via, come fa il
+               context-menu per-segmento). Il ciclo desugar∘resugar è
+               idempotente sugli indici.
+
+     Zona o punti nudi, per il motore, non sono solo grafia: sul bordo di un
+     salto la lettura cambia. Il primo punto di un gruppo che cade
+     sull'istante del punto prima — o prima ancora — il builder lo sposta a
+     quell'istante piu' DISCONTINUITY_OFFSET (`_expand_bp_group`); un punto
+     nudo li' resta dov'e', e due punti sullo stesso istante sono un salto
+     largo zero. Con `cubic` cambia la forma, non solo il microsecondo: le
+     tangenti di Fritsch-Carlson vedono il microsecondo come una pendenza
+     enorme, e la curva riparte dal salto col doppio della pendenza della
+     corda; sul salto largo zero quella pendenza vale 0 e la curva riparte
+     piatta. Il resugar decideva la grafia dai soli tag, quindi il primo commit
+     qualunque su quell'inviluppo la scambiava nelle due direzioni: la zona sul
+     salto, fra punti nudi, si appiattiva; i punti nudi taggati dopo un blocco
+     diventavano una zona. -0.29 e +0.29 su una zona cubica da 2 a 3. */
   function desugarBPGroups(items) {
     // Forma diretta: il valore E' il gruppo, oppure E' il blocco (isBareEnv).
     // Il blocco mancava, e non si vedeva da nessuna parte tranne l'unico posto
@@ -309,14 +326,132 @@
     return out;
   }
 
-  function resugarBPGroups(items, globalDefault) {
+  /* Le zone di un valore sugli indici della sua forma piatta: dove comincia e
+     dove finisce ogni BP group dopo desugarBPGroups, e il suo interp. */
+  function _groupSpans(items) {
+    if (isBareEnv(items)) items = [items];
+    const spans = [];
+    if (!Array.isArray(items)) return spans;
+    let k = 0;
+    for (const it of items) {
+      if (isBPGroup(it)) {
+        spans.push({ start: k, end: k + it[0].length - 1, interp: it[1] });
+        k += it[0].length;
+      } else {
+        k += 1;
+      }
+    }
+    return spans;
+  }
+
+  /* Le zone di `like` — il valore da cui gli item vengono — riportate sugli
+     item nuovi. Un gesto dell'editor cambia un item, ne aggiunge uno o ne
+     toglie uno: a parita' di lunghezza gli indici sono gli stessi; altrimenti
+     il cambio sta fra il prefisso e il suffisso che le due forme piatte hanno
+     in comune. Un punto aggiunto dentro una zona la allunga, uno tolto la
+     accorcia. Tolto l'ultimo, il nuovo ultimo perde il tipo della zona che il
+     desugar gli aveva scritto (`untag`): sull'ultimo punto quel tag
+     governerebbe il gap in uscita, che nello YAML di prima — col solo punto
+     tolto — e' globale. Cio' che non si sa riportare, o che resta con meno di
+     due punti o con un item che non e' un breakpoint, torna all'inferenza. */
+  function _carryGroupSpans(items, like) {
+    const w = unwrapEnv(like);
+    const spans = _groupSpans(w.items).filter((sp) => sp.end > sp.start);
+    const untag = [];
+    if (!spans.length) return { spans, untag };
+    const base = desugarBPGroups(w.items);
+    const lb = base.length, ln = items.length;
+    let carried = spans;
+    if (lb !== ln) {
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      let p = 0;
+      while (p < lb && p < ln && same(base[p], items[p])) p++;
+      let s = 0;
+      while (s < lb - p && s < ln - p && same(base[lb - 1 - s], items[ln - 1 - s])) s++;
+      const removed = lb - s - p, added = ln - s - p;
+      carried = [];
+      for (const sp of spans) {
+        if (sp.end < p) carried.push(sp);
+        else if (sp.start >= lb - s) carried.push({ ...sp, start: sp.start + ln - lb, end: sp.end + ln - lb });
+        else if (removed === 0 && added === 1) carried.push({ ...sp, end: sp.end + 1 });
+        else if (removed === 1 && added === 0) {
+          if (p === sp.end) untag.push({ index: p - 1, interp: sp.interp });
+          carried.push({ ...sp, end: sp.end - 1 });
+        }
+      }
+    }
+    const ok = (sp) => {
+      if (sp.start < 0 || sp.end >= ln || sp.end <= sp.start) return false;
+      for (let k = sp.start; k <= sp.end; k++) if (!isBreakpoint(items[k])) return false;
+      return true;
+    };
+    return { spans: carried.filter(ok), untag };
+  }
+
+  /* Una zona riportata, riscritta come gruppo. Il suo interp e' il tipo dei
+     segmenti interni se e' uno solo — tutti portati a step, la zona e' step —
+     se no quello che aveva; un segmento che ne dice un altro diventa
+     un'eccezione sul punto, anche se e' il tipo globale: dentro un gruppo un
+     punto nudo e' del gruppo, non del globale. L'ultimo punto resta come
+     scritto, perche' il suo tag governa il gap in uscita. */
+  function _spanGroup(pts, interp, g) {
+    const effs = pts.slice(0, -1).map((p) => typeof p[2] === "string" ? p[2] : g);
+    const T = effs.every((t) => t === effs[0]) ? effs[0] : interp;
+    const body = pts.map((p, i) => {
+      if (i === pts.length - 1) return typeof p[2] === "string" ? [p[0], p[1], p[2]] : [p[0], p[1]];
+      return effs[i] === T ? [p[0], p[1]] : [p[0], p[1], effs[i]];
+    });
+    return [body, T];
+  }
+
+  function resugarBPGroups(items, globalDefault, like) {
     if (!Array.isArray(items)) return items;
     const g = globalDefault || "linear";
+    const { spans, untag } = like == null ? { spans: [], untag: [] } : _carryGroupSpans(items, like);
+    if (untag.length) {
+      items = items.slice();
+      for (const u of untag) {
+        const p = items[u.index];
+        if (isBreakpoint(p) && p[2] === u.interp) items[u.index] = [p[0], p[1]];
+      }
+    }
+    /* Un tag uguale al globale e' ridondante solo se l'inviluppo ha comunque
+       un tipo sul punto. Con anche uno solo il motore costruisce un segmento
+       per coppia, senza nessuno un segmento solo (`_parse_segments`:
+       has_per_point_type), e sull'istante esatto di un salto — due punti
+       sullo stesso istante — i due leggono l'altro punto: con step quello
+       all'inizio e quelli in mezzo, con linear e cubic quello in fondo. A
+       t = 0 cade il primo grano. Il tipo sul punto lo danno una zona (i suoi
+       punti interni ce l'hanno sempre), un tag diverso dal globale, un punto
+       {t, v, type}, un punto del pattern di un blocco col suo tag. */
+    const keepsPerPoint = spans.length > 0 || items.some((it) =>
+      (isBreakpoint(it) && typeof it[2] === "string" && it[2] !== g) ||
+      isBPGroup(it) ||
+      (isDictBreakpoint(it) && typeof it.type === "string") ||
+      (isCompactBlock(it) && it[0].some((p) => Array.isArray(p) && typeof p[2] === "string")));
+    const spanAt = new Map(spans.map((sp) => [sp.start, sp]));
     const out = [];
+    /* Lo stato di EnvelopeBuilder.parse mentre legge quello che si scrive:
+       `cur` e' il suo current_time — il massimo per i punti, l'ULTIMO punto per
+       un gruppo, l'ultimo punto espanso per un blocco — e `seen` il suo
+       has_preceding. Servono a sapere se una zona nuova cadrebbe su un salto. */
+    let cur = 0, seen = false;
+    function emit(it) {
+      out.push(it);
+      if (isBreakpoint(it)) { if (it[0] > cur) cur = it[0]; seen = true; }
+      else if (isDictBreakpoint(it)) { if (it.t > cur) cur = it.t; seen = true; }
+      else if (isBPGroup(it)) { const last = it[0][it[0].length - 1]; if (last[0] > cur) cur = last[0]; seen = true; }
+      else if (isCompactBlock(it)) { cur = _compactLastTime(it, cur); seen = true; }
+    }
     let run = [];
     function flushRun() {
       if (!run.length) return;
-      if (run.length >= 2) {
+      /* Una zona nuova solo dove si legge come i suoi punti nudi: non sul
+         bordo di un salto, che le darebbe il microsecondo, e non fuori ordine,
+         dove il builder porterebbe avanti l'ultimo punto invece del massimo e
+         sposterebbe cio' che segue. */
+      const inOrder = run.every((p, i) => i === 0 || p[0] >= run[i - 1][0]);
+      if (run.length >= 2 && inOrder && !(seen && run[0][0] <= cur)) {
         const effs = run.slice(0, -1).map((p) => typeof p[2] === "string" ? p[2] : g);
         const T = effs.every((t) => t === effs[0]) ? effs[0] : null;
         if (T && T !== g) {
@@ -324,18 +459,27 @@
             if (i === run.length - 1) return typeof p[2] === "string" ? [p[0], p[1], p[2]] : [p[0], p[1]];
             return [p[0], p[1]]; // tag interno == T → assorbito dal gruppo
           });
-          out.push([pts, T]);
+          emit([pts, T]);
           run = [];
           return;
         }
       }
-      // run piatto — normalizza via i tag ridondanti (== default globale)
-      run.forEach((p) => out.push(typeof p[2] === "string" && p[2] === g ? [p[0], p[1]] : p));
+      // run piatto — normalizza via i tag ridondanti (== default globale),
+      // finche' l'inviluppo resta con un tipo sul punto (keepsPerPoint)
+      run.forEach((p) => emit(keepsPerPoint && typeof p[2] === "string" && p[2] === g ? [p[0], p[1]] : p));
       run = [];
     }
-    for (const it of items) {
+    for (let i = 0; i < items.length; i++) {
+      const sp = spanAt.get(i);
+      if (sp) {
+        flushRun();
+        emit(_spanGroup(items.slice(sp.start, sp.end + 1), sp.interp, g));
+        i = sp.end;
+        continue;
+      }
+      const it = items[i];
       if (isBreakpoint(it)) run.push(it);
-      else { flushRun(); out.push(it); }
+      else { flushRun(); emit(it); }
     }
     flushRun();
     return out;

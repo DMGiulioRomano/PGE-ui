@@ -498,7 +498,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const curWrap = PGEEnv.unwrapEnv(curRaw);
       const cur = PGEEnv.desugarBPGroups(curWrap.items);
       const commitCur = (next) => onChange(patchForPath(stream, e2.path,
-        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, curWrap.interp || "linear"), curWrap.interp, curRaw)));
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, curWrap.interp || "linear", curRaw), curWrap.interp, curRaw)));
       e.preventDefault();
       if (selectedPattern != null) {
         // Delete a single pattern point inside a loop block. Refuse to drop
@@ -617,7 +617,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         if (window.PGEHistory) window.PGEHistory.beginGesture();
       }
       onChange(patchForPath(stream, e2.path,
-        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, interp || "linear"), interp, _raw)));
+        PGEEnv.wrapEnv(PGEEnv.resugarBPGroups(next, interp || "linear", _raw), interp, _raw)));
     }
     function onKeyUp(e) {
       if ((e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight") &&
@@ -643,8 +643,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   /* BP group [points, interp] (PGE #64): l'editor lavora sulla forma DESUGARATA
      — il group interp diventa il type esplicito dei punti interni (3-tuple
      della #54), così tutti gli indici piatti (selezione, drag, zone) restano
-     stabili. commit() ricompatta i run uniformi in [points, interp] via
-     resugarBPGroups, quindi lo YAML mantiene la forma a gruppi. */
+     stabili. commit() ricompatta via resugarBPGroups, che riceve il valore
+     da cui gli item vengono e ne riporta le zone: lo YAML mantiene la forma
+     a gruppi, e una zona sul bordo di un salto resta zona, che per il motore
+     non e' solo grafia (envelope-loops.js, "desugar / resugar"). */
   const rawEnv = PGEEnv.desugarBPGroups(_wrap.items);
   const globalInterp = _wrap.interp;
   /* L'interp che vale quando l'envelope non ne dichiara uno. Per tutti i
@@ -757,10 +759,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     const { items: srcItems, interp } = window.PGEEnv.unwrapEnv(JSON.parse(JSON.stringify(envClipboard.rawEnv)));
     const remapped = remapEnvY(srcItems, envClipboard.srcHardMin, envClipboard.srcHardMax, env.hardMin, env.hardMax);
     // Le chiavi del dict (time_unit) vengono dalla SORGENTE: sono i suoi
-    // punti, e i loro tempi sono nella sua unita'.
+    // punti, e i loro tempi sono nella sua unita'. Le zone pure: il resugar
+    // le riporta dagli appunti, che hanno la struttura di `remapped`.
     const next = window.PGEEnv.wrapEnv(
-      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear"), interp,
-      envClipboard.rawEnv);
+      window.PGEEnv.resugarBPGroups(window.PGEEnv.desugarBPGroups(remapped), interp || "linear", envClipboard.rawEnv),
+      interp, envClipboard.rawEnv);
     // Quinta via per scrivere `[]` su un envelope: handleCopyEnv accetta un
     // `rawEnv` vuoto (un array e' truthy), quindi il paste puo' propagare un
     // vuoto gia' esistente. Non ne crea mai uno, ma lo stesso guard vale.
@@ -886,11 +889,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
 
   /* ============ Interactions ============ */
   function commit(next) {
-    const resugared = PGEEnv.resugarBPGroups(next, globalInterp || "linear");
+    const resugared = PGEEnv.resugarBPGroups(next, globalInterp || "linear", rawEnvRaw);
     onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, globalInterp, rawEnvRaw)));
   }
   function commitWithInterp(nextItems, nextInterp) {
-    const resugared = PGEEnv.resugarBPGroups(nextItems, nextInterp || "linear");
+    const resugared = PGEEnv.resugarBPGroups(nextItems, nextInterp || "linear", rawEnvRaw);
     onChange(patchForPath(stream, env.path, PGEEnv.wrapEnv(resugared, nextInterp, rawEnvRaw)));
   }
   function beginDragHistory() {if (window.PGEHistory) window.PGEHistory.beginGesture();}
