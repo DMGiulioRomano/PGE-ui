@@ -68,7 +68,7 @@ Le operazioni dell'oracolo:
 | `classify_deviation_probability` | modo + gate costruito, o l'errore | `window.PGEDeviationProb` |
 | `build_time_distribution` | strategia, durate, errori — e l'`hint` dell'errore (`calc_hint`), cioè la riga che il motore stampa sotto «Hint:» a render fallito: `str(exc)` di `ParameterBoundError` non la porta, e senza di lei il patto sulle frasi dell'avviso (#193, sotto) non si può porre | `window.PGEEnv.timeDistError` |
 | `build_envelope` | se un `Envelope` vero si costruisce, e il `field` dell'errore — senza chiave passata, la sotto-posizione del builder (`envelope.compact.n_reps`, …). Accetta anche `raw_json`, il corpo come testo JSON: è l'unico modo di chiedere `n_reps: 2.0`, che da node arriva `2` | `window.PGEEnv.envShapeError` |
-| `evaluate_envelope` | quanto vale l'`Envelope` vero ai tempi chiesti (`Envelope.evaluate`). Dove `build_envelope` dice *se* il motore costruisce un corpo, questa dice *cosa ne suona*: serve alle riscritture che lasciano il corpo valido e ne cambiano il senso. I due termini di ogni confronto sono risposte del motore, nessun valore atteso è scritto di qua. Con `duration` e `time_mode` il corpo si costruisce come lo costruisce uno stream (`create_scaled_envelope`), l'unica strada che legge `time_unit` | `window.PGEEnv.wrapEnv` (#189, e le chiavi del dict come `time_unit`); `PGEEnvUtils.truncateEnvArray` / `sliceEnvArray` (il punto calcolato al taglio, suite `envelope-cut`) |
+| `evaluate_envelope` | quanto vale l'`Envelope` vero ai tempi chiesti (`Envelope.evaluate`). Dove `build_envelope` dice *se* il motore costruisce un corpo, questa dice *cosa ne suona*: serve alle riscritture che lasciano il corpo valido e ne cambiano il senso. I due termini di ogni confronto sono risposte del motore, nessun valore atteso è scritto di qua. Con `duration` e `time_mode` il corpo si costruisce come lo costruisce uno stream (`create_scaled_envelope`), l'unica strada che legge `time_unit` | `window.PGEEnv.wrapEnv` (#189, e le chiavi del dict come `time_unit`; con un blocco compatto fra gli item, #191, e il pannello del loop, il selettore globale, il paste e il doppio click nel loop contro il loro intento); `PGEEnvUtils.truncateEnvArray` / `sliceEnvArray` (il punto calcolato al taglio, e la lista il cui tipo globale sta in un blocco: suite `envelope-cut`); `window.PGEEnv.envValueAt` ∘ `envExpand` e `envPath` — il cursore e il disegno dell'EnvelopeEditor, cioe' le tangenti della cubica (#190) e il tipo globale che lo slot 3 di un blocco da' alla lista e non al dict (#191): suite `envelope-eval` |
 | `parameter_bounds` | i bound, letti importando **o** via AST | `bounds.js` + `PGE_BOUNDS` |
 | `resolve_stream_files` | la lista `streams:` del master con le voci `file:` risolte da `pge.engine.stream_files.resolve_stream_files` (PythonGranularEngine#290), su documenti passati come dict: niente disco, la cartella del master e' virtuale. Il modulo importa solo `pge.shared.exceptions` | `PGEYaml.parse` con `imports` (la risoluzione) e `serialize` + `serializeImports` (la riscrittura di master e file), suite `fingerprint` (#183, #184); i documenti veri del laboratorio di `tests/fixtures/lab/`, prima e dopo il giro in PGE-ui, con `fingerprint` accanto: suite `lab-roundtrip` (#188); gli stessi documenti tagliati a meta' come li taglia lo split, master e file come li scriverebbe il salvataggio — la testa nel suo file, la coda in `<nome>-2.yml` col nome del file come id, il resto intatto, la coda da sola uno stream: suite `stream-split` (#187) |
 | `filter_solo_mute` | gli `stream_id` che `pge.engine.solo_mute.filter_solo_mute` tiene — importata, da PGE #246 | `PGEBackend.streamsEngineBuilds` (il fallback di `done` in `run()`) |
@@ -329,6 +329,34 @@ quindi numpy: là il vincolo era doppio. I candidati vanno dal più recente al
 più vecchio e il vecchio path resta, perché il bridge deve funzionare su ogni
 annata di motore.
 
+## L'interp di un blocco, e la cubica di due punti (#190, #191)
+
+Fino a #191 questa tabella aveva una riga per `envelope-wrap`: con un blocco
+compatto fra gli item `wrapEnv` scriveva la lista piatta, e la suite pretendeva
+che il motore suonasse diverso il dict e la lista scritta. La divergenza c'era
+perche' la decisione non era presa: il motore legge l'interp di un blocco per
+FORMA — nella lista lo slot 3 del primo blocco che lo dichiara e' il tipo
+globale (`extract_interp_type`), nel dict non conta niente — e l'editor lo
+disegnava per blocco. Decisa: l'editor lo legge come il motore e scrive l'interp
+di UN blocco sui punti del suo pattern, che il motore legge uguale nelle due
+forme; con un blocco il dict resta dict. La riga se n'e' andata, e il caso e'
+diventato tre asserti di parita' (il dict sopravvive, il pannello del loop e il
+selettore globale suonano il loro intento).
+
+`envelope-eval` e' la suite nuova, ed e' la domanda che mancava: non *se* il
+motore costruisce un corpo, ne' se una riscrittura lo lascia uguale, ma se il
+**disegno** e il **cursore** dell'EnvelopeEditor dicono quello che suona. Prima
+avevano una copia a testa delle tangenti della cubica, e sbagliavano allo stesso
+modo la cubica di due punti (il motore mette le tangenti a zero, lo smoothstep;
+loro una retta) — il caso che la `n == 2` di
+`_compute_fritsch_carlson_tangents` dichiara apposta. Il comportamento e' vecchio
+quanto lo SHA registrato qui sopra: niente da aggiornare li'.
+
+Il presidio di quella suite non e' un valore atteso ma la lettura di PRIMA,
+copiata nel test com'era (l'espansione, il cursore, il disegno a pezzi): sulle
+righe marcate deve essere diversa dal motore, o la suite sarebbe verde anche col
+difetto rimesso.
+
 ## Divergenze dichiarate
 
 La parità non è identità. Alcune differenze sono volute, e ogni suite le
@@ -344,7 +372,7 @@ commento.
 | magnify-spec | cifre decimali Unicode (`t=１４`) | `float()` le accetta, `Number()` no; replicarle vuol dire la tabella `unicodedata.decimal` |
 | magnify-spec | i bordi che solo Python striscia (U+00A0, U+2028, U+3000, `\x1c`, `\x85`…) | la UI toglie il solo insieme ASCII, sottoinsieme di `str.isspace()`: la divergenza è garantita nel verso sicuro senza replicare una tabella Unicode. Pretesa da `error()` **e** dal gate: ai bordi esterni dello SPEC è `sendable()` a decidere da solo, e lì il test chiede al motore se lo SPEC grezzo passa. Il verso pericoloso era U+FEFF, che `trim()` toglieva e `strip()` no — chiuso, e i due lati concordano |
 | magnify-spec | SPEC vuoto o di soli separatori: non parte affatto | non è `error()` a fermarlo ma `sendable()`, ed è lo stesso gate che usa la UI: al motore arriva il testo che finirebbe in argv |
-| envelope-wrap | un `{type: T, points}` con un blocco compatto fra gli item perde `T` al primo commit | `wrapEnv` scrive la lista piatta, dove il motore prende come tipo globale l'interp del primo blocco (`extract_interp_type`); nel dict quell'interp e' ignorato. L'editor lo disegna per blocco, e tenere il dict renderebbe falso il disegno del blocco appena aggiunto con "add loop": la decisione e' sul modello, PGE-ui #191. La suite pretende la divergenza (il motore suona diverso il dict e la lista scritta) |
+| envelope-eval | un pattern che comincia con un salto (due punti alla stessa x in testa), senza un tipo per punto: dal secondo ciclo il motore lo suona piatto, l'editor legge la rampa | il builder aggiunge `DISCONTINUITY_OFFSET` al solo primo punto di ogni ciclo dopo il primo, che finisce 1e-6 dopo il secondo; senza tipi per punto il motore fa un segmento solo e lo ordina (`NormalSegment`), e il salto si inverte. Con un tipo su un punto fa un segmento per coppia e suona la rampa in ogni ciclo, come nel primo: e' un'incoerenza del motore — un tipo ridondante cambia il suono — e la lettura dell'editor non la copia. Asserita, con il gemello tipato che concorda |
 | envelope-shape | `n_reps: 2.0`: rifiutato dal motore, muto per la UI | per Python è un float, quindi non un compatto; di qua `2.0` e `2` sono lo stesso Number. Verso sicuro, chiesto via `raw_json` |
 | time-dist | la banda int/float, larga al più uno | la UI modella la semantica intera di Python, più permissiva: mai un falso positivo. Larga **zero** dove le due soglie cadono sullo stesso intero, quindi il test mette il tetto su ogni sonda e il pavimento sul corpus. In `exponential` la banda non viene dalla lettura intera (con `rate < 1` i pesi sono sempre float) ma da un pareggio: a `rate: 0.5` la somma dei pesi è `2**1024 - 1` e `1024·log10(2)` è esattamente `log10(MAX)`, su cui la disuguaglianza stretta tace. In `power` la somma si stima per difetto (PGE #293): la soglia della UI può solo arrivare dopo quella del motore |
 | bounds | `grainDur.min` più basso del registro | il minimo vero è 1 campione (`1/output_sr`), override dinamico invisibile all'AST dei bound — il sample rate arriva però dal motore per la sua strada, vedi sotto |

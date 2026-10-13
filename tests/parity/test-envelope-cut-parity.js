@@ -71,6 +71,12 @@ const TRUNCATE = [
     [[0, 0], [[[1.2, 1], [1.5, 2]], "linear"]], null, 1],
   ["{type: step}: il segmento che entra in un gruppo tiene il punto prima",
     { type: "step", points: [[0, 0], [[[1.2, 1], [1.5, 2]], "linear"]] }, null, 1],
+  /* #191: nella lista il tipo globale e' lo slot 3 del primo blocco che ne
+     dichiara uno, e il bordo si chiude con quello. Qui il blocco comincia
+     oltre il bordo e il taglio lo toglie: la lista che resta direbbe linear
+     (vedi il caso piu' sotto, che lo chiede su tutta la curva). */
+  ["lista: il globale step di un blocco governa il bordo",
+    [[0, 0], [0.6, 1], [1.4, 3], [[[0, 0], [100, 1]], 1.6, 2, "step"]], null, 2],
 ].map(([label, raw, , lin]) => [label, raw, U.truncateEnvArray(raw), lin]);
 {
   const rd = [[0, 1], [1.1, -1]];
@@ -117,6 +123,26 @@ parity({
               Math.abs(at1 - lin) > TOL);
           }
         });
+      },
+    },
+    {
+      label: "truncate: il taglio che toglie il blocco del globale non cambia la testa (#191)",
+      run: async (ask, assert) => {
+        /* Il blocco che nella lista dichiara il tipo globale comincia a 1: il
+           taglio lo toglie, e la lista che resta — quella che il taglio
+           scriveva — e' lineare. La testa tagliata deve suonare come
+           l'originale su tutta [0, 1], non solo al bordo. Step e non cubic:
+           la cubica tagliata cambia comunque, perche' le tangenti si calcolano
+           anche sui punti che il taglio toglie — il limite gia' dichiarato del
+           taglio (`boundaryY`), che non c'entra con il tipo globale. */
+        const RAW = [[0, 0], [0.5, 1], [1, 0.25], [[[0, 0], [100, 1]], 1.5, 2, "step"]];
+        const cut = U.truncateEnvArray(RAW);
+        const before = RAW.slice(0, 3);   // il taglio di prima
+        const [o, c, b] = await evaluate(ask, [[RAW], [cut], [before]], GRID);
+        const w = worst(o, c);
+        assert("la testa tagliata suona come l'originale", w.d <= TOL,
+          `scarto ${w.d.toExponential(3)} a t=${GRID[w.i]}; scritto ${JSON.stringify(cut)}`);
+        assert("…e la lista senza il blocco no (il caso discrimina)", worst(o, b).d > TOL);
       },
     },
     {

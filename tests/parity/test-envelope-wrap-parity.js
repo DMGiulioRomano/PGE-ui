@@ -19,8 +19,12 @@
 
 const { parity, loadUiLibs } = require("./harness.js");
 
-const window = loadUiLibs(["envelope-loops.js"]);
+/* envelope-utils.js per remapEnvY, la proporzione del paste: il paste e' una
+   delle porte da cui esce un envelope, e da #191 deve portare i tag del
+   pattern. Carica dopo envelope-loops.js, come nell'editor. */
+const window = loadUiLibs(["envelope-loops.js", "deviation-probability.js", "envelope-utils.js"]);
 const E = window.PGEEnv;
+const U = window.PGEEnvUtils;
 
 /* Una griglia fitta, piu' un margine fuori da [0, 1] (prima del primo punto
    e dopo l'ultimo il motore tiene gli estremi, e anche quello deve restare). */
@@ -57,6 +61,18 @@ const CORPUS = [
   ["un gruppo che copre tutto l'envelope (si ricompatta)",
     { type: "cubic", points: [[[[0, 0], [0.3, 1], [0.6, 0.2], [1, 1]], "step"]] }, false],
   ["soli breakpoint nudi (il caso che c'era gia')", FF, true],
+  /* #191: con un blocco compatto fra gli item. Il dict resta dict; la lista
+     che dice gia' il suo globale nello slot 3 del primo blocco resta lista;
+     lo slot 3 di un blocco che il motore ignora non conta. */
+  ["dict cubic con un blocco (la issue #191)",
+    { type: "cubic", points: [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2]] }, true],
+  ["dict cubic con un blocco step, ignorato dal motore",
+    { type: "cubic", points: [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2, "step"]] }, true],
+  ["lista che dichiara il globale nel blocco: step anche fuori",
+    [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2, "step"]], false],
+  ["lista con due blocchi: vale il primo che dichiara",
+    [[0, 0], [[[0, 0], [50, 1], [100, 0]], 0.5, 2], [[[0, 1], [50, 0], [100, 1]], 1, 2, "cubic"]], false],
+  ["blocco nudo cubico", [[[0, 0], [30, 1], [100, 0.5]], 1, 3, "cubic"], false],
 ];
 
 /* `scaled` (facoltativo) e' lo stream che legge l'envelope — `{duration,
@@ -180,21 +196,126 @@ parity({
       },
     },
     {
-      label: "la divergenza dichiarata: con un blocco compatto il type globale si perde ancora (#191)",
+      label: "con un blocco compatto il type globale sopravvive al commit (#191)",
       run: async (ask, assert) => {
-        /* Con un blocco compatto fra gli item wrapEnv scrive ancora la lista
-           piatta (envelope-loops.js, e il caso dichiarato in
-           test-bp-groups.js). Il motore legge l'interp di un blocco in due
-           modi diversi secondo la forma — nella lista quello del primo blocco
-           diventa il tipo globale, nel dict viene ignorato — e l'editor lo
-           disegna per blocco: la decisione e' della issue #191. Asserita qui
-           perche' una divergenza che sparisce deve far parlare un test, non
-           lasciare un commento stantio. */
+        /* Fino a #191 wrapEnv scriveva la lista piatta appena c'era un blocco
+           fra gli item, e il motore la suonava diversa dal dict: la
+           divergenza che questa suite pretendeva. Deciso: il dict resta. */
         const LOOPED = { type: "cubic", points: [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2]] };
-        const scritto = rewrap(LOOPED);
-        assert("wrapEnv scrive la lista piatta", Array.isArray(scritto), JSON.stringify(scritto));
-        const [o, s] = await evaluate(ask, [LOOPED, scritto]);
-        assert("…e il motore la suona diversa dal dict", !same(o, s), fmtWorst(o, s));
+        const scritto = roundTrip(LOOPED);
+        assert("il commit scrive il dict", !Array.isArray(scritto) && scritto.type === "cubic",
+          JSON.stringify(scritto));
+        const [o, s2, piatta] = await evaluate(ask, [LOOPED, scritto, LOOPED.points]);
+        assert("…e il motore lo suona come l'originale", same(o, s2), fmtWorst(o, s2));
+        assert("…mentre la lista piatta che si scriveva prima no (il caso discrimina)",
+          !same(o, piatta), fmtWorst(o, piatta));
+      },
+    },
+    {
+      label: "l'interp di un blocco dal pannello del loop: suona quello scelto, il resto com'era (#191)",
+      run: async (ask, assert) => {
+        /* Il gesto che la issue temeva: "add loop" su una curva cubica, poi
+           `step` sul blocco appena aggiunto. setBlockInterp lo scrive sui punti
+           interni del pattern, che il motore legge uguale nelle due forme.
+           Il "voluto" e' scritto qui: e' l'intento del gesto — il blocco a
+           gradini dentro la curva che resta cubica — non un valore atteso. */
+        const PAT = [[0, 0], [50, 1], [100, 0]];
+        const CURVA = { type: "cubic", points: [[0, 0.2], [0.2, 1], [0.4, 0.6], [PAT, 0.9, 2], [1, 0.3]] };
+        const w = E.unwrapEnv(CURVA);
+        const items = E.desugarBPGroups(w.items);
+        const res = E.setBlockInterp(items, 3, "step", w.interp, { dict: true });
+        const scritto = commitPath(res.items, res.interp, CURVA);
+        const voluto = { type: "cubic", points: [[0, 0.2], [0.2, 1], [0.4, 0.6],
+                                                 [[[0, 0, "step"], [50, 1, "step"], [100, 0]], 0.9, 2], [1, 0.3]] };
+        // Il gesto di prima: lo slot 3 del blocco, e la lista piatta.
+        const prima = [[0, 0.2], [0.2, 1], [0.4, 0.6], [PAT, 0.9, 2, "step"], [1, 0.3]];
+        const [v, s2, p] = await evaluate(ask, [voluto, scritto, prima]);
+        assert("lo scritto suona come il voluto", same(v, s2), `${fmtWorst(v, s2)}; scritto ${JSON.stringify(scritto)}`);
+        assert("…e il gesto di prima no: la curva fuori dal blocco diventava step (il caso discrimina)",
+          !same(v, p), fmtWorst(v, p));
+
+        // Il blocco che E' tutto l'envelope: il suo interp e' il globale, nello slot 3.
+        const SOLO = [[PAT, 1, 4]];
+        const r2 = E.setBlockInterp(SOLO, 0, "cubic", "linear", { dict: false });
+        const scritto2 = commitPath(r2.items, r2.interp, SOLO);
+        assert("blocco solo: lo slot 3 e' il globale, la lista resta lista",
+          JSON.stringify(scritto2) === JSON.stringify([[PAT, 1, 4, "cubic"]]), JSON.stringify(scritto2));
+        const [v2, s3] = await evaluate(ask, [{ type: "cubic", points: SOLO }, scritto2]);
+        assert("…e suona come il blocco cubico", same(v2, s3), fmtWorst(v2, s3));
+      },
+    },
+    {
+      label: "l'interp globale dal selettore, con un blocco: si scrive dove il motore lo legge (#191)",
+      run: async (ask, assert) => {
+        const LISTA = [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2, "cubic"]];
+        const w = E.unwrapEnv(LISTA);
+        assert("la lista si apre col globale del suo blocco", w.interp === "cubic", w.interp);
+        const items = E.desugarBPGroups(w.items);
+        const scritto = commitPath(E.setGlobalInterp(items, "step"), "step", LISTA);
+        const voluto = { type: "step", points: [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2]] };
+        const [v, s2, o] = await evaluate(ask, [voluto, scritto, LISTA]);
+        assert("lo scritto suona come il voluto (tutto step)", same(v, s2),
+          `${fmtWorst(v, s2)}; scritto ${JSON.stringify(scritto)}`);
+        assert("…e la lista resta lista: lo slot 3 del blocco dice step",
+          Array.isArray(scritto) && scritto[2][3] === "step", JSON.stringify(scritto));
+        assert("…e cambiare il globale cambia davvero il suono (il caso discrimina)", !same(v, o), fmtWorst(v, o));
+      },
+    },
+    {
+      label: "l'interp di un blocco sopravvive al paste e al doppio click nel loop (#191)",
+      run: async (ask, assert) => {
+        /* Da #191 l'interp di un blocco sono i tag dei punti interni del suo
+           pattern (setBlockInterp): due gesti che toccano il pattern lo
+           perdevano, perche' scrivevano punti senza tag, che seguono il
+           globale. La curva e' quella del caso del pannello: un blocco step
+           dentro una curva cubica. */
+        const PAT = [[0, 0], [50, 1], [100, 0]];
+        const CURVA = { type: "cubic", points: [[0, 0.2], [0.2, 1], [0.4, 0.6], [PAT, 0.9, 2], [1, 0.3]] };
+        const w0 = E.unwrapEnv(CURVA);
+        const r0 = E.setBlockInterp(E.desugarBPGroups(w0.items), 3, "step", w0.interp, { dict: true });
+        const SRC = commitPath(r0.items, r0.interp, CURVA);
+        const untag = (pattern) => pattern.map((p) => [p[0], p[1]]);
+
+        /* Il paste (handlePasteEnv in EnvelopeEditor.jsx) riporta i valori dal
+           dominio della sorgente a quello della destinazione, qui da [0, 1] a
+           [-5, 5]. La proporzione e' affine e il motore e' lineare nei valori,
+           tangenti della cubica comprese: l'incollato deve suonare come la
+           sorgente riportata, punto per punto. remapEnvY ricostruiva ogni punto
+           del pattern come `[x, y]`. */
+        const paste = (src) => {
+          const u = E.unwrapEnv(src);
+          const r = U.remapEnvY(u.items, 0, 1, -5, 5);
+          return E.wrapEnv(E.resugarBPGroups(E.desugarBPGroups(r), u.interp || "linear"), u.interp, src);
+        };
+        const incollato = paste(SRC);
+        const primaPaste = JSON.parse(JSON.stringify(incollato));
+        primaPaste.points[3][0] = untag(primaPaste.points[3][0]);
+        const [s, p, pp] = await evaluate(ask, [SRC, incollato, primaPaste]);
+        const riportata = s.map((v) => -5 + 10 * v);
+        assert("il paste: il blocco incollato suona la sorgente riportata nel dominio nuovo", same(riportata, p),
+          `${fmtWorst(riportata, p)}; incollato ${JSON.stringify(incollato)}`);
+        assert("…e il pattern senza tag che il paste scriveva no (il caso discrimina)",
+          !same(riportata, pp), fmtWorst(riportata, pp));
+
+        /* Il doppio click dentro il loop aggiunge un punto al pattern. Messo
+           SULLA curva — a x = 25%, dove lo step tiene ancora il primo punto,
+           y = 0 — non deve cambiare niente di cio' che suona: le due meta' del
+           segmento che spezza restano step. Senza tag la seconda seguiva il
+           globale, cubica. */
+        const items = E.desugarBPGroups(E.unwrapEnv(SRC).items);
+        const blk = items[3];
+        const ins = E.insertPatternPoint(blk[0], 25, 0);
+        const conPunto = (pattern) => {
+          const nb = blk.slice(); nb[0] = pattern;
+          return commitPath(items.map((it, i) => (i === 3 ? nb : it)), E.unwrapEnv(SRC).interp, SRC);
+        };
+        const scritto = conPunto(ins.pattern);
+        const primaDbl = conPunto([...blk[0], [25, 0]].sort((a, b) => a[0] - b[0]));
+        const [o, d, pd] = await evaluate(ask, [SRC, scritto, primaDbl]);
+        assert("il doppio click: un punto sulla curva non cambia il suono del blocco", same(o, d),
+          `${fmtWorst(o, d)}; scritto ${JSON.stringify(scritto)}`);
+        assert("…e il punto senza tag che si inseriva prima si' (il caso discrimina)",
+          !same(o, pd), fmtWorst(o, pd));
       },
     },
   ],

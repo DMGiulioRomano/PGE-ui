@@ -144,13 +144,30 @@
   // del dict, quello del gruppo per i suoi punti interni, lo step imposto a
   // read_direction. Assente, e' lineare.
   function truncateEnvArray(arr, snap, inherited) {
-    // object-form {type, points}: clip points beyond x=1.0, add closing BP
+    // object-form {type, points}: clip points beyond x=1.0, add closing BP.
+    // Senza `type` il dict e' lineare, anche con un blocco che dichiara un
+    // interp: nel dict il motore lo ignora (#191) — e la lista dei suoi points
+    // non deve andarlo a cercare li'.
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
       return { ...arr, points: truncateEnvArray(arr.points, snap,
-        typeof arr.type === "string" ? arr.type : inherited) };
+        typeof arr.type === "string" ? arr.type : (inherited || "linear")) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap, inherited));
+    /* Il tipo globale di una LISTA e' lo slot 3 del primo blocco che ne
+       dichiara uno (#191, PGEEnv.listInterp): e' l'ereditato dei suoi punti
+       nudi, e il bordo si chiude con quello — su uno step tiene il valore. E
+       il taglio puo' togliere proprio quel blocco, se comincia oltre il bordo:
+       la lista che resta direbbe `linear`, e la testa che il taglio esiste per
+       conservare suonerebbe diversa. Li' il tipo passa nel `type` di un dict.
+       Su read_direction l'ereditato arriva dal chiamante (lo step imposto). */
+    if (inherited == null) {
+      const g = PGEEnv.listInterp(arr);
+      if (g) {
+        const out = truncateEnvArray(arr, snap, g);
+        return (PGEEnv.listInterp(out) || "linear") === g ? out : { type: g, points: out };
+      }
+    }
     const result = [];
     let prevX = 0, prevY = null, prevInterp = null;
     const close = (y) => (snap ? snap(y) : +y.toFixed(4));
@@ -604,7 +621,16 @@
   // giusta per il caso di gran lunga piu' comune (copia e incolla sullo stesso
   // parametro di un altro stream). Il caso finito resta quello di prima.
   // Pura: non muta `items`.
+  //
+  // Ogni grafia di un punto passa di qui, come nel walk sui tempi qui sopra.
+  // Le due nude — il valore E' il blocco, o il gruppo — `unwrapEnv` le rende
+  // come i loro ELEMENTI (pattern, end_time, n_reps; punti, interp), nessuno
+  // dei quali e' un item: il paste di un blocco nudo passava com'era, con le y
+  // della sorgente nel dominio della destinazione e senza richiusura. Si
+  // normalizzano con la regola del modulo (`isBareEnv` + `_asBare`). E il
+  // punto `{t, v}`, che per il motore e' un punto (PGE #234), restava fermo.
   function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
+    if (PGEEnv.isBareEnv(items)) return _asBare(remapEnvY([items], srcMin, srcMax, dstMin, dstMax));
     const range = srcMax - srcMin;
     const proportional = Number.isFinite(range) && Number.isFinite(dstMax - dstMin);
     function remap(y) {
@@ -617,8 +643,16 @@
     }
     return items.map(it => {
       if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
+      if (PGEEnv.isDictBreakpoint(it)) return { ...it, v: remap(it.v) };
       if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
-      if (PGEEnv.isCompactBlock(it)) { return [it[0].map(pt => [pt[0], remap(pt[1])]), ...it.slice(1)]; }
+      // Il punto del pattern si copia e se ne cambia la y, come il breakpoint
+      // qui sopra: il tag `[x, y, type]` e' l'interp del segmento che ne parte,
+      // e da #191 quelli dei punti interni SONO l'interp del blocco
+      // (PGEEnv.setBlockInterp). Ricostruito `[x, y]`, il paste lo perdeva e
+      // il blocco incollato tornava a seguire il globale.
+      if (PGEEnv.isCompactBlock(it)) {
+        return [it[0].map(pt => { const r = pt.slice(); r[1] = remap(pt[1]); return r; }), ...it.slice(1)];
+      }
       return it;
     });
   }

@@ -373,6 +373,9 @@ function App() {
   /* La stessa guardia per lo split (#187), che da quando taglia uno stream
      importato aspetta la cartella dal bridge: vedi `onSplit`. */
   const splittingRef = useRefApp(false);
+  /* E per il «file suo» (#205), che aspetta la cartella allo stesso modo:
+     vedi `onGiveOwnFile`. */
+  const owningFileRef = useRefApp(false);
 
   /* La versione di semantica del motore, richiesta al bridge.
    *
@@ -1438,8 +1441,9 @@ function App() {
       pushToast({ kind: "warn", title: "Split rifiutato",
                   message: `${PY.importConflictText(data, sharedFiles)}: lo stesso file importato da piu' voci ` +
                            `e' un documento solo, e dopo lo split le sue copie non direbbero piu' la stessa cosa — ` +
-                           `salvataggio e render si rifiuterebbero`,
-                  duration: 6000 });
+                           `salvataggio e render si rifiuterebbero. Da' prima allo stream un file suo ` +
+                           `(Inspector, riga file), o taglia tutte le voci allo stesso punto`,
+                  duration: 8000 });
       return;
     }
     /* La coda di uno stream importato si chiama `<nome>-N` ed e' il nome del
@@ -1699,8 +1703,9 @@ function App() {
     if (!newId || newId === oldId) return null;
     // The id becomes a filename (`<basename>__<id>.<ext>`) and a path segment
     // on the way to server.py. Keep it to what is safe in both, and refuse a
-    // leading dot so it cannot land as a hidden file.
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newId))
+    // leading dot so it cannot land as a hidden file. One rule, in the bridge
+    // module: an imported stream's own file (#205) is named after its id too.
+    if (!window.PGEYaml.STREAM_ID_RE.test(newId))
       return "letters, digits, . _ - only, and must start with a letter or digit";
     if (data.streams.some(s => s.id === newId)) return `"${newId}" is already a stream`;
     // A stem still on disk under that name would be picked up as this stream's
@@ -1768,6 +1773,68 @@ function App() {
       (s._srcId === oldId && s._srcProject === activeProject) ? { ...s, _srcId: newId } : s);
     setDirty(true);
     return null;
+  }
+  /* Il file suo di uno stream importato (#205): `<cartella>/<id>.yml`, lo
+   * stesso id — la stessa realizzazione, nessuno stem giallo — e la voce del
+   * master `file: <nuovo>` senza stream_id. E' il rimedio del conflitto: lo
+   * stesso file importato da piu' voci e' un documento solo, e una modifica su
+   * una voce sola lo mette in conflitto (#184). Il file nuovo si crea al
+   * salvataggio o prima del render (`createImports`, creazione esclusiva),
+   * come la copia di #186 e la rinomina di #208, e il nome si chiede prima
+   * alla cartella: il gesto e' asincrono come la rinomina, e come lei dopo
+   * l'attesa guarda lo stato di adesso. Se il nome e' preso si rifiuta: un
+   * `<id>-2.yml` con `stream_id: <id>` il laboratorio lo aprirebbe con l'id
+   * del suo nome, cioe' un'altra realizzazione.
+   *
+   * Torna (una Promise di) null, o il messaggio da mostrare. */
+  async function giveOwnFile(id) {
+    const PY = window.PGEYaml;
+    const src = data.streams.find(s => s.id === id);
+    if (!src) return `"${id}" non c'e' piu'`;
+    const plan = PY.importOwnFile(src, data.streams);
+    if (!plan.file) return plan.reason;
+    const dir = PY.importDirOf(plan.file);
+    const listed = await listImportNames([dir], "del file suo");
+    // Fra la domanda e la risposta lo stream puo' essere cambiato — cancellato,
+    // annullato, rinominato, o avere gia' un file suo: si guarda lo stato di
+    // ADESSO, e il nome contro i file che l'editor conosce adesso.
+    const now = dataRef.current.streams.find(s => s.id === id);
+    if (!now || !now._import || now._import.file !== src._import.file)
+      return `"${id}" e' cambiato mentre si leggeva la cartella — riprova`;
+    const knownFiles = [...listed, ...Object.keys(importDiskRef.current), ...PY.importFilesOf(dataRef.current)];
+    if (PY.importIdTaken(id, [dir], knownFiles))
+      return `${plan.file}: c'e' gia' un file con quel nome (maiuscole a parte), e il file suo di uno stream ` +
+             `si chiama come il suo id — rinomina lo stream, o togli quel file`;
+    setData(d => {
+      // Deciso di nuovo qui, sugli stream di adesso: e' l'updater a scrivere.
+      const s = d.streams.find(x => x.id === id);
+      if (!s || !s._import || s._import.file !== src._import.file) return d;
+      return { ...d, streams: d.streams.map(x => (x === s ? PY.ownFileImport(x, d.streams, importDiskRef.current) : x)) };
+    });
+    logToTerminal(`[file] ${src._import.file} → ${plan.file}: ${id} prende un file suo, con lo stesso id — ` +
+                  `creato al salvataggio o prima del render; ` +
+                  (plan.shared
+                    ? `${src._import.file} resta, lo importa${plan.others.length === 1 ? "" : "no"} ${plan.others.join(", ")}`
+                    : `${src._import.file} si cancella al salvataggio`));
+    setDirty(true);
+    return null;
+  }
+  /* L'ingresso del «file suo», con la sua guardia di rientro — lo schema di
+     `onSplit`. Il gesto aspetta la cartella dal bridge, e il bottone resta
+     acceso durante l'attesa: un doppio click faceva partire un secondo gesto
+     dallo stato di prima, e se la sua risposta arrivava dopo il ridisegno il
+     controllo sullo stato di adesso diceva «e' cambiato mentre si leggeva la
+     cartella — riprova» sotto un gesto riuscito (prima del ridisegno, un
+     secondo log del trasloco). Un ref si alza nello stesso tick e vale per
+     ogni chiusura: durante l'attesa un secondo gesto non parte. */
+  async function onGiveOwnFile(id) {
+    if (owningFileRef.current) return null;
+    owningFileRef.current = true;
+    try {
+      return await giveOwnFile(id);
+    } finally {
+      owningFileRef.current = false;
+    }
   }
   /* Uno stream importato cancellato lascia un file che il master non nomina
      piu' (#208): si cancella al salvataggio. Lo si dice adesso, quando l'undo
@@ -2159,11 +2226,12 @@ function App() {
     const imp = PY.serializeImports(d);
     if (imp.conflicts.length) {
       // Per il motore il file e' un documento solo: il rimedio e' riportare le
-      // copie a dire la stessa cosa. Nessun gesto dell'editor stacca uno
-      // stream dal suo file, e il messaggio non ne promette uno.
+      // copie a dire la stessa cosa, o dare a uno stream un file suo (#205),
+      // il gesto sulla riga `file` dell'Inspector.
       return { error: `lo stesso file importato da piu' stream con modifiche diverse: ` +
                       `${PY.importConflictText(d, imp.conflicts)} — per il motore e' un documento solo: ` +
-                      `annulla la modifica, o falla uguale su ognuno degli stream che lo importano` };
+                      `annulla la modifica, falla uguale su ognuno degli stream che lo importano, ` +
+                      `o da' a uno di loro un file suo (Inspector, riga file)` };
     }
     const bodies = PY.changedImports(imp.files, importDiskRef.current);
     const texts = {};
@@ -3249,6 +3317,9 @@ function App() {
     <Inspector stream={selected() || null}
                onChange={(p) => selectedId && updateStream(selectedId, p)}
                onRename={(name) => selectedId ? renameStream(selectedId, name) : null}
+               ownFile={selected() && selected()._import && window.PGEYaml
+                 ? window.PGEYaml.importOwnFile(selected(), data.streams) : null}
+               onOwnFile={() => selectedId ? onGiveOwnFile(selectedId) : null}
                onClose={closeInspector}
                tab={inspectorTab} onTab={setInspectorTab}
                samples={mediaList.files}

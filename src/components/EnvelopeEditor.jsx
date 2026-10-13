@@ -171,37 +171,50 @@ const DIST_PARAM = {
 function distType(d) {return typeof d === "string" ? d : d && d.type || "linear";}
 function distParams(d) {return typeof d === "object" && d ? d : {};}
 
-function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, interpTypes }) {
+/* `interp` e' l'interp EFFETTIVO dei segmenti interni del blocco (PGEEnv
+   .blockInterp: i tag del pattern, o il globale), non lo slot 3: per il motore
+   lo slot 3 e' il tipo globale dell'envelope o niente (#191). Sceglierlo passa
+   da `onSetInterp`, che lo scrive sui punti del pattern (PGEEnv.setBlockInterp).
+   `slotNote` dice, quando serve, che cosa fa lo slot 3 scritto nel blocco. */
+function LoopBlockPanel({ block, interp, slotNote, onUpdate, onSetInterp, onDelete, onDeleteBlocked, color, interpTypes }) {
   // interpTypes: ristretto a ["step"] sui domini discreti (read_direction),
   // dove gli altri valori sono errori di parse e non curve alternative.
   const INTERP_TYPES = interpTypes || _INTERP_TYPES;
   const { Icon } = window.PGE;
   if (!block) return null;
-  const [pat, end, n, interp, dist] = block.raw;
+  const [, end, n, , dist] = block.raw;
   const dtype = distType(dist);
   const dparams = distParams(dist);
 
-  function setN(v) {
-    const nn = Math.max(1, Math.min(64, Math.round(v)));
-    onUpdate([pat, end, nn, interp || "linear", dist || "linear"]);
+  /* Ogni setter cambia il SUO slot e lascia gli altri come sono. Prima
+     ricostruivano il blocco a cinque slot con `interp || "linear"` e
+     `dist || "linear"`: perdevano `wrap` (slot 5) e dichiaravano uno slot 3
+     che per il motore e' il tipo globale — in una lista, cambiare n_reps al
+     primo blocco poteva cambiare l'interp di tutto l'envelope. Uno slot
+     saltato davanti a quello che si scrive resta null, che il motore legge
+     come non dichiarato. */
+  function put(i, v) {
+    const nb = block.raw.slice();
+    while (nb.length < i) nb.push(null);
+    nb[i] = v;
+    onUpdate(nb);
   }
-  function setInterp(v) {
-    const cleanPat = pat.map(p => [p[0], p[1]]);
-    onUpdate([cleanPat, end, n, v, dist || "linear"]);
+  function setN(v) {
+    put(2, Math.max(1, Math.min(64, Math.round(v))));
   }
   function setDistType(v) {
-    if (v === "linear") onUpdate([pat, end, n, interp || "linear", "linear"]);else
+    if (v === "linear") put(4, "linear");else
     {
       const params = (DIST_PARAM[v] || []).reduce((a, p) => (a[p.key] = p.def, a), {});
-      onUpdate([pat, end, n, interp || "linear", { type: v, ...params }]);
+      put(4, { type: v, ...params });
     }
   }
   function setDistParam(key, value) {
-    onUpdate([pat, end, n, interp || "linear", { type: dtype, ...dparams, [key]: value }]);
+    put(4, { type: dtype, ...dparams, [key]: value });
   }
   function setEnd(v) {
     const ne = Math.max(block.start + 0.001, Math.min(1, v));
-    onUpdate([pat, +ne.toFixed(4), n, interp || "linear", dist || "linear"]);
+    put(1, +ne.toFixed(4));
   }
 
   const params = DIST_PARAM[dtype] || [];
@@ -245,8 +258,9 @@ function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, int
 
         <label className="ee-loop-fld">
           <span className="ee-loop-lbl">interp</span>
-          <select className="ee-loop-select mono" value={interp || "linear"}
-          onChange={(e) => setInterp(e.target.value)}>
+          <select className="ee-loop-select mono" value={interp}
+          onChange={(e) => onSetInterp(e.target.value)}>
+            {interp === "mixed" ? <option value="mixed" disabled>mixed</option> : null}
             {INTERP_TYPES.map((o) => <option key={o.val} value={o.val}>{o.label}</option>)}
           </select>
         </label>
@@ -323,6 +337,7 @@ function LoopBlockPanel({ block, onUpdate, onDelete, onDeleteBlocked, color, int
           sono quelle del blocco.
         </div>
       ) : null}
+      {slotNote ? <div className="ee-loop-panel-hint mono">{slotNote}</div> : null}
       <div className="ee-loop-panel-hint mono">
         pattern · {block.pattern.length} pt · x∈[0,100]% di ciclo · drag i punti del 1° ciclo per modificare il pattern · drag l'edge destro del loop per allungarlo
       </div>
@@ -645,18 +660,24 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const interpIsFixed = defaultInterp !== "linear";
   const interpTypes = interpIsFixed
     ? _INTERP_TYPES.filter((o) => o.val === defaultInterp) : _INTERP_TYPES;
-  /* expandMixed sul desugarato (non su rawEnvRaw): blocks.originalIdx deve
-     indicizzare rawEnv, e con i gruppi gli indici nativi divergerebbero. Vale
-     anche per la forma typed {type,points}, che da #189 porta gruppi e 3-tuple
-     — wrapEnv ce li scrive — e che a mano poteva portarli gia' prima: il dict
-     si ricostruisce attorno agli item desugarati, cosi' expandMixed tiene il
-     `type` come interp dei punti senza tipo e gli indici restano quelli di
-     rawEnv. */
+  /* L'interp con cui il motore SUONA i segmenti senza tipo suo: il globale
+     com'e' scritto (`globalInterp`, che per una lista e' lo slot 3 del primo
+     blocco che ne dichiara uno, #191), o quello che il motore impone a
+     read_direction. E' quello che si disegna e si legge sotto il cursore;
+     quello che si SCRIVE resta `globalInterp`, perche' lo step imposto il
+     YAML non lo porta. */
+  const drawInterp = interpIsFixed ? defaultInterp : (globalInterp || "linear");
+  /* La lettura e' una sola, envExpand (envelope-loops.js): gli item come li
+     legge il builder, BP group interi — il primo punto di un gruppo che cade
+     sul punto prima il motore lo sposta, un breakpoint nudo no — dentro un
+     dict col tipo globale, cosi' expandMixed tagga col globale i punti senza
+     tipo suo, in ogni forma; e blocks.originalIdx tradotto negli indici di
+     rawEnv, che e' desugarato. Gli schizzi delle righe (envSketch) e la
+     parita' leggono per la stessa via. */
   const exp = useMemoEE(() => {
-    if (!rawEnvRaw) return { points: [], cycles: [], blocks: [] };
-    const items = PGEEnv.desugarBPGroups(PGEEnv.unwrapEnv(rawEnvRaw).items);
-    return PGEEnv.expandMixed(PGEEnv.isTypedEnv(rawEnvRaw) ? { type: rawEnvRaw.type, points: items } : items);
-  }, [rawEnvRaw]);
+    if (!rawEnvRaw) return { points: [], cycles: [], blocks: [], globalInterp: drawInterp, perPoint: false };
+    return PGEEnv.envExpand(rawEnvRaw, interpIsFixed ? defaultInterp : null);
+  }, [rawEnvRaw, interpIsFixed, defaultInterp]);
   /* La forma dell'envelope aperto (PGE #211, #180), sul valore GREZZO: il
      motore giudica quello che c'e' nello YAML, non la forma desugarata su cui
      lavora l'editor. Muta sulle voci inerti, come il tab Raw: il motore non
@@ -706,7 +727,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
      segmenti interni non condividono lo stesso type effettivo. */
   function zoneEffInterp(zone) {
     if (!zone || zone.kind !== "bps" || zone.indices.length < 2) return null;
-    const g = _wrap.interp || "linear";
+    const g = drawInterp;
     const effs = zone.indices.slice(0, -1).map((i) => {
       const it = rawEnv[i];
       return (it && typeof it[2] === "string") ? it[2] : g;
@@ -891,19 +912,22 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   function applySegInterp(type) {
     if (!ctxMenu) return;
     if (ctxMenu.kind === "loop") {
+      /* Un punto del pattern senza tag segue il GLOBALE, non lo slot 3 del
+         blocco (#191): e' rispetto a quello che un tag e' ridondante. Il
+         blocco si ricopia slot per slot — ricostruirlo coi soli slot non
+         nulli faceva scivolare la distribuzione nello slot dell'interp quando
+         questo era null, e perdeva `wrap` (slot 5). */
       const { blockOrigIdx, patIdx } = ctxMenu;
+      const g = globalInterp || defaultInterp;
       const newItems = rawEnv.map((it, i) => {
         if (i !== blockOrigIdx || !PGEEnv.isCompactBlock(it)) return it;
-        const blockInterp = it[3] || "linear";
-        const newPattern = it[0].map((pt, pi) => {
+        const nb = it.slice();
+        nb[0] = it[0].map((pt, pi) => {
           if (pi !== patIdx) return pt;
-          if (type === blockInterp) return [pt[0], pt[1]];
+          if (type === g) return [pt[0], pt[1]];
           return [pt[0], pt[1], type];
         });
-        const result = [newPattern, it[1], it[2]];
-        if (it[3] != null) result.push(it[3]);
-        if (it[4] != null) result.push(it[4]);
-        return result;
+        return nb;
       });
       commit(newItems);
     } else {
@@ -1042,7 +1066,11 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       newVal = clampY(newVal);
       const newPattern = pattern.map((p, i) => i === patIdx ?
       (p.length >= 3 ? [+xPct.toFixed(2), +newVal.toFixed(yPrec), p[2]] : [+xPct.toFixed(2), +newVal.toFixed(yPrec)]) : p);
-      const newBlock = [newPattern, block.raw[1], block.raw[2], block.raw[3], block.raw[4]].filter((x) => x !== undefined);
+      // Il blocco si copia e cambia solo il pattern. Ricostruito slot per slot
+      // (0..4) perdeva `wrap`, lo slot 5: il difetto dei setter del pannello
+      // del loop e del menu del segmento (#191), che qui era rimasto.
+      const newBlock = block.raw.slice();
+      newBlock[0] = newPattern;
       const updated = rawEnv.map((it, i) => i === blockOrigIdx ? newBlock : it);
       commit(updated);
     }
@@ -1153,14 +1181,16 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const COLLIDE = 0.5;
       if (pattern.some((p) => Math.abs(p[0] - xPct) < COLLIDE)) return;
       xPct = Math.max(minPct, Math.min(maxPct, xPct));
-      const newPt = [+xPct.toFixed(2), +val.toFixed(yPrec)];
-      const newPattern = [...pattern, newPt].sort((a, b) => a[0] - b[0]);
+      // Il punto prende il tipo del punto prima, come il breakpoint nudo qui
+      // sotto (PGEEnv.insertPatternPoint): da #191 l'interp del blocco sta nei
+      // tag del pattern, e un punto senza tag seguiva il globale — la meta'
+      // del segmento dopo il punto cambiava suono.
+      const ins = PGEEnv.insertPatternPoint(pattern, +xPct.toFixed(2), +val.toFixed(yPrec));
       const newBlock = rawBlock.slice();
-      newBlock[0] = newPattern;
+      newBlock[0] = ins.pattern;
       const next = rawEnv.map((it, i) => i === hostBlock.originalIdx ? newBlock : it);
       commit(next);
-      const newPatIdx = newPattern.findIndex((p) => p === newPt);
-      setSelectedPattern({ blockIdx: hostBlock.originalIdx, patIdx: newPatIdx });
+      setSelectedPattern({ blockIdx: hostBlock.originalIdx, patIdx: ins.index });
       setSelectedBlock(null);
       setSelectedBP(null);
       return;
@@ -1441,120 +1471,65 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     commit(next);
   }
 
-  /* ============ path strings ============
-     Renders the envelope as an SVG `d` honoring interp:
-       - standalone BPs use globalInterp (mutually exclusive with loop blocks)
-       - loop cycles use block.interp (intra-cycle); cross-cycle and
-         block-boundary connectors are forced linear (logical discontinuities)
+  /* ----- set loop block interp (#191) -----
+     Il motore non ha un interp per blocco: lo slot 3 e' il tipo globale (il
+     primo dichiarato, nella lista) o niente (nel dict). PGEEnv.setBlockInterp
+     lo scrive sui punti interni del pattern, che il motore legge uguale nelle
+     due forme — o, se il blocco e' tutto l'envelope, cambia il globale — e
+     torna il globale con cui committare. */
+  const isDictForm = !!rawEnvRaw && typeof rawEnvRaw === "object" && !Array.isArray(rawEnvRaw);
+  function setLoopInterp(blockIdx, type) {
+    const res = PGEEnv.setBlockInterp(rawEnv, blockIdx, type, globalInterp, { dict: isDictForm });
+    commitWithInterp(res.items, res.interp);
+  }
+  /* Che cosa fa lo slot 3 scritto nel blocco, quando non e' quello che si
+     vede: ignorato (nel dict, o dopo il primo blocco che ne dichiara uno), o
+     tipo globale di tutto l'envelope (il primo, se fuori dal blocco c'e'
+     altro). Il pannello lo dice: il numero nello YAML e il disegno non devono
+     sembrare due versioni della stessa cosa. */
+  function blockSlotNote(idx) {
+    const it = rawEnv[idx];
+    if (interpIsFixed || !PGEEnv.isCompactBlock(it) || typeof it[3] !== "string") return null;
+    const first = rawEnv.findIndex((x) => PGEEnv.isCompactBlock(x) && typeof x[3] === "string");
+    if (isDictForm || first !== idx) {
+      if (it[3] === drawInterp) return null;
+      return `lo slot interp scritto nel blocco (${it[3]}) il motore lo ignora — ` +
+             (isDictForm ? "nel dict vale il type" : "nella lista vale solo quello del primo blocco che lo dichiara") +
+             `: questo blocco suona ${blockInterpOf(it)}`;
+    }
+    if (rawEnv.length > 1)
+      return `lo slot interp del blocco (${it[3]}) e' l'interp globale dell'envelope: il motore lo applica anche fuori dal blocco, ` +
+             "a ogni segmento senza interp propria";
+    return null;
+  }
+  function blockInterpOf(it) { return PGEEnv.blockInterp(it, drawInterp); }
 
-     CUBIC = PCHIP (Fritsch-Carlson 1980, monotone-preserving):
-       segment slopes  δᵢ = (vᵢ₊₁ − vᵢ) / (tᵢ₊₁ − tᵢ)
-       at interior i:  if δ_{i-1}·δᵢ ≤ 0  → mᵢ = 0          (local extremum)
-                       else mᵢ = 2 / (1/δ_{i-1} + 1/δᵢ)     (weighted harmonic)
-       at endpoints:   m₀ = δ₀, m_{n-1} = δ_{n-2}
-     Hermite → Bezier control points in DOMAIN space:
-       cp1 = (tᵢ + h/3,   vᵢ   + h·mᵢ/3)
-       cp2 = (tᵢ₊₁ − h/3, vᵢ₊₁ − h·mᵢ₊₁/3)
-     Reference: Fritsch & Carlson, SIAM J. Numer. Anal. 17 (1980).         */
+  /* ============ path strings ============
+     La curva e' PGEEnv.envPath (envelope-loops.js): i comandi M / L / C nel
+     dominio (tempo, valore), segmento per segmento come il motore costruisce
+     l'envelope — ogni segmento col tipo del punto da cui parte (il suo tag, o
+     il globale), la cubica con le tangenti di Fritsch-Carlson calcolate su
+     TUTTI i punti espansi, due punti a tangenti zero (lo smoothstep, #190).
+     Qui si portano in pixel e basta. Prima la curva si costruiva qui, un pezzo
+     per gruppo di breakpoint e uno per ciclo, ognuno con le tangenti dei suoi
+     soli punti e un raccordo dritto in mezzo: la cubica di due punti usciva
+     una retta, e ai confini fra gruppo e blocco la curva disegnata non era
+     quella suonata. Il valore sotto il cursore (valueAtTime) legge la stessa
+     funzione, quindi disegno e cursore non possono piu' divergere. */
   // bp[2] (optional string) overrides the group-level interp for the segment starting at bp
   function segInterp(bp, fallback) {
     return (Array.isArray(bp) && typeof bp[2] === "string") ? bp[2] : (fallback || "linear");
   }
 
-  function emitGroup(bps, interp, started) {
-    if (!bps.length) return { d: "", firstX: 0, lastX: 0 };
-    const head = bps[0];
-    const x0 = xOf(head[0]), y0 = yOf(head[1]);
-    let d = started ? ` L ${x0.toFixed(2)} ${y0.toFixed(2)}` :
-                      `M ${x0.toFixed(2)} ${y0.toFixed(2)}`;
-    const n = bps.length;
-    if (n === 1) return { d, firstX: x0, lastX: x0 };
-
-    // Pre-compute PCHIP tangents globally (needed for any cubic segment in the group).
-    // Tangents are computed over all points so boundaries between strategy types stay smooth.
-    const h = new Array(n - 1);
-    const delta = new Array(n - 1);
-    for (let i = 0; i < n - 1; i++) {
-      h[i] = bps[i + 1][0] - bps[i][0];
-      delta[i] = h[i] !== 0 ? (bps[i + 1][1] - bps[i][1]) / h[i] : 0;
-    }
-    const m = new Array(n);
-    if (n === 2) { m[0] = delta[0]; m[1] = delta[0]; }
-    else {
-      m[0]     = delta[0];
-      m[n - 1] = delta[n - 2];
-      for (let i = 1; i < n - 1; i++) {
-        const dl = delta[i - 1], dr = delta[i];
-        if (dl * dr <= 0) m[i] = 0;
-        else m[i] = 2 / (1 / dl + 1 / dr);
-      }
-    }
-
-    for (let i = 0; i < n - 1; i++) {
-      const si = segInterp(bps[i], interp);
-      const t0 = bps[i][0],     v0 = bps[i][1];
-      const t1 = bps[i + 1][0], v1 = bps[i + 1][1];
-      if (si === "step") {
-        const px  = xOf(t1).toFixed(2);
-        const ppy = yOf(v0).toFixed(2);
-        const py  = yOf(v1).toFixed(2);
-        d += ` L ${px} ${ppy} L ${px} ${py}`;
-      } else if (si === "cubic") {
-        const cp1t = t0 + h[i] / 3, cp1v = v0 + h[i] * m[i]     / 3;
-        const cp2t = t1 - h[i] / 3, cp2v = v1 - h[i] * m[i + 1] / 3;
-        d += ` C ${xOf(cp1t).toFixed(2)} ${yOf(cp1v).toFixed(2)}` +
-             ` ${xOf(cp2t).toFixed(2)} ${yOf(cp2v).toFixed(2)}` +
-             ` ${xOf(t1).toFixed(2)} ${yOf(v1).toFixed(2)}`;
-      } else {
-        d += ` L ${xOf(t1).toFixed(2)} ${yOf(v1).toFixed(2)}`;
-      }
-    }
-    const last = bps[n - 1];
-    return { d, firstX: x0, lastX: xOf(last[0]) };
-  }
-
   function buildEnvelopeD() {
-    if (!exp.points.length) return { lineD: "", firstX: 0, lastX: 0 };
-    const blockByIdx = new Map();
-    exp.blocks.forEach((b) => blockByIdx.set(b.originalIdx, b));
-
-    let d = "";
-    let started = false;
-    let firstX = 0, lastX = 0;
-    let bpRun = []; // consecutive standalone BPs — emitted as one group
-
-    function flushBPs() {
-      if (!bpRun.length) return;
-      const res = emitGroup(bpRun, globalInterp || defaultInterp, started);
-      if (!started) firstX = res.firstX;
-      lastX = res.lastX;
-      started = true;
-      d += res.d;
-      bpRun = [];
-    }
-
-    for (let i = 0; i < rawEnv.length; i++) {
-      const item = rawEnv[i];
-      if (PGEEnv.isBreakpoint(item)) {
-        bpRun.push(item);
-      } else if (PGEEnv.isCompactBlock(item)) {
-        flushBPs();
-        const block = blockByIdx.get(i);
-        if (!block) continue;
-        const blockInterp = block.interp || "linear";
-        for (let c = 0; c < block.cycles.length; c++) {
-          const cycPts = block.cycles[c].points;
-          if (!cycPts.length) continue;
-          const res = emitGroup(cycPts, blockInterp, started);
-          if (!started) firstX = res.firstX;
-          lastX = res.lastX;
-          started = true;
-          d += res.d;
-        }
-      }
-    }
-    flushBPs();
-    return { lineD: d, firstX, lastX };
+    const cmds = PGEEnv.envPath(exp);
+    if (!cmds.length) return { lineD: "", firstX: 0, lastX: 0 };
+    const P = (t, v) => `${xOf(t).toFixed(2)} ${yOf(v).toFixed(2)}`;
+    const d = cmds.map((c) =>
+      c.op === "M" ? `M ${P(c.t, c.v)}` :
+      c.op === "C" ? ` C ${P(c.c1[0], c.c1[1])} ${P(c.c2[0], c.c2[1])} ${P(c.t, c.v)}` :
+      ` L ${P(c.t, c.v)}`).join("");
+    return { lineD: d, firstX: xOf(cmds[0].t), lastX: xOf(cmds[cmds.length - 1].t) };
   }
   const { lineD, firstX, lastX } = buildEnvelopeD();
   const segHitPaths = buildSegmentHitPaths();
@@ -1577,7 +1552,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
         kind: "bp",
         d: `M ${xOf(a[0]).toFixed(2)} ${yOf(a[1]).toFixed(2)} L ${xOf(b[0]).toFixed(2)} ${yOf(b[1]).toFixed(2)}`,
         bpOrigIdx: iA,
-        curInterp: segInterp(a, globalInterp || defaultInterp),
+        curInterp: segInterp(a, drawInterp),
         midX: (xOf(a[0]) + xOf(b[0])) / 2,
         midY: (yOf(a[1]) + yOf(b[1])) / 2,
         rx: xOf(a[0]), rw: xOf(b[0]) - xOf(a[0]),
@@ -1591,7 +1566,8 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       const block = exp.blocks.find((b) => b.originalIdx === bi);
       if (!block || !block.cycles.length) continue;
       const pattern = item[0];
-      const blockInterp = item[3] || "linear";
+      // Un punto del pattern senza tag segue il globale (#191).
+      const blockInterp = drawInterp;
 
       // hit paths on first cycle (one per pattern segment)
       const c0 = block.cycles[0];
@@ -1643,48 +1619,14 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     "";
 
   /* ============ value at playhead ============
-     Mirrors emitGroup: samples honoring the per-segment interp tagged onto
-     each flat point (pt[2]) by expandMixed — step holds, cubic uses PCHIP
-     (Fritsch-Carlson) tangents, otherwise linear. */
+     PGEEnv.envValueAt: lo stesso envelope di envPath, quindi il numero sotto
+     il cursore e' un punto della curva disegnata — e, segmento per segmento,
+     quello che `Envelope.evaluate` suona (tests/parity/
+     test-envelope-eval-parity.js). Prima era una seconda copia delle
+     tangenti, con lo stesso errore della prima sulla cubica di due punti. */
   function valueAtTime(t) {
-    const pts = exp.points;
-    if (!pts.length) return null;
     const x = (t - stream.onset) / Math.max(1e-9, stream.duration);
-    if (x <= pts[0][0]) return pts[0][1];
-    if (x >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      if (x >= a[0] && x <= b[0]) {
-        const hseg = b[0] - a[0];
-        if (hseg <= 0) return a[1];
-        const u = (x - a[0]) / hseg;
-        const si = (typeof a[2] === "string") ? a[2] : "linear";
-        if (si === "step") return a[1];
-        if (si === "cubic") {
-          // PCHIP tangents at a (i) and b (i+1) from neighboring deltas.
-          const dCur = (b[1] - a[1]) / hseg;
-          const tangent = (idx) => {
-            const hL = idx > 0 ? pts[idx][0] - pts[idx - 1][0] : 0;
-            const hR = idx < pts.length - 1 ? pts[idx + 1][0] - pts[idx][0] : 0;
-            const dL = hL > 0 ? (pts[idx][1] - pts[idx - 1][1]) / hL : null;
-            const dR = hR > 0 ? (pts[idx + 1][1] - pts[idx][1]) / hR : null;
-            if (dL == null) return dR == null ? 0 : dR;          // first point
-            if (dR == null) return dL;                            // last point
-            if (dL * dR <= 0) return 0;                           // local extremum
-            return 2 / (1 / dL + 1 / dR);                         // weighted harmonic
-          };
-          const mA = tangent(i), mB = tangent(i + 1);
-          const u2 = u * u, u3 = u2 * u;
-          const h00 = 2 * u3 - 3 * u2 + 1;
-          const h10 = u3 - 2 * u2 + u;
-          const h01 = -2 * u3 + 3 * u2;
-          const h11 = u3 - u2;
-          return h00 * a[1] + h10 * hseg * mA + h01 * b[1] + h11 * hseg * mB;
-        }
-        return a[1] + u * (b[1] - a[1]);
-      }
-    }
-    return pts[0][1];
+    return PGEEnv.envValueAt(exp, x);
   }
   const inStream = playhead != null && playhead >= stream.onset && playhead <= stream.onset + stream.duration;
   const liveVal = inStream ? valueAtTime(playhead) : null;
@@ -1695,11 +1637,17 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
   const bpIndices = rawEnv.map((it, i) => PGEEnv.isBreakpoint(it) ? i : -1).filter((i) => i >= 0);
 
   const hasLoop = exp.blocks.length > 0;
-  // Con più di una macrozona l'interp globale non ha più senso (issue #108):
-  // ogni zona ha il suo selettore. Nel modello desugarato più zone bps
-  // implicano loop block in mezzo, ma il vincolo resta esplicito.
-  const nonEmptyZoneCount = macroZones.filter((z) => z.kind !== "empty").length;
-  const showGlobalInterp = !hasLoop && nonEmptyZoneCount <= 1 && !interpIsFixed;
+  /* L'interp globale c'e' anche con un loop (#191). Con piu' macrozone la
+     #108 l'aveva nascosto — ogni zona ha il suo selettore — ma allora con un
+     loop il globale non sopravviveva al commit (wrapEnv scriveva la lista
+     piatta), e il motore ne aveva comunque uno: lo slot 3 del primo blocco
+     che lo dichiara, che l'editor non mostrava. Adesso e' il tipo di ogni
+     segmento che non ne dichiara uno — le zone e i blocchi senza interp
+     propria, i raccordi fra i cicli, le uscite dalle zone — e le zone e i
+     blocchi lo sovrascrivono coi loro tag. Cambiarlo lo scrive dove il motore
+     lo legge (setGlobalInterp, wrapEnv). Resta nascosto dove non e' una
+     scelta: read_direction, che il motore impone a step. */
+  const showGlobalInterp = !interpIsFixed;
 
   return (
     <div className="pge-envedit" data-screen-label="04 Envelope Editor" ref={rootRef}>
@@ -1723,10 +1671,10 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
           <Icon name="clipboard" size={12} />
         </button>
         {showGlobalInterp ?
-        <label className="ee-loop-fld" title="global interpolation for this envelope's breakpoints">
+        <label className="ee-loop-fld" title="interp globale: vale per ogni segmento che non ne dichiara uno (zone e loop senza interp propria, raccordi fra i cicli)">
             <span className="ee-loop-lbl">interp</span>
             <select className="ee-loop-select mono" value={globalInterp}
-              onChange={(e) => commitWithInterp(rawEnv, e.target.value)}>
+              onChange={(e) => commitWithInterp(PGEEnv.setGlobalInterp(rawEnv, e.target.value), e.target.value)}>
               {_INTERP_TYPES.map((o) => <option key={o.val} value={o.val}>{o.label}</option>)}
             </select>
           </label> :
@@ -1759,6 +1707,9 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
       {selectedBlockObj ?
       <LoopBlockPanel block={selectedBlockObj} color={stream.color}
       interpTypes={interpTypes}
+      interp={blockInterpOf(selectedBlockObj.raw)}
+      slotNote={blockSlotNote(selectedBlock)}
+      onSetInterp={(v) => setLoopInterp(selectedBlock, v)}
       onUpdate={(newRaw) => updateBlock(selectedBlock, newRaw)}
       onDelete={deleteSelectedLoop}
       onDeleteBlocked={wouldEmptyEnv(rawEnv.filter((_, i) => i !== selectedBlock))} /> :

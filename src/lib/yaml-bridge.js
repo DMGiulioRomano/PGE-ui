@@ -1292,6 +1292,17 @@
     const id = String(newId);
     const file = importRenameFile(s, id, streams);
     if (!file) return { ...s, id };
+    return _moveImport(s, file, id, disk, true);
+  }
+
+  /* Il trasloco di uno stream importato in `file`, con l'id `id`: quello della
+     rinomina (#208) e quello del file suo (#205). `follow` dice se il file che
+     lo stream lascia diventa una sua provenienza (`from`): si', quando nessun
+     altro lo importa — e' un orfano che il salvataggio cancella, e che il
+     laboratorio puo' salvare prima. No, quando lo importa ancora un'altra voce:
+     resta il SUO documento, e una rilettura di quel file non deve finire dentro
+     lo stream che se n'e' andato. */
+  function _moveImport(s, file, id, disk, follow) {
     const imp = s._import;
     const entry = {};
     for (const k of Object.keys(imp.entry || { file: imp.file })) {
@@ -1301,13 +1312,6 @@
     if (!("file" in entry)) entry.file = file;
     const place = JSON.parse(JSON.stringify(imp.place || {}));
     if ("stream_id" in place) place.stream_id = id;
-    /* Da dove viene (`from`): il file che lo stream lascia, se e' su disco —
-       nel disco ricordato, o letto all'apertura per chi non lo passa — col
-       piazzamento che lo stream ha DENTRO quel file. Un nome di passaggio, mai
-       scritto, non lo e': la provenienza resta quella di prima. Riportato al
-       file da cui veniva, non c'e' piu' niente da seguire. */
-    const onDisk = disk ? Object.prototype.hasOwnProperty.call(disk, imp.file) : imp.fresh !== true;
-    const from = onDisk ? { file: imp.file, place: JSON.parse(JSON.stringify(imp.place || {})) } : imp.from;
     const out = {
       ...imp,
       file,
@@ -1316,9 +1320,85 @@
       place,
       fresh: true,
     };
-    if (from && from.file !== file) out.from = from;
-    else delete out.from;
+    if (follow) {
+      /* Da dove viene (`from`): il file che lo stream lascia, se e' su disco —
+         nel disco ricordato, o letto all'apertura per chi non lo passa — col
+         piazzamento che lo stream ha DENTRO quel file. Un nome di passaggio,
+         mai scritto, non lo e': la provenienza resta quella di prima. Riportato
+         al file da cui veniva, non c'e' piu' niente da seguire. */
+      const onDisk = disk ? Object.prototype.hasOwnProperty.call(disk, imp.file) : imp.fresh !== true;
+      const from = onDisk ? { file: imp.file, place: JSON.parse(JSON.stringify(imp.place || {})) } : imp.from;
+      if (from && from.file !== file) out.from = from;
+      else delete out.from;
+    }
     return { ...s, id, _import: out };
+  }
+
+  /* ---------- un file suo per uno stream importato (PGE-ui #205) ----------
+   *
+   * Lo stesso file importato da piu' voci del master e' UN documento: le voci
+   * differiscono nel piazzamento e basta. Appena una modifica di contenuto ne
+   * tocca una sola, le copie in memoria divergono e salvataggio e render si
+   * rifiutano (#184, `serializeImports`). Il rimedio e' dare a quella voce un
+   * file suo, `<cartella del file>/<id>.yml`: lo stream TIENE il suo id —
+   * quindi la realizzazione, `(seed, stream_id, componente)`, e il fingerprint
+   * del motore: nessuno stem diventa giallo — e la voce del master diventa
+   * `file: <nuovo>` senza `stream_id`, che e' il default. Non e' una copia
+   * (#186, che cambia id e realizzazione): e' un trasloco, `_moveImport`.
+   *
+   * Vale anche per un file che importa una voce sola, se il suo nome non e'
+   * l'id dello stream (`- file: streams/voci.yml` con `stream_id: coro`): li'
+   * e' la rinomina del FILE che tiene l'id, e il file vecchio diventa un
+   * orfano come quello di una rinomina (#208). E' la regola che il
+   * laboratorio e #208 danno per vera — lo `stream_id` e' il nome del file —
+   * rimessa in piedi senza cambiare suono.
+   *
+   * Il file si crea al salvataggio o prima del render, mai al gesto (`fresh`,
+   * `createImports`, creazione esclusiva, 409 `exists`): un gesto annullato
+   * non lascia niente su disco. Se il nome e' preso, il gesto si rifiuta — lo
+   * decide chi chiama, contro la cartella, come per l'incolla e la rinomina:
+   * un `<id>-2.yml` con `stream_id: <id>` terrebbe la realizzazione nel brano,
+   * ma nel laboratorio il file si aprirebbe gia' modificato, con l'id del suo
+   * nome, cioe' un'altra realizzazione. */
+
+  /* L'alfabeto di uno stream_id che diventa un nome di file: e' il nome dello
+     stem (`<basename>__<id>.<ext>`), un segmento di path verso il bridge, e
+     — per uno stream importato — il nome del suo file. Lettere, cifre, `.`
+     `_` `-`, e non un punto in testa (un file nascosto). La rinomina lo
+     pretende dal campo (app.jsx), il file suo dall'id che c'e': uno YAML
+     scritto a mano puo' portare un id che un nome di file non e'. */
+  const STREAM_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+  // Il file suo di `s`: `{file, shared, others}`, o `{reason, others}` se il
+  // gesto non c'e'. `others` sono gli altri stream che importano lo stesso file.
+  function importOwnFile(s, streams) {
+    const imp = s && s._import;
+    if (!imp) return { reason: "lo stream e' scritto nel master: non ha un file da cambiare", others: [] };
+    const id = String(s.id);
+    if (!STREAM_ID_RE.test(id)) {
+      return { reason: `"${id}" non e' un nome di file (lettere, cifre, . _ -): rinomina lo stream prima`, others: [] };
+    }
+    const others = (streams || [])
+      .filter(o => o && o !== s && o.id !== s.id && o._import && o._import.file === imp.file)
+      .map(o => o.id);
+    if (importDefaultId(imp.file) === id) {
+      return {
+        reason: others.length
+          ? `${imp.file} ha gia' il nome di questo stream: il file suo va dato ` +
+            `${others.length === 1 ? "all'altro stream che lo importa" : "agli altri stream che lo importano"} ` +
+            `(${others.join(", ")})`
+          : `${imp.file} e' gia' il file di questo stream, col suo nome`,
+        others,
+      };
+    }
+    return { file: importCopyFile(imp.file, id), shared: others.length > 0, others };
+  }
+
+  // Lo stream col file suo; lo stesso oggetto se il gesto non c'e'.
+  function ownFileImport(s, streams, disk) {
+    const plan = importOwnFile(s, streams);
+    if (!plan.file) return s;
+    return _moveImport(s, plan.file, String(s.id), disk, !plan.shared);
   }
 
   /* ---------- il file che uno stream rinominato ha lasciato (#208 + #185) ----------
@@ -2093,6 +2173,7 @@
     importReadFiles,
     rereadImport,
     copyImport,
+    importOwnFile, ownFileImport, STREAM_ID_RE,
     importSplitBase,
     importCreates,
     // cancellare o rinominare uno stream importato (#208)

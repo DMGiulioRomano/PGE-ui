@@ -3081,10 +3081,12 @@ console.log("\n── i quattro Seg che restavano senza guardia ──");
       && /setModesOwner\(stream\.id\)/.test(block));
     const fire = (modesOwner, id, paramModes) => {
       const seen = { owner: NIENTE, modes: NIENTE };
+      // Il rifiuto del «file suo» (#205) si azzera nello stesso raccordo.
       new Function("modesOwner", "stream", "paramModes", "setModesOwner", "setParamModes",
-        block)(
+        "fileError", "setFileError", block)(
         modesOwner, { id }, paramModes,
-        (v) => { seen.owner = v; }, (v) => { seen.modes = v; });
+        (v) => { seen.owner = v; }, (v) => { seen.modes = v; },
+        null, () => {});
       return seen;
     };
     const cambio = fire("s1", "s2", { pan: "env" });
@@ -3299,6 +3301,35 @@ console.log("\n── remapEnvY: il copia/incolla fra parametri, con un dominio 
   assert("blocco compatto: dominio aperto → finito, clamp e niente NaN",
     ok(blk) && eq(blk, [[[[0, 1], [100, 1]], 1, 4]]), JSON.stringify(blk));
   assert("non muta l'input", eq(DENS, [[0, 8], [0.5, 6000], [1, 0.5]]));
+
+  /* Il tag sul punto del pattern e' l'interp del segmento che ne parte, e da
+     #191 quelli dei punti interni SONO l'interp del blocco: il pannello del
+     loop lo scrive li' (PGEEnv.setBlockInterp). Il paste ricostruiva ogni
+     punto del pattern come `[x, y]`, e il blocco incollato tornava a seguire
+     il globale — un blocco step dentro una curva cubica incollato cubico. */
+  const TAGGED = [[[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]];
+  const pasted = R(TAGGED, 0, 1, 0, 10);
+  assert("blocco compatto: i tag del pattern restano, e sono l'interp del blocco (#191)",
+    eq(pasted, [[[[0, 0, "step"], [50, 10, "step"], [100, 0]], 1, 2]]), JSON.stringify(pasted));
+  assert("…cosi' il blocco incollato suona ancora step dentro una curva cubica",
+    window.PGEEnv.blockInterp(pasted[0], "cubic") === "step");
+  assert("…e la sorgente non si tocca",
+    eq(TAGGED, [[[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]]));
+
+  /* Le grafie che il paste attraversava senza vederle. Il blocco e il gruppo
+     NUDI arrivano da unwrapEnv come i loro elementi, e il punto `{t, v}` non e'
+     un array: passavano com'erano, con le y della sorgente. Confronto, non
+     numeri: la grafia nuda si comporta come la gemella dentro una lista, il
+     dict come il punto array. */
+  const BLK = [[[0, 0], [50, 1, "step"], [100, 0]], 1, 4];
+  const GRP = [[[0, 0.2], [0.5, 1], [1, 0]], "cubic"];
+  for (const [nome, nudo] of [["blocco", BLK], ["gruppo", GRP]]) {
+    const out = R(window.PGEEnv.unwrapEnv(nudo).items, 0, 1, 0, 10);
+    assert(`${nome} nudo: rimappato come lo stesso dentro una lista`,
+      eq(out, R([nudo], 0, 1, 0, 10)[0]), JSON.stringify(out));
+  }
+  assert("punto {t, v}: rimappato come il punto array, tipo compreso",
+    eq(R([{ t: 0, v: 1, type: "step" }], 0, 1, 0, 10), [{ t: 0, v: 10, type: "step" }]));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

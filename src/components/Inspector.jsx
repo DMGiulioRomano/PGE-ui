@@ -396,7 +396,7 @@ function SamplePickerMenu({ current, onPick, showLabel, triggerRef }) {
   );
 }
 
-function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
+function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, tab, onTab, samples, freezeEnvOnResize, onFreezeEnvToggle, onFocusEnvParam }) {
   const { Section, ParamRow, Seg, Switch, Tag, NumberField, Icon, Button } = window.PGE;
   const [paramModes, setParamModes] = useStateIN({});
   // Di QUALE stream sono i paramModes qui sopra. Serve perche' quella memoria
@@ -409,6 +409,8 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   // Why the rejection lives here and not in a toast: it belongs next to the
   // field that caused it, and it has to survive until the user fixes the value.
   const [idError, setIdError] = useStateIN(null);
+  // Il messaggio del gesto «file suo» (#205): un rifiuto, o null.
+  const [fileError, setFileError] = useStateIN(null);
   const samplePickerTrigger = React.useRef(null);
   const ibodyRef = React.useRef(null);
   const ibodyScrollTop = React.useRef(0);
@@ -469,6 +471,9 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
   if (modesOwner !== stream.id) {
     setModesOwner(stream.id);
     if (Object.keys(paramModes).length) setParamModes({});
+    // Il rifiuto del «file suo» e' dello stream di prima, come la memoria qui
+    // sopra: sul successivo direbbe un perche' che non e' il suo.
+    if (fileError) setFileError(null);
   }
 
   const setMode = (k, v) => setParamModes({ ...paramModes, [k]: v });
@@ -1017,10 +1022,51 @@ function Inspector({ stream, onChange, onClose, onRename, tab, onTab, samples, f
               {stream._import ? (
               /* Lo stream importato con `file:` (#183): dove e' scritto. Le
                  modifiche vanno li' (#184), tranne il piazzamento — stream_id,
-                 onset, mute, solo — che resta nel master. */
+                 onset, mute, solo — che resta nel master.
+                 «file suo» (#205) da' allo stream un file col nome del suo id,
+                 tenendo l'id: il rimedio del file importato da piu' voci, che
+                 una modifica su una sola mette in conflitto. Il bottone c'e'
+                 dove il gesto c'e', o dove il file e' condiviso (spento, col
+                 perche' — tipicamente: va dato all'altra voce). */
               <div className="pge-prow">
                 <span className="k" title="importato con `file:` dal master: stream_id, onset, mute e solo si scrivono nel master, tutto il resto in questo file">file</span><span />
-                <span className="v mono" style={{color:"var(--fg-2)"}}>{stream._import.file}</span>
+                <span className="v mono" style={{color:"var(--fg-2)"}}>
+                  {stream._import.file}
+                  {ownFile && (ownFile.file || (ownFile.others && ownFile.others.length)) ? (
+                    <button className="pge-btn ghost" style={{height: 20, padding: "0 6px"}}
+                            disabled={!ownFile.file || !onOwnFile}
+                            title={ownFile.file
+                              ? `da' a questo stream un file suo, ${ownFile.file}: stesso id, stessa realizzazione — ` +
+                                `si crea al salvataggio` +
+                                (ownFile.shared ? `; ${stream._import.file} resta a ${ownFile.others.join(", ")}`
+                                                : `; ${stream._import.file} si cancella al salvataggio`)
+                              : ownFile.reason}
+                            onClick={() => {
+                              setFileError(null);
+                              Promise.resolve(onOwnFile())
+                                .catch(e => String((e && e.message) || e))
+                                .then(err => setFileError(err || null));
+                            }}>file suo</button>
+                  ) : null}
+                </span>
+                <span />
+              </div>
+              ) : null}
+              {/* Il perche' del bottone spento, scritto: il `title` di un bottone
+                  disabilitato Chrome e Safari non lo mostrano. */}
+              {stream._import && !fileError && ownFile && !ownFile.file && ownFile.others && ownFile.others.length ? (
+              <div className="pge-prow">
+                <span className="k" />
+                <span />
+                <span className="v own-file-reason" style={{color:"var(--fg-3)", fontSize:10}}>{ownFile.reason}</span>
+                <span />
+              </div>
+              ) : null}
+              {stream._import && fileError ? (
+              <div className="pge-prow">
+                <span className="k" />
+                <span />
+                <span className="v" style={{color:"var(--status-error)", fontSize:10}}>{fileError}</span>
                 <span />
               </div>
               ) : null}

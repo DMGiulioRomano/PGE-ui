@@ -225,7 +225,18 @@ exists, the fourth only when a browser is installed):
   the save, on the remembered disk forgetting only after a save that went
   through, on the `dephase` file kept in that disk, on the old file going
   through `importGuard`, `fileHasOwnChanges` and `rereadImportFile`, on only
-  the save closing the move, and on the Inspector awaiting the rename).
+  the save closing the move, and on the Inspector awaiting the rename), and
+  `test-stream-own-file.js` (#205: a file of its own for an imported stream —
+  `importOwnFile` saying where the gesture is, a file another entry imports or
+  one not named after the stream's id, and why it isn't anywhere else;
+  `ownFileImport` moving the stream to `<dir>/<id>.yml` with its id, the
+  shared file left to the other entries with no `from` towards it, a lone
+  file followed and deleted at the save like a rename's, the conflict it
+  resolves and nothing to create once undone; plus source guards on the async
+  gesture listing the folder before it writes and re-reading the state of now,
+  on its re-entry guard (`onGiveOwnFile`), on the one alphabet of ids (`STREAM_ID_RE`), on the Inspector being the one
+  element that gets the gesture, and on the conflict and split messages naming
+  it).
 - **`make tests-python`** (pytest) — `test_render_pipeline.py`
   (`parse_render_line` events — including the summary-block gate and its
   canary, which reads the engine CLI's own head line by *position* rather than
@@ -576,7 +587,16 @@ into the renamed stream, creates the new file from the lab's version and
 deletes the old one; with a duration edited after the rename it asks about
 the old file, and «sovrascrivi» leaves it with the lab's bytes. The new name
 there is not `onda` again: the split step wrote a stem under that id, and an
-id that owns a stem is not taken back.
+id that owns a stem is not taken back. Then #205, on a master importing
+`streams/voci.yml` twice (`fixtures/PGE_smoke_shared.yml`, as `coro` and
+`alto`): `coro` lengthened alone and the save refused — the conflict, its
+message naming the gesture, nothing written —; «file suo» on its Inspector
+row, double-clicked (one gesture, no error under it), gives it `streams/coro.yml`, not on disk until the save, then a lab
+document with `stream_id: coro` and the edit, the master entry without
+`stream_id`, `voci.yml` left to `alto` byte for byte; on `alto`, now its only
+importer, the gesture moves the file: undone before the save it leaves
+nothing, saved `streams/alto.yml` says what `voci.yml` said but for
+`stream_id`, `voci.yml` is deleted (#208), and the button is gone.
 
 Three decisions hold it up, and each is the answer to a way the test could have
 been green while proving nothing:
@@ -1469,8 +1489,9 @@ Three things in it are easy to get wrong, and each has its case:
   as the builder asks it: `{t: pattern, v: end_time, type: n_reps}` normalizes
   into a compact too, and looking for the last compact among the items as
   written missed it — the next block restarted from 0, silent where the engine
-  rejects. `expandMixed` restarts from `end_time` — the preview is not what
-  decides rejection.
+  rejects. Since #191 `expandMixed` restarts from the same point (it is the
+  editor's reading of the builder, see "drawn and read as the engine plays
+  it"); the preview still is not what decides rejection.
 - **The int/float blind spot.** For Python `n_reps: 2.0` is a float, hence not
   a compact, hence an error; here `2.0` and `2` are the same Number, and the
   mirror stays silent — the safe direction, like `power.exponent` in
@@ -2258,9 +2279,11 @@ master imports with a `- file:` entry at the cut. Five rules:
   copies diverge — a `conflict`, and save and render refuse. The split asks
   first (`importConflictsAdded(data, withHeads)`, the conflicts the heads would
   add, not the ones already there) and refuses with a toast naming the file
-  and the streams that import it (`importConflictText`), instead of leaving a
-  state that can't be saved. Entries cut together at the same point stay equal
-  and pass; the tails don't enter, each has a new file.
+  and the streams that import it (`importConflictText`) and the way out —
+  give the stream a file of its own first (#205), or cut every entry at the
+  same point — instead of leaving a state that can't be saved. Entries cut
+  together at the same point stay equal and pass; the tails don't enter, each
+  has a new file.
 - **One split at a time** (`onSplit`, the shortcut's entry): a ref raised
   before any await and dropped in a `finally`, `renderAgain`'s shape. Without
   it a `d` pressed while the first split waited for the folder started from
@@ -2757,10 +2780,9 @@ its **placement**. The path is relative to the master's folder, i.e.
   written once, when they diverge it is a `conflict` and save and render
   refuse rather than pick one. The refusal names the file and the streams
   that import it (`importConflictText`) and the remedies the editor really
-  has — undo the edit, or make it on every one of those streams; no gesture
-  detaches a stream from its file, so the message doesn't promise one. The
-  split refuses *before* creating such a conflict (see "Split at the
-  playhead").
+  has — undo the edit, make it on every one of those streams, or give one of
+  them a file of its own (#205, below). The split refuses *before* creating
+  such a conflict (see "Split at the playhead").
 - **Errors name the master and the file, and the editor doesn't crash.** A file
   that is missing, unreadable, malformed, holds no stream or more than one, or
   chains another `file:` leaves its entry unresolved: it is not a timeline
@@ -2774,13 +2796,16 @@ its **placement**. The path is relative to the master's folder, i.e.
 - **A copy and a split's tail are new files.** A paste of an imported
   stream gets a file of its own beside the original (#186, below), and so
   does the tail of a split, `<name>-2.yml` (#187, see "Split at the
-  playhead"); the split's head keeps its file and is shortened there. Nothing
-  detaches a stream from its file any more — `detachImport` went with #187.
+  playhead"); the split's head keeps its file and is shortened there.
+  `detachImport` went with #187: nothing writes an imported stream back into
+  the master. What resolves a shared file is the stream's own file (#205,
+  below), which keeps the id where the copy and the tail take a new one.
 - **A rename moves the file, and a file the master no longer names is
   deleted at the save** (#208, below).
 - **The Raw tab** shows the resolved stream and keeps `_import` on apply, so an
   edit there lands in the file; the timeline shows the file name beside the
-  id, and the Inspector has a `file` row.
+  id, and the Inspector has a `file` row, with the «file suo» button where
+  #205's gesture applies.
 
 `roundTripDiff` ignores `_import` (the master entry is rewritten from the state
 and, re-read, says what was just written) and compares the imported files
@@ -2989,6 +3014,60 @@ the rename and the delete in a browser, and the rename with the lab saving the
 old file in between — reread and deleted without own changes, asked about with
 them, «sovrascrivi» leaving it with the lab's bytes.
 
+**A file of its own** (#205). The same file imported by two entries of the
+master is one document — the engine allows it, and the entries differ in
+placement only — so the first content edit made on one of them leaves two
+copies that say different things, and save and render refuse (the `conflict`
+above). The message used to promise a remedy no gesture performed. It is on
+the Inspector's `file` row now: «file suo» gives the stream `<dir>/<id>.yml`.
+Five rules:
+
+- **The stream keeps its id**, so its realization (`(seed, stream_id,
+  component)`) and the engine's fingerprint: no stem goes yellow. It is not a
+  copy (#186: a new id, another realization) but a move, the rename's
+  (`_moveImport`, shared with `renameImport`): a file to *create* (`fresh`,
+  `createImports`, the bridge's exclusive create), its `stream_id` the id when
+  the file writes one, the master entry keeping its keys as written minus
+  `stream_id`, which becomes the default.
+- **Where the gesture is** (`importOwnFile`): on a file another entry
+  imports, and on a file one entry imports under a name that isn't the
+  stream's id (`- file: streams/voci.yml` with `stream_id: coro`) — the rule
+  the lab and #208 take for true, `stream_id` = file name, put back without
+  changing the sound. Not on a stream written in the master, not on an id
+  that can't be a file name (`STREAM_ID_RE`: a hand-written YAML can carry
+  one), and not on a file already named after the id; there, if another
+  entry imports it, the button is shown disabled and its reason names the
+  other streams, the ones the gesture is for.
+- **The shared file stays the other entries'**, so the stream that leaves
+  doesn't follow it: no `from` (#208's provenance), because a reread of that
+  file belongs to the streams that still import it. A lone file is followed
+  like a rename's old file — a read to respect until the save deletes it,
+  since nobody imports it any more.
+- **The name is the id, or nothing.** Asked of the folder first, like the
+  paste and the rename (`listImportNames`, then the state of *now*): if
+  `<dir>/<id>.yml` is taken (`importIdTaken`) the gesture refuses. A
+  `<id>-2.yml` carrying `stream_id: <id>` would keep the realization in the
+  piece, but the lab writes the id from the file name: it would open the file
+  already modified, with another realization.
+- **Written at the save or before the render, never at the gesture**, and
+  undone before the save it leaves nothing on disk.
+- **One gesture at a time** (`onGiveOwnFile`, the entry the Inspector calls):
+  a ref raised before any await and dropped in a `finally`, `onSplit`'s shape.
+  The button stays lit while the folder is asked, so a double click ran two
+  gestures from the same state, and the second, answered after the redraw,
+  printed «e' cambiato mentre si leggeva la cartella — riprova» under a
+  gesture that had gone through.
+
+The id it names a file with has one alphabet, `PGEYaml.STREAM_ID_RE`, which
+`renameStream` reads too. The conflict message and the split's fourth refusal
+name the gesture. `tests/node/test-stream-own-file.js` pins the model and the
+wiring, `tests/parity/test-stream-own-file-parity.js` asks the engine
+(`resolve_stream_files`) to find the stream that moved with the same id and
+fingerprint, the other streams untouched, the shared file still the other
+entry's, the edit that conflicted resolved into the new file, and the new
+file alone one stream with the same id; `tests/e2e/test-boot.js` walks the
+gesture in a browser.
+
 **A lab document comes back whole** (#188, step 4 of the plan, "round-trip
 inverso"). The rules above say where each key goes; what they don't say is
 whether the *content* of the imported file survives the editor — and the lab
@@ -3055,14 +3134,12 @@ What the round trip does now, and what it doesn't:
   segments, and here the run is the whole envelope — the same thing it has
   always done to a flat list, and the same expansion the builder does
   (`_expand_bp_group`). The shape moves, the reading doesn't.
-- **A loop block among the items keeps the list**, as before: the declared case,
-  PGE-ui #191. The engine reads a compact block's interp by *form* — in a list
-  the **first** block's interp becomes the envelope's global type
-  (`EnvelopeBuilder.extract_interp_type`), in a dict it is ignored and the `type`
-  governs — while `expandMixed` and `buildEnvelopeD` draw it per block. Keeping
-  the dict there would make the engine's reading identical and the drawing of
-  the block just added with "add loop" false; the decision is about that model,
-  not about `wrapEnv`.
+- **A loop block among the items no longer forces the list** (#191, decided —
+  see the next section). It used to: the engine reads a compact block's interp
+  by *form*, the editor drew it per block, and the dict would have made the
+  block just added with "add loop" draw one thing and play another. Now the
+  editor reads it the engine's way, and `wrapEnv` keeps the dict unless the
+  list already says the same global type.
 
 **The dict now carries what used to be only in lists, so every reader that
 measured an envelope as a list had to learn it.** `.length` on a dict is
@@ -3077,9 +3154,11 @@ curve that isn't there — and a BP group in the list put `NaN` in its polyline.
 They all read through `unwrapEnv` now: the two sparklines through the editor's
 own path (`unwrapEnv` → `desugarBPGroups` → `expandMixed`), written once as
 `PGEEnv.envSketch` so the two rows can't drift apart again — and the editor's
-path down to the third field: the dict is rebuilt around the desugared items,
-as in the editor's own `exp`, or `expandMixed` tags the untyped points `linear`
-and the sketch loses the very `type` this section is about. Its `count` is
+path down to the third field: the items inside a dict carrying the
+global type, or `expandMixed` tags the untyped points `linear` and the sketch
+loses the very `type` this section is about. Since #191 that path is one
+function, `PGEEnv.envExpand`, which the editor's `exp` and `envSketch` both
+call. Its `count` is
 `PGEEnv.envCount`, which the Inspector badges read too: written elements, with
 a **bare** block or group (the whole value, or a dict's `points`) counting as
 one, not as the three or two fields `unwrapEnv` hands back — `↻1 · 3 el` on an
@@ -3106,9 +3185,9 @@ a contract). `tests/parity/test-envelope-wrap-parity.js` asks the engine the
 real question — the same body before and after `wrapEnv ∘ unwrapEnv` and the
 commit path, evaluated on the same grid by `Envelope.evaluate`, plus the
 `setZoneInterp` gesture against its intent — with a guard that the corpus
-discriminates (the flat list of the same items must play differently), and the
-loop case asserted as a divergence, so the day #191 is decided that suite
-speaks.
+discriminates (the flat list of the same items must play differently). The loop
+case was asserted there as a divergence until #191 decided it; it is now three
+assertions of parity (next section).
 
 **The other keys of the dict survive too** (`wrapEnv(items, interp, like)`).
 `wrapEnv` rebuilt the dict out of `type` and `points` alone, and without a
@@ -3135,6 +3214,139 @@ One consequence outside this repo: mare-nostrum's lab writes a touched
 *not* as the mixed form, because PGE-ui used to lose the global type on re-read
 (mare-nostrum's CLAUDE.md, "Gli inviluppi `{type, points}`"). That reason is
 gone; whether to change it is that repo's call.
+
+### EnvelopeEditor: drawn and read as the engine plays it (#190, #191)
+
+What the EnvelopeEditor draws, the value its playhead readout shows and what
+the engine plays are one reading now, written once in `envelope-loops.js`
+(`window.PGEEnv`):
+
+- **`envExpand(raw, imposed)`** — the editor's one reading: `unwrapEnv` →
+  `expandMixed`, inside a dict carrying the engine's global type (or the one
+  the engine imposes: read_direction's `step`, which the YAML doesn't carry).
+  The EnvelopeEditor's `exp`, `envSketch` and the parity suites call it;
+  nobody rebuilds it. It reads BP groups **whole**, as the builder does, and
+  not desugared like `rawEnv`: the builder moves a group's first point
+  `DISCONTINUITY_OFFSET` past the previous one when it falls on or before it
+  (`_expand_bp_group`), a bare breakpoint it doesn't — on the desugared items
+  that move was lost, the jump became a zero-width segment and the cubic's
+  tangents beside it weren't the engine's (0.29 off on
+  `[[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], cubic]]`). The **indices** stay
+  desugared: `blocks[].originalIdx` is translated into `rawEnv`'s (a group
+  counts as many as its points), the invariant the editor rests on.
+- **`expandMixed`** is the mirror of `EnvelopeBuilder.parse` plus the global
+  type `Envelope.__init__` puts on top: the same points at the same instants,
+  each tagged with the type of the segment that leaves it — its own tag, else
+  the global. Three readings of the builder it lacked: a `{t, v}` point is a
+  point (drawn, not draggable — `isBreakpoint` still says what the canvas
+  drags); the block after a block starts at the previous one's **last expanded
+  point** (`current_time = compact_expanded[-1][0]`), not at its `end_time`;
+  `wrap` (slot 5) adds its closing points. `perPoint` says whether any point
+  has a type of its own — the engine then builds one segment per pair,
+  otherwise one with the global type, and the two differ on a `step` at the
+  exact instant of a discontinuity.
+- **`cubicTangents`** (`_compute_fritsch_carlson_tangents`, operation for
+  operation, over **all** expanded points), **`hermite`**, **`envValueAt`**
+  (`Envelope.evaluate`, both paths) and **`envPath`** (`M`/`L`/`C` commands in
+  the (time, value) domain; `buildEnvelopeD` only maps them to pixels, and
+  `valueAtTime` is `envValueAt`).
+
+**#190, the cubic of two points.** With two points the engine sets both
+tangents to zero — Hermite becomes the smoothstep `v0 + (v1 − v0)(3s² − 2s³)`,
+"for the straight line there is `type: linear`" — while `emitGroup` and
+`valueAtTime`, each with its own copy of the tangents, gave both ends the
+segment's slope: a straight line. `cubic` and `linear` looked identical and the
+render differed (on `[[0, 0.001], [1, 0.016]]` the readout at `t = 0.1` was 76%
+above what played). The drawing also computed tangents per run of bare
+breakpoints and per cycle, each with its own ends, joined by straight
+connectors, where the engine computes them over every expanded point: at the
+boundary between a group and a block, and between cycles, the drawn curve
+wasn't the played one (0.10–0.15 off in the parity corpus).
+
+**#191, the interp of a compact block.** The engine has no per-block interp.
+Slot 3 is one spelling of the envelope's **global** type: in a list, the first
+block that declares one (`extract_interp_type`), governing the bare points
+outside the block and every other block's points; in a dict, nothing (the
+`type` governs). The editor drew it per block and read every list as `linear`:
+a `step` block after two bare points drew the points straight while the engine
+stepped them; in a `{type: cubic}` dict the block drew stepped and played
+cubic. The issue offered two roads; it takes both halves — **read like the
+engine, write a block's interp on its pattern**:
+
+- **Reading.** `listInterp` (the mirror of `extract_interp_type`, with the
+  engine's compact recognition) gives a list its global type, and
+  `unwrapEnv(list).interp` is that, not `linear`. The loop panel and the loop
+  band show the block's **effective** interp (`blockInterp`: the tags of its
+  internal pattern points, else the global; `mixed` when not uniform), and the
+  panel says what a written slot 3 does when it isn't what plays — ignored (a
+  dict, or not the first declared) or "the global type of the whole envelope".
+- **A block's interp** (`setBlockInterp`, the loop panel) is written as tags on
+  the pattern's **internal** points — not the last, whose segment leaves the
+  cycle and follows the global, the BP group rule — and none where it equals
+  the global. The engine reads a pattern tag the same way in both forms, so
+  "add loop" on a cubic curve and then `step` on the block steps the block and
+  leaves the curve cubic, list or dict. The one exception is the block that
+  **is** the whole envelope: there the block's interp is the global, written
+  in slot 3 (`[pattern, 1, 4, cubic]`, the documented compact form) or in the
+  dict's `type`, and the internal tags are cleared.
+- **The global** (`setGlobalInterp` + `wrapEnv`; the header selector, shown
+  with loops too now and hidden only on read_direction, where the engine
+  imposes `step`): every declared slot 3 follows it, so the list keeps saying
+  it and removing the first block can't change the type of everything else.
+  `wrapEnv` with a block among the items keeps the list only when the list
+  already says the editor's global (`listInterp(items) === interp`; from a dict,
+  only when linear), else writes `{type, points}`. Deleting the block that
+  spelled the global keeps the global: the commit writes it in the dict.
+- **The writers that declared a slot 3 by themselves.** `defaultCompactBlock`
+  ("add loop") is `[pattern, 1, 4]` now: the new block follows the global. The
+  loop panel's setters change their own slot only — they rebuilt five slots
+  with `interp || "linear"`, dropping `wrap` and, in a list, letting an
+  `n_reps` edit on the first block change the global; a skipped slot is
+  `null`, which the engine reads as undeclared. The context menu on a pattern
+  segment copies the block slot by slot (it rebuilt it from the non-null slots,
+  so a null slot 3 let the distribution slide into it), and `fmtCompact` keeps
+  that `null`. So does the drag of a pattern point, which rebuilt the block
+  from slots 0..4 and dropped `wrap` the same way.
+- **The gestures that write pattern points carry the block's interp.** With
+  the interp in the pattern's tags, a point written without one follows the
+  global, and two gestures wrote them so. The paste (`remapEnvY`) rebuilt every
+  pattern point as `[x, y]`: a `step` block pasted into a cubic curve came out
+  cubic. It copies the point and changes its y now, as it always did for bare
+  points. The double click inside a loop (`insertPatternPoint`) gives the new
+  point the tag of the point before it, the rule a bare breakpoint inserted in
+  a zone already had: it splits that point's segment, and both halves keep its
+  type — untagged, the half after the point turned cubic and the block `mixed`.
+- **The freeze cut** (`truncateEnvArray`) closes a list's border with the
+  list's global, and when the cut drops the block that spelled it, writes it
+  in a dict's `type`: the head the cut exists to preserve would otherwise play
+  `linear`.
+
+`tests/parity/test-envelope-eval-parity.js` asks the engine: `envValueAt ∘
+envExpand` and `envPath` against `Envelope.evaluate` over a corpus (two-point
+cubics in both spellings, group/block and cycle boundaries, the four rows of
+#191's table, two blocks, a bare block inside a dict, `wrap`, `{t, v}`, time
+distributions, a discontinuity asked at its exact instant, a group starting on
+the instant of the point before it), with a presidio
+that is the old reading itself — expansion, cursor and drawing, frozen in the
+test — required to differ from the engine on the rows that say so.
+`test-envelope-wrap-parity.js` asks the dict with a block, the loop panel
+gesture and the global selector against their intent, and a block set to `step`
+through the paste (the pasted curve plays the source mapped onto the new
+domain) and through a double click on the curve (nothing it plays changes);
+`test-envelope-cut-parity.js` the list whose global sits in a block.
+`tests/node/test-bp-groups.js` pins the shapes, the rules that need no engine
+(drawing and readout are one curve) and the wiring of the panel, the selector,
+the pattern drag and the double click.
+Declared: points written out of order are drawn as written (the engine sorts
+inside a segment), and a cut cubic still changes its tangents at the border
+(they are computed on points the cut removes) — `boundaryY`'s known limit.
+And one divergence the engine makes by itself, asserted in the eval suite: a
+pattern that **starts with a jump** (two points at the same x first) gets
+`DISCONTINUITY_OFFSET` on its first point only, which from the second cycle on
+lands after the second; with no per-point type the engine sorts its single
+segment and plays that cycle flat, with one it plays the ramp in every cycle.
+The editor reads the ramp — a redundant tag changing the sound is the engine's
+inconsistency, not a reading to copy.
 
 ### Audio playback (`audio-engine.js`)
 
@@ -3350,7 +3562,8 @@ keep naming the same stream.
 that is what keeps `isTrivial` true, so a plain rename on an ungrouped project
 writes no `ui_tracks` at all; a lane the user actually named keeps its name.
 Three refusals, all at the trust boundary: a charset (the id becomes a filename
-and a path segment), a live stream already holding the name, and `ownsStemFor`
+and a path segment; `PGEYaml.STREAM_ID_RE`, the alphabet #205's own file is
+named with too), a live stream already holding the name, and `ownsStemFor`
 — a stem still on disk under that name would be picked up as the renamed
 stream's audio, the same hazard `allocStreamIds` guards against. An imported
 stream adds a fourth (#208): its file moves to `<dir>/<new>.yml`, so the new

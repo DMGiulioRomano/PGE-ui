@@ -1,0 +1,22 @@
+# Master di prova del file suo (#205).
+#
+# Lo stesso file, `streams/voci.yml`, importato da due voci con due stream_id:
+# per il motore e' un documento solo, e le due voci differiscono nel
+# piazzamento e basta. test-boot.js modifica una voce sola, si fa rifiutare il
+# salvataggio (le due copie non dicono piu' la stessa cosa), e scioglie il
+# conflitto col gesto «file suo» dell'Inspector.
+#
+# Il corpo e' scritto nella forma in cui il bridge lo riscrive, come
+# PGE_smoke_file.yml. `smoke.wav` non esiste, come per PGE_smoke.yml.
+
+title: smoke-shared
+duration: 7
+bpm: 120
+seed: 1441
+streams:
+  - file: streams/voci.yml
+    stream_id: coro
+    onset: 0
+  - file: streams/voci.yml
+    stream_id: alto
+    onset: 4

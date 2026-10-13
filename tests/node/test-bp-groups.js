@@ -397,19 +397,22 @@ console.log("\n── wrapEnv: il type globale di un {type, points} resta (#189)
   assert("soli breakpoint nudi con interp non lineare: dict, come prima",
     eq(E.wrapEnv([[0, 0], [1, 1]], "step"), { type: "step", points: [[0, 0], [1, 1]] }));
 
-  /* Il caso dichiarato: con un blocco compatto fra gli item la lista resta
-     piatta, come prima di #189. Il motore legge l'interp del blocco in due
-     modi che l'editor non rispecchia — nella lista piatta quello del PRIMO
-     blocco diventa il tipo globale (`EnvelopeBuilder.extract_interp_type`),
-     nel dict viene ignorato e governa il `type` — mentre expandMixed lo
-     disegna per blocco. Tenere il dict qui renderebbe identico il valore per
-     il motore ma aprirebbe un disegno falso proprio sul blocco appena
-     aggiunto con "add loop"; la decisione sta nella issue #191, e la
-     divergenza e' asserita dalla suite di parita'. Se questo assert cade,
-     qualcuno ha deciso: aggiornare la parita' e CLAUDE.md insieme. */
+  /* Con un blocco compatto fra gli item (#191). Fino a qui la lista restava
+     piatta — il caso che #189 aveva lasciato dichiarato — e il `type` si
+     perdeva al primo commit. Il motore legge l'interp di un blocco per FORMA:
+     nella lista quello del primo blocco che lo dichiara e' il tipo globale
+     (`EnvelopeBuilder.extract_interp_type`), nel dict non conta niente. Deciso:
+     l'editor lo legge cosi' (listInterp, expandMixed) e lo scrive cosi' —
+     il dict resta dict, la lista resta lista se dice gia' lo stesso globale,
+     e l'interp di UN blocco va sui punti del suo pattern (setBlockInterp).
+     Che il motore suoni lo stesso lo chiede test-envelope-wrap-parity.js. */
   const LOOPED = [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2]];
-  assert("con un blocco compatto la lista resta piatta (caso dichiarato, #191)",
-    eq(E.wrapEnv(LOOPED, "cubic"), LOOPED), JSON.stringify(E.wrapEnv(LOOPED, "cubic")));
+  assert("con un blocco compatto il dict resta: il type globale non si perde (#191)",
+    eq(E.wrapEnv(LOOPED, "cubic"), { type: "cubic", points: LOOPED }),
+    JSON.stringify(E.wrapEnv(LOOPED, "cubic")));
+  const LOOPED_DICT = { type: "cubic", points: LOOPED };
+  assert("…e il round-trip dell'editor senza modifiche lo rende identico",
+    eq(roundTrip(LOOPED_DICT), LOOPED_DICT), JSON.stringify(roundTrip(LOOPED_DICT)));
 
   /* fmtEnvInline formattava i points del dict con fmtBP e basta: un gruppo
      dentro usciva come numeri senza senso. */
@@ -435,9 +438,17 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
   const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
   assert("l'editor non passa piu' il dict grezzo a expandMixed",
     !/isTypedEnv\(rawEnvRaw\)\s*\?\s*rawEnvRaw\s*:/.test(eeSrc));
-  assert("…ma un dict con i points desugarati, e il type del dict",
-    /expandMixed\(\s*PGEEnv\.isTypedEnv\(rawEnvRaw\)\s*\?\s*\{\s*type:\s*rawEnvRaw\.type,\s*points:\s*items\s*\}\s*:\s*items\s*\)/.test(eeSrc));
-  const exp = E.expandMixed({ type: DICT.type, points: rawEnv });
+  /* Da #191 la lettura e' una funzione sola, envExpand: gli item dentro un
+     dict col tipo globale — il `type`, o per la lista lo slot 3 del primo
+     blocco — e l'editor la chiama invece di rifarla. I gruppi li legge interi,
+     come il builder (il bordo di un gruppo, sotto in #190), e gli indici dei
+     blocchi li da' in rawEnv: dove nessun gruppo cade sul punto prima e' la
+     lettura degli item desugarati. */
+  assert("…ma la lettura condivisa, envExpand, sul valore com'e' scritto",
+    /PGEEnv\.envExpand\(\s*rawEnvRaw\b/.test(eeSrc) && !/PGEEnv\.expandMixed\(/.test(eeSrc));
+  assert("envExpand, senza un gruppo sul punto prima, e' la lettura degli item desugarati",
+    eq(E.envExpand(DICT), E.expandMixed({ type: DICT.type, points: rawEnv })));
+  const exp = E.envExpand(DICT);
   assert("originalIdx indicizza un blocco di rawEnv",
     exp.blocks.length === 1 && E.isCompactBlock(rawEnv[exp.blocks[0].originalIdx]),
     JSON.stringify(exp.blocks.map((b) => b.originalIdx)));
@@ -498,10 +509,7 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
      sorgente qui sopra fissa), e lo schizzo deve tracciare la stessa cosa,
      tag compresi: chi un giorno disegnasse i segmenti dal tag lo leggerebbe
      di qui. */
-  const editorExp = (raw) => {
-    const items = E.desugarBPGroups(E.unwrapEnv(raw).items);
-    return E.expandMixed(E.isTypedEnv(raw) ? { type: raw.type, points: items } : items);
-  };
+  const editorExp = (raw) => E.envExpand(raw);
   for (const [nome, raw] of [["la forma mista", MISTA],
                              ["il dict con un gruppo", { type: "cubic", points: CURVA_GRUPPO }],
                              ["il dict di soli punti nudi", { type: "step", points: [[0, 0], [0.5, 1], [1, 0]] }],
@@ -691,6 +699,274 @@ console.log("\n── rescaleCurveY: la curva multistate cambia scala in ogni gr
     assert("quattro stati: il salvataggio senza modifiche non introduce deriva",
       eq(out, curve), JSON.stringify(out));
   }
+}
+
+/* ── la cubica come la calcola il motore (#190) ─────────────────────────────
+   Le tangenti in un posto solo (cubicTangents), usate dal disegno (envPath) e
+   dal cursore (envValueAt). Che i valori siano quelli del motore lo chiede
+   tests/parity/test-envelope-eval-parity.js; qui le regole che non hanno
+   bisogno del motore, e che disegno e cursore dicano la stessa curva. */
+console.log("\n── cubicTangents / envValueAt / envPath (#190) ──");
+{
+  assert("due punti: tangenti a zero (lo smoothstep), non la pendenza",
+    eq(E.cubicTangents([[0, 0.001], [1, 0.016]]), [0, 0]));
+  assert("un punto, nessun punto: zeri",
+    eq(E.cubicTangents([[0, 1]]), [0]) && eq(E.cubicTangents([]), []));
+  const m = E.cubicTangents([[0, 0], [1, 2], [2, 3], [3, 1]]);
+  assert("tre punti o piu': estremi = pendenza del segmento, interni = media armonica",
+    m[0] === 2 && m[3] === -2 && m[1] === 2 / (1 / 2 + 1 / 1) && m[2] === 0, JSON.stringify(m));
+  assert("un segmento largo zero (la discontinuita') ha pendenza zero, non quella del vicino",
+    E.cubicTangents([[0, 0], [0.5, 1], [0.5, 3], [1, 4]])[1] === 0);
+
+  const due = E.envExpand({ type: "cubic", points: [[0, 0.001], [1, 0.016]] });
+  const v = E.envValueAt(due, 0.1);
+  const smooth = 0.001 + 0.015 * (3 * 0.01 - 2 * 0.001);
+  assert("la cubica di due punti sotto il cursore e' lo smoothstep, non la retta",
+    Math.abs(v - smooth) < 1e-15 && Math.abs(v - 0.0025) > 1e-4, String(v));
+  const cmds = E.envPath(due);
+  assert("…e il disegno la traccia con le tangenti piatte: i punti di controllo stanno sugli estremi",
+    cmds.length === 2 && cmds[1].op === "C" && cmds[1].c1[1] === 0.001 && cmds[1].c2[1] === 0.016,
+    JSON.stringify(cmds));
+  assert("lo stesso col tipo sul punto",
+    eq(E.envPath(E.envExpand([[0, 0.001, "cubic"], [1, 0.016]])).map((c) => c.op), ["M", "C"]));
+
+  /* (review) Il bordo di un gruppo. Il builder sposta di DISCONTINUITY_OFFSET
+     il primo punto di un gruppo che cade sull'istante del punto prima, o
+     prima (`_expand_bp_group`: `t <= current_time`), come il primo punto di un
+     blocco; un breakpoint nudo no. envExpand leggeva gli item DESUGARATI, dove
+     il gruppo e' gia' fatto di breakpoint nudi: lo spostamento si perdeva, il
+     segmento del salto era largo zero — pendenza zero invece di 1e6 — e le
+     tangenti della cubica accanto non erano quelle del motore (0.29 di
+     scarto a t = 0.7 qui sotto: lo chiede test-envelope-eval-parity.js). */
+  const BORDO = [[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], "cubic"]];
+  const eb = E.envExpand(BORDO);
+  assert("il primo punto di un gruppo sull'istante del punto prima si sposta come nel builder",
+    eb.points.length === 4 && eb.points[1][0] === 0.5 && eb.points[2][0] === 0.5 + E.DISCONTINUITY_OFFSET,
+    JSON.stringify(eb.points));
+  assert("…e la tangente della cubica li' vede il salto (non zero)",
+    E.cubicTangents(eb.points)[2] > 3.9, JSON.stringify(E.cubicTangents(eb.points)));
+  assert("…un breakpoint nudo sullo stesso istante invece resta dov'e' (il builder non lo sposta)",
+    E.envExpand([[0, 0], [0.5, 1], [0.5, 2, "cubic"], [1, 3]]).points[2][0] === 0.5);
+  /* Letto il gruppo intero, gli indici dei blocchi restano quelli di rawEnv,
+     che e' desugarato: l'invariante su cui l'editor poggia (blockByOrig). */
+  const GB = [[[[0, 0], [0.2, 1], [0.3, 0.5]], "cubic"], [[[0, 1], [100, 0]], 1, 2]];
+  const rawGB = E.desugarBPGroups(E.unwrapEnv(GB).items);
+  const expGB = E.envExpand(GB);
+  assert("…e con un gruppo prima di un blocco originalIdx indicizza ancora rawEnv",
+    expGB.blocks.length === 1 && expGB.blocks[0].originalIdx === 3 && E.isCompactBlock(rawGB[3]),
+    JSON.stringify(expGB.blocks.map((b) => b.originalIdx)));
+
+  /* Disegno e cursore: la stessa curva. La Bezier di envPath, valutata come
+     la traccia l'SVG, deve dare i valori di envValueAt dove il disegno ne ha
+     uno solo (non sull'istante di un salto). */
+  const bez = (cmds, t) => {
+    let prev = cmds[0];
+    for (const c of cmds.slice(1)) {
+      if (prev.t < t && t < c.t) {
+        const s = (t - prev.t) / (c.t - prev.t), r = 1 - s;
+        return c.op === "C"
+          ? r * r * r * prev.v + 3 * r * r * s * c.c1[1] + 3 * r * s * s * c.c2[1] + s * s * s * c.v
+          : prev.v + s * (c.v - prev.v);
+      }
+      prev = c;
+    }
+    return null;
+  };
+  for (const [nome, raw] of [
+    ["dict cubic con un gruppo e un blocco",
+      { type: "cubic", points: [[0, 0], [[[0.1, 0.5], [0.2, 1]], "step"], [[[0, 1], [50, 0], [100, 1]], 0.6, 2], [1, 0.9]] }],
+    ["lista con il globale in un blocco", [[0, 0], [0.2, 1], [[[0, 0], [50, 1], [100, 0]], 1, 2, "cubic"]]],
+    ["step con una discontinuita'", { type: "step", points: [[0, 0], [0.5, 1], [0.5, 3], [1, 0]] }],
+  ]) {
+    const exp = E.envExpand(raw);
+    const at = new Set(exp.points.map((p) => p[0]));
+    const cm = E.envPath(exp);
+    const bad = [];
+    for (let i = 1; i < 300; i++) {
+      const t = i / 300;
+      if (at.has(t)) continue;
+      const a = bez(cm, t), b = E.envValueAt(exp, t);
+      if (a == null || Math.abs(a - b) > 1e-12) bad.push(`${t}: ${a} contro ${b}`);
+    }
+    assert(`disegno e cursore dicono la stessa curva: ${nome}`, bad.length === 0, bad.slice(0, 3).join("; "));
+  }
+  // L'editor non tiene piu' una sua copia delle tangenti.
+  const SG = require("./source-guard.js");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  assert("l'EnvelopeEditor disegna con envPath e legge il cursore con envValueAt",
+    /PGEEnv\.envPath\(\s*exp\s*\)/.test(eeSrc) && /PGEEnv\.envValueAt\(\s*exp\b/.test(eeSrc));
+  assert("…e non calcola tangenti per conto suo",
+    !/function\s+emitGroup\b/.test(eeSrc) && !/1\s*\/\s*dL\s*\+\s*1\s*\/\s*dR/.test(eeSrc) &&
+    !/m\[0\]\s*=\s*delta\[0\]/.test(eeSrc));
+}
+
+/* ── l'interp di un blocco compatto: il modello del motore (#191) ───────────
+   Il motore non ha un interp per blocco. Lo slot 3 di un compatto e' una
+   grafia del tipo GLOBALE: nella lista quello del primo blocco che ne
+   dichiara uno (`extract_interp_type`), nel dict niente. L'editor lo legge
+   cosi' (listInterp, unwrapEnv, expandMixed) e lo scrive cosi': l'interp di
+   UN blocco va sui punti interni del suo pattern (setBlockInterp), il globale
+   dove il motore lo legge (setGlobalInterp, wrapEnv). Che il motore suoni lo
+   stesso lo chiedono test-envelope-eval-parity.js e
+   test-envelope-wrap-parity.js. */
+console.log("\n── l'interp di un blocco compatto (#191) ──");
+{
+  const PAT = [[0, 0], [50, 1], [100, 0]];
+  assert("listInterp: lo slot 3 del primo blocco che ne dichiara uno",
+    E.listInterp([[0, 0], [PAT, 0.5, 2], [PAT, 0.8, 2, "step"], [PAT, 1, 2, "cubic"]]) === "step");
+  assert("…il blocco nudo stesso",
+    E.listInterp([PAT, 1, 2, "cubic"]) === "cubic");
+  assert("…null senza nessuno, e null su cio' che non e' una lista",
+    E.listInterp([[0, 0], [PAT, 1, 2]]) === null && E.listInterp({ type: "cubic", points: [] }) === null &&
+    E.listInterp([PAT, 1, 2, null, "exponential"]) === null);
+  assert("unwrapEnv: la lista col globale del suo blocco",
+    E.unwrapEnv([[0, 0], [PAT, 1, 2, "cubic"]]).interp === "cubic");
+  assert("…il dict col suo type, e lineare senza, qualunque cosa dica un blocco",
+    E.unwrapEnv({ type: "step", points: [[PAT, 1, 2, "cubic"]] }).interp === "step" &&
+    E.unwrapEnv({ time_unit: "absolute", points: [[PAT, 1, 2, "cubic"]] }).interp === "linear");
+
+  const L = E.envExpand([[0, 0], [0.2, 1], [PAT, 1, 2, "step"]]);
+  assert("expandMixed: nella lista lo step del blocco vale anche per i punti nudi",
+    L.points[0][2] === "step" && L.points[1][2] === "step" && L.globalInterp === "step");
+  const D = E.envExpand({ type: "cubic", points: [[0, 0], [0.2, 1], [PAT, 1, 2, "step"]] });
+  assert("…nel dict lo slot 3 non conta: il blocco segue il type",
+    D.points.every((p) => p[2] === "cubic"), JSON.stringify(D.points.map((p) => p[2])));
+  assert("…e il blocco dice l'interp che suona, e lo slot com'e' scritto",
+    D.blocks[0].interp === "cubic" && D.blocks[0].rawInterp === "step");
+  const T = E.envExpand({ type: "cubic", points: [[0, 0], [[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]] });
+  assert("…i tag del pattern sono l'interp del blocco, nelle due forme",
+    T.blocks[0].interp === "step" &&
+    E.envExpand([[0, 0], [[[0, 0, "step"], [50, 1, "linear"], [100, 0]], 1, 2]]).blocks[0].interp === "mixed");
+
+  // blockInterp: i punti interni, l'ultimo no (il suo segmento esce dal ciclo)
+  assert("blockInterp: l'ultimo punto del pattern non conta",
+    E.blockInterp([[[0, 0, "step"], [50, 1, "step"], [100, 0, "cubic"]], 1, 2], "linear") === "step");
+  assert("…senza tag e' il globale", E.blockInterp([PAT, 1, 2, "step"], "cubic") === "cubic");
+
+  // setBlockInterp: un blocco fra altri item → tag sul pattern
+  const items = [[0, 0], [0.2, 1], [PAT, 1, 2]];
+  const r = E.setBlockInterp(items, 2, "step", "cubic", { dict: true });
+  assert("setBlockInterp: i punti interni del pattern prendono il tag, l'ultimo no",
+    eq(r.items[2][0], [[0, 0, "step"], [50, 1, "step"], [100, 0]]) && r.interp === "cubic",
+    JSON.stringify(r));
+  assert("…il resto non si tocca, slot 3 compreso",
+    r.items[0] === items[0] && r.items[1] === items[1] && r.items[2].length === 3);
+  const back = E.setBlockInterp(r.items, 2, "cubic", "cubic", { dict: true });
+  assert("…e scegliere il globale toglie i tag: segue il globale",
+    eq(back.items[2][0], PAT));
+  const conUltimo = E.setBlockInterp([[0, 0], [[[0, 0], [50, 1], [100, 0, "step"]], 1, 2]], 1, "cubic", "linear");
+  assert("…il tag dell'ultimo punto (il segmento in uscita) resta com'e'",
+    eq(conUltimo.items[1][0], [[0, 0, "cubic"], [50, 1, "cubic"], [100, 0, "step"]]));
+  // il blocco solo: il suo interp e' il globale
+  const solo = E.setBlockInterp([[[[0, 0, "step"], [50, 1], [100, 0]], 1, 4]], 0, "cubic", "linear", { dict: false });
+  assert("setBlockInterp sul blocco solo: cambia il globale, scritto nello slot 3",
+    eq(solo.items, [[PAT, 1, 4, "cubic"]]) && solo.interp === "cubic", JSON.stringify(solo));
+  const soloDict = E.setBlockInterp([[PAT, 1, 4]], 0, "step", "cubic", { dict: true });
+  assert("…nel dict il globale e' il type: lo slot 3 non si aggiunge",
+    eq(soloDict.items, [[PAT, 1, 4]]) && soloDict.interp === "step");
+  const soloLin = E.setBlockInterp([[PAT, 1, 4]], 0, "linear", "cubic", { dict: false });
+  assert("…e linear senza slot 3 resta senza", eq(soloLin.items, [[PAT, 1, 4]]) && soloLin.interp === "linear");
+
+  // setGlobalInterp: lo slot 3 dichiarato segue il globale, quello assente resta assente
+  const G = [[0, 0], [PAT, 0.5, 2, "cubic"], [PAT, 1, 2, "step"], [[[0, 1], [100, 0]], 1.5, 2]];
+  const g2 = E.setGlobalInterp(G, "linear");
+  assert("setGlobalInterp: ogni slot 3 dichiarato dice il globale nuovo",
+    g2[1][3] === "linear" && g2[2][3] === "linear" && g2[3].length === 3 && g2[0] === G[0]);
+  assert("…e niente da cambiare: lo stesso oggetto", E.setGlobalInterp(g2, "linear") === g2);
+
+  // wrapEnv con un blocco: la forma che dice il globale
+  const cp = (items, interp, like) => E.wrapEnv(E.resugarBPGroups(items, interp || "linear"), interp, like);
+  const rt = (x) => { const w = E.unwrapEnv(x); return cp(E.desugarBPGroups(w.items), w.interp, x); };
+  const LISTA = [[0, 0], [0.2, 1], [PAT, 1, 2, "step"]];
+  assert("wrapEnv: la lista che dice gia' il globale resta lista (niente migrazione)",
+    eq(rt(LISTA), LISTA), JSON.stringify(rt(LISTA)));
+  assert("…il blocco nudo cubico, aperto e committato, resta il blocco cubico",
+    eq(rt([PAT, 1, 3, "cubic"]), [[PAT, 1, 3, "cubic"]]), JSON.stringify(rt([PAT, 1, 3, "cubic"])));
+  const DICT = { type: "cubic", points: [[0, 0], [PAT, 1, 2, "step"]] };
+  assert("…il dict resta dict, slot 3 ignorato compreso", eq(rt(DICT), DICT), JSON.stringify(rt(DICT)));
+  assert("…una lista senza slot 3 col globale non lineare diventa dict",
+    eq(E.wrapEnv([[0, 0], [PAT, 1, 2]], "cubic", [[0, 0], [PAT, 1, 2]]), { type: "cubic", points: [[0, 0], [PAT, 1, 2]] }));
+  assert("…un dict portato a linear torna lista se la lista lo dice",
+    eq(E.wrapEnv([[0, 0], [PAT, 1, 2]], "linear", { type: "cubic", points: [] }), [[0, 0], [PAT, 1, 2]]));
+  assert("…e resta dict se la lista direbbe un altro globale",
+    eq(E.wrapEnv([[0, 0], [PAT, 1, 2, "step"]], "linear", { type: "cubic", points: [] }),
+       { type: "linear", points: [[0, 0], [PAT, 1, 2, "step"]] }));
+  /* Togliere il blocco che nella lista dichiarava il globale non cambia il
+     tipo di tutto il resto: l'editor tiene il globale, e il commit lo scrive
+     nel dict. */
+  const senza = E.desugarBPGroups(E.unwrapEnv(LISTA).items).slice(0, 2);
+  assert("…togliere il blocco del globale non lo perde",
+    eq(cp(senza, E.unwrapEnv(LISTA).interp, LISTA), { type: "step", points: [[0, 0], [0.2, 1]] }));
+
+  // il blocco di "add loop": niente slot 3, segue il globale
+  const nuovo = E.defaultCompactBlock([[0, 0.3]], null, null);
+  assert("defaultCompactBlock: pattern, end_time e n_reps, niente slot 3",
+    nuovo.length === 3, JSON.stringify(nuovo));
+  assert("…aggiunto a una curva cubica, suona cubico come il resto",
+    E.envExpand({ type: "cubic", points: [[0, 0.3], nuovo] }).blocks[0].interp === "cubic");
+
+  // fmtCompact: lo slot 3 null davanti a una distribuzione resta al suo posto
+  assert("fmtCompact: un interp null davanti alla distribuzione resta null",
+    E.fmtCompact([PAT, 1, 2, null, "exponential"]) === "[[[0, 0], [50, 1], [100, 0]], 1, 2, null, 'exponential']",
+    E.fmtCompact([PAT, 1, 2, null, "exponential"]));
+  assert("…e si rilegge con la distribuzione nello slot 4",
+    E.parseEnvLiteral(E.fmtCompact([PAT, 1, 2, null, "exponential"]))[4] === "exponential");
+
+  /* insertPatternPoint: il punto che il doppio click mette dentro un loop.
+     Da #191 l'interp di un blocco sono i tag dei punti del suo pattern
+     (setBlockInterp), quindi un punto nuovo senza tag seguiva il globale: il
+     doppio click su un blocco `step` dentro una curva cubica rendeva cubica la
+     meta' del segmento dopo il punto, e il blocco `mixed`. Il punto prende il
+     tipo del punto prima, come il breakpoint nudo inserito in una zona. */
+  const STEP_PAT = [[0, 0, "step"], [50, 1, "step"], [100, 0]];
+  const ins = E.insertPatternPoint(STEP_PAT, 25, 0.5);
+  assert("insertPatternPoint: il punto va al suo posto in x, e torna l'indice",
+    ins.index === 1 && ins.pattern.length === 4 && ins.pattern[1][0] === 25, JSON.stringify(ins));
+  assert("…e prende il tag del punto prima: le due meta' del segmento restano step",
+    eq(ins.pattern[1], [25, 0.5, "step"]), JSON.stringify(ins.pattern));
+  assert("…cosi' il blocco resta step dentro la curva cubica",
+    E.blockInterp([ins.pattern, 1, 2], "cubic") === "step");
+  assert("…e il pattern di prima non si tocca (l'undo lo ritrova com'era)",
+    eq(STEP_PAT, [[0, 0, "step"], [50, 1, "step"], [100, 0]]));
+  assert("dopo un punto senza tag: niente tag, segue il globale come il segmento che spezza",
+    eq(E.insertPatternPoint(PAT, 25, 0.5).pattern[1], [25, 0.5]));
+  assert("dopo l'ultimo punto: ne prende il tag, cioe' il segmento in uscita che spezza",
+    eq(E.insertPatternPoint([[0, 0], [80, 1, "step"]], 90, 0.2).pattern,
+       [[0, 0], [80, 1, "step"], [90, 0.2, "step"]]));
+  assert("prima del primo punto: nessun punto prima, nessun tag",
+    eq(E.insertPatternPoint([[10, 0, "step"], [100, 1]], 5, 0.3),
+       { pattern: [[5, 0.3], [10, 0, "step"], [100, 1]], index: 0 }));
+  assert("un tag che non e' una stringa non si eredita",
+    eq(E.insertPatternPoint([[0, 0, null], [100, 1]], 50, 0.5).pattern[1], [50, 0.5]));
+
+  /* Il cablaggio nell'EnvelopeEditor, che in node non gira: il pannello del
+     loop scrive l'interp per setBlockInterp, il selettore globale per
+     setGlobalInterp ed e' visibile anche con un loop, i setter del pannello
+     non dichiarano piu' uno slot 3 da soli. */
+  const SG = require("./source-guard.js");
+  const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
+  assert("il pannello del loop scrive l'interp per setBlockInterp",
+    /PGEEnv\.setBlockInterp\(\s*rawEnv\b/.test(eeSrc) && /onSetInterp=\{/.test(eeSrc));
+  assert("il selettore globale scrive per setGlobalInterp",
+    /commitWithInterp\(\s*PGEEnv\.setGlobalInterp\(\s*rawEnv\s*,/.test(eeSrc));
+  assert("…ed e' visibile anche con un loop (nascosto solo dove il motore impone lo step)",
+    /const showGlobalInterp\s*=\s*!interpIsFixed\s*;/.test(eeSrc));
+  assert("i setter del pannello non dichiarano lo slot 3 da soli",
+    !/interp\s*\|\|\s*"linear"\s*,\s*dist/.test(eeSrc) && !/cleanPat/.test(eeSrc));
+  /* Il trascinamento di un punto del pattern ricostruiva il blocco con i soli
+     slot 0..4 (`[newPattern, block.raw[1], …, block.raw[4]]`): perdeva `wrap`,
+     lo slot 5, il difetto che #191 ha tolto ai setter del pannello e al menu
+     del segmento. Il blocco si copia, e cambia solo il pattern. */
+  const dragAt = eeSrc.indexOf("function startPatternDrag(");
+  const drag = dragAt < 0 ? "" : eeSrc.slice(dragAt, eeSrc.indexOf("function startLoopEndDrag(", dragAt));
+  assert("il trascinamento di un punto del pattern copia il blocco: nessuno slot si perde",
+    drag.length > 0 && /block\.raw\.slice\(\)/.test(drag) && !/\braw\[[1-5]\]/.test(drag), drag.slice(-400));
+  assert("…e nessun altro punto dell'editor ricostruisce un blocco elencandone gli slot",
+    !/block\.raw\[3\]\s*,\s*block\.raw\[4\]/.test(eeSrc));
+  const dbl = eeSrc.slice(eeSrc.indexOf("function onCanvasDblClick("),
+    eeSrc.indexOf("function rescaleZoneItems("));
+  assert("il doppio click dentro un loop inserisce il punto per insertPatternPoint (il tipo del punto prima)",
+    /PGEEnv\.insertPatternPoint\(\s*pattern\b/.test(dbl) && !/\[\.\.\.pattern,\s*newPt\]/.test(dbl), dbl.slice(0, 200));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

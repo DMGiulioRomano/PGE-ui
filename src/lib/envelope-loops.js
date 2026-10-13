@@ -70,6 +70,28 @@
     return env && typeof env === "object" && !Array.isArray(env) &&
            Array.isArray(env.points) && typeof env.type === "string";
   }
+  /* L'interp globale di una LISTA, come la legge il motore (#191). La lista
+     non ha un `type`: `Envelope.__init__` lo chiede a
+     `EnvelopeBuilder.extract_interp_type`, cioe' al PRIMO blocco compatto che
+     ne dichiara uno nello slot 3 — o al valore stesso, se e' un compatto
+     nudo. Senza nessuno, null (il chiamante ripiega su `linear`). Lo slot 3 di
+     un compatto non diventa un tag dei suoi punti
+     (`_expand_compact_format` tagga solo i punti del pattern che ne hanno uno
+     proprio): e' una delle grafie del tipo GLOBALE, e governa i breakpoint
+     nudi fuori dal blocco e i punti di ogni altro blocco. Il riconoscimento e'
+     quello del motore (`_engineIsCompact`), non quello di cio' che l'editor sa
+     disegnare: decide lui che cosa e' un compatto. */
+  function listInterp(raw) {
+    if (_engineIsCompact(raw)) return typeof raw[3] === "string" ? raw[3] : null;
+    if (!Array.isArray(raw)) return null;
+    for (const it of raw) if (_engineIsCompact(it) && typeof it[3] === "string") return it[3];
+    return null;
+  }
+  /* `interp` e' il tipo globale dell'envelope come lo legge il motore: il
+     `type` del dict, per la lista quello di `listInterp`. Era `linear` per
+     ogni lista, quindi una lista il cui blocco dichiarava `cubic` si apriva
+     lineare — i breakpoint nudi disegnati dritti mentre il motore li suonava
+     cubici — e un commit con quell'interp la riscriveva lineare (#191). */
   function unwrapEnv(env) {
     if (isTypedEnv(env)) {
       return { interp: env.type || "linear", items: env.points.slice() };
@@ -79,11 +101,13 @@
     // l'interp lineare; il motore la accetta comunque —
     // `is_envelope_like` guarda solo che `points` ci sia. Va
     // letta qui, altrimenti chi la dichiara envelope a monte se la vede aprire
-    // vuota, e un commit su quell'editor la svuoterebbe davvero.
+    // vuota, e un commit su quell'editor la svuoterebbe davvero. Il suo tipo e'
+    // `linear` anche con un blocco che ne dichiara un altro: nel dict il motore
+    // legge `breakpoints.get('type', 'linear')`, e lo slot 3 lo ignora.
     if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
       return { interp: "linear", items: env.points.slice() };
     }
-    return { interp: "linear", items: Array.isArray(env) ? env.slice() : [] };
+    return { interp: listInterp(env) || "linear", items: Array.isArray(env) ? env.slice() : [] };
   }
   /* L'inversa di unwrapEnv: un interp globale non lineare esce `{type, points}`,
      ANCHE con 3-tuple o BP group fra gli item (#189). Per il motore il `type`
@@ -97,15 +121,18 @@
      non restava neppure un segno. Il gesto piu' corto per arrivarci era
      setZoneInterp su una curva che l'editor stesso aveva scritto cubica.
 
-     Resta fuori un caso, dichiarato: un blocco compatto fra gli item tiene la
-     lista piatta, come prima. Lì il motore legge l'interp del blocco in due
-     modi che l'editor non rispecchia — nella lista quello del PRIMO blocco
-     diventa il tipo globale (`EnvelopeBuilder.extract_interp_type`), nel dict
-     viene ignorato e governa il `type` — mentre expandMixed lo disegna per
-     blocco. Il dict renderebbe identico il valore per il motore e falso il
-     disegno del blocco appena aggiunto con "add loop": la decisione sta nella
-     issue #191, e la divergenza e' asserita in
-     tests/parity/test-envelope-wrap-parity.js.
+     Con un blocco compatto fra gli item (#191) la lista resta solo se dice
+     gia' lo stesso tipo globale: nella lista il motore lo prende dallo slot 3
+     del primo blocco che ne dichiara uno (`listInterp`), quindi
+     `[[pattern, 1, 4, cubic]]` e' gia' cubico e si riscrive com'e'. Se no,
+     dict: `{type: cubic, points: [[0, 0], [0.2, 1], blocco]}` usciva lista
+     piatta, e dal primo commit i breakpoint nudi e il blocco suonavano
+     lineari. Nel dict lo slot 3 dei blocchi il motore lo ignora, e l'editor
+     lo disegna ignorato (expandMixed); l'interp di UN blocco si scrive sui
+     punti del suo pattern (`setBlockInterp`), che il motore legge uguale nelle
+     due forme. Un dict senza chiavi in piu' non torna lista solo se il tipo e'
+     lineare e la lista lo direbbe: e' la regola di sempre, il dict serve a
+     portare un tipo che la lista non sa scrivere.
 
      `like` e' il valore da cui gli item vengono (facoltativo). Il dict non ha
      solo `type` e `points`: `time_unit` per il motore prevale sul `time_mode`
@@ -135,9 +162,11 @@
       }
       return out;
     }
-    if (!nonLinear) return items;
-    if (items.some(isCompactBlock)) return items;
-    return { type: interp, points: items.slice() };
+    if (!items.some(isCompactBlock)) return nonLinear ? { type: interp, points: items.slice() } : items;
+    const g = nonLinear ? interp : "linear";
+    const likeDict = !!like && typeof like === "object" && !Array.isArray(like);
+    if ((listInterp(items) || "linear") === g && (!likeDict || !nonLinear)) return items;
+    return { type: g, points: items.slice() };
   }
 
   function isCompactBlock(item) {
@@ -887,7 +916,8 @@
 
   /* Lo schizzo di un envelope, per le righe che lo mostrano in piccolo
      (ParamRow in primitives.jsx, CurveRow in EnvelopeSelector.jsx): la strada
-     dell'EnvelopeEditor — unwrapEnv, desugar, expandMixed — per ogni grafia.
+     dell'EnvelopeEditor — envExpand: unwrapEnv, expandMixed — per ogni
+     grafia.
      Le due righe la percorrevano ciascuna a modo suo, e misuravano l'envelope
      come lista: su un dict `{type, points}` — che wrapEnv scrive per ogni
      interp globale non lineare, eccezioni sul punto comprese (#189) — una
@@ -896,14 +926,13 @@
        count:  gli elementi SCRITTI (envCount)
        points: i punti da tracciare, [t, v, interp]
        loops:  quanti blocchi compatti
-     La strada e' quella dell'editor anche sul terzo campo: il dict si rifa'
-     attorno agli item desugarati, come `exp` in EnvelopeEditor.jsx, perche'
-     expandMixed tagghi col `type` i punti senza tipo suo. Passati come lista
-     uscivano `linear`, cioe' lo schizzo perdeva proprio il dato che #189
-     esiste per conservare.                                                  */
+     La strada e' quella dell'editor anche sul terzo campo: gli item dentro
+     un dict col tipo globale, perche' expandMixed tagghi col globale i punti
+     senza tipo suo. Passati come lista uscivano `linear`,
+     cioe' lo schizzo perdeva proprio il dato che #189 esiste per conservare;
+     e da #191 e' envExpand, la stessa funzione dell'editor, non una copia.  */
   function envSketch(env) {
-    const flat = desugarBPGroups(unwrapEnv(env).items);
-    const exp = expandMixed(isTypedEnv(env) ? { type: env.type, points: flat } : flat);
+    const exp = envExpand(env);
     return { count: envCount(env), points: exp.points, loops: exp.blocks.length };
   }
 
@@ -920,27 +949,68 @@
   }
 
   /* ---------- espansione: envelope misto → punti renderizzabili ----------
+     Lo specchio di `EnvelopeBuilder.parse` piu' il tipo globale che
+     `Envelope.__init__` gli mette sopra: gli stessi punti, negli stessi
+     istanti, con l'interp che il motore da' a ciascun segmento.
      Output:
-       points: [[t, v], …]              — utili a tracciare la curva
-       cycles: [{ blockIdx, cycleIdx, start, end, points: [[t,v],…] }, …]
-       blocks: [{ index, start, end, nReps, interp, dist, pattern,
-                  cycles: [...], originalIdx }]                                */
+       points: [[t, v, interp], …]      — interp = il tipo del segmento che
+                                          PARTE dal punto: il suo tag, o il
+                                          globale
+       cycles: [{ blockIdx, cycleIdx, start, end, points: [[t,v(,type)],…] }, …]
+                                        — i soli punti del pattern, indice per
+                                          indice (le maniglie del 1° ciclo)
+       blocks: [{ index, start, end, nReps, interp, rawInterp, dist, pattern,
+                  cycles: [...], originalIdx }]
+       globalInterp: il tipo globale (#191)
+       perPoint: qualche punto espanso porta un tipo suo — per il motore e'
+                 un segmento per coppia, altrimenti uno solo (vedi envValueAt)
+
+     L'interp di un punto senza tag e' il GLOBALE (#191): il `type` del dict,
+     per la lista lo slot 3 del primo blocco che ne dichiara uno
+     (`listInterp`). Lo slot 3 di un blocco non tagga i suoi punti: nella lista
+     e' il globale solo se e' il primo dichiarato, nel dict non conta niente.
+     Prima ogni ciclo si taggava col suo slot 3 e i breakpoint nudi di una
+     lista `linear`: un blocco `step` dopo due punti nudi si disegnava a
+     gradini e i due punti dritti, e il motore suonava a gradini anche loro;
+     nel dict `cubic` lo stesso blocco si disegnava a gradini e suonava
+     cubico. `block.interp` e' l'interp EFFETTIVO dei segmenti interni del
+     blocco (i tag del pattern, o il globale; "mixed" se non sono uniformi),
+     `block.rawInterp` lo slot 3 com'e' scritto.
+
+     Il resto e' la lettura del builder, anche dove l'editor non ha maniglie:
+       · il punto `{t, v, type?}` e' un punto (`dict_as_list`), e la curva ci
+         passa — si disegna, non si trascina (isBreakpoint);
+       · il blocco comincia dall'ULTIMO punto espanso di quello prima
+         (`current_time = compact_expanded[-1][0]`), non dal suo end_time —
+         con un pattern finito prima di x=100 cade dentro l'ultimo ciclo;
+       · `wrap` (slot 5) aggiunge a fine ciclo un punto col primo y del
+         pattern, se il pattern finisce prima di 100.
+     Su queste tre il disegno raccontava un altro envelope: il cursore, i due
+     punti di un gruppo o di un blocco successivo, e le tangenti della cubica
+     che si calcolano su TUTTI i punti (#190). */
   function expandMixed(env) {
-    // typed envelope wrapping: peel it and tag points with the global interp
-    let globalInterp = "linear";
-    if (isTypedEnv(env)) { globalInterp = env.type || "linear"; env = env.points; }
-    if (isBPGroup(env)) env = [env]; // forma diretta [points, interp]
+    let globalInterp;
+    if (_isDict(env) && Array.isArray(env.points)) {
+      globalInterp = typeof env.type === "string" && env.type ? env.type : "linear";
+      env = env.points;
+    } else {
+      globalInterp = listInterp(env) || "linear";
+    }
+    if (isBareEnv(env)) env = [env]; // forma diretta: il valore E' il gruppo, o il blocco
     const points = [];
     const cycles = [];
     const blocks = [];
+    let perPoint = false;
     let currentTime = 0;
-    if (!Array.isArray(env)) return { points, cycles, blocks };
+    if (!Array.isArray(env)) return { points, cycles, blocks, globalInterp, perPoint };
 
     for (let i = 0; i < env.length; i++) {
       const item = env[i];
-      if (isBreakpoint(item)) {
-        points.push([item[0], item[1], (typeof item[2] === "string" ? item[2] : globalInterp)]);
-        if (item[0] > currentTime) currentTime = item[0];
+      const bp = bpAt(item);
+      if (bp) {
+        if (bp[2] != null) perPoint = true;
+        points.push([bp[0], bp[1], bp[2] != null ? bp[2] : globalInterp]);
+        if (bp[0] > currentTime) currentTime = bp[0];
         continue;
       }
       if (isBPGroup(item)) {
@@ -957,8 +1027,9 @@
             pt = currentTime + DISCONTINUITY_OFFSET;
           }
           const isLast = pi === pts.length - 1;
-          const tag = typeof p[2] === "string" ? p[2] : (isLast ? globalInterp : gInterp);
-          points.push([pt, p[1], tag]);
+          const own = typeof p[2] === "string" ? p[2] : (isLast ? null : gInterp);
+          if (own != null) perPoint = true;
+          points.push([pt, p[1], own != null ? own : globalInterp]);
           if (pt > currentTime) currentTime = pt;
         }
         continue;
@@ -967,15 +1038,17 @@
       const pattern = item[0];
       const endTime = item[1];
       const nReps   = item[2];
-      const interp  = item[3] || "linear";
       const dist    = item[4] || "linear";
+      const wrap    = item.length > 5 && item[5] === true;
       const blockStart = currentTime;
       const T = Math.max(0, endTime - blockStart);
       if (T <= 0 || nReps < 1) continue;
       const cycleDurs = computeCycleDurations(T, nReps, dist);
       const block = {
         index: blocks.length, originalIdx: i,
-        start: blockStart, end: endTime, nReps, interp, dist, pattern,
+        start: blockStart, end: endTime, nReps, dist, pattern,
+        interp: blockInterp(item, globalInterp),
+        rawInterp: typeof item[3] === "string" ? item[3] : null,
         // Non null quando la distribuzione dichiarata non è costruibile: i
         // cicli qui sotto sono disegnati con il ripiego lineare, ma il motore
         // rifiuterebbe questo blocco. Chi disegna può dirlo.
@@ -987,6 +1060,7 @@
         previewFallback: isPreviewFallback(cycleDurs),
         cycles: []
       };
+      const blockPts = [];
       let t = blockStart;
       for (let c = 0; c < nReps; c++) {
         const dur = cycleDurs[c];
@@ -994,22 +1068,296 @@
         const cyclePts = [];
         for (let pi = 0; pi < pattern.length; pi++) {
           const xPct = pattern[pi][0], y = pattern[pi][1];
+          const own = pattern[pi].length >= 3 && typeof pattern[pi][2] === "string" ? pattern[pi][2] : null;
           let pt = cs + (xPct / 100) * dur;
           // discontinuità: primo punto del 1° ciclo se time_offset>0,
           // e primo punto di ogni ciclo successivo
           if (pi === 0 && (c > 0 || blockStart > 0)) pt += DISCONTINUITY_OFFSET;
-          cyclePts.push(pattern[pi].length >= 3 ? [pt, y, pattern[pi][2]] : [pt, y]);
-          points.push([pt, y, (pattern[pi].length >= 3 ? pattern[pi][2] : interp)]);
+          cyclePts.push(own != null ? [pt, y, own] : [pt, y]);
+          if (own != null) perPoint = true;
+          blockPts.push([pt, y, own != null ? own : globalInterp]);
         }
         const cycObj = { blockIdx: block.index, cycleIdx: c, start: cs, end: ce, points: cyclePts };
         cycles.push(cycObj);
         block.cycles.push(cycObj);
         t = ce;
       }
+      // wrap (slot 5): un punto sintetico a fine ciclo col primo y del
+      // pattern, se il pattern finisce prima di x=100 — il loop si chiude.
+      // Poi l'ordine per tempo, stabile come `list.sort`.
+      if (wrap && pattern[pattern.length - 1][0] < 100) {
+        const firstY = pattern[0][1];
+        for (const cyc of block.cycles) blockPts.push([cyc.end - DISCONTINUITY_OFFSET, firstY, globalInterp]);
+        blockPts.sort((a, b) => a[0] - b[0]);
+      }
+      for (const p of blockPts) points.push(p);
       blocks.push(block);
-      currentTime = endTime;
+      // `current_time = compact_expanded[-1][0]`: assegnato, e l'ultimo punto
+      // espanso, non l'end_time.
+      currentTime = blockPts.length ? blockPts[blockPts.length - 1][0] : endTime;
     }
-    return { points, cycles, blocks, globalInterp };
+    return { points, cycles, blocks, globalInterp, perPoint };
+  }
+
+  /* L'interp EFFETTIVO dei segmenti interni di un blocco: il tag di ogni
+     punto del pattern tranne l'ultimo — il cui segmento esce dal ciclo, verso
+     il ciclo dopo o verso cio' che segue il blocco — o, senza tag, il globale.
+     "mixed" se non sono uniformi; un pattern di un punto solo ha un segmento
+     solo, quello in uscita. E' quello che il pannello del loop mostra e il
+     badge scrive (#191): lo slot 3 non lo e', per il motore e' il globale o
+     niente. */
+  function blockInterp(block, interp) {
+    const g = interp || "linear";
+    const pat = isCompactBlock(block) ? block[0] : [];
+    if (!pat.length) return g;
+    const inner = pat.length > 1 ? pat.slice(0, -1) : pat;
+    const effs = inner.map((p) => (p.length >= 3 && typeof p[2] === "string") ? p[2] : g);
+    return effs.every((e) => e === effs[0]) ? effs[0] : "mixed";
+  }
+
+  /* L'interp di UN blocco, scelta dal pannello del loop (#191). Il motore non
+     ha un interp per blocco: lo slot 3 e' una grafia del tipo GLOBALE (il
+     primo dichiarato, nella lista) o niente (nel dict). Quello che legge
+     uguale nelle due forme e' il tag sul punto, quindi l'interp di un blocco
+     sono i tag dei punti interni del suo pattern — tutti tranne l'ultimo, il
+     cui segmento esce dal ciclo e segue il globale, come per il BP group;
+     un tag uguale al globale non si scrive. Cosi' "add loop" su una curva
+     cubica, e poi `step` sul blocco, fa a gradini il blocco e lascia cubico
+     il resto, nelle due forme.
+     L'eccezione e' il blocco che E' tutto l'envelope: li' l'interp del blocco
+     e quello globale sono la stessa cosa, e il pannello cambia il globale —
+     scritto nello slot 3 come la forma compatta lo documenta (`[pattern, 1,
+     4, cubic]`), invece di un tag su ogni punto. Nel dict (`opts.dict`) il
+     globale e' il `type`, e lo slot 3 si tocca solo se c'era, per non
+     lasciarci un tipo che non vale. I tag interni si tolgono: valgono il
+     globale.
+     Torna `{items, interp}`: gli item nuovi e il globale (cambiato solo nel
+     caso del blocco solo), da passare insieme al commit. */
+  function setBlockInterp(items, idx, type, interp, opts) {
+    const g = interp || "linear";
+    const block = Array.isArray(items) ? items[idx] : null;
+    if (!isCompactBlock(block)) return { items, interp: g };
+    const pat = block[0];
+    const last = pat.length - 1;
+    const alone = items.length === 1;
+    const nextPat = pat.map((p, i) => {
+      if (i === last && last > 0) return p;
+      if (alone || type === g) return [p[0], p[1]];
+      return [p[0], p[1], type];
+    });
+    const nb = block.slice();
+    nb[0] = nextPat;
+    if (!alone) return { items: items.map((it, i) => (i === idx ? nb : it)), interp: g };
+    const dict = !!(opts && opts.dict);
+    if (typeof block[3] === "string" || (!dict && type !== "linear")) nb[3] = type;
+    return { items: [nb], interp: type };
+  }
+
+  /* Un punto nuovo nel pattern di un blocco — il doppio click dentro il loop
+     — al suo posto in x, col tipo del punto PRIMA: e' il segmento di quel
+     punto che il nuovo spezza, e le due meta' restano quello che il segmento
+     era, come per il breakpoint nudo inserito in una zona (onCanvasDblClick).
+     Da #191 l'interp di un blocco sono i tag dei punti del suo pattern
+     (setBlockInterp), quindi un punto senza tag seguiva il globale: il doppio
+     click su un blocco `step` dentro una curva cubica rendeva cubica la meta'
+     dopo il punto, e il blocco `mixed`. Dopo l'ultimo punto vale lo stesso
+     (spezza il segmento in uscita, che e' del tag dell'ultimo); prima del
+     primo un punto prima non c'e', e niente tag. Torna `{pattern, index}`: il
+     pattern nuovo — quello di prima non si tocca — e dove sta il punto. */
+  function insertPatternPoint(pattern, x, y) {
+    const pat = Array.isArray(pattern) ? pattern : [];
+    let index = pat.findIndex((p) => p[0] > x);
+    if (index < 0) index = pat.length;
+    const left = index > 0 ? pat[index - 1] : null;
+    const pt = left && typeof left[2] === "string" ? [x, y, left[2]] : [x, y];
+    return { pattern: [...pat.slice(0, index), pt, ...pat.slice(index)], index };
+  }
+
+  /* L'interp globale cambiato dal selettore in testata. Si scrive dove il
+     motore lo legge: nel dict e' il `type` (wrapEnv), nella lista lo slot 3
+     dei blocchi che ne dichiarano uno — il primo e' il globale, gli altri il
+     motore non li guarda, e lasciarli con un tipo che non vale vorrebbe dire
+     che togliere il primo blocco cambierebbe il tipo di tutto il resto. Un
+     blocco senza slot 3 resta senza: segue il globale. */
+  function setGlobalInterp(items, type) {
+    if (!Array.isArray(items)) return items;
+    let changed = false;
+    const out = items.map((it) => {
+      if (!isCompactBlock(it) || typeof it[3] !== "string" || it[3] === type) return it;
+      changed = true;
+      const nb = it.slice();
+      nb[3] = type;
+      return nb;
+    });
+    return changed ? out : items;
+  }
+
+  /* ---------- la cubica come la calcola il motore (#190) ----------
+     Le tangenti di `Envelope._compute_fritsch_carlson_tangents`, su TUTTI i
+     punti espansi dell'envelope — blocchi, gruppi e punti nudi insieme, come
+     fa il motore (`_parse_segments`: `global_tangents` sulla lista intera) —
+     e una funzione sola per il disegno e per il cursore, che prima ne
+     avevano una copia a testa e sbagliavano allo stesso modo:
+       · con DUE punti le tangenti sono zero: l'Hermite diventa lo smoothstep
+         v0 + (v1 - v0)(3s² - 2s³), una S. Il disegno e il cursore davano a
+         entrambi la pendenza del segmento, cioe' una retta: `cubic` e
+         `linear` sembravano la stessa curva, e a t = 0.1 il valore mostrato
+         era il 76% piu' alto di quello che suonava;
+       · le tangenti del disegno si calcolavano per gruppo di breakpoint e per
+         ciclo, ognuno coi suoi estremi: al confine fra un gruppo e un blocco,
+         e fra un ciclo e il successivo, la curva disegnata non era quella
+         suonata;
+       · un segmento di ampiezza zero (la discontinuita') ha pendenza zero,
+         non quella del vicino.
+     Le pendenze e le tangenti interne seguono il motore alla lettera, operazione
+     per operazione: la parita' li confronta su Envelope.evaluate. */
+  function cubicTangents(points) {
+    const n = points ? points.length : 0;
+    const m = new Array(n).fill(0);
+    if (n < 3) return m;
+    const d = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      const t0 = points[i][0], t1 = points[i + 1][0];
+      d[i] = t1 > t0 ? (points[i + 1][1] - points[i][1]) / (t1 - t0) : 0;
+    }
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      const dl = d[i - 1], dr = d[i];
+      m[i] = dl * dr <= 0 ? 0 : 2 / (1 / dl + 1 / dr);
+    }
+    return m;
+  }
+
+  // CubicInterpolation._cubic_hermite, nello stesso ordine di operazioni.
+  function hermite(t, t0, v0, m0, t1, v1, m1) {
+    const h = t1 - t0;
+    if (h === 0) return v0;
+    const s = (t - t0) / h;
+    const s2 = s * s;
+    const s3 = s2 * s;
+    return (2 * s3 - 3 * s2 + 1) * v0 + (s3 - 2 * s2 + s) * h * m0 +
+           (-2 * s3 + 3 * s2) * v1 + (s3 - s2) * h * m1;
+  }
+
+  /* Quanto vale l'envelope espanso (l'uscita di expandMixed) al tempo x, come
+     `Envelope.evaluate`. Due strade, come nel motore:
+       · nessun punto con un tipo suo (`perPoint` falso): UN segmento con il
+         tipo globale. Lo step li' vale l'ultimo punto con t <= x, quindi su
+         una discontinuita' (due punti allo stesso istante) il secondo;
+       · altrimenti un segmento per coppia, ognuno col tipo del punto da cui
+         parte: lo step tiene il valore fino al punto dopo, che vale da li'.
+     Le due differiscono solo esattamente sull'istante di una discontinuita',
+     ed e' per quello che ci sono tutte e due. */
+  function envValueAt(exp, x) {
+    const pts = exp && exp.points;
+    if (!pts || !pts.length) return null;
+    const n = pts.length;
+    if (n === 1) return pts[0][1];
+    const tg = cubicTangents(pts);
+    const lerp = (a, b) => {
+      const alpha = b[0] > a[0] ? (x - a[0]) / (b[0] - a[0]) : 0;
+      return a[1] + alpha * (b[1] - a[1]);
+    };
+    if (!exp.perPoint) {
+      const g = exp.globalInterp || "linear";
+      if (x < pts[0][0]) return pts[0][1];
+      if (x > pts[n - 1][0]) return pts[n - 1][1];
+      if (g === "step") {
+        for (let i = n - 1; i >= 0; i--) if (x >= pts[i][0]) return pts[i][1];
+        return pts[0][1];
+      }
+      for (let i = 0; i < n - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        if (a[0] <= x && x <= b[0]) {
+          return g === "cubic" ? hermite(x, a[0], a[1], tg[i], b[0], b[1], tg[i + 1]) : lerp(a, b);
+        }
+      }
+      return pts[n - 1][1];
+    }
+    const pair = (i) => {
+      const a = pts[i], b = pts[i + 1];
+      if (a[2] === "step") return x >= b[0] ? b[1] : a[1];
+      if (a[2] === "cubic") return hermite(x, a[0], a[1], tg[i], b[0], b[1], tg[i + 1]);
+      return lerp(a, b);
+    };
+    // Un segmento solo (due punti): `NormalSegment.evaluate`, che tiene fuori
+    // dagli estremi e altrimenti chiede alla strategia — anche sull'istante
+    // di un segmento largo zero, dove lo step da' il secondo punto.
+    if (n === 2) {
+      if (x < pts[0][0]) return pts[0][1];
+      if (x > pts[1][0]) return pts[1][1];
+      return pair(0);
+    }
+    if (x <= pts[0][0]) return pts[0][1];
+    if (x >= pts[n - 1][0]) return pts[n - 1][1];
+    for (let i = 0; i < n - 1; i++) {
+      if (pts[i][0] <= x && x <= pts[i + 1][0]) return pair(i);
+    }
+    return pts[n - 1][1];
+  }
+
+  /* Il tracciato della curva, nel dominio (tempo, valore): lo stesso
+     envelope di envValueAt, segmento per segmento, con le stesse tangenti.
+     `M` sul primo punto, poi per ogni segmento:
+       step  → `L` al tempo del punto dopo col valore tenuto, `L` al valore dopo;
+       cubic → `C` coi punti di controllo di Bezier dell'Hermite
+               (t0 + h/3, v0 + h·m0/3), (t1 − h/3, v1 − h·m1/3): in x il
+               tempo e' lineare nel parametro, quindi la Bezier E' l'Hermite;
+       altro → `L`.
+     Il chiamante porta i comandi in pixel; la curva e' decisa qui, una volta
+     sola per disegno e cursore. */
+  function envPath(exp) {
+    const pts = (exp && exp.points) || [];
+    if (!pts.length) return [];
+    const tg = cubicTangents(pts);
+    const out = [{ op: "M", t: pts[0][0], v: pts[0][1] }];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const h = b[0] - a[0];
+      // Senza tipi per-punto ogni punto porta gia' il globale (expandMixed):
+      // un segmento solo o uno per coppia si disegnano uguali.
+      const si = a[2];
+      if (si === "step") {
+        out.push({ op: "L", t: b[0], v: a[1] });
+        out.push({ op: "L", t: b[0], v: b[1] });
+      } else if (si === "cubic" && h > 0) {
+        out.push({ op: "C",
+                   c1: [a[0] + h / 3, a[1] + h * tg[i] / 3],
+                   c2: [b[0] - h / 3, b[1] - h * tg[i + 1] / 3],
+                   t: b[0], v: b[1] });
+      } else {
+        out.push({ op: "L", t: b[0], v: b[1] });
+      }
+    }
+    return out;
+  }
+
+  /* La lettura dell'editor, una sola: l'envelope com'e' scritto → i punti
+     espansi coi loro segmenti. Gli item come li legge il builder, dentro un
+     dict col tipo globale del motore — il `type`, o per la lista
+     `listInterp` — o quello che il motore impone (`imposed`: lo `step` di
+     read_direction, che lo YAML non scrive). La usano l'EnvelopeEditor, gli
+     schizzi delle righe (envSketch) e la parita'.
+     I BP group restano INTERI, e non desugarati come `rawEnv`: il builder
+     sposta di DISCONTINUITY_OFFSET il primo punto di un gruppo che cade
+     sull'istante del punto prima (`_expand_bp_group`), e un breakpoint nudo
+     no — sugli item desugarati lo spostamento si perdeva, il salto era un
+     segmento largo zero, e le tangenti della cubica accanto non erano quelle
+     del motore. Desugarati restano invece gli INDICI: `blocks[].originalIdx`
+     e' la posizione del blocco in `rawEnv` (desugarBPGroups, dove un gruppo
+     conta quanti i suoi punti), l'invariante su cui l'editor poggia. */
+  function envExpand(raw, imposed) {
+    const w = unwrapEnv(raw);
+    const items = isBareEnv(w.items) ? [w.items] : w.items;
+    const exp = expandMixed({ type: imposed || w.interp, points: items });
+    if (Array.isArray(items) && exp.blocks.length) {
+      const at = [];
+      let k = 0;
+      items.forEach((it, i) => { at[i] = k; k += isBPGroup(it) ? it[0].length : 1; });
+      for (const b of exp.blocks) b.originalIdx = at[b.originalIdx];
+    }
+    return exp;
   }
 
   /* ---------- formattazione YAML del formato compatto ---------- */
@@ -1035,7 +1383,11 @@
   function fmtCompact(block) {
     const parts = [fmtPattern(block[0]), fmtNum(block[1]), String(block[2])];
     const interp = block[3], dist = block[4];
+    // Gli slot sono POSIZIONALI: un interp non dichiarato (null) davanti a una
+    // distribuzione resta `null`, o la distribuzione scivolerebbe nello slot
+    // dell'interp e si rileggerebbe come tale.
     if (interp) parts.push(`'${interp}'`);
+    else if (dist) parts.push("null");
     if (dist)   parts.push(fmtDist(dist));
     return "[" + parts.join(", ") + "]";
   }
@@ -1169,8 +1521,16 @@
   };
 
   /* ---------- factory: blocco compatto di default ---------- */
+  /* Il blocco che "add loop" aggiunge: pattern triangolare, end_time 1, quattro
+     cicli, e NIENT'ALTRO. Prima portava `linear` nello slot 3 e nello slot 4:
+     la distribuzione e' il default, ma lo slot 3 e' una grafia del tipo
+     GLOBALE (#191) — nel dict `{type: cubic}` era un `linear` che il motore
+     ignora e lo YAML dichiarava, e in una lista dove nessun blocco ne
+     dichiarava uno era il blocco nuovo a fissare il globale. Senza, il blocco
+     segue il globale come ogni altro segmento senza tipo suo, e il suo interp
+     si sceglie dal pannello (setBlockInterp). */
   function defaultCompactBlock(env, fallbackY, bounds) {
-    // pattern triangolare di default; end_time = 1; n_reps = 4; linear/linear
+    // pattern triangolare di default; end_time = 1; n_reps = 4
     const y0 = fallbackY != null ? fallbackY :
                (Array.isArray(env) && env.length && isBreakpoint(env[env.length - 1])
                 ? env[env.length - 1][1] : 0);
@@ -1183,7 +1543,7 @@
     }
     return [
       [[0, +y0.toFixed(3)], [50, peak], [100, +y0.toFixed(3)]],
-      1, 4, "linear", "linear"
+      1, 4
     ];
   }
 
@@ -1334,8 +1694,10 @@
     wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
-    isTypedEnv, unwrapEnv, wrapEnv,
-    computeCycleDurations, isPreviewFallback, expandMixed, envSketch, envCount,
+    isTypedEnv, unwrapEnv, wrapEnv, listInterp,
+    blockInterp, setBlockInterp, setGlobalInterp, insertPatternPoint,
+    computeCycleDurations, isPreviewFallback, expandMixed, envExpand, envSketch, envCount,
+    cubicTangents, hermite, envValueAt, envPath,
     TIME_DIST_NAMES, timeDistError, TIME_DIST_OVERFLOW_FIX, TIME_DIST_OVERFLOW_WHY,
     INTERP_TYPES, envShapeError,
     fmtEnvInline, fmtCompact, fmtBPGroup, fmtDist, fmtBP, fmtNum,
