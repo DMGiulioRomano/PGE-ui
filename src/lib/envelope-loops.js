@@ -415,6 +415,20 @@
         if (isBreakpoint(p) && p[2] === u.interp) items[u.index] = [p[0], p[1]];
       }
     }
+    /* Un tag uguale al globale e' ridondante solo se l'inviluppo ha comunque
+       un tipo sul punto. Con anche uno solo il motore costruisce un segmento
+       per coppia, senza nessuno un segmento solo (`_parse_segments`:
+       has_per_point_type), e sull'istante esatto di un salto — due punti
+       sullo stesso istante — i due leggono l'altro punto: con step quello
+       all'inizio e quelli in mezzo, con linear e cubic quello in fondo. A
+       t = 0 cade il primo grano. Lo danno una zona (i suoi punti interni hanno sempre il tipo), un tag
+       diverso dal globale, un punto {t, v, type}, un punto del pattern di un
+       blocco col suo tag. */
+    const keepsPerPoint = spans.length > 0 || items.some((it) =>
+      (isBreakpoint(it) && typeof it[2] === "string" && it[2] !== g) ||
+      isBPGroup(it) ||
+      (isDictBreakpoint(it) && typeof it.type === "string") ||
+      (isCompactBlock(it) && it[0].some((p) => Array.isArray(p) && typeof p[2] === "string")));
     const spanAt = new Map(spans.map((sp) => [sp.start, sp]));
     const out = [];
     /* Lo stato di EnvelopeBuilder.parse mentre legge quello che si scrive:
@@ -450,8 +464,9 @@
           return;
         }
       }
-      // run piatto — normalizza via i tag ridondanti (== default globale)
-      run.forEach((p) => emit(typeof p[2] === "string" && p[2] === g ? [p[0], p[1]] : p));
+      // run piatto — normalizza via i tag ridondanti (== default globale),
+      // finche' l'inviluppo resta con un tipo sul punto (keepsPerPoint)
+      run.forEach((p) => emit(keepsPerPoint && typeof p[2] === "string" && p[2] === g ? [p[0], p[1]] : p));
       run = [];
     }
     for (let i = 0; i < items.length; i++) {

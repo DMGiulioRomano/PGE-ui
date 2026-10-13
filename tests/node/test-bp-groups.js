@@ -76,12 +76,19 @@ assert("run di 2 punti cubic → gruppo",
 assert("run misto resta piatto con i tag",
   eq(E.resugarBPGroups([[0, 0, "cubic"], [0.5, 1, "step"], [1, 2]], "linear"),
      [[0, 0, "cubic"], [0.5, 1, "step"], [1, 2]]));
-assert("tag ridondanti (== default globale) normalizzati via",
+assert("tag ridondanti (== default globale) normalizzati via, se resta un tipo sul punto",
+  eq(E.resugarBPGroups([[0, 0, "linear"], [0.5, 1, "step"], [1, 1]], "linear"),
+     [[0, 0], [0.5, 1, "step"], [1, 1]]));
+/* L'ultimo tipo sul punto non si toglie, anche ridondante: senza nessuno il
+   motore costruisce un segmento solo invece di uno per coppia
+   (`_parse_segments`: has_per_point_type), e sull'istante esatto di un
+   salto legge l'altro punto. */
+assert("…l'ultimo tipo sul punto resta, anche se ridondante",
   eq(E.resugarBPGroups([[0, 0, "linear"], [1, 1]], "linear"),
-     [[0, 0], [1, 1]]));
-assert("default globale non-linear: run cubic con global cubic resta piatto",
+     [[0, 0, "linear"], [1, 1]]));
+assert("default globale non-linear: run cubic con global cubic resta piatto, col suo tag",
   eq(E.resugarBPGroups([[0, 0, "cubic"], [1, 1]], "cubic"),
-     [[0, 0], [1, 1]]));
+     [[0, 0, "cubic"], [1, 1]]));
 assert("desugar∘resugar idempotente sugli indici piatti",
   eq(E.desugarBPGroups(E.resugarBPGroups(E.desugarBPGroups(MIXED), "linear")),
      E.desugarBPGroups(MIXED)));
@@ -534,6 +541,20 @@ console.log("\n── il commit sul bordo del salto: zona e punti nudi non si sc
   assert("una zona di due punti che ne perde l'ultimo non c'e' piu': il punto che resta esce nudo",
     eq(commit(S2.slice(0, 3), "linear", SALTO), [[0, 0], [0.5, 1], [0.5, 2]]),
     JSON.stringify(commit(S2.slice(0, 3), "linear", SALTO)));
+
+  /* Il fratello di questo difetto, nello stesso resugar, trovato dal
+     confronto a caso di test-envelope-wrap-parity.js: il tag uguale al
+     globale si toglieva sempre, e se era l'ultimo tipo sul punto il motore
+     passava da un segmento per coppia a un segmento solo. Sull'istante esatto
+     di un salto i due leggono l'altro punto: con linear e cubic in fondo
+     all'inviluppo, con step in cima — a t = 0, dove cade il primo grano — e
+     in mezzo. */
+  const FINE_SALTO = [[0, 1], [0.2, 0.1], { t: 0.3, v: -0.2 }, [0.3, 0.1, "linear"]];
+  assert("un inviluppo che finisce con un salto e un tag ridondante: il commit lo rende identico",
+    eq(rt(FINE_SALTO), FINE_SALTO), JSON.stringify(rt(FINE_SALTO)));
+  const INIZIO_SALTO = { type: "step", points: [[0, 0], [0, 1, "step"], [1, 2]] };
+  assert("…e uno step che comincia con un salto",
+    eq(rt(INIZIO_SALTO), INIZIO_SALTO), JSON.stringify(rt(INIZIO_SALTO)));
 
   // Il paste: il valore d'origine e' quello degli appunti, con la sua struttura.
   const incollato = U.remapEnvY(E.unwrapEnv(SALTO).items, 0, 3, 0, 6);
