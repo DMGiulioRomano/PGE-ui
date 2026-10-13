@@ -386,13 +386,18 @@ body[data-density="compact"] { --lane-h: 44px; --row-h: 22px; }
 
 /* ---------- Buttons ---------- */
 .pge-btn { font-family: var(--font-ui); font-size: 11px; font-weight: 500; height: 24px; padding: 0 10px; border-radius: 4px; border: 1px solid var(--border-default); background: var(--bg-panel); color: var(--fg-1); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.pge-btn:hover { background: var(--bg-hover); }
+.pge-btn:hover:not(:disabled) { background: var(--bg-hover); }
 .pge-btn.ghost { background: transparent; border-color: transparent; color: var(--fg-2); }
-.pge-btn.ghost:hover { background: var(--bg-hover); color: var(--fg-1); }
+.pge-btn.ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg-1); }
 .pge-btn.primary { background: var(--accent); color: var(--fg-on-accent); border-color: transparent; font-weight: 600; }
-.pge-btn.primary:hover { background: var(--accent-hover); }
+.pge-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
 .pge-btn.danger { color: var(--status-error); border-color: rgba(229,72,77,.3); background: rgba(229,72,77,.06); }
 .pge-btn.active { background: var(--accent); color: var(--fg-on-accent); border-color: transparent; }
+/* Un .pge-btn disabilitato si legge dal bottone: senza, il ghost restava
+   identico all'attivo e si illuminava al passaggio (il «file suo» di #205).
+   Il `title` non basta: sui bottoni disabilitati Chrome e Safari non lo
+   mostrano (cfr. envelope_editor.css). */
+.pge-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ---------- Seg ---------- */
 .pge-seg { display: inline-flex; height: 22px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 6px; padding: 1px; }

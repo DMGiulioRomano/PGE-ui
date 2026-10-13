@@ -1052,6 +1052,16 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                 <span />
               </div>
               ) : null}
+              {/* Il perche' del bottone spento, scritto: il `title` di un bottone
+                  disabilitato Chrome e Safari non lo mostrano. */}
+              {stream._import && !fileError && ownFile && !ownFile.file && ownFile.others && ownFile.others.length ? (
+              <div className="pge-prow">
+                <span className="k" />
+                <span />
+                <span className="v own-file-reason" style={{color:"var(--fg-3)", fontSize:10}}>{ownFile.reason}</span>
+                <span />
+              </div>
+              ) : null}
               {stream._import && fileError ? (
               <div className="pge-prow">
                 <span className="k" />

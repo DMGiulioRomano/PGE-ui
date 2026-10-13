@@ -230,6 +230,14 @@ console.log("\n── app.jsx e Inspector: il gesto ──");
   const insp = SG.codeOf(path.join(__dirname, "../../src/components/Inspector.jsx"));
   assert("l'Inspector ha il bottone «file suo» sulla riga file, e mostra il messaggio che torna",
     /onOwnFile\(/.test(insp) && /file suo/.test(insp) && /setFileError\(/.test(insp));
+  /* Il bottone spento: il perche' sta in una riga, non solo nel `title`, che
+     sui bottoni disabilitati Chrome e Safari non mostrano; e .pge-btn ha uno
+     stile per :disabled, o il ghost spento sembrava acceso. */
+  assert("il perche' del bottone spento e' scritto in una riga dell'Inspector",
+    /\{ownFile\.reason\}/.test(insp));
+  const css = fs.readFileSync(path.join(__dirname, "../../styles/editor.css"), "utf8");
+  assert("…e .pge-btn disabilitato si legge dal bottone",
+    /\.pge-btn:disabled\s*\{[^}]*opacity/.test(css) && /\.pge-btn\.ghost:hover:not\(:disabled\)/.test(css));
 
   const iw = fnBody("function importWrites(");
   assert("il messaggio di conflitto nomina il gesto, e non uno «stacca» che non c'e'",
