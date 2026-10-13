@@ -3315,6 +3315,21 @@ console.log("\n── remapEnvY: il copia/incolla fra parametri, con un dominio 
     window.PGEEnv.blockInterp(pasted[0], "cubic") === "step");
   assert("…e la sorgente non si tocca",
     eq(TAGGED, [[[[0, 0, "step"], [50, 1, "step"], [100, 0]], 1, 2]]));
+
+  /* Le grafie che il paste attraversava senza vederle. Il blocco e il gruppo
+     NUDI arrivano da unwrapEnv come i loro elementi, e il punto `{t, v}` non e'
+     un array: passavano com'erano, con le y della sorgente. Confronto, non
+     numeri: la grafia nuda si comporta come la gemella dentro una lista, il
+     dict come il punto array. */
+  const BLK = [[[0, 0], [50, 1, "step"], [100, 0]], 1, 4];
+  const GRP = [[[0, 0.2], [0.5, 1], [1, 0]], "cubic"];
+  for (const [nome, nudo] of [["blocco", BLK], ["gruppo", GRP]]) {
+    const out = R(window.PGEEnv.unwrapEnv(nudo).items, 0, 1, 0, 10);
+    assert(`${nome} nudo: rimappato come lo stesso dentro una lista`,
+      eq(out, R([nudo], 0, 1, 0, 10)[0]), JSON.stringify(out));
+  }
+  assert("punto {t, v}: rimappato come il punto array, tipo compreso",
+    eq(R([{ t: 0, v: 1, type: "step" }], 0, 1, 0, 10), [{ t: 0, v: 10, type: "step" }]));
 }
 
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:

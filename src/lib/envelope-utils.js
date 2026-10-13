@@ -621,7 +621,16 @@
   // giusta per il caso di gran lunga piu' comune (copia e incolla sullo stesso
   // parametro di un altro stream). Il caso finito resta quello di prima.
   // Pura: non muta `items`.
+  //
+  // Ogni grafia di un punto passa di qui, come nel walk sui tempi qui sopra.
+  // Le due nude — il valore E' il blocco, o il gruppo — `unwrapEnv` le rende
+  // come i loro ELEMENTI (pattern, end_time, n_reps; punti, interp), nessuno
+  // dei quali e' un item: il paste di un blocco nudo passava com'era, con le y
+  // della sorgente nel dominio della destinazione e senza richiusura. Si
+  // normalizzano con la regola del modulo (`isBareEnv` + `_asBare`). E il
+  // punto `{t, v}`, che per il motore e' un punto (PGE #234), restava fermo.
   function remapEnvY(items, srcMin, srcMax, dstMin, dstMax) {
+    if (PGEEnv.isBareEnv(items)) return _asBare(remapEnvY([items], srcMin, srcMax, dstMin, dstMax));
     const range = srcMax - srcMin;
     const proportional = Number.isFinite(range) && Number.isFinite(dstMax - dstMin);
     function remap(y) {
@@ -634,6 +643,7 @@
     }
     return items.map(it => {
       if (PGEEnv.isBreakpoint(it)) { const r = it.slice(); r[1] = remap(it[1]); return r; }
+      if (PGEEnv.isDictBreakpoint(it)) return { ...it, v: remap(it.v) };
       if (PGEEnv.isBPGroup(it)) { return [remapEnvY(it[0], srcMin, srcMax, dstMin, dstMax), it[1]]; }
       // Il punto del pattern si copia e se ne cambia la y, come il breakpoint
       // qui sopra: il tag `[x, y, type]` e' l'interp del segmento che ne parte,
