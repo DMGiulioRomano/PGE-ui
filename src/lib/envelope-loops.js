@@ -916,8 +916,8 @@
 
   /* Lo schizzo di un envelope, per le righe che lo mostrano in piccolo
      (ParamRow in primitives.jsx, CurveRow in EnvelopeSelector.jsx): la strada
-     dell'EnvelopeEditor — envExpand: unwrapEnv, desugar, expandMixed — per
-     ogni grafia.
+     dell'EnvelopeEditor — envExpand: unwrapEnv, expandMixed — per ogni
+     grafia.
      Le due righe la percorrevano ciascuna a modo suo, e misuravano l'envelope
      come lista: su un dict `{type, points}` — che wrapEnv scrive per ogni
      interp globale non lineare, eccezioni sul punto comprese (#189) — una
@@ -926,9 +926,9 @@
        count:  gli elementi SCRITTI (envCount)
        points: i punti da tracciare, [t, v, interp]
        loops:  quanti blocchi compatti
-     La strada e' quella dell'editor anche sul terzo campo: gli item
-     desugarati dentro un dict col tipo globale, perche' expandMixed tagghi
-     col globale i punti senza tipo suo. Passati come lista uscivano `linear`,
+     La strada e' quella dell'editor anche sul terzo campo: gli item dentro
+     un dict col tipo globale, perche' expandMixed tagghi col globale i punti
+     senza tipo suo. Passati come lista uscivano `linear`,
      cioe' lo schizzo perdeva proprio il dato che #189 esiste per conservare;
      e da #191 e' envExpand, la stessa funzione dell'editor, non una copia.  */
   function envSketch(env) {
@@ -1334,15 +1334,30 @@
   }
 
   /* La lettura dell'editor, una sola: l'envelope com'e' scritto → i punti
-     espansi coi loro segmenti. Gli item desugarati (un BP group diventa i
-     suoi 3-tuple, gli indici restano quelli di `rawEnv`) dentro un dict col
-     tipo globale del motore — il `type`, o per la lista `listInterp` — o
-     quello che il motore impone (`imposed`: lo `step` di read_direction, che
-     lo YAML non scrive). La usano l'EnvelopeEditor, gli schizzi delle righe
-     (envSketch) e la parita'. */
+     espansi coi loro segmenti. Gli item come li legge il builder, dentro un
+     dict col tipo globale del motore — il `type`, o per la lista
+     `listInterp` — o quello che il motore impone (`imposed`: lo `step` di
+     read_direction, che lo YAML non scrive). La usano l'EnvelopeEditor, gli
+     schizzi delle righe (envSketch) e la parita'.
+     I BP group restano INTERI, e non desugarati come `rawEnv`: il builder
+     sposta di DISCONTINUITY_OFFSET il primo punto di un gruppo che cade
+     sull'istante del punto prima (`_expand_bp_group`), e un breakpoint nudo
+     no — sugli item desugarati lo spostamento si perdeva, il salto era un
+     segmento largo zero, e le tangenti della cubica accanto non erano quelle
+     del motore. Desugarati restano invece gli INDICI: `blocks[].originalIdx`
+     e' la posizione del blocco in `rawEnv` (desugarBPGroups, dove un gruppo
+     conta quanti i suoi punti), l'invariante su cui l'editor poggia. */
   function envExpand(raw, imposed) {
     const w = unwrapEnv(raw);
-    return expandMixed({ type: imposed || w.interp, points: desugarBPGroups(w.items) });
+    const items = isBareEnv(w.items) ? [w.items] : w.items;
+    const exp = expandMixed({ type: imposed || w.interp, points: items });
+    if (Array.isArray(items) && exp.blocks.length) {
+      const at = [];
+      let k = 0;
+      items.forEach((it, i) => { at[i] = k; k += isBPGroup(it) ? it[0].length : 1; });
+      for (const b of exp.blocks) b.originalIdx = at[b.originalIdx];
+    }
+    return exp;
   }
 
   /* ---------- formattazione YAML del formato compatto ---------- */

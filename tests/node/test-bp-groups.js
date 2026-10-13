@@ -438,14 +438,17 @@ console.log("\n── expandMixed sul dict con gruppi: gli indici sono quelli di
   const eeSrc = SG.codeOf(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"));
   assert("l'editor non passa piu' il dict grezzo a expandMixed",
     !/isTypedEnv\(rawEnvRaw\)\s*\?\s*rawEnvRaw\s*:/.test(eeSrc));
-  /* Da #191 la lettura e' una funzione sola, envExpand: gli item desugarati
-     dentro un dict col tipo globale — il `type`, o per la lista lo slot 3 del
-     primo blocco — e l'editor la chiama invece di rifarla. */
+  /* Da #191 la lettura e' una funzione sola, envExpand: gli item dentro un
+     dict col tipo globale — il `type`, o per la lista lo slot 3 del primo
+     blocco — e l'editor la chiama invece di rifarla. I gruppi li legge interi,
+     come il builder (il bordo di un gruppo, sotto in #190), e gli indici dei
+     blocchi li da' in rawEnv: dove nessun gruppo cade sul punto prima e' la
+     lettura degli item desugarati. */
   assert("…ma la lettura condivisa, envExpand, sul valore com'e' scritto",
     /PGEEnv\.envExpand\(\s*rawEnvRaw\b/.test(eeSrc) && !/PGEEnv\.expandMixed\(/.test(eeSrc));
-  assert("envExpand e' gli item desugarati dentro un dict col tipo globale",
+  assert("envExpand, senza un gruppo sul punto prima, e' la lettura degli item desugarati",
     eq(E.envExpand(DICT), E.expandMixed({ type: DICT.type, points: rawEnv })));
-  const exp = E.expandMixed({ type: DICT.type, points: rawEnv });
+  const exp = E.envExpand(DICT);
   assert("originalIdx indicizza un blocco di rawEnv",
     exp.blocks.length === 1 && E.isCompactBlock(rawEnv[exp.blocks[0].originalIdx]),
     JSON.stringify(exp.blocks.map((b) => b.originalIdx)));
@@ -726,6 +729,32 @@ console.log("\n── cubicTangents / envValueAt / envPath (#190) ──");
     JSON.stringify(cmds));
   assert("lo stesso col tipo sul punto",
     eq(E.envPath(E.envExpand([[0, 0.001, "cubic"], [1, 0.016]])).map((c) => c.op), ["M", "C"]));
+
+  /* (review) Il bordo di un gruppo. Il builder sposta di DISCONTINUITY_OFFSET
+     il primo punto di un gruppo che cade sull'istante del punto prima, o
+     prima (`_expand_bp_group`: `t <= current_time`), come il primo punto di un
+     blocco; un breakpoint nudo no. envExpand leggeva gli item DESUGARATI, dove
+     il gruppo e' gia' fatto di breakpoint nudi: lo spostamento si perdeva, il
+     segmento del salto era largo zero — pendenza zero invece di 1e6 — e le
+     tangenti della cubica accanto non erano quelle del motore (0.29 di
+     scarto a t = 0.7 qui sotto: lo chiede test-envelope-eval-parity.js). */
+  const BORDO = [[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], "cubic"]];
+  const eb = E.envExpand(BORDO);
+  assert("il primo punto di un gruppo sull'istante del punto prima si sposta come nel builder",
+    eb.points.length === 4 && eb.points[1][0] === 0.5 && eb.points[2][0] === 0.5 + E.DISCONTINUITY_OFFSET,
+    JSON.stringify(eb.points));
+  assert("…e la tangente della cubica li' vede il salto (non zero)",
+    E.cubicTangents(eb.points)[2] > 3.9, JSON.stringify(E.cubicTangents(eb.points)));
+  assert("…un breakpoint nudo sullo stesso istante invece resta dov'e' (il builder non lo sposta)",
+    E.envExpand([[0, 0], [0.5, 1], [0.5, 2, "cubic"], [1, 3]]).points[2][0] === 0.5);
+  /* Letto il gruppo intero, gli indici dei blocchi restano quelli di rawEnv,
+     che e' desugarato: l'invariante su cui l'editor poggia (blockByOrig). */
+  const GB = [[[[0, 0], [0.2, 1], [0.3, 0.5]], "cubic"], [[[0, 1], [100, 0]], 1, 2]];
+  const rawGB = E.desugarBPGroups(E.unwrapEnv(GB).items);
+  const expGB = E.envExpand(GB);
+  assert("…e con un gruppo prima di un blocco originalIdx indicizza ancora rawEnv",
+    expGB.blocks.length === 1 && expGB.blocks[0].originalIdx === 3 && E.isCompactBlock(rawGB[3]),
+    JSON.stringify(expGB.blocks.map((b) => b.originalIdx)));
 
   /* Disegno e cursore: la stessa curva. La Bezier di envPath, valutata come
      la traccia l'SVG, deve dare i valori di envValueAt dove il disegno ne ha

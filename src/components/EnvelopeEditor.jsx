@@ -667,11 +667,13 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
      quello che si SCRIVE resta `globalInterp`, perche' lo step imposto il
      YAML non lo porta. */
   const drawInterp = interpIsFixed ? defaultInterp : (globalInterp || "linear");
-  /* La lettura e' una sola, envExpand (envelope-loops.js): gli item
-     desugarati — blocks.originalIdx deve indicizzare rawEnv, e con i gruppi
-     gli indici nativi divergerebbero — dentro un dict col tipo globale, cosi'
-     expandMixed tagga col globale i punti senza tipo suo, in ogni forma. Gli
-     schizzi delle righe (envSketch) e la parita' leggono per la stessa via. */
+  /* La lettura e' una sola, envExpand (envelope-loops.js): gli item come li
+     legge il builder, BP group interi — il primo punto di un gruppo che cade
+     sul punto prima il motore lo sposta, un breakpoint nudo no — dentro un
+     dict col tipo globale, cosi' expandMixed tagga col globale i punti senza
+     tipo suo, in ogni forma; e blocks.originalIdx tradotto negli indici di
+     rawEnv, che e' desugarato. Gli schizzi delle righe (envSketch) e la
+     parita' leggono per la stessa via. */
   const exp = useMemoEE(() => {
     if (!rawEnvRaw) return { points: [], cycles: [], blocks: [], globalInterp: drawInterp, perPoint: false };
     return PGEEnv.envExpand(rawEnvRaw, interpIsFixed ? defaultInterp : null);

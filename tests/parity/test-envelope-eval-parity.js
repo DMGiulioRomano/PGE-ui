@@ -242,6 +242,13 @@ const CORPUS = [
   ["un pattern che finisce prima di 100, e il blocco dopo comincia li'",
     [[[[0, 0], [60, 1]], 0.5, 2], [[[0, 0.5], [100, 0]], 1, 2]], true],
   ["wrap: il ciclo si chiude sul primo y", [[[0, 0], [50, 1]], 1, 3, "linear", "linear", true], true],
+  // Il primo punto di un gruppo sull'istante del punto prima: il builder lo
+  // sposta di DISCONTINUITY_OFFSET (`_expand_bp_group`), e le tangenti della
+  // cubica vedono il salto. Gli item desugarati lo perdevano.
+  ["un gruppo cubico che comincia sull'istante del punto prima",
+    [[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], "cubic"]], true],
+  ["…e sull'istante dell'ultimo punto di un blocco",
+    [[[[0, 0], [100, 1]], 0.5, 2], [[[0.5, 0], [0.75, 1], [1, 0.2]], "cubic"]], true],
   ["il punto {t, v}", [{ t: 0, v: 0 }, { t: 0.5, v: 1, type: "cubic" }, { t: 1, v: 0.25 }], true],
   ["distribuzione temporale, cubica", [[[0, 0], [50, 1], [100, 0]], 1, 4, "cubic", "exponential"], true],
   // Gli step: un segmento solo o uno per coppia

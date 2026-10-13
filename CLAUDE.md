@@ -3148,7 +3148,7 @@ curve that isn't there — and a BP group in the list put `NaN` in its polyline.
 They all read through `unwrapEnv` now: the two sparklines through the editor's
 own path (`unwrapEnv` → `desugarBPGroups` → `expandMixed`), written once as
 `PGEEnv.envSketch` so the two rows can't drift apart again — and the editor's
-path down to the third field: the desugared items inside a dict carrying the
+path down to the third field: the items inside a dict carrying the
 global type, or `expandMixed` tags the untyped points `linear` and the sketch
 loses the very `type` this section is about. Since #191 that path is one
 function, `PGEEnv.envExpand`, which the editor's `exp` and `envSketch` both
@@ -3216,10 +3216,18 @@ the engine plays are one reading now, written once in `envelope-loops.js`
 (`window.PGEEnv`):
 
 - **`envExpand(raw, imposed)`** — the editor's one reading: `unwrapEnv` →
-  `desugarBPGroups` → `expandMixed`, inside a dict carrying the engine's global
-  type (or the one the engine imposes: read_direction's `step`, which the YAML
-  doesn't carry). The EnvelopeEditor's `exp`, `envSketch` and the parity suites
-  call it; nobody rebuilds it.
+  `expandMixed`, inside a dict carrying the engine's global type (or the one
+  the engine imposes: read_direction's `step`, which the YAML doesn't carry).
+  The EnvelopeEditor's `exp`, `envSketch` and the parity suites call it;
+  nobody rebuilds it. It reads BP groups **whole**, as the builder does, and
+  not desugared like `rawEnv`: the builder moves a group's first point
+  `DISCONTINUITY_OFFSET` past the previous one when it falls on or before it
+  (`_expand_bp_group`), a bare breakpoint it doesn't — on the desugared items
+  that move was lost, the jump became a zero-width segment and the cubic's
+  tangents beside it weren't the engine's (0.29 off on
+  `[[0, 0], [0.5, 1], [[[0.5, 2], [1, 3]], cubic]]`). The **indices** stay
+  desugared: `blocks[].originalIdx` is translated into `rawEnv`'s (a group
+  counts as many as its points), the invariant the editor rests on.
 - **`expandMixed`** is the mirror of `EnvelopeBuilder.parse` plus the global
   type `Envelope.__init__` puts on top: the same points at the same instants,
   each tagged with the type of the segment that leaves it — its own tag, else
@@ -3311,7 +3319,8 @@ engine, write a block's interp on its pattern**:
 envExpand` and `envPath` against `Envelope.evaluate` over a corpus (two-point
 cubics in both spellings, group/block and cycle boundaries, the four rows of
 #191's table, two blocks, a bare block inside a dict, `wrap`, `{t, v}`, time
-distributions, a discontinuity asked at its exact instant), with a presidio
+distributions, a discontinuity asked at its exact instant, a group starting on
+the instant of the point before it), with a presidio
 that is the old reading itself — expansion, cursor and drawing, frozen in the
 test — required to differ from the engine on the rows that say so.
 `test-envelope-wrap-parity.js` asks the dict with a block, the loop panel
