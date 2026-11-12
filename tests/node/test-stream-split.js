@@ -405,8 +405,15 @@ console.log("\n── app.jsx: lo split da' alla coda un file suo ──");
   /* Il modello qui sopra prende il pointer tagliato: app.jsx deve fare lo
      stesso, e lo stream intero non deve rientrare dalla porta del pointer. */
   assert("...e il pointer della coda e' quello tagliato, con lo start nuovo",
-    /pointer:\s*\{\s*\.\.\.\(sliced\.stream\.pointer\s*\|\|\s*\{\}\),\s*start\s*\}/.test(sp)
+    /\{\s*\.\.\.\(sliced\.stream\.pointer\s*\|\|\s*\{\}\),\s*start\s*\}/.test(sp)
       && !/\.\.\.\(s\.pointer\b/.test(sp), (sp.match(/pointer:\s*\{[^}]*\}/) || [""])[0]);
+
+  /* Con pointer.position (PGE #312) la posizione e' scritta: la coda la
+     riprende dal pointer tagliato, SENZA uno start accanto — sarebbe un
+     errore del motore — e senza chiedere il sidecar. */
+  assert("con pointer.position la coda non riceve start, e il sidecar non serve",
+    /pointer:\s*start === undefined\s*\?\s*\{\s*\.\.\.\(sliced\.stream\.pointer\s*\|\|\s*\{\}\)\s*\}/.test(sp)
+      && /positionEnv != null\)\) \{\s*cuts\.push\(\{ s, start: undefined, exact: true \}\);\s*continue;/.test(sp));
 
   /* Il quarto rifiuto (il file condiviso) viene con gli altri tre: prima di
      ogni giro di rete, e prima dell'allocazione. */

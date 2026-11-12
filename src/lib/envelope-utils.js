@@ -300,14 +300,47 @@
     return [];
   }
 
+  // Gli envelope dentro `maps:` (PGE #310): `r` e `clock` di una mappa possono
+  // essere envelope sui tempi dello stream, e seguono il suo `time_mode` come
+  // ogni altro — quindi un resize o un taglio li deve portare con se', o
+  // restano nel vecchio riferimento temporale mentre il resto si sposta. Le
+  // mappe vivono nello `_extra` dello stream (yaml-bridge non le modella), con
+  // nomi liberi: per questo hanno un cammino loro, come deviation_probability,
+  // invece di una riga `wf` per chiave.
+  const MAP_ENV_KEYS = ["r", "clock"];
+  function _isMapEnv(v) {
+    return Array.isArray(v) || (v != null && typeof v === "object" && Array.isArray(v.points));
+  }
+  function _applyMapEnvs(maps, fn) {
+    if (!maps || typeof maps !== "object" || Array.isArray(maps)) return maps;
+    return Object.fromEntries(Object.entries(maps).map(([name, spec]) => {
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) return [name, spec];
+      const out = { ...spec };
+      for (const k of MAP_ENV_KEYS) if (_isMapEnv(spec[k])) out[k] = fn(spec[k]);
+      return [name, out];
+    }));
+  }
+  function _mapEnvs(maps) {
+    if (!maps || typeof maps !== "object" || Array.isArray(maps)) return [];
+    const out = [];
+    for (const spec of Object.values(maps)) {
+      if (!spec || typeof spec !== "object") continue;
+      for (const k of MAP_ENV_KEYS) if (_isMapEnv(spec[k])) out.push(spec[k]);
+    }
+    return out;
+  }
+
   // `fn` riceve (envelope, domain): il dominio è della singola chiave, non
   // dello stream, e solo read_direction ne ha uno che non sia il continuo.
   function _applyEnvFields(stream, fn) {
     const wf = (obj, key, domain) => obj[key] != null ? { [key]: fn(obj[key], domain) } : {};
     const dp = stream.deviationProbability;
     const deviationProbWalk = Array.isArray(dp) || (dp && typeof dp === "object");
+    const maps = stream._extra && stream._extra.maps;
+    const mapsWalk = _mapEnvs(maps).length > 0;
     return {
       ...stream,
+      ...(mapsWalk ? { _extra: { ...stream._extra, maps: _applyMapEnvs(maps, fn) } } : {}),
       ...wf(stream, "densityEnv"),
       ...wf(stream, "fillFactorEnv"),
       ...wf(stream, "distributionEnv"),
@@ -321,13 +354,16 @@
         ...wf(stream.grain, "durationRangeEnv"),
         // read_direction: dominio {-1, +1}, non un continuo (PGE #207).
         ...wf(stream.grain, "readDirectionEnv", "direction"),
+        // grain.iot (PGE #311): l'attesa fino al grano successivo, un envelope
+        // nel tempo dello stream come grain.duration.
+        ...wf(stream.grain, "iotEnv"),
         // grain.envelope.curve: blend/morph curve, array or {type,points} —
         // both handled by rescaleEnvArray/truncateEnvArray.
         ...(stream.grain.envelope && typeof stream.grain.envelope === "object" && !Array.isArray(stream.grain.envelope)
           ? { envelope: { ...stream.grain.envelope, ...wf(stream.grain.envelope, "curve") } }
           : {}),
       } : stream.grain,
-      pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv"), ...wf(stream.pointer, "offsetRangeEnv") } : stream.pointer,
+      pointer: stream.pointer ? { ...stream.pointer, ...wf(stream.pointer, "speedRatioEnv"), ...wf(stream.pointer, "loopStartEnv"), ...wf(stream.pointer, "loopDurEnv"), ...wf(stream.pointer, "loopEndEnv"), ...wf(stream.pointer, "offsetRangeEnv"), ...wf(stream.pointer, "positionEnv") } : stream.pointer,
       pitch:   stream.pitch   ? { ...stream.pitch,   ...wf(stream.pitch,   "valueEnv"), ...wf(stream.pitch, "rangeEnv") } : stream.pitch,
       ...(deviationProbWalk ? { deviationProbability: _applyDeviationProb(dp, fn) } : {}),
       voices:  stream.voices  ? {
@@ -431,15 +467,18 @@
       stream.grain    && stream.grain.durationEnv,
       stream.grain    && stream.grain.durationRangeEnv,
       stream.grain    && stream.grain.readDirectionEnv,
+      stream.grain    && stream.grain.iotEnv,
       stream.grain    && stream.grain.envelope && stream.grain.envelope.curve,
       stream.pointer  && stream.pointer.speedRatioEnv,
       stream.pointer  && stream.pointer.loopStartEnv,
       stream.pointer  && stream.pointer.loopDurEnv,
       stream.pointer  && stream.pointer.loopEndEnv,
       stream.pointer  && stream.pointer.offsetRangeEnv,
+      stream.pointer  && stream.pointer.positionEnv,
       stream.pitch    && stream.pitch.valueEnv,
       stream.pitch    && stream.pitch.rangeEnv,
       ..._deviationProbEnvs(stream.deviationProbability),
+      ..._mapEnvs(stream._extra && stream._extra.maps),
       stream.voices   && stream.voices.numEnv,
       stream.voices   && stream.voices.scatterEnv,
       stream.voices && stream.voices.pitch        && stream.voices.pitch.stepEnv,
@@ -1023,6 +1062,18 @@
   // i bound scalano con lo stesso fattore dei valori — chi era dentro ci resta.
   // Da o verso un'unità ignota non si converte: si scrive solo la chiave.
   // Ritorna un grain nuovo; l'originale non viene mutato.
+  /* Il clamp di grain.iot (PGE #311) nell'unita' di duration_unit: i bound
+   * del motore sono in secondi (un campione - 100 s), il numero scritto no.
+   * Un'espressione passa com'e': i bound li applica il motore, grano per
+   * grano. */
+  function clampGrainIot(grain, v, bounds) {
+    if (typeof v !== "number" || !isFinite(v)) return v;
+    const PB = bounds || window.PGE_BOUNDS || {};
+    if (!PB.grainIot) return v;
+    const unit = (grain && grain.durationUnit) || "seconds";
+    return _clampGrain(v, grainUnitBounds(PB.grainIot, unit));
+  }
+
   function convertGrainDurationUnit(grain, toUnit, opts) {
     const ng = Object.assign({}, grain || {});
     const fromUnit = ng.durationUnit || "seconds";
@@ -1031,8 +1082,12 @@
       const ratio = grainUnitFactor(fromUnit) / grainUnitFactor(toUnit);
       const conv = (v) => (typeof v === "number" && isFinite(v) ? _roundGrain(v * ratio) : v);
       const allBounds = (opts && opts.bounds) || null;
+      // grain.iot (PGE #311) segue la stessa unita': il motore la porta in
+      // secondi con lo stesso fattore (Stream._pre_normalize_grain_iot). Senza,
+      // un `iot: 0.1` restava 0.1 e diventava un decimo di millisecondo.
       const fields = [
         ["duration", "durationEnv", allBounds && allBounds.grainDur],
+        ["iot", "iotEnv", allBounds && allBounds.grainIot],
       ];
       // Con la banda relativa (PGE #267) duration_range non e' una durata ma
       // una frazione della durata: non ha unita', quindi non si converte — e
@@ -1045,7 +1100,16 @@
       if (!grainRangeIsRelative(ng)) {
         fields.push(["durationRange", "durationRangeEnv", allBounds && allBounds.durationRange]);
       }
+      const E = window.PGEExpr;
       for (const [scalarKey, envKey, secBounds] of fields) {
+        // Un'espressione (PGE #308): il fattore dell'unita' il motore lo
+        // applica al RISULTATO, quindi lo stesso testo sotto un'altra unita'
+        // vale un'altra cosa. Si scala il testo, che resta un'espressione.
+        // Solo per la base e per iot: duration_range non accetta espressioni.
+        if (E && scalarKey !== "durationRange" && E.isExpression(ng[scalarKey])) {
+          ng[scalarKey] = E.scaleExpression(ng[scalarKey], ratio);
+          continue;
+        }
         if (typeof ng[scalarKey] === "number" && isFinite(ng[scalarKey])) {
           ng[scalarKey] = _clampGrain(
             conv(ng[scalarKey]),
@@ -1330,6 +1394,7 @@
     grainRangeBounds,
     grainRangeSuffix,
     clampGrainRange,
+    clampGrainIot,
     convertGrainRangeUnit,
     grainRangeSeed,
     grainRangeBadge,

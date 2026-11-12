@@ -202,10 +202,14 @@ parity({
            GRANULAR_PARAMETERS non puo' esprimere, e arriva su /bounds come
            `relative_range`. Che quella strada funzioni lo prova il caso di
            RELATIVE_RANGE_BOUNDS qui sotto, da una base sbagliata. */
-        const OWN_ROUTE = new Set(["pitch", "relativeRange"]);
+        /* `pointerPosition` (PGE #312) e' la terza: i suoi bound AVVOLGONO
+           (WRAPPING_PARAMETERS), e la UI non ha bordo da applicare — un
+           `[0, 1]` mappato da qui taglierebbe un valore che il motore
+           accetta. Lo prova test-expressions-parity.js. */
+        const OWN_ROUTE = new Set(["pitch", "relativeRange", "pointerPosition"]);
         const unmapped = Object.keys(STATIC)
           .filter(k => !OWN_ROUTE.has(k) && !(k in B.ENGINE_PARAM_MAP));
-        assert("ogni clamp di PGE_BOUNDS ha la sua mappatura (pitch e relativeRange a parte)",
+        assert("ogni clamp di PGE_BOUNDS ha la sua mappatura (pitch, relativeRange e pointerPosition a parte)",
           unmapped.length === 0,
           unmapped.join(", ") + " — senza mappatura restano al fallback statico " +
           "anche col bridge acceso");

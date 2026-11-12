@@ -90,6 +90,15 @@
     distribution:{ min: 0, max: 1 },
     speedRatio:  { min: -100, max: 100 },
     grainDur:    { min: 1 / OUTPUT_SR, max: 10 },   // min 1 campione (PGE #158)
+    // grain.iot (PGE #311): l'attesa fino al grano successivo, da un campione
+    // (il minimo lo sostituisce il motore con 1/output_sr, come per grainDur)
+    // a 100 s, l'inverso del pavimento di density.
+    grainIot:    { min: 1 / OUTPUT_SR, max: 100 },
+    // pointer.position (PGE #312): i bound del motore sono [0, 1], ma
+    // AVVOLGONO (WRAPPING_PARAMETERS): 1.25 e' 0.25, e un valore finito non e'
+    // mai fuori. Un clamp a [0, 1] riscriverebbe un valore che il motore
+    // accetta, quindi qui non c'e' bordo — e nessuna mappatura in bounds.js.
+    pointerPosition: { min: -Infinity, max: Infinity },
     // grain_duration.max_range = 1.0 (non max_val): Parameter._calculate_range
     // taglia in silenzio quel che eccede, quindi il fallback dev'essere 1. Il
     // 10 che c'era qui era il max_val di grainDur — il VALORE, non la banda —
@@ -190,8 +199,8 @@
    * preserved under `<block>._extra` and re-emitted on serialize, so engine
    * keys the editor doesn't model yet survive the round trip instead of
    * dying silently. (`loop_duration` is the legacy alias healed at parse.) */
-  const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range"]);
-  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "duration_range_unit", "envelope", "reverse", "read_direction"]);
+  const POINTER_KNOWN = new Set(["start", "speed_ratio", "loop_start", "loop_end", "loop_dur", "loop_duration", "loop_unit", "offset_range", "position"]);
+  const GRAIN_KNOWN   = new Set(["duration", "duration_range", "duration_unit", "duration_range_unit", "envelope", "reverse", "read_direction", "iot"]);
   const PITCH_KNOWN   = new Set(["semitones", "cents", "quarter_tone", "eighth_tone", "ratio", "edo", "value", "range"]);
   const VOICES_KNOWN  = new Set(["num_voices", "scatter", "pitch", "onset_offset", "pointer", "pan"]);
 
@@ -543,6 +552,15 @@
       const rd = pickValueOrEnv(grain.readDirection, grain.readDirectionEnv);
       grainY.read_direction = rd === undefined ? null : rd;
     }
+    // grain.iot (PGE #311): il terzo modo della densita', scelto per
+    // PRESENZA della chiave. Numero, envelope o espressione; la chiave vuota
+    // resta `null` a chiave presente — per il motore e' il modo scelto senza
+    // valore (MissingFieldError), non l'assenza, e farla sparire farebbe
+    // ripartire in silenzio il default `fill_factor: 2`.
+    if (grain.iot !== undefined || grain.iotEnv != null) {
+      const iot = pickValueOrEnv(grain.iot, grain.iotEnv);
+      grainY.iot = iot === undefined ? null : iot;
+    }
     mergeBlockExtras(grainY, grain._extra);
     if (Object.values(grainY).some(v => v !== undefined)) {
       y.grain = stripUndef(grainY);
@@ -563,6 +581,13 @@
       loop_unit:     ptr.loopUnit || undefined,
       offset_range:  ptrOffRange,  // explicit 0 disables implicit jitter — keep it (#50)
     };
+    // pointer.position (PGE #312): la posizione di lettura scritta, al posto
+    // di start e speed_ratio. Presence-keyed come grain.iot: vuota e'
+    // un MissingFieldError del motore, e resta scritta.
+    if (ptr.position !== undefined || ptr.positionEnv != null) {
+      const pos = pickValueOrEnv(ptr.position, ptr.positionEnv);
+      ptrY.position = pos === undefined ? null : pos;
+    }
     mergeBlockExtras(ptrY, ptr._extra);
     if (Object.values(ptrY).some(v => v !== undefined)) {
       y.pointer = stripUndef(ptrY);
@@ -1649,6 +1674,13 @@
             return { readDirection: null, readDirectionEnv: null };
           return { readDirection: rd.scalar, readDirectionEnv: rd.env };
         })(),
+        // grain.iot (PGE #311): presence-keyed, come read_direction — la
+        // chiave vuota resta `null` a chiave presente.
+        ...(() => {
+          if (!("iot" in grain)) return {};
+          const io = unpackValueOrEnv(grain.iot ?? null);
+          return { iot: io.scalar, iotEnv: io.env };
+        })(),
         ...(() => { const ex = collectExtras(y.grain, GRAIN_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pointer: {
@@ -1672,6 +1704,12 @@
         })(),
         ...(ptr.loop_unit != null ? { loopUnit: ptr.loop_unit } : {}),
         ...(() => { const or = unpackValueOrEnv(ptr.offset_range ?? null); return or.scalar != null || or.env ? { offsetRange: or.scalar, offsetRangeEnv: or.env } : {}; })(),
+        // pointer.position (PGE #312): presence-keyed come grain.iot.
+        ...(() => {
+          if (!("position" in ptr)) return {};
+          const po = unpackValueOrEnv(ptr.position ?? null);
+          return { position: po.scalar, positionEnv: po.env };
+        })(),
         ...(() => { const ex = collectExtras(y.pointer, POINTER_KNOWN); return ex ? { _extra: ex } : {}; })(),
       },
       pitch: (() => {

@@ -45,6 +45,8 @@
     distribution:       { param: "distribution",        field: "value" },
     speedRatio:         { param: "pointer_speed_ratio", field: "value" },
     grainDur:           { param: "grain_duration",      field: "value" },
+    // grain.iot (PGE #311): il pavimento e' un campione, come grainDur.
+    grainIot:           { param: "grain_iot",           field: "value" },
     durationRange:      { param: "grain_duration",      field: "range" },
     // read_direction (PGE #207): min_val/max_val = -1/+1. I bound da soli non
     // dicono che sono ammessi SOLO i due estremi — quel vincolo sta nella UI
@@ -178,6 +180,11 @@
     const sr = resolveOutputSr(raw);
     if (out.grainDur && sr !== null) {
       out.grainDur = Object.assign({}, out.grainDur, { min: 1 / sr });
+    }
+    // Lo stesso pavimento per grain.iot: il motore lo sostituisce con
+    // 1/output_sr (`_ONE_SAMPLE_FLOOR_PARAMS`).
+    if (out.grainIot && sr !== null) {
+      out.grainIot = Object.assign({}, out.grainIot, { min: 1 / sr });
     }
 
     // Il dominio della banda relativa (PGE #267, `grain.duration_range_unit:

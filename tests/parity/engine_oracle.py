@@ -1121,6 +1121,26 @@ def _bounds_from_ast():
 # OP — constants
 # =============================================================================
 
+def _source_literal(relpath, name):
+    """Un letterale a livello di modulo del motore, letto dall'AST del
+    sorgente senza importarlo; None se il file o il nome non ci sono."""
+    import ast
+    path = Path(ENGINE.root) / relpath
+    if not path.exists():
+        return None
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if any(getattr(t, "id", None) == name for t in targets):
+            try:
+                value = ast.literal_eval(node.value)
+            except ValueError:
+                return None
+            return list(value) if isinstance(value, (tuple, list, set, frozenset)) else value
+    return None
+
+
 @op("constants")
 def _op_constants(args):
     """Le costanti del motore che i mirror JS ricopiano per intero.
@@ -1190,6 +1210,43 @@ def _op_constants(args):
     except OracleError as exc:
         out["default_output_sr_ast"] = None
         out["default_output_sr_ast_error"] = str(exc)
+
+    # Le mappe caotiche (PythonGranularEngine #307, PGE-ui #215/#216): dove
+    # un'espressione vale (`PGEExpr.EXPRESSION_FIELDS`), i modi che escludono
+    # grain.iot e pointer.position, i parametri che avvolgono, e gli intervalli
+    # del catalogo che il catalogo degli envelope usa per la finestra di `r`.
+    # I campi e il catalogo si importano (stdlib); le costanti dei controller
+    # e di parameter_definitions si leggono dall'AST, perche' quei moduli
+    # tirano dentro numpy e il job node della CI non ce l'ha.
+    try:
+        fields = ENGINE.module("pge.expressions.fields")
+        out["expression_fields"] = list(fields.EXPRESSION_FIELDS)
+    except (OracleError, AttributeError) as exc:
+        out["expression_fields"] = None
+        out["expression_fields_error"] = str(exc)
+    try:
+        cat = ENGINE.module("pge.maps.catalog")
+        out["map_types"] = list(cat.MAP_TYPES) + [cat.MAP_TYPE_CUSTOM]
+        out["map_kinds"] = {
+            name: {"r_range": list(k.r_range), "value_range": list(k.value_range)}
+            for name, k in cat.MAP_KINDS.items()}
+    except (OracleError, AttributeError) as exc:
+        out["map_types"] = None
+        out["map_kinds"] = None
+        out["map_kinds_error"] = str(exc)
+    for key, rel, name in (
+            ("iot_exclusive_keys", "src/pge/controllers/density_controller.py",
+             "IOT_EXCLUSIVE_KEYS"),
+            ("position_exclusive_keys",
+             "src/pge/controllers/pointer_controller.py",
+             "POSITION_EXCLUSIVE_KEYS"),
+            ("wrapping_parameters",
+             "src/pge/parameters/parameter_definitions.py",
+             "WRAPPING_PARAMETERS"),
+            ("nan_to_max_parameters",
+             "src/pge/parameters/parameter_definitions.py",
+             "NAN_TO_MAX_PARAMETERS")):
+        out[key] = _source_literal(rel, name)
 
     # Le interpolazioni che il builder ammette (per l'interp di un BP group,
     # PGE #64): `PGEEnv.INTERP_TYPES` le ricopia per `envShapeError`. Il

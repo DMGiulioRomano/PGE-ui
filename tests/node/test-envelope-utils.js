@@ -1420,8 +1420,10 @@ console.log("\n── cablaggio loop_unit (issue #126, poi #149) ──");
       && /if \(u === loopEndSel\) return;/.test(inspSrc)
       && !/value=\{\(stream\.pointer\.loopEnd != null \|\| stream\.pointer\.loopEndEnv != null\) \? "loop_end"/.test(inspSrc));
     assert("i semi dello scalare↔env non sono più un 1 nudo",
-      /cur\.loopDur != null \? cur\.loopDur : loopSeedWhole/.test(inspSrc)
-      && /cur\.loopEnd != null \? cur\.loopEnd : loopSeedWhole/.test(inspSrc)
+      // il seme e' lo scalare solo se e' un numero (PGE-ui #215: un'espressione
+      // vive nello stesso campo, e non va dentro un breakpoint)
+      /typeof cur\.loopDur === "number" \? cur\.loopDur : loopSeedWhole/.test(inspSrc)
+      && /typeof cur\.loopEnd === "number" \? cur\.loopEnd : loopSeedWhole/.test(inspSrc)
       && !/cur\.loopDurEnv\[0\]\[1\]\) \|\| 1/.test(inspSrc)
       && !/cur\.loopEndEnv\[0\]\[1\]\) \|\| 1/.test(inspSrc));
     assert("e il numero mostrato quando la chiave manca è il seme, su entrambe le righe",
@@ -1558,7 +1560,7 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
      contate: e' da li' che la guardia riceve il `mode` che le serve. */
   assert("il no-op non e' una seconda copia dentro toggleMode",
     !/if \(newMode === getMode\(k\)\) return;/.test(inspSrc)
-    && (inspSrc.match(/mode=\{getMode\("(\w+)"\)\} onMode=\{\(m\) => toggleMode\("\1", m\)\}/g) || []).length === 16);
+    && (inspSrc.match(/mode=\{getMode\("(\w+)"\)\} onMode=\{\(m\) => toggleMode\("\1", m\)\}/g) || []).length === 18);  // +grainIot, +position (PGE #311, #312)
   /* …e la guardia riceve anche l'altra meta': `envValue` dice se la curva
      c'e'. Una ParamRow con onMode e senza envValue avrebbe una guardia cieca
      su meta' della domanda — e nessun errore a dirlo. */
@@ -1576,7 +1578,8 @@ console.log("\n── cablaggio scalare↔env: il no-op e il lettore condiviso �
   /* Dodici rami piu' loopSeedFrom, che e' l'involucro con il ripiego del loop:
      tredici letture, nessuna scritta a mano. */
   assert("i dodici rami di toggleMode chiedono al lettore del modulo",
-    (inspSrc.match(/window\.PGEEnv\.firstBreakpointY\(/g) || []).length === 13);
+    // quindici: i rami di grain.iot e pointer.position (PGE #311, #312)
+    (inspSrc.match(/window\.PGEEnv\.firstBreakpointY\(/g) || []).length === 15);
   /* I due Seg di deviation_probability sono il terzo e il quarto con lo stesso
      difetto, e non passano da toggleMode: la guardia e' loro, e la copertura
      sta in test-deviation-probability.js. Qui si guarda solo che ci sia. */
@@ -1685,7 +1688,7 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
      sorgente: `value` e' il numero del campo, `envValue` la curva del mini
      grafico — gli stessi che il render legge dieci righe piu' giu'. */
   assert("…e «gia' scritta» si legge da value/envValue, quelli che la riga disegna",
-    /const written = m === "env" \? envValue != null : typeof value === "number";/.test(handleModeSrc)
+    /const written = m === "env" \? envValue != null : typeof value === "number" \|\| !!\(window\.PGEExpr && window\.PGEExpr\.isExpression\(value\)\);/.test(handleModeSrc)
     && /mode === "scalar" \|\| !envValue \?/.test(primSrc));
 
   /* ── le quattordici righe di Voices: il lettore ────────────────────────── */
@@ -1841,7 +1844,7 @@ console.log("\n── cablaggio scalare↔env: Voices e density ↔ fill_factor 
   /* Le quattro dichiarazioni sono una sola risposta in quattro pezzi: quale
      bottone e' acceso, e se la coppia e' scritta — la seconda meta' serve
      perche' nessuna delle due chiavi e' obbligatoria. */
-  const densNames = ["fillFactorWritten", "densityWritten", "densityUnitSel", "densityUnitWritten"];
+  const densNames = ["iotWritten", "fillFactorWritten", "densityWritten", "densityUnitSel", "densityUnitWritten"];
   const densDecls = densNames.map((n) => lineIn(inspSrc, n));
   assert("le dichiarazioni del bottone acceso di density ↔ fill_factor sono estraibili",
     densDecls.every((d) => d.length > 0),
@@ -2470,7 +2473,8 @@ console.log("\n── cablaggio grain.duration_unit (issue #114) ──");
   // l'intero dominio.
   assert("le manopole di durata hanno step nell'unità in vigore",
     /const grainSteps = GRAIN_STEPS\[grainUnit\] \|\| GRAIN_STEPS\.seconds/.test(inspSrc)
-    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 1
+    // due: grain.duration e grain.iot (PGE #311), nella stessa unita'
+    && (inspSrc.match(/steps=\{grainSteps\}/g) || []).length === 2
     && /const grainRangeSteps = grainRangeRelative \? \[[^\]]+\] : grainSteps;/.test(inspSrc)
     && (inspSrc.match(/steps=\{grainRangeSteps\}/g) || []).length === 1
     && /samples: \[1, 100, 1000, 10000\]/.test(inspSrc));
@@ -2598,7 +2602,8 @@ console.log("\n── cablaggio unità di grain.duration nell'EnvelopeEditor (is
     && /grainDurVis/.test(catSrc) && /grainRangeVis/.test(catSrc));
   assert("il suffisso è quello condiviso con l'Inspector",
     /const grainUnitSuffix = window\.PGEEnvUtils\.grainUnitSuffix\(grainUnit\)/.test(catSrc)
-    && (catSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 1
+    // due: grain.duration e grain.iot (PGE #311), che segue la stessa unita'
+    && (catSrc.match(/unit: grainUnitSuffix, fine: true,/g) || []).length === 2
     && /const grainRangeSuffix = window\.PGEEnvUtils\.grainRangeSuffix\(stream\.grain\)/.test(catSrc)
     && (catSrc.match(/unit: grainRangeSuffix, fine: true,/g) || []).length === 1);
 }

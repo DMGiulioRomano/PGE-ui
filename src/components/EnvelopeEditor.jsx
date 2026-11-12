@@ -18,10 +18,13 @@ const remapEnvY = window.PGEEnvUtils.remapEnvY;
 
 function getNested(obj, path) {return path.reduce((o, k) => o == null ? o : o[k], obj);}
 function patchForPath(stream, path, value) {
+  // A qualunque profondita': gli envelope delle mappe (PGE #310) stanno a
+  // quattro livelli — `_extra.maps.<nome>.r` — e la versione a tre ne
+  // scriveva il terzo, cioe' sostituiva la mappa intera con l'envelope.
+  const set = (obj, i) => ({ ...(obj || {}),
+    [path[i]]: i === path.length - 1 ? value : set((obj || {})[path[i]], i + 1) });
   if (path.length === 1) return { [path[0]]: value };
-  if (path.length === 2) return { [path[0]]: { ...(stream[path[0]] || {}), [path[1]]: value } };
-  const top = stream[path[0]] || {};
-  return { [path[0]]: { ...top, [path[1]]: { ...(top[path[1]] || {}), [path[2]]: value } } };
+  return { [path[0]]: set(stream[path[0]], 1) };
 }
 
 // `fine` è la dichiarazione di precisione della voce di catalogo, non il suo
