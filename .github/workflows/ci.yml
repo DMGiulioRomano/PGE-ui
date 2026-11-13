@@ -186,7 +186,11 @@ jobs:
 
   e2e:
     name: e2e (boot headless dell'editor · Inspector · EnvelopeEditor · undo)
-    runs-on: ubuntu-latest
+    # Fissato a 24.04: `ubuntu-latest` e' passato a 26.04, dove Playwright
+    # 1.56 non installa chromium («does not support chromium on
+    # ubuntu26.04-x64») e il job muore prima del primo test. Si toglie quando
+    # la versione pinnata in tests/e2e/package.json supporta il runner nuovo.
+    runs-on: ubuntu-24.04
     # Stesso tetto del job node. Qui il rischio di appendersi e' concreto: un
     # `page.click` che non aggancia niente, un bridge che non annuncia la
     # porta. I tetti locali ci sono gia' (page.setDefaultTimeout in
