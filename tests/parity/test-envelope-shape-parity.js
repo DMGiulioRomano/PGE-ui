@@ -121,6 +121,38 @@ const CORPUS = [
   // `points` che non e' una lista: il builder la itera lo stesso
   ["points stringa", { points: "abc" }],
   ["points dict", { type: "linear", points: { t: 0, v: 1 } }],
+
+  /* PGE #288: i guard che stanno prima del builder, in `Envelope.__init__` e
+     in `extract_interp_type`, ora nominano la sotto-posizione. */
+  ["points null", { type: "linear", points: null }],
+  ["points numero", { points: 3 }],
+  ["points booleano", { points: true }],
+  ["points stringa vuota", { points: "" }],
+  ["points lista vuota", { type: "cubic", points: [] }],
+  ["points dict vuoto", { points: {} }],
+  ["lista vuota", []],
+  ["type ignoto", { type: "cubicc", points: [[0, 0], [1, 1]] }],
+  ["type null", { type: null, points: [[0, 0], [1, 1]] }],
+  ["type numerico", { type: 5, points: [[0, 0], [1, 1]] }],
+  ["type vuoto", { type: "", points: [[0, 0], [1, 1]] }],
+  ["type di soli spazi", { type: "   ", points: [[0, 0], [1, 1]] }],
+  ["type Step (maiuscola)", { type: "Step", points: [[0, 0], [1, 1]] }],
+  ["type CUBIC", { type: "CUBIC", points: [[0, 0], [1, 1]] }],
+  ["type ' linear ' (spazi attorno)", { type: " linear ", points: [[0, 0], [1, 1]] }],
+  ["points che non si percorre prima del type", { type: "bogus", points: null }],
+  ["type prima del corpo vuoto", { type: "bogus", points: [] }],
+  ["type prima dei guard del builder", { type: "bogus", points: [PAT, 1, true] }],
+  ["slot interp ignoto, compatto diretto", [PAT, 1, 4, "cubicc"]],
+  ["slot interp prima di n_reps", [PAT, 1, true, "cubicc"]],
+  ["slot interp di soli spazi", [PAT, 1, 4, "   "]],
+  ["slot interp vuoto (il default)", [PAT, 1, 4, ""]],
+  ["slot interp Step", [PAT, 1, 4, "Step"]],
+  ["slot interp ignoto in lista", [[0, 0], [PAT, 1, 4, "bogus"]]],
+  ["primo slot null, decide il secondo", [[PAT, 1, 2], [PAT, 2, 2, "bogus"]]],
+  ["slot dopo il primo dichiarato: non si legge", [[PAT, 1, 2, "cubic"], [PAT, 2, 2, "bogus"]]],
+  ["slot interp prima di un elemento sbagliato", [[0, "x"], [PAT, 1, 2, "bogus"]]],
+  ["slot dentro un dict: non si legge", { type: "linear", points: [PAT, 1, 2, "bogus"] }],
+  ["slot dentro un dict, in lista: non si legge", { type: "linear", points: [[PAT, 1, 2, "bogus"]] }],
 ];
 
 const verdicts = async (ask) => {
@@ -181,6 +213,23 @@ parity({
           noField.length === 0, noField.join("\n      "));
         assert("...e i confronti fatti sono tutti i rifiuti, non zero",
           withField.length >= 20, `confrontati ${withField.length}`);
+      },
+    },
+    {
+      label: "il silenzio dichiarato: un dict senza points non e' un envelope (#288)",
+      run: async (ask, assert) => {
+        /* `Envelope({type: linear})` alza `envelope.points` da PGE #288, ma da
+           uno YAML non ci si arriva: `is_envelope_like` di un dict e'
+           `'points' in obj`, e chi non lo e' non si costruisce come envelope.
+           Lo specchio tace li', e questo caso tiene la divergenza in vista:
+           se il motore smettesse di rifiutarlo, o lo specchio parlasse, lo
+           direbbe. */
+        const raw = { type: "linear" };
+        const r = (await ask("build_envelope", { raw })).value;
+        assert("il motore, costruito a mano, rifiuta il dict senza points su envelope.points",
+          r.ok === false && r.field === "envelope.points", JSON.stringify(r));
+        assert("...e la UI tace: da uno YAML quel dict non diventa un envelope",
+          E.envShapeError(raw) === null);
       },
     },
     {

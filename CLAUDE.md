@@ -1497,13 +1497,37 @@ Three things in it are easy to get wrong, and each has its case:
   mirror stays silent — the safe direction, like `power.exponent` in
   `timeDistError`. The parity asks it through `raw_json` (below).
 
-Out of scope, and said: what the engine rejects *outside* the builder (an
-unknown per-point or global interp, a dict without `points` or with a number
-or `null` there, the empty list — that one is `wouldEmptyEnv`'s, PGE #209). A
-string or a mapping under `points` is **not** on that list: the builder
-iterates them (by character, by key), and rejects the first item as an element
-it doesn't recognize — reachable from the Raw tab through
-`deviation_probability`, whose recognition is `'points' in obj`.
+**The guards before the builder are mirrored too** (PGE #288, #212). They used
+to be a bare `KeyError`, `TypeError` and `ValueError` with no field, and were
+declared out of scope here; since PGE #288 `Envelope.__init__` and
+`extract_interp_type` name the sub-position, in this order. In the dict:
+`points` that can't be iterated (`null`, a number, a boolean) → `points`, with
+the dict as written for `value`; a `type` the factory doesn't read → `type`
+(`null` included: a key written and left empty is not the default); an empty
+body → `points`; then the builder. In the list: the interp slot of the compact
+block that becomes the envelope's type — the direct block's, or the first
+block's in the list with a non-`null` slot, recognized on the items *as
+written* — → `compact.interp`, **before** the builder's guards (so
+`[PAT, 1, true, "cubicc"]` is `compact.interp`, not `compact.n_reps`); an empty
+body → `points`; then the builder. A slot the envelope doesn't read (a compact
+inside a dict, or after the first that declares one) is not validated, and the
+engine builds the envelope. The name is judged **the way the factory reads it**,
+not against an exact list (`_factoryReads`, mirror of
+`InterpolationStrategyFactory.canonical`): case and surrounding spaces don't
+matter, so `type: Step` and `' cubic '` render; `''`, `'   '` and an unknown
+name are refused — except an empty compact slot, which reads as the default
+(`interp or DEFAULT_INTERP`). `trim()` strips a little more than `str.strip()`
+(U+FEFF): one name accepted too many, never one too few.
+
+Still out of scope, and said: a dict **without** `points` — `Envelope` built by
+hand rejects it (`envelope.points`), but from a YAML it never becomes an
+envelope (`is_envelope_like` is `'points' in obj`), so the mirror stays quiet
+and the parity suite asserts the divergence; and an unknown per-point interp
+(`envelope.point.type` since PGE #211). A string or a mapping under `points` is
+not refused before the builder: the builder iterates them (by character, by
+key), and rejects the first item as an element it doesn't recognize —
+reachable from the Raw tab through `deviation_probability`, whose recognition
+is `'points' in obj`.
 
 It has two readers. The **Raw tab** (`computeAnnotations`) walks the envelopes
 of the stream through the catalog — `listEnvelopes`, the same list the
@@ -2083,6 +2107,21 @@ The Inspector's `Seg` sits under the `duration_range` row and shows whenever the
 One cost of promoting the key: the **engine's** hash doesn't move (`sort_keys`, and the key was already hashed from `grain._extra`), but the UI's does — `fingerprintStream` hashes the JS object, where `grain._extra.duration_range_unit` became `grain.durationRangeUnit`. One yellow dot, once, only on streams that declare the key; the safe direction, cleared by the first render.
 
 Every grafia converts, and that used to be false. Before PGE #234 the engine's `is_envelope_like` was **narrower than its own builder**: a list of only dict breakpoints or only 3-tuples was not envelope-like, so `scale_raw_param_values` left it alone and the engine read it in seconds whatever unit was declared. The UI mirrored that quirk with an `isEngineEnvelopeLike` gate, and derived a per-curve axis unit from it. The engine now scales every form its builder accepts (and stopped dropping the per-point interp inside a compact block), so the gate, the per-curve unit and the Inspector's warning row are gone — about 140 lines whose only job was to copy a defect. `deviation-probability.js` lost the matching `dictBPOk` parameter for the same reason. **If a future engine change re-narrows that predicate, this is the code that has to come back.**
+
+**The dict form's body is read like the bare list** (PGE #289, #212). A
+`{type, points}` whose `points` is a compact block or a BP group written
+**directly** — the whole body, not one of its items — used to be walked item by
+item by both scalers, so neither converted anything and changing
+`duration_unit` didn't change the sound. Since PGE #299 the engine reads it in
+the declared unit (`_scale_body_y`: compact, then group, then list, the
+builder's order), so `_mapGrainEnvY` goes through one `mapBody` for both
+branches — bare value and dict `points` — exactly as the engine does.
+`test-envelope-utils.js` asks it by comparison (the dict converts as the same
+bare body, the engine's `TestScalaYFormaDict`), including the clamp of
+`convertGrainRangeUnit`, which runs on the same walk. No editor gesture writes
+that spelling (`wrapEnv` puts a group or a block inside a list); the Raw tab
+and a hand-written YAML do. `VARIATION_SEMANTICS_VERSION` didn't move, as for
+#234.
 
 Discrete-domain parameters (`grain.read_direction`): engine bounds are `-1`/`+1` but the domain is the **set** `{-1, +1}` — the engine rejects `0` at parse time. Every place the UI *computes* a y must **snap to the sign**, not clamp to the range. `snapDirection`/`snapForDomain` in `envelope-utils.js` are the single source; the envelope entry carries `domain: "direction"`. Interpolation is `step`, imposed and implicit; the editor hides the interp selectors. The two direction keys (`grain.reverse`, `grain.read_direction`) are an exclusive group the engine refuses (not resolves by priority) — both are kept in state and re-emitted so the author's mistake is visible; the Inspector flags the pair. Absence is preserved: with neither key present the engine uses `auto` mode.
 

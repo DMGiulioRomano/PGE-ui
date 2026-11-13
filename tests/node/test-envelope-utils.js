@@ -3246,6 +3246,53 @@ console.log("\n── le grafie che il walk sui tempi non vedeva (bare / dict) �
       !eq(y, env) && !eq(x, env),
       "y=" + JSON.stringify(y) + " x=" + JSON.stringify(x));
   }
+  // 7b. La forma dict con il corpo NUDO sotto `points` (PGE #289, #212): un
+  //     compatto o un BP group diretti non sono elementi ma il corpo intero, e
+  //     `_mapGrainEnvY` ne scorreva i campi — niente convertito, mentre il
+  //     motore (da PGE #299, `_scale_body_y`) li legge nell'unita' dichiarata
+  //     come la lista nuda. La regola e' il confronto del motore
+  //     (`TestScalaYFormaDict`): il dict converte come la stessa grafia nuda,
+  //     e il walk sui tempi gia' lo faceva.
+  for (const [nome, body] of [["BP group", GROUP], ["blocco", BLOCK],
+                              ["array", PTS], ["dict", DICTS]]) {
+    const typed = { type: "linear", points: body };
+    const y = U.convertGrainDurationUnit({ durationEnv: typed }, "milliseconds").durationEnv;
+    const bare = U.convertGrainDurationUnit({ durationEnv: body }, "milliseconds").durationEnv;
+    assert("{type, points: " + nome + " nudo}: le y convertono come la grafia nuda",
+      eq(y, { type: "linear", points: bare }) && !eq(y, typed), JSON.stringify(y));
+    const x = U.rescaleEnvArray(typed, 2);
+    assert("{type, points: " + nome + " nudo}: e il walk sui tempi lo vede pure",
+      !eq(x, typed), JSON.stringify(x));
+  }
+  {
+    // I quattro casi della issue, misurati su main: ms → s.
+    const ms = (env) => U.convertGrainDurationUnit(
+      { durationUnit: "milliseconds", durationEnv: env }, "seconds").durationEnv;
+    assert("ms→s: compatto sotto points convertito (#212)",
+      eq(ms({ type: "linear", points: [[[0, 50], [100, 100]], 1.0, 2] }),
+         { type: "linear", points: [[[0, 0.05], [100, 0.1]], 1, 2] }));
+    assert("ms→s: BP group sotto points convertito (#212)",
+      eq(ms({ type: "linear", points: [[[0, 50], [1, 100]], "cubic"] }),
+         { type: "linear", points: [[[0, 0.05], [1, 0.1]], "cubic"] }));
+    assert("ms→s: le altre chiavi del dict restano (time_unit)",
+      eq(ms({ type: "linear", time_unit: "absolute", points: [[[0, 50], [1, 100]], "cubic"] }),
+         { type: "linear", time_unit: "absolute", points: [[[0, 0.05], [1, 0.1]], "cubic"] }));
+    // `points` che non e' una sequenza: resta com'e' (lo rifiuta il motore, #288).
+    for (const p of [null, 3])
+      assert("points = " + JSON.stringify(p) + ": nessuna conversione, nessuna eccezione",
+        eq(ms({ type: "linear", points: p }), { type: "linear", points: p }));
+  }
+  {
+    // Lo stesso ramo serve il clamp di convertGrainRangeUnit: absolute → relative
+    // riporta i punti nel dominio della frazione, anche sotto `points` nudo.
+    const PBr = { durationRange: { min: 0, max: 1 }, relativeRange: { min: 0, max: 1 } };
+    const g = U.convertGrainRangeUnit({ durationUnit: "milliseconds", durationRange: null,
+      durationRangeEnv: { type: "linear", points: [[[0, 10], [1, 20]], "cubic"] } },
+      "relative", { bounds: PBr });
+    assert("convertGrainRangeUnit: il clamp raggiunge il BP group sotto points (#212)",
+      eq(g.durationRangeEnv, { type: "linear", points: [[[0, 1], [1, 1]], "cubic"] }),
+      JSON.stringify(g.durationRangeEnv));
+  }
   // 8. E allo stream: il campo con la grafia nuda si muove, l'avviso parla, e
   //    il taglio conta lo scarto invece di restituire una coda che dichiara
   //    ancora la durata della testa.

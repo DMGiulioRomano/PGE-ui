@@ -127,6 +127,14 @@ function EnvParamSelect({ envelopes, value, onChange, compact }) {
 function shapeErrorHint(e) {
   const v = typeof e.value === "number" ? String(e.value) : JSON.stringify(e.value);
   switch (e.where) {
+    case "points":
+      return e.why === "empty"
+        ? "l'envelope non ha punti: un corpo vuoto non e' un envelope"
+        : `\`points\` dev'essere una lista di breakpoint — trovato ${JSON.stringify(e.value.points)}`;
+    case "type":
+      return `il type ${v} dell'envelope non e' fra ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
+    case "compact.interp":
+      return `l'interp ${v} (quarto elemento del blocco compatto, il tipo dell'envelope) non e' fra ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
     case "point":
       return `l'elemento ${e.index} non e' un breakpoint [t, v] / [t, v, type], un BP group ne' un blocco compatto: ${v}`;
     case "group.interp":

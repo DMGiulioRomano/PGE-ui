@@ -150,8 +150,8 @@ distinguerle, ogni run stampa il commit del motore contro cui ha confrontato, e
 lo ripete nel riepilogo. Confrontalo con quello qui sotto.
 
 **Commit del motore contro cui i patti sono verificati:**
-`c120af592b0afcf6740cead07a65f8c8b096cbf4`
-(«Merge pull request #293 from DMGiulioRomano/claude/jolly-sagan-saqxna»)
+`1188dbcd4d475191559303bdb77cb012d85e7567`
+(«Merge pull request #299 from DMGiulioRomano/claude/determined-allen-rcmt22»)
 
 Questa riga **non è più solo una nota**: `test-fingerprint-parity.js` pretende
 che lo SHA scritto qui sia un antenato del commit contro cui il run ha davvero
@@ -181,7 +181,12 @@ dei pesi delle distribuzioni temporali (PGE #219, fusa con PGE #293): in
 `exponential` e `power` la somma trabocca prima del peso più grande, e lo
 specchio di `timeDistError` la guarda da allora. Su un motore senza quel commit
 `test-time-dist-parity.js` è rossa — la UI avvisa su coppie che lì rendono
-ancora — e la verifica dello SHA qui sopra dice perché.
+ancora — e la verifica dello SHA qui sopra dice perché. Fra `c120af5` (il
+merge di PGE #293) e il commit qui sopra sono entrati i guard col campo prima
+del builder (PGE #288, fusa con PGE #299): `envelope.points`, `envelope.type`,
+`envelope.compact.interp`, che `envShapeError` rispecchia da #212. Su un motore
+senza quel commit quei corpi sono KeyError, TypeError e ValueError nudi, e
+`test-envelope-shape-parity.js` è rossa sul campo che manca.
 
 Se il commit del run è più recente e la parità è caduta, il sospetto principale
 è una modifica del motore: guarda il suo CHANGELOG fra quel commit e quello del
