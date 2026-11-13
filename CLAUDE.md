@@ -1519,6 +1519,33 @@ name are refused — except an empty compact slot, which reads as the default
 (`interp or DEFAULT_INTERP`). `trim()` strips a little more than `str.strip()`
 (U+FEFF): one name accepted too many, never one too few.
 
+**And the global type is read by its canonical name** (#214, PGE #300/#301).
+Since PGE #301 `Envelope.type` is the registry key
+(`InterpolationStrategyFactory.canonical`), so `type: Cubic`, `' cubic '` and a
+compact slot `'CUBIC'` play the cubic of `cubic` — before, the engine kept the
+name as written and the Fritsch-Carlson branch, comparing it literally, played a
+flat smoothstep. The editor kept it as written too, and `envValueAt`/`envPath`
+compare `"cubic"`/`"step"` literally, so it drew and read those spellings as
+`linear`: the only one of the three readers (engine, SV export, editor) still
+diverging. `PGEEnv.canonicalInterp` is the mirror of `canonical` — trim and
+lower-case, **only** when the result is in `INTERP_TYPES`; otherwise the name
+stays as written, because a name the engine refuses is for `envShapeError` to
+accuse, not for the drawing to hide. It is applied in one place, `unwrapEnv` /
+`listInterp` (so `envExpand`, the readout, `envSketch` and the loop panel all
+follow), plus `expandMixed`'s dict branch for direct callers, the freeze cut and
+the split (`truncateEnvArray` / `sliceEnvArray` read the dict's `type` as the
+inherited interp of the bare points), `setGlobalInterp` and the slot-3 note.
+It covers the **global** type only: the per-point interp, a BP group's, the
+`interp` of `chord_progression` and `grain.read_direction`'s are still compared
+literally by the engine, and stay literal here (`_groupError` is their mirror).
+**The commit keeps the source's spelling** when it says the same type:
+`wrapEnv` writes `type: Cubic` back, not `cubic` — for the engine the same
+envelope, for the fingerprint not (a yellow dot on a fresh stem); a *changed*
+type is written canonical. Same rule as the other dict keys `wrapEnv(items,
+interp, like)` already keeps. Pinned in `test-bp-groups.js` and, against the
+engine, in `test-envelope-eval-parity.js` — red against an engine without #301,
+on purpose.
+
 Still out of scope, and said: a dict **without** `points` — `Envelope` built by
 hand rejects it (`envelope.points`), but from a YAML it never becomes an
 envelope (`is_envelope_like` is `'points' in obj`), so the mirror stays quiet
