@@ -19,6 +19,11 @@
  *     lista quello del primo blocco che lo dichiara e' il tipo globale
  *     (`extract_interp_type`), nel dict e' ignorato. L'editor lo disegnava per
  *     blocco, e i breakpoint nudi di una lista sempre lineari.
+ *   · #214 — il tipo globale col nome che il motore tiene: da PGE #301
+ *     `type: Cubic`, `' cubic '` e lo slot `'CUBIC'` sono la cubica di
+ *     `cubic`. L'editor teneva il nome com'era scritto e, confrontandolo alla
+ *     lettera, li leggeva lineari. Contro un motore senza #301 quei casi sono
+ *     rossi, ed e' giusto: quel motore suonava lo smoothstep.
  *
  * Nessun valore atteso e' scritto di qua: un termine e' la UI, l'altro il
  * motore. I presidi (`OLD`) sono la lettura di prima, rifatta qui per
@@ -211,6 +216,7 @@ function pathValue(cmds, t) {
 }
 
 const BLOCK = [[[0, 0], [50, 1], [100, 0]], 1, 2];
+const GRAFIE = [[0, 10], [0.3, 40], [0.6, 15], [1, 30]];
 /* Il corpus: [etichetta, corpo, il presidio discrimina?]. */
 const CORPUS = [
   // #190 — la tabella della issue, e le sue due grafie
@@ -254,6 +260,14 @@ const CORPUS = [
   // Gli step: un segmento solo o uno per coppia
   ["step globale, una discontinuita'", { type: "step", points: [[0, 0], [0.5, 1], [0.5, 3], [1, 0]] }, false],
   ["step sul punto, una discontinuita'", [[0, 0, "step"], [0.5, 1, "step"], [0.5, 3], [1, 0]], false],
+  // #214 — il tipo globale col nome che il motore tiene (PGE #301): i punti
+  // della issue del motore (#300) portati su [0, 1]. Contro un motore senza
+  // #301 sono rossi, ed e' giusto: quel motore suonava lo smoothstep.
+  ["{type: Cubic}: la cubica di cubic", { type: "Cubic", points: GRAFIE }, true],
+  ["{type: ' cubic '}: la cubica di cubic", { type: " cubic ", points: GRAFIE }, true],
+  ["lo slot 'CUBIC' del compatto: il tipo dell'envelope",
+    [[[0, 10], [30, 40], [60, 15], [100, 30]], 1, 1, "CUBIC"], true],
+  ["{type: Step}: i gradini di step", { type: "Step", points: GRAFIE }, true],
 ];
 
 parity({

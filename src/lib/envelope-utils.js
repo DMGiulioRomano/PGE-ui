@@ -149,8 +149,10 @@
     // interp: nel dict il motore lo ignora (#191) — e la lista dei suoi points
     // non deve andarlo a cercare li'.
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
+      // Il `type` col nome che il motore tiene (#214): `{type: Step}` tiene
+      // il valore al bordo come `{type: step}`.
       return { ...arr, points: truncateEnvArray(arr.points, snap,
-        typeof arr.type === "string" ? arr.type : (inherited || "linear")) };
+        typeof arr.type === "string" ? PGEEnv.canonicalInterp(arr.type) : (inherited || "linear")) };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;
     if (PGEEnv.isBareEnv(arr)) return _asBare(truncateEnvArray([arr], snap, inherited));
@@ -515,7 +517,7 @@
   function sliceEnvArray(arr, cut, snap, inGroup, inherited) {
     if (arr && typeof arr === "object" && !Array.isArray(arr) && Array.isArray(arr.points)) {
       const pts = sliceEnvArray(arr.points, cut, snap, false,
-        typeof arr.type === "string" ? arr.type : inherited);
+        typeof arr.type === "string" ? PGEEnv.canonicalInterp(arr.type) : inherited);
       return pts === null ? null : { ...arr, points: pts };
     }
     if (!Array.isArray(arr) || !arr.length) return arr;

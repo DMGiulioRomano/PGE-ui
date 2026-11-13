@@ -1506,7 +1506,7 @@ function EnvelopeEditor({ stream, pxPerSec, duration, playhead, onChange, onLoop
     if (interpIsFixed || !PGEEnv.isCompactBlock(it) || typeof it[3] !== "string") return null;
     const first = rawEnv.findIndex((x) => PGEEnv.isCompactBlock(x) && typeof x[3] === "string");
     if (isDictForm || first !== idx) {
-      if (it[3] === drawInterp) return null;
+      if (PGEEnv.canonicalInterp(it[3]) === drawInterp) return null;
       return `lo slot interp scritto nel blocco (${it[3]}) il motore lo ignora — ` +
              (isDictForm ? "nel dict vale il type" : "nella lista vale solo quello del primo blocco che lo dichiara") +
              `: questo blocco suona ${blockInterpOf(it)}`;

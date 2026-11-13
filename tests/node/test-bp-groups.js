@@ -1118,6 +1118,92 @@ console.log("\n── l'interp di un blocco compatto (#191) ──");
     /PGEEnv\.insertPatternPoint\(\s*pattern\b/.test(dbl) && !/\[\.\.\.pattern,\s*newPt\]/.test(dbl), dbl.slice(0, 200));
 }
 
+/* ============================================================================
+   #214 — il tipo globale col nome che il motore tiene (PGE #300/#301).
+   La factory legge il nome senza badare a maiuscole e spazi attorno, e da
+   PGE #301 `Envelope.type` e' la chiave del registro: `type: Cubic`,
+   `' cubic '` e lo slot `'CUBIC'` del compatto suonano la cubica di `cubic`.
+   `unwrapEnv` e `listInterp` rendevano il nome com'era scritto, e
+   `envValueAt`/`envPath`, che confrontano alla lettera, li leggevano lineari.
+   Il valore contro il motore lo chiede test-envelope-eval-parity.js; qui la
+   lettura, la scrittura e i confini.
+   ============================================================================ */
+{
+  const P = [[0, 10], [0.3, 40], [0.6, 15], [1, 30]];
+  const PAT = [[0, 10], [30, 40], [60, 15], [100, 30]];
+  const at = (raw) => { const x = E.envExpand(raw); return [0.15, 0.45, 0.8].map((t) => E.envValueAt(x, t)); };
+  const ref = at({ type: "cubic", points: P });
+
+  assert("canonicalInterp: trim e minuscole, solo se il risultato e' un tipo della factory",
+    E.canonicalInterp("Cubic") === "cubic" && E.canonicalInterp(" cubic ") === "cubic" &&
+    E.canonicalInterp("STEP") === "step" && E.canonicalInterp("linear") === "linear");
+  assert("…altrimenti il nome resta com'e' (lo accusa envShapeError, non chi disegna)",
+    E.canonicalInterp("cubicc") === "cubicc" && E.canonicalInterp("   ") === "   " &&
+    E.canonicalInterp("") === "" && E.canonicalInterp(null) === null && E.canonicalInterp(3) === 3);
+  assert("unwrapEnv del dict: il `type` canonico",
+    E.unwrapEnv({ type: "Cubic", points: P }).interp === "cubic" &&
+    E.unwrapEnv({ type: " cubic ", points: P }).interp === "cubic" &&
+    E.unwrapEnv({ type: "Step", time_unit: "normalized", points: P }).interp === "step");
+  assert("listInterp e unwrapEnv della lista: lo slot 3 canonico",
+    E.listInterp([PAT, 1, 1, "CUBIC"]) === "cubic" &&
+    E.listInterp([[0, 0], [PAT, 1, 2, " Step "]]) === "step" &&
+    E.unwrapEnv([PAT, 1, 1, "CUBIC"]).interp === "cubic");
+  assert("un nome che il motore non legge resta com'e' scritto",
+    E.unwrapEnv({ type: "cubicc", points: P }).interp === "cubicc" &&
+    E.listInterp([PAT, 1, 1, "Cubicc"]) === "Cubicc");
+  assert("…e l'errore resta quello di prima (envShapeError legge il nome com'e' scritto)",
+    !!E.envShapeError({ type: "cubicc", points: P }) && !E.envShapeError({ type: "Cubic", points: P }) &&
+    !E.envShapeError([PAT, 1, 1, "CUBIC"]));
+  assert("envExpand: `Cubic`, `' cubic '` e lo slot `'CUBIC'` si leggono come `cubic`",
+    eq(at({ type: "Cubic", points: P }), ref) && eq(at({ type: " cubic ", points: P }), ref) &&
+    eq(at([PAT, 1, 1, "CUBIC"]), at([PAT, 1, 1, "cubic"])) &&
+    !eq(at({ type: "linear", points: P }), ref),
+    JSON.stringify([at({ type: "Cubic", points: P }), ref]));
+  assert("expandMixed di un dict: il tipo globale canonico anche chiamata da sola",
+    E.expandMixed({ type: "Cubic", points: P }).globalInterp === "cubic");
+  assert("l'interp per punto e quello del BP group restano alla lettera (il motore li confronta cosi')",
+    E.expandMixed([[0, 0, "Cubic"], [1, 1]]).points[0][2] === "Cubic" &&
+    E.expandMixed([[[[0, 0], [0.5, 1], [1, 0]], "Cubic"]]).points[0][2] === "Cubic");
+
+  /* Il commit: la grafia del sorgente resta quando dice lo stesso tipo — per
+     il motore e' lo stesso envelope, per il fingerprint no. */
+  const commit = (raw, interp) => {
+    const w = E.unwrapEnv(raw);
+    return E.wrapEnv(w.items, interp === undefined ? w.interp : interp, raw);
+  };
+  assert("wrapEnv: `{type: Cubic}` riscritto com'e'",
+    eq(commit({ type: "Cubic", points: P }), { type: "Cubic", points: P }));
+  assert("…anche con chiavi in piu', nel loro ordine",
+    eq(commit({ time_unit: "normalized", type: " cubic ", points: P }),
+       { time_unit: "normalized", type: " cubic ", points: P }));
+  assert("…anche con un blocco fra gli item",
+    eq(commit({ type: "Step", points: [[0, 0], [PAT, 1, 2]] }), { type: "Step", points: [[0, 0], [PAT, 1, 2]] }));
+  assert("la lista con lo slot `'CUBIC'` resta lista, con la sua grafia",
+    eq(commit([[0, 0], [PAT, 1, 2, "CUBIC"]]), [[0, 0], [PAT, 1, 2, "CUBIC"]]));
+  assert("un tipo cambiato si scrive canonico",
+    eq(commit({ type: "Cubic", points: P }, "step"), { type: "step", points: P }) &&
+    eq(commit({ type: "Cubic", time_unit: "normalized", points: P }, "linear"),
+       { type: "linear", time_unit: "normalized", points: P }));
+  assert("setGlobalInterp: lo slot `'CUBIC'` dice gia' `cubic`, non si riscrive",
+    (() => { const l = [[0, 0], [PAT, 1, 2, "CUBIC"]]; return E.setGlobalInterp(l, "cubic") === l; })() &&
+    eq(E.setGlobalInterp([[0, 0], [PAT, 1, 2, "CUBIC"]], "step"), [[0, 0], [PAT, 1, 2, "step"]]));
+
+  /* Il taglio legge il `type` del dict come tipo dei punti nudi: `{type: Step}`
+     tiene il valore al bordo come `{type: step}`. */
+  const S = [[0, 0], [0.5, 1], [1.5, 3]];
+  assert("truncateEnvArray: `{type: Step}` chiude il bordo come `{type: step}`",
+    eq(U.truncateEnvArray({ type: "Step", points: S }).points,
+       U.truncateEnvArray({ type: "step", points: S }).points),
+    JSON.stringify(U.truncateEnvArray({ type: "Step", points: S })));
+  assert("sliceEnvArray: `{type: Step}` apre il taglio come `{type: step}`",
+    eq(U.sliceEnvArray({ type: "Step", points: [[0, 0], [0.5, 1], [1, 3]] }, 0.25).points,
+       U.sliceEnvArray({ type: "step", points: [[0, 0], [0.5, 1], [1, 3]] }, 0.25).points));
+
+  const eeSrc = fs.readFileSync(path.join(__dirname, "../../src/components/EnvelopeEditor.jsx"), "utf8");
+  assert("la nota dello slot 3 confronta il nome canonico",
+    /PGEEnv\.canonicalInterp\(it\[3\]\)\s*===\s*drawInterp/.test(eeSrc));
+}
+
 // Il verdetto sta in un handler `exit`, non in una riga in fondo al file:
 // cosi' una sezione appesa dopo continua a contare, invece di stampare FAIL
 // e uscire 0. Il vincolo e' verificato da test-suite-harness.js (#132).

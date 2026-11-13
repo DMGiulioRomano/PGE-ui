@@ -80,21 +80,29 @@
      proprio): e' una delle grafie del tipo GLOBALE, e governa i breakpoint
      nudi fuori dal blocco e i punti di ogni altro blocco. Il riconoscimento e'
      quello del motore (`_engineIsCompact`), non quello di cio' che l'editor sa
-     disegnare: decide lui che cosa e' un compatto. */
+     disegnare: decide lui che cosa e' un compatto.
+     Il nome e' quello canonico (`canonicalInterp`, #214): `'CUBIC'` nello
+     slot e' la cubica di `cubic`, per il motore da PGE #301. */
   function listInterp(raw) {
-    if (_engineIsCompact(raw)) return typeof raw[3] === "string" ? raw[3] : null;
+    if (_engineIsCompact(raw)) return typeof raw[3] === "string" ? canonicalInterp(raw[3]) : null;
     if (!Array.isArray(raw)) return null;
-    for (const it of raw) if (_engineIsCompact(it) && typeof it[3] === "string") return it[3];
+    for (const it of raw) if (_engineIsCompact(it) && typeof it[3] === "string") return canonicalInterp(it[3]);
     return null;
   }
   /* `interp` e' il tipo globale dell'envelope come lo legge il motore: il
      `type` del dict, per la lista quello di `listInterp`. Era `linear` per
      ogni lista, quindi una lista il cui blocco dichiarava `cubic` si apriva
      lineare — i breakpoint nudi disegnati dritti mentre il motore li suonava
-     cubici — e un commit con quell'interp la riscriveva lineare (#191). */
+     cubici — e un commit con quell'interp la riscriveva lineare (#191).
+     Ed e' il nome CANONICO (#214): da PGE #301 `Envelope.type` e' la chiave
+     del registro, quindi `type: Cubic` e `' cubic '` suonano la cubica di
+     `cubic`. Reso com'era scritto, `envValueAt` ed `envPath` — che
+     confrontano `"cubic"` e `"step"` alla lettera — lo leggevano `linear`, e
+     l'editor era l'unico dei tre lettori a divergere. Un nome che il motore
+     non legge resta com'e': lo accusa `envShapeError`, non chi disegna. */
   function unwrapEnv(env) {
     if (isTypedEnv(env)) {
-      return { interp: env.type || "linear", items: env.points.slice() };
+      return { interp: canonicalInterp(env.type) || "linear", items: env.points.slice() };
     }
     // Dict con `points` ma senza `type`: l'editor la scrive solo riscrivendo
     // un dict che porta altre chiavi (`time_unit`, che wrapEnv conserva) con
@@ -142,15 +150,24 @@
      dict e' quindi OBBLIGATO, con l'interp lineare e anche con un blocco fra
      gli item: le chiavi restano nel loro ordine, `points` sono gli item nuovi,
      `type` dice l'interp (e se non c'era, si aggiunge davanti a `points` solo
-     quando non e' lineare). */
+     quando non e' lineare).
+
+     Il `type` si scrive con la grafia del sorgente quando dice lo stesso
+     tipo (#214): `unwrapEnv` di `{type: Cubic}` rende `cubic`, e riscriverlo
+     `cubic` a ogni commit — per il motore lo stesso envelope — cambiava il
+     fingerprint dello stream, cioe' un pallino giallo su uno stem fresco. E'
+     la stessa regola delle chiavi diverse da `type`: cio' che il gesto non
+     tocca resta com'era scritto. Un tipo cambiato si scrive canonico. */
   function wrapEnv(items, interp, like) {
-    const extra = (like && typeof like === "object" && !Array.isArray(like))
-      ? Object.keys(like).filter((k) => k !== "type" && k !== "points") : [];
+    const likeDict = !!like && typeof like === "object" && !Array.isArray(like);
+    const extra = likeDict ? Object.keys(like).filter((k) => k !== "type" && k !== "points") : [];
     const nonLinear = !!interp && interp !== "linear";
+    const spell = (t) => (likeDict && typeof like.type === "string" && canonicalInterp(like.type) === t)
+      ? like.type : t;
     if (extra.length) {
       const out = {};
       for (const k of Object.keys(like)) {
-        if (k === "type") out.type = interp || "linear";
+        if (k === "type") out.type = spell(interp || "linear");
         else if (k === "points") {
           if (!("type" in like) && nonLinear) out.type = interp;
           out.points = items.slice();
@@ -162,11 +179,10 @@
       }
       return out;
     }
-    if (!items.some(isCompactBlock)) return nonLinear ? { type: interp, points: items.slice() } : items;
+    if (!items.some(isCompactBlock)) return nonLinear ? { type: spell(interp), points: items.slice() } : items;
     const g = nonLinear ? interp : "linear";
-    const likeDict = !!like && typeof like === "object" && !Array.isArray(like);
     if ((listInterp(items) || "linear") === g && (!likeDict || !nonLinear)) return items;
-    return { type: g, points: items.slice() };
+    return { type: spell(g), points: items.slice() };
   }
 
   function isCompactBlock(item) {
@@ -1006,6 +1022,21 @@
     return typeof name === "string" && INTERP_TYPES.includes(name.trim().toLowerCase());
   }
 
+  /* Il nome che il motore TIENE (#214): `InterpolationStrategyFactory.canonical`,
+     la chiave del registro, che da PGE #301 e' `Envelope.type`. Trim e
+     minuscole, e solo se il risultato e' un tipo che la factory conosce;
+     altrimenti il nome resta com'e' scritto — un nome che il motore rifiuta
+     lo deve accusare lo specchio dei guard (`envShapeError`), non chi lo
+     disegna. Vale per il tipo GLOBALE, cioe' il `type` del dict e lo slot 3
+     del compatto che l'envelope prende come suo: l'interp per punto e quello
+     del BP group il motore li confronta ancora alla lettera, e qui restano
+     come sono (`_groupError` ne e' lo specchio giusto). */
+  function canonicalInterp(name) {
+    if (typeof name !== "string") return name;
+    const c = name.trim().toLowerCase();
+    return INTERP_TYPES.includes(c) ? c : name;
+  }
+
   // `isinstance(x, Iterable)` sui valori che da uno YAML arrivano qui: le
   // stringhe, le liste e i dict si percorrono; null, i numeri e i booleani no.
   const _iterable = (v) => typeof v === "string" || Array.isArray(v) || _isDict(v);
@@ -1183,7 +1214,7 @@
   function expandMixed(env) {
     let globalInterp;
     if (_isDict(env) && Array.isArray(env.points)) {
-      globalInterp = typeof env.type === "string" && env.type ? env.type : "linear";
+      globalInterp = typeof env.type === "string" && env.type ? canonicalInterp(env.type) : "linear";
       env = env.points;
     } else {
       globalInterp = listInterp(env) || "linear";
@@ -1375,7 +1406,8 @@
     if (!Array.isArray(items)) return items;
     let changed = false;
     const out = items.map((it) => {
-      if (!isCompactBlock(it) || typeof it[3] !== "string" || it[3] === type) return it;
+      // `'CUBIC'` dice gia' `cubic` (#214): la grafia del sorgente resta.
+      if (!isCompactBlock(it) || typeof it[3] !== "string" || canonicalInterp(it[3]) === type) return it;
       changed = true;
       const nb = it.slice();
       nb[3] = type;
@@ -1886,7 +1918,7 @@
     wouldEmptyEnv,
     isBPGroup, envHasGroup, desugarBPGroups, resugarBPGroups,
     firstBreakpointY,
-    isTypedEnv, unwrapEnv, wrapEnv, listInterp,
+    isTypedEnv, unwrapEnv, wrapEnv, listInterp, canonicalInterp,
     blockInterp, setBlockInterp, setGlobalInterp, insertPatternPoint,
     computeCycleDurations, isPreviewFallback, expandMixed, envExpand, envSketch, envCount,
     cubicTangents, hermite, envValueAt, envPath,
