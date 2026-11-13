@@ -101,12 +101,74 @@ for (const [label, env] of VALID)
 }
 
 console.log("\n── cio' che non e' un envelope non e' affare di questo specchio ──");
+/* Un dict senza `points` non e' envelope-like per il motore
+   (`Envelope.is_envelope_like`: `'points' in obj`), quindi da uno YAML non
+   arriva mai al costruttore: il suo `envelope.points` (#288) lo vede solo chi
+   costruisce un Envelope a mano, e qui tacere e' il verso sicuro. */
 for (const [label, v] of [["numero", 5], ["stringa", "x"], ["null", null],
                           ["undefined", undefined], ["dict senza points", { a: 1 }],
-                          ["points numero", { points: 3 }], ["points null", { points: null }],
-                          ["points stringa vuota", { points: "" }], ["lista vuota", []]]) {
+                          ["dict senza points, con type", { type: "bogus" }]]) {
   assert(`${label}: null (lo decide un altro strato, non il builder)`, err(v) === null, show(err(v)));
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PGE #288: i guard prima del builder hanno il campo
+   ═══════════════════════════════════════════════════════════════════════════
+   Prima erano un KeyError, un TypeError e due ValueError nudi, e lo specchio
+   li dichiarava fuori scope. Ora `Envelope.__init__` e `extract_interp_type`
+   nominano la sotto-posizione, e l'ordine e' quello del motore: nel dict
+   `points` che non si percorre → `type` → corpo vuoto → builder; nella lista
+   lo slot interp del compatto che diventa il tipo → corpo vuoto → builder. */
+console.log("\n── PGE #288: points, type, compact.interp, il corpo vuoto ──");
+for (const [label, v] of [["points numero", { points: 3 }], ["points null", { points: null }],
+                          ["points booleano", { type: "linear", points: true }]])
+  assert(`${label} → points (non si percorre), value = il dict`,
+    is(v, { where: "points", why: "type", value: v, index: null }), show(err(v)));
+for (const [label, v] of [["points stringa vuota", { points: "" }],
+                          ["points lista vuota", { type: "cubic", points: [] }],
+                          ["points dict vuoto", { points: {} }],
+                          ["lista vuota", []]])
+  assert(`${label} → points (corpo vuoto)`,
+    is(v, { where: "points", why: "empty", value: v, index: null }), show(err(v)));
+for (const t of ["cubicc", null, 5, "", "   "])
+  assert(`type ${JSON.stringify(t)} → type (la factory non lo legge)`,
+    is({ type: t, points: [[0, 0], [1, 1]] }, { where: "type", why: "interp", value: t }),
+    show(err({ type: t, points: [[0, 0], [1, 1]] })));
+/* Il nome lo giudica la factory, non un elenco esatto (978593e): maiuscole e
+   spazi attorno non contano, e `type: Step` rende da sempre. */
+for (const t of ["Step", "CUBIC", " linear "])
+  assert(`type ${JSON.stringify(t)}: la factory lo legge, nessun errore`,
+    err({ type: t, points: [[0, 0], [1, 1]] }) === null, show(err({ type: t, points: [[0, 0], [1, 1]] })));
+assert("dict: points che non si percorre prima del type",
+  is({ type: "bogus", points: null }, { where: "points", why: "type" }));
+assert("dict: il type prima del corpo vuoto",
+  is({ type: "bogus", points: [] }, { where: "type" }));
+assert("dict: il type prima dei guard del builder",
+  is({ type: "bogus", points: [PAT, 1, true] }, { where: "type" }));
+
+// La lista: lo slot del compatto che diventa il tipo dell'envelope.
+assert("compatto diretto con slot ignoto → compact.interp",
+  is([PAT, 1, 4, "cubicc"], { where: "compact.interp", why: "interp", value: "cubicc", index: null }),
+  show(err([PAT, 1, 4, "cubicc"])));
+assert("compact.interp prima dei guard del builder: [PAT, 1, true, 'cubicc']",
+  is([PAT, 1, true, "cubicc"], { where: "compact.interp" }), show(err([PAT, 1, true, "cubicc"])));
+assert("slot di soli spazi → compact.interp",
+  is([PAT, 1, 4, "   "], { where: "compact.interp", value: "   " }));
+for (const slot of ["Step", "CUBIC", "", null])
+  assert(`slot ${JSON.stringify(slot)}: valido (la factory lo legge, o vuoto vale il default)`,
+    err([PAT, 1, 4, slot]) === null, show(err([PAT, 1, 4, slot])));
+assert("in lista: il primo compatto con uno slot → compact.interp, col suo indice",
+  is([[0, 0], [PAT, 1, 4, "bogus"]], { where: "compact.interp", index: 1 }),
+  show(err([[0, 0], [PAT, 1, 4, "bogus"]])));
+assert("in lista: il primo slot null non conta, decide il secondo",
+  is([[PAT, 1, 2], [PAT, 2, 2, "bogus"]], { where: "compact.interp", index: 1 }));
+assert("in lista: uno slot dopo il primo dichiarato non si legge, e non si valida",
+  err([[PAT, 1, 2, "cubic"], [PAT, 2, 2, "bogus"]]) === null);
+assert("in lista: compact.interp prima di un elemento sbagliato che lo precede",
+  is([[0, "x"], [PAT, 1, 2, "bogus"]], { where: "compact.interp" }));
+assert("dentro un dict lo slot del compatto non si legge, e non si valida",
+  err({ type: "linear", points: [PAT, 1, 2, "bogus"] }) === null &&
+  err({ type: "linear", points: [[PAT, 1, 2, "bogus"]] }) === null);
 /* Un `points` che non e' una lista non cade per forza prima del builder: il
    builder itera quello che riceve, e una stringa si itera per caratteri, un
    dict per chiavi — elementi che non sono breakpoint, e che il suo guard

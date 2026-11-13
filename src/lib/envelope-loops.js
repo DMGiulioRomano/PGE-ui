@@ -996,20 +996,68 @@
     return last;
   }
 
+  /* Il nome d'interpolazione come lo legge `InterpolationStrategyFactory`
+     (`canonical`): una stringa, senza badare a maiuscole e spazi attorno —
+     `type: Step` rende da sempre (PGE #288, 978593e). Non un elenco esatto:
+     uno specchio alla lettera segnerebbe rosso uno YAML che rende. `trim()`
+     toglie un poco piu' di `str.strip()` (U+FEFF), cioe' qui si accetta un
+     nome in piu', mai uno in meno: il verso sicuro. */
+  function _factoryReads(name) {
+    return typeof name === "string" && INTERP_TYPES.includes(name.trim().toLowerCase());
+  }
+
+  // `isinstance(x, Iterable)` sui valori che da uno YAML arrivano qui: le
+  // stringhe, le liste e i dict si percorrono; null, i numeri e i booleani no.
+  const _iterable = (v) => typeof v === "string" || Array.isArray(v) || _isDict(v);
+  const _emptyBody = (v) => (typeof v === "string" || Array.isArray(v))
+    ? v.length === 0 : (_isDict(v) && Object.keys(v).length === 0);
+
+  /* Lo slot interp che diventa il tipo dell'envelope (`extract_interp_type`):
+     quello del compatto diretto, oppure del primo compatto della lista con
+     uno slot non null — riconosciuti sugli elementi COME SCRITTI, prima della
+     normalizzazione dei dict. Gli altri slot non si leggono, e non si
+     validano. */
+  function _leadInterpSlot(list) {
+    if (_engineIsCompact(list))
+      return (list.length > 3 && list[3] != null) ? { value: list[3], index: null } : null;
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      if (_engineIsCompact(it) && it.length > 3 && it[3] != null) return { value: it[3], index: i };
+    }
+    return null;
+  }
+
   function envShapeError(env) {
-    // `Envelope.__init__`: il dict passa `breakpoints['points']` al builder, e
-    // senza la chiave e' un KeyError, prima del builder. Il builder poi itera
-    // quello che riceve, e non solo una lista: una stringa si itera per
-    // caratteri, un dict per chiavi — elementi che non sono breakpoint, e che
-    // il suo guard rifiuta (`envelope.point`). Un numero o null non si
-    // iterano: TypeError, fuori dal builder. Dal tab Raw ci si arriva da
-    // `deviation_probability`, riconosciuto envelope da `'points' in obj`.
+    /* `Envelope.__init__`, prima del builder (PGE #288: col campo, dove prima
+       erano un KeyError, un TypeError e due ValueError nudi). Nel dict:
+       `points` che non si percorre (null, un numero) → `points`, col dict
+       com'e' scritto; poi `type` che la factory non legge → `type`, anche
+       null (una chiave scritta e lasciata vuota non e' il default); poi il
+       corpo vuoto → `points`. Nella lista: lo slot interp del compatto che
+       diventa il tipo → `compact.interp`, PRIMA dei guard del builder; poi
+       il corpo vuoto. Un dict senza `points` resta muto: da uno YAML non
+       diventa un envelope (`is_envelope_like` e' `'points' in obj`).
+       Il builder poi itera quello che riceve, e non solo una lista: una
+       stringa si itera per caratteri, un dict per chiavi — elementi che non
+       sono breakpoint, e che il suo guard rifiuta (`envelope.point`). Dal tab
+       Raw ci si arriva da `deviation_probability`, riconosciuto envelope da
+       `'points' in obj`. */
     let raw = env;
     if (_isDict(env)) {
       if (!_has(env, "points")) return null;
       raw = env.points;
+      if (!_iterable(raw)) return { where: "points", why: "type", value: env, index: null };
+      if (_has(env, "type") && !_factoryReads(env.type))
+        return { where: "type", why: "interp", value: env.type, index: null };
+      if (_emptyBody(raw)) return { where: "points", why: "empty", value: env, index: null };
       if (typeof raw === "string") raw = Array.from(raw);
       else if (_isDict(raw)) raw = Object.keys(raw);
+    } else if (Array.isArray(env)) {
+      const slot = _leadInterpSlot(env);
+      // `interp or DEFAULT_INTERP`: lo slot scritto vuoto vale il default.
+      if (slot && slot.value !== "" && !_factoryReads(slot.value))
+        return { where: "compact.interp", why: "interp", value: slot.value, index: slot.index };
+      if (env.length === 0) return { where: "points", why: "empty", value: env, index: null };
     }
     if (_engineIsCompact(raw)) {
       const e = _compactError(raw, 0);

@@ -906,8 +906,11 @@ def _op_build_envelope(args):
         error  null, o `Classe: messaggio`
         field  null, o il `field` dell'errore. Nessuna chiave viene passata al
                costruttore, quindi da PGE #211 e' la sotto-posizione che il
-               builder sa da solo (`envelope.compact.n_reps`, …); prima gli
-               errori di forma erano ValueError nudi, e qui c'e' null.
+               builder sa da solo (`envelope.compact.n_reps`, …), e da PGE
+               #288 anche quelle che conoscono `Envelope.__init__`
+               (`envelope.points`, `envelope.type`) ed `extract_interp_type`
+               (`envelope.compact.interp`); prima gli errori di forma erano
+               KeyError, TypeError e ValueError nudi, e qui c'e' null.
     """
     env_mod = ENGINE.module("pge.envelopes.envelope")
     if "raw_json" in args:

@@ -48,7 +48,7 @@
    * (BP group) sono envelope interi, non item dentro una lista. Ne' unwrapEnv
    * ne' desugarBPGroups le toccano — lo dice gia' wouldEmptyEnv, che le
    * normalizza per conto suo — e il walk sulle y di questo stesso modulo le
-   * riconosce da PGE #234 (_mapGrainEnvY, le sue ultime due righe). Il walk
+   * riconosce da PGE #234 (_mapGrainEnvY, `mapBody`; anche sotto `points` da #212). Il walk
    * sui TEMPI no: leggeva quelle liste item per item, dove niente e' un punto
    * ne' un blocco, e non riscriveva niente. Una curva ferma nel vecchio
    * riferimento temporale mentre ogni altra dello stream si sposta — e senza
@@ -1039,12 +1039,18 @@
       }
       return item;
     };
+    // Il corpo di un envelope, nudo o sotto `points`: per il builder sono la
+    // stessa cosa, e da PGE #299 (`_scale_body_y`, issue PGE #289) anche per
+    // la scala delle y. Il ramo dict scorreva `points` elemento per elemento,
+    // e un compatto o un BP group DIRETTI — il corpo intero, non un suo
+    // elemento — restavano nell'unita' vecchia mentre il motore li leggeva
+    // nella nuova (#212).
+    const mapBody = (body) => (PGEEnv.isBareEnv(body) ? mapItem(body) : body.map(mapItem));
     if (env && typeof env === "object" && !Array.isArray(env) && Array.isArray(env.points)) {
-      return { ...env, points: env.points.map(mapItem) };
+      return { ...env, points: mapBody(env.points) };
     }
     if (!Array.isArray(env)) return env;
-    if (PGEEnv.isBPGroup(env) || PGEEnv.isCompactBlock(env)) return mapItem(env);
-    return env.map(mapItem);
+    return mapBody(env);
   }
 
   // Cambia l'unità di grain.duration / grain.duration_range CONVERTENDO i

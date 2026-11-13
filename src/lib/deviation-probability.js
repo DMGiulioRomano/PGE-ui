@@ -178,8 +178,11 @@
       return any ? null : "shape";
     }
     if (v && typeof v === "object") {
-      // Il builder legge `points` senza guardare se c'è: un dict che non ce
-      // l'ha alza KeyError, ed è il terzo dei corpi malformati di PGE #209.
+      // Un dict senza `points` (o con `points` null, un numero) è il terzo
+      // dei corpi malformati di PGE #209. Da PGE #288 lo rifiuta
+      // `Envelope.__init__` col campo (`deviation_probability.<chiave>`,
+      // `envelope.points` nello specchio di forma); prima era un KeyError
+      // nudo, che arrivava avvolto da GateFactory con la causa nell'hint.
       if (!Array.isArray(v.points)) return "shape";
       return _envBodyError(v.points);
     }

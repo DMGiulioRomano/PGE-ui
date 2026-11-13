@@ -81,6 +81,14 @@ function fmtShapeValue(v) {
 function shapeErrorText(e) {
   const v = fmtShapeValue(e.value);
   switch (e.where) {
+    case "points":
+      return e.why === "empty"
+        ? "the envelope has no points — an empty body is not an envelope"
+        : `\`points\` must be a list of breakpoints — got ${fmtShapeValue(e.value.points)}`;
+    case "type":
+      return `envelope type ${v} is not one of ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
+    case "compact.interp":
+      return `interp ${v} (4th element of the compact block, the envelope's type) is not one of ${window.PGEEnv.INTERP_TYPES.join(", ")}`;
     case "point":
       return `element ${e.index} is not a breakpoint [t, v] / [t, v, type], a BP group or a compact block: ${v}`;
     case "group.interp":
