@@ -129,6 +129,16 @@
         visMin: 0, visMax: loopMax != null ? loopMax : 10,
         hardMin: PB.loopEnd.min, hardMax: loopMax != null ? loopMax : PB.loopEnd.max });
     }
+    if (stream.pointer && stream.pointer.positionEnv) {
+      // pointer.position (PGE #312): una frazione della finestra attiva, che
+      // fuori da 0-1 RIENTRA a capo. Nessun bordo duro: tagliare a [0, 1]
+      // riscriverebbe una curva che il motore legge — tre giri della finestra
+      // sono `[[0, 0], [T, 3]]`.
+      list.push({ key: "position", label: "position", group: "Pointer",
+        path: ["pointer", "positionEnv"], yaml: "pointer.position", unit: "",
+        visMin: 0, visMax: 1,
+        hardMin: PB.pointerPosition.min, hardMax: PB.pointerPosition.max });
+    }
     if (stream.pointer && stream.pointer.offsetRangeEnv) {
       list.push({ key: "offsetRange", label: "offset_range", group: "Pointer",
         path: ["pointer", "offsetRangeEnv"], yaml: "pointer.offset_range", unit: "",
@@ -145,6 +155,16 @@
         path: ["grain", "durationRangeEnv"], yaml: "grain.duration_range", unit: grainRangeSuffix, fine: true,
         visMin: grainRangeVis.min, visMax: grainRangeVis.max,
         hardMin: grainRangeBounds.min, hardMax: grainRangeBounds.max });
+    }
+    if (stream.grain && stream.grain.iotEnv) {
+      // grain.iot (PGE #311) e' nell'unita' di duration_unit come la durata, e
+      // i suoi bound (un campione - 100 s) li converte grainUnitBounds.
+      const iotBounds = window.PGEEnvUtils.grainUnitBounds(PB.grainIot, grainUnit);
+      const iotVis = window.PGEEnvUtils.grainUnitBounds({ min: 0, max: 0.25 }, grainUnit);
+      list.push({ key: "grainIot", label: "iot", group: "Grain",
+        path: ["grain", "iotEnv"], yaml: "grain.iot", unit: grainUnitSuffix, fine: true,
+        visMin: iotVis.min, visMax: iotVis.max,
+        hardMin: iotBounds.min, hardMax: iotBounds.max });
     }
     if (stream.grain && stream.grain.readDirectionEnv) {
       // `domain: "direction"` (PGE #207) è ciò che distingue questo envelope da
@@ -306,6 +326,30 @@
             path: ["deviationProbability", pk], yaml: "deviation_probability." + pk, unit: "%",
             inert: PGEDeviationProb.inertReason(pk, liveKeys),
             visMin: 0, visMax: 100, hardMin: 0, hardMax: 100 });
+        }
+      }
+    }
+    // Gli envelope di `r` e `clock` delle mappe (PGE #310), nello `_extra` dello
+    // stream: la finestra di `r` e' l'intervallo del tipo nel catalogo del
+    // motore (PGEExpr.MAP_KINDS); il clock e' positivo, al piu' un passo per
+    // campione.
+    const maps = stream._extra && stream._extra.maps;
+    if (maps && typeof maps === "object" && !Array.isArray(maps)) {
+      const isEnv = (v) => Array.isArray(v) || (v != null && typeof v === "object" && Array.isArray(v.points));
+      for (const [name, spec] of Object.entries(maps)) {
+        if (!spec || typeof spec !== "object") continue;
+        if (isEnv(spec.r)) {
+          const kind = window.PGEExpr && window.PGEExpr.MAP_KINDS[spec.type];
+          const rr = kind ? kind.r_range : [0, 4];
+          list.push({ key: "map_" + name + "_r", label: name + ".r", group: "Maps",
+            path: ["_extra", "maps", name, "r"], yaml: "maps." + name + ".r", unit: "",
+            visMin: rr[0], visMax: rr[1], hardMin: -Infinity, hardMax: Infinity });
+        }
+        if (isEnv(spec.clock)) {
+          const sr = window.PGE_OUTPUT_SR || 48000;
+          list.push({ key: "map_" + name + "_clock", label: name + ".clock", group: "Maps",
+            path: ["_extra", "maps", name, "clock"], yaml: "maps." + name + ".clock", unit: "/s",
+            visMin: 0, visMax: 50, hardMin: 1 / sr, hardMax: sr });
         }
       }
     }

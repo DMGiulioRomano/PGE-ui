@@ -1612,6 +1612,46 @@ alone — a `.nan`/`.inf` leaves earlier as `kind: "param"` — so the other bra
 of that hint, where reducing the cycles doesn't help, is unreachable from this
 string.
 
+### The third value kind, `grain.iot`, `pointer.position` (#215, #216)
+
+The engine's chaotic maps (PythonGranularEngine#307) add a third kind of value
+beside number and envelope: an **expression**, a string inside outer
+parentheses that reads the stream's maps (`m1`, `m1.y`) or the time `t`,
+evaluated at every grain — on the base value of the fifteen fields of
+`EXPRESSION_FIELDS`. In the model an expression lives in the **scalar** field
+as the string (`volume: "(-18 + 4*m1)"`, `volumeEnv: null`), which is how
+yaml-bridge already round-tripped it; `src/lib/expressions.js`
+(`window.PGEExpr`) is the one answer to "is this value an expression?", and
+every gesture that would treat the value as a number asks it first:
+
+- `ParamRow` (primitives.jsx): `handleMode`'s "already written" counts an
+  expression, so a click on the lit `scalar` button no longer replaces it with
+  the default; rows that can write one (`onExpr`) get a third `expr` button
+  (seeded from the number shown) and an `ExprField` text input. The guard
+  stays `handleMode`; `handleExprMode` only adds the two clicks it doesn't know.
+- `toggleMode` seeds an envelope from the scalar **only if it is a number** —
+  `[[0, "(…)"], [1, "(…)"]]` was the old outcome.
+- `convertGrainDurationUnit` scales an expression's **text**
+  (`((expr) * 1000)`): the engine applies the unit factor to the result.
+
+`grain.iot` (PGE #311) and `pointer.position` (PGE #312) are first-class in
+the model (`grain.iot`/`iotEnv`, `pointer.position`/`positionEnv`),
+presence-keyed like `read_direction` (an empty key is kept: it is the mode
+chosen without a value). `grain.iot` is the third button of the density `Seg`
+(`densityUnitSel`, its clicks remove the exclusive keys, distribution
+included); it follows `duration_unit` (`clampGrainIot`, the conversion). With
+`pointer.position` the `speed_ratio`/`start` rows disappear (they would write
+what the engine refuses) and a hand-written conflict is shown with its remedy;
+the AddParamMenu adds it by removing the other two; the split gives the tail
+the cut position and **no** `start`. Its bounds wrap (`WRAPPING_PARAMETERS`),
+so `PGE_BOUNDS.pointerPosition` has no edge and no `ENGINE_PARAM_MAP` entry.
+`iotEnv`, `positionEnv` and the `r`/`clock` envelopes of `maps:` (in the
+stream's `_extra`, with a walk of their own like `deviation_probability`) are
+in the catalog and in the time walk. `maps:` itself is still edited from the
+Raw tab. The literals `expressions.js` copies are pinned by
+`tests/parity/test-expressions-parity.js` (the oracle's `constants` op reads
+them, the controllers' by AST); `tests/node/test-expressions.js` runs the rest.
+
 ### Dynamic parameter bounds
 
 `GET /bounds` in `server.py` **AST-parses** the engine's `parameter_definitions.py` (`GRANULAR_PARAMETERS`) and `pitch_unit.py` under `src/pge/parameters/` (falling back to pre-#162 flat `src/parameters/`). Returns `{}` for an engine without those files. `backend.js` `bounds()` fetches it; `app.jsx` wraps the fetch in `refreshEngineBounds()` and calls it from **three** sites — boot, project change, render start — the same three as `refreshEngineSem`, and for the same reason (see below). `bounds.js` (`mergeEngineBounds`, node-tested) folds the engine payload onto `window.PGE_BOUNDS` via `ENGINE_PARAM_MAP` — which says, per UI key, the engine param and whether it reads `min_val/max_val` or `min_range/max_range`. `window.PGE_BOUNDS` in `yaml-bridge.js` is the **static fallback** (used on `file://` / server down).
@@ -3879,7 +3919,7 @@ needs its control: with a `PATH` that narrow, *any* failure would keep a
 `status !== 0` assert green, so the same `PATH` with `realpath` back in it must
 succeed.
 
-`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/renderer-choice.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → `src/lib/file-guard.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
+`PGE Editor.html` loads scripts in a fixed order: vendor (React/Babel/js-yaml) → `src/lib/yaml-bridge.js` → `src/lib/expressions.js` → `src/lib/bounds.js` → `src/lib/envelope-loops.js` → `src/lib/deviation-probability.js` → `src/lib/envelope-utils.js` → `src/lib/envelope-catalog.js` → `src/lib/backend.js` → `src/lib/audio-engine.js` → `src/lib/grain-map.js` → `src/lib/render-status.js` → `src/lib/renderer-choice.js` → `src/lib/history-core.js` → `src/lib/tracks.js` → `src/lib/tweaks-store.js` → `src/lib/magnify-spec.js` → `src/lib/file-guard.js` → JSX files (`src/components/*.jsx`) → `src/components/app.jsx` last. Everything attaches to `window.*` (no modules). A new JSX file must be added to `PGE Editor.html` AND must not depend on later-loaded siblings at parse time.
 
 That last sentence is not prose any more: `tests/node/test-sources.js` is its
 executable form (#138). It reads the `<script>` list out of the HTML, requires a

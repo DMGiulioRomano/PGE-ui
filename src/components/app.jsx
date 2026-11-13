@@ -1378,6 +1378,15 @@ function App() {
     const cuts = [];
     for (const s of targets) {
       ensureGrainData(s.id);   // se il sidecar non e' ancora in memoria, chiedilo
+      // Con pointer.position (PGE #312) la posizione di lettura e' SCRITTA,
+      // istante per istante: la coda la riprende dal suo envelope tagliato (o
+      // dallo scalare, o dall'espressione, che la leggono uguale), e uno
+      // `start` accanto a lei sarebbe un errore del motore. Non serve il
+      // sidecar, e non c'e' niente da convertire.
+      if (s.pointer && (s.pointer.position !== undefined || s.pointer.positionEnv != null)) {
+        cuts.push({ s, start: undefined, exact: true });
+        continue;
+      }
       const gd = grainData[s.id];
       const sampleDur = (mediaList.files || []).find(f => f.name === s.sample)?.duration || 0;
       const ptr = gd && window.PGEGrainMap.readPositionAt(gd, t - s.onset, {
@@ -1423,7 +1432,9 @@ function App() {
         ...sliced.stream,
         onset: R(t), duration: R(s.duration - cutRel),
         durationImplicit: false, durationUnresolved: false,
-        pointer: { ...(sliced.stream.pointer || {}), start },
+        pointer: start === undefined
+          ? { ...(sliced.stream.pointer || {}) }
+          : { ...(sliced.stream.pointer || {}), start },
       };
       halves.set(s.id, { head, tail });
     }

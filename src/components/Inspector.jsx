@@ -485,6 +485,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "loopStart"  && stream.pointer && stream.pointer.loopStartEnv)  return "env";
     if (k === "loopDur"    && stream.pointer && stream.pointer.loopDurEnv)    return "env";
     if (k === "grainDur" && stream.grain && stream.grain.durationEnv) return "env";
+    if (k === "grainIot" && stream.grain && stream.grain.iotEnv) return "env";
+    if (k === "position" && stream.pointer && stream.pointer.positionEnv) return "env";
     if (k === "readDirection" && stream.grain && stream.grain.readDirectionEnv) return "env";
     if (k === "pan" && stream.panEnv) return "env";
     if (k === "volume" && stream.volumeEnv) return "env";
@@ -517,6 +519,11 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     // il modo in cui la seconda copia smette di valere, la ragione che
     // loopEndSel dichiara qui sotto.
     setMode(k, newMode);
+    // Il seme di un envelope nuovo e' lo SCALARE solo se e' un numero
+    // (PGE-ui #215): un'espressione (`(0.02 + 0.08*m1)`) vive nello stesso
+    // campo, e `[[0, "(…)"], [1, "(…)"]]` sarebbe un envelope di stringhe —
+    // uno YAML che il motore non costruisce. Su un'espressione il seme e' il
+    // default del parametro, come sulla chiave assente.
     // grainDur non è in `fields` — ha un ramo suo, con un default che dipende
     // dall'unità — quindi qui non ci sta: una seconda copia di 0.05 è solo
     // l'invito a rimetterla in circolo.
@@ -531,7 +538,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "speedRatio") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.speedRatio != null ? cur.speedRatio : 1;
+        const v = typeof cur.speedRatio === "number" ? cur.speedRatio : 1;
         onChange({ pointer: { ...cur, speedRatio: null, speedRatioEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.speedRatioEnv, 1);
@@ -548,11 +555,37 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
       // sparirebbe e il valore sarebbe peggiore di quando mancava.
       const grainDurSeed = window.PGEEnvUtils.grainDefaultDuration(cur.durationUnit);
       if (newMode === "env") {
-        const v = cur.duration != null ? cur.duration : grainDurSeed;
+        const v = typeof cur.duration === "number" ? cur.duration : grainDurSeed;
         onChange({ grain: { ...cur, duration: null, durationEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.durationEnv, grainDurSeed);
         onChange({ grain: { ...cur, duration: v, durationEnv: null } });
+      }
+      return;
+    }
+    if (k === "grainIot") {
+      // grain.iot (PGE #311): il seme e' 0.1 s nell'unita' della durata, come
+      // fa il bottone che sceglie il modo.
+      const cur = stream.grain || {};
+      const seed = window.PGEEnvUtils.grainSecondsToUnit(0.1, cur.durationUnit);
+      if (newMode === "env") {
+        const v = typeof cur.iot === "number" ? cur.iot : seed;
+        onChange({ grain: { ...cur, iot: null, iotEnv: [[0, v], [1, v]] } });
+      } else {
+        const v = window.PGEEnv.firstBreakpointY(cur.iotEnv, seed);
+        onChange({ grain: { ...cur, iot: v, iotEnv: null } });
+      }
+      return;
+    }
+    if (k === "position") {
+      // pointer.position (PGE #312): una frazione della finestra, 0.5 a meta'.
+      const cur = stream.pointer || {};
+      if (newMode === "env") {
+        const v = typeof cur.position === "number" ? cur.position : 0;
+        onChange({ pointer: { ...cur, position: null, positionEnv: [[0, v], [1, typeof cur.position === "number" ? v : 1]] } });
+      } else {
+        const v = window.PGEEnv.firstBreakpointY(cur.positionEnv, 0.5);
+        onChange({ pointer: { ...cur, position: v, positionEnv: null } });
       }
       return;
     }
@@ -565,7 +598,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
       const cur = stream.grain || {};
       const S = window.PGEEnvUtils.snapDirection;
       if (newMode === "env") {
-        const v = cur.readDirection != null ? S(cur.readDirection) : 1;
+        const v = typeof cur.readDirection === "number" ? S(cur.readDirection) : 1;
         onChange({ grain: { ...cur, readDirection: null,
                             readDirectionEnv: [[0, v], [0.5, -v]] } });
       } else {
@@ -578,7 +611,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "loopStart") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopStart != null ? cur.loopStart : 0;
+        const v = typeof cur.loopStart === "number" ? cur.loopStart : 0;
         onChange({ pointer: { ...cur, loopStart: null, loopStartEnv: [[0, v], [1, v]] } });
       } else {
         // Stessa lettura delle altre due righe del loop, con il ripiego di
@@ -601,7 +634,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "loopDur") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopDur != null ? cur.loopDur : loopSeedWhole;
+        const v = typeof cur.loopDur === "number" ? cur.loopDur : loopSeedWhole;
         onChange({ pointer: { ...cur, loopDur: null, loopDurEnv: [[0, v], [1, v]] } });
       } else {
         const v = loopSeedFrom(cur.loopDurEnv);
@@ -612,7 +645,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "loopEnd") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.loopEnd != null ? cur.loopEnd : loopSeedWhole;
+        const v = typeof cur.loopEnd === "number" ? cur.loopEnd : loopSeedWhole;
         onChange({ pointer: { ...cur, loopEnd: null, loopEndEnv: [[0, v], [1, v]] } });
       } else {
         const v = loopSeedFrom(cur.loopEndEnv);
@@ -623,7 +656,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "pitch") {
       const cur = stream.pitch || {};
       if (newMode === "env") {
-        const v = cur.value != null ? cur.value : (cur.unit === "ratio" ? 1.0 : 0);
+        const v = typeof cur.value === "number" ? cur.value : (cur.unit === "ratio" ? 1.0 : 0);
         onChange({ pitch: { ...cur, value: null, valueEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.valueEnv, cur.unit === "ratio" ? 1.0 : 0);
@@ -634,7 +667,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "voicesNum") {
       const cur = stream.voices || {};
       if (newMode === "env") {
-        const v = cur.num != null ? cur.num : 1;
+        const v = typeof cur.num === "number" ? cur.num : 1;
         onChange({ voices: { ...cur, num: null, numEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.numEnv, 1);
@@ -645,7 +678,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "scatter") {
       const cur = stream.voices || {};
       if (newMode === "env") {
-        const v = cur.scatter != null ? cur.scatter : 0;
+        const v = typeof cur.scatter === "number" ? cur.scatter : 0;
         onChange({ voices: { ...cur, scatter: null, scatterEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.scatterEnv, 0);
@@ -655,7 +688,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     }
     if (k === "panRange") {
       if (newMode === "env") {
-        const v = stream.panRange != null ? stream.panRange : 0;
+        const v = typeof stream.panRange === "number" ? stream.panRange : 0;
         onChange({ panRange: null, panRangeEnv: [[0, v], [1, v]] });
       } else {
         const v = window.PGEEnv.firstBreakpointY(stream.panRangeEnv, 0);
@@ -665,7 +698,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     }
     if (k === "volumeRange") {
       if (newMode === "env") {
-        const v = stream.volumeRange != null ? stream.volumeRange : 0;
+        const v = typeof stream.volumeRange === "number" ? stream.volumeRange : 0;
         onChange({ volumeRange: null, volumeRangeEnv: [[0, v], [1, v]] });
       } else {
         const v = window.PGEEnv.firstBreakpointY(stream.volumeRangeEnv, 0);
@@ -676,7 +709,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "pitchRange") {
       const cur = stream.pitch || {};
       if (newMode === "env") {
-        const v = cur.range != null ? cur.range : 0;
+        const v = typeof cur.range === "number" ? cur.range : 0;
         onChange({ pitch: { ...cur, range: null, rangeEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.rangeEnv, 0);
@@ -687,7 +720,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "durationRange") {
       const cur = stream.grain || {};
       if (newMode === "env") {
-        const v = cur.durationRange != null ? cur.durationRange : 0;
+        const v = typeof cur.durationRange === "number" ? cur.durationRange : 0;
         onChange({ grain: { ...cur, durationRange: null, durationRangeEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.durationRangeEnv, 0);
@@ -698,7 +731,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     if (k === "offsetRange") {
       const cur = stream.pointer || {};
       if (newMode === "env") {
-        const v = cur.offsetRange != null ? cur.offsetRange : 0;
+        const v = typeof cur.offsetRange === "number" ? cur.offsetRange : 0;
         onChange({ pointer: { ...cur, offsetRange: null, offsetRangeEnv: [[0, v], [1, v]] } });
       } else {
         const v = window.PGEEnv.firstBreakpointY(cur.offsetRangeEnv, 0);
@@ -708,7 +741,7 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
     }
     const f = fields[k]; if (!f) return;
     if (newMode === "env") {
-      const v = stream[f.sk] != null ? stream[f.sk] : defaultsByKey[k];
+      const v = typeof stream[f.sk] === "number" ? stream[f.sk] : defaultsByKey[k];
       onChange({ [f.sk]: null, [f.ek]: [[0, v], [1, v]] });
     } else {
       const v = window.PGEEnv.firstBreakpointY(stream[f.ek], defaultsByKey[k]);
@@ -951,10 +984,25 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
   // mentre la riga sotto mostra «—». Quel click chiede eccome: era l'unico modo
   // per far esistere una density, e rifiutarlo lasciava la riga senza ingresso.
   // Da cui il secondo flag: si tace solo su una coppia gia' scritta.
+  // grain.iot (PGE #311) e' il terzo modo, scelto come gli altri per
+  // PRESENZA: anche `iot:` vuota e' il modo scelto (un errore del motore, che
+  // la riga mostra invece di farla sparire). Con lei density, fill_factor e
+  // distribution sono un errore, non una priorita'.
+  const iotWritten = !!(stream.grain && (stream.grain.iot !== undefined || stream.grain.iotEnv != null));
+  // pointer.position (PGE #312): la posizione di lettura scritta, presence-
+  // keyed come grain.iot. Accanto a speed_ratio o start e' un errore del
+  // motore per presenza: le righe di quelle due spariscono (scriverebbero la
+  // chiave che il motore rifiuta), e il conflitto di uno YAML scritto a mano
+  // lo dice la riga di position, col rimedio.
+  const positionWritten = !!(stream.pointer && (stream.pointer.position !== undefined || stream.pointer.positionEnv != null));
+  const positionConflicts = !positionWritten ? [] : [
+    ...((stream.pointer.speedRatio != null || stream.pointer.speedRatioEnv != null) ? ["speed_ratio"] : []),
+    ...(stream.pointer.start !== undefined ? ["start"] : []),
+  ];
   const fillFactorWritten = stream.fillFactor != null || stream.fillFactorEnv != null;
   const densityWritten = stream.density != null || stream.densityEnv != null;
-  const densityUnitSel = fillFactorWritten ? "fill_factor" : "density";
-  const densityUnitWritten = fillFactorWritten || densityWritten;
+  const densityUnitSel = iotWritten ? "iot" : fillFactorWritten ? "fill_factor" : "density";
+  const densityUnitWritten = iotWritten || fillFactorWritten || densityWritten;
 
   return (
     <aside className="pge-inspector" data-screen-label={tab === "raw" ? "03 Inspector Raw" : "02 Inspector Preview"}>
@@ -1225,6 +1273,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
             <Section title="Overall density"
                      badge={densityUnitSel === "fill_factor"
                        ? <span className="mono" style={{color:"var(--accent)"}}>{stream.fillFactorEnv ? `fill_factor · env · ${window.PGEEnv.envCount(stream.fillFactorEnv)} bp` : "fill_factor"}</span>
+                       : densityUnitSel === "iot"
+                       ? <span className="mono" style={{color:"var(--accent)"}}>{stream.grain.iotEnv ? `iot · env · ${window.PGEEnv.envCount(stream.grain.iotEnv)} bp` : "iot"}</span>
                        : (stream.densityEnv
                            ? <span className="mono" style={{color:"var(--accent)"}}>density · env · {window.PGEEnv.envCount(stream.densityEnv)} bp</span>
                            : <span className="mono">density</span>)}>
@@ -1256,14 +1306,27 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                          // durata del grano — una scelta di modello, non la
                          // lettura di una curva che il round 3 ha rimesso a
                          // posto altrove.
-                         if (u === "fill_factor") {
+                         // grain.iot (PGE #311) e' esclusivo con le altre due
+                         // E con distribution, per presenza: il passaggio a iot
+                         // le toglie tutte e tre, quello da iot toglie la sua
+                         // chiave. Il seme e' 0.1 s nell'unita' della durata.
+                         const g = stream.grain || {};
+                         const senzaIot = (() => { const ng = { ...g }; delete ng.iot; delete ng.iotEnv; return ng; })();
+                         if (u === "iot") {
+                           const seme = window.PGEEnvUtils.grainSecondsToUnit(0.1, g.durationUnit);
+                           onChange({ density: null, densityEnv: null, fillFactor: null, fillFactorEnv: null,
+                                      distribution: null, distributionEnv: null,
+                                      grain: { ...g, iot: seme, iotEnv: null } });
+                         } else if (u === "fill_factor") {
                            const ff = 2.0;
-                           onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null });
+                           onChange({ density: null, densityEnv: null, fillFactor: ff, fillFactorEnv: null,
+                                      ...(iotWritten ? { grain: senzaIot } : {}) });
                          } else {
-                           onChange({ fillFactor: null, fillFactorEnv: null, density: 8, densityEnv: null });
+                           onChange({ fillFactor: null, fillFactorEnv: null, density: 8, densityEnv: null,
+                                      ...(iotWritten ? { grain: senzaIot } : {}) });
                          }
                        }}
-                       options={[{label:"density",value:"density"},{label:"fill_factor",value:"fill_factor"}]} />
+                       options={[{label:"density",value:"density"},{label:"fill_factor",value:"fill_factor"},{label:"iot",value:"iot"}]} />
                 </span>
                 <span />
               </div>
@@ -1275,7 +1338,30 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                   envValue={stream.fillFactorEnv}
                   onEditEnv={focusEnv("fillFactor")}
                   onSelect={() => setSelRow("fillFactor")} selected={selRow==="fillFactor"}
-                  onValue={(v) => onChange({fillFactor: Math.max(window.PGE_BOUNDS.fillFactor.min, Math.min(window.PGE_BOUNDS.fillFactor.max, v))})} />
+                  onValue={(v) => onChange({fillFactor: Math.max(window.PGE_BOUNDS.fillFactor.min, Math.min(window.PGE_BOUNDS.fillFactor.max, v))})}
+                  onExpr={(t) => onChange({fillFactor: t, fillFactorEnv: null})} />
+              ) : densityUnitSel === "iot" ? (
+                <>
+                  <ParamRow name="iot"
+                    mode={getMode("grainIot")} onMode={(m) => toggleMode("grainIot", m)}
+                    value={stream.grain.iot != null ? stream.grain.iot : "—"}
+                    unit={stream.grain.iotEnv ? "" : grainUnitSuffix} steps={grainSteps}
+                    accent={stream.grain.iotEnv != null}
+                    envValue={stream.grain.iotEnv}
+                    onEditEnv={focusEnv("grainIot")}
+                    onSelect={() => setSelRow("grain.iot")} selected={selRow==="grain.iot"}
+                    onValue={(v) => onChange({grain: {...stream.grain, iot: window.PGEEnvUtils.clampGrainIot(stream.grain, v, window.PGE_BOUNDS)}})}
+                    onExpr={(t) => onChange({grain: {...stream.grain, iot: t, iotEnv: null}})} />
+                  <div className="pge-prow hint" style={{paddingTop:0}}>
+                    <span className="k" />
+                    <span />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}
+                          title="PGE #311: grain.iot e' l'attesa fino al grano successivo; con lei density, fill_factor e distribution sono un errore del motore">
+                      attesa fino al grano successivo · la densità emerge dagli onset
+                    </span>
+                    <span />
+                  </div>
+                </>
               ) : (
                 <ParamRow name="density"
                           mode={getMode("density")} onMode={(m) => toggleMode("density", m)}
@@ -1284,8 +1370,10 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                           envValue={stream.densityEnv}
                           onEditEnv={focusEnv("density")}
                           onSelect={() => setSelRow("density")} selected={selRow==="density"}
-                          onValue={(v) => onChange({density: v})} />
+                          onValue={(v) => onChange({density: v})}
+                          onExpr={(t) => onChange({density: t, densityEnv: null})} />
               )}
+              {densityUnitSel !== "iot" ? (<>
               <ParamRow name="distribution"
                         mode={getMode("distribution")} onMode={(m) => toggleMode("distribution", m)}
                         value={stream.distribution != null ? stream.distribution : "—"}
@@ -1293,7 +1381,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                         envValue={stream.distributionEnv}
                         onEditEnv={focusEnv("distribution")}
                         onSelect={() => setSelRow("distribution")} selected={selRow==="distribution"}
-                        onValue={(v) => onChange({distribution: v})} />
+                        onValue={(v) => onChange({distribution: v})}
+                        onExpr={(t) => onChange({distribution: t, distributionEnv: null})} />
               <div className="pge-prow hint" style={{paddingTop:0}}>
                 <span className="k" />
                 <span />
@@ -1302,9 +1391,49 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                 </span>
                 <span />
               </div>
+              </>) : null}
             </Section>
 
             <Section title="Pointer">
+              {positionWritten ? (
+                <>
+                  <ParamRow name="position"
+                            mode={getMode("position")} onMode={(m) => toggleMode("position", m)}
+                            value={stream.pointer.position != null ? stream.pointer.position : "—"} unit=""
+                            accent={stream.pointer.positionEnv != null}
+                            envValue={stream.pointer.positionEnv}
+                            onEditEnv={focusEnv("position")}
+                            onSelect={() => setSelRow("ptr.position")} selected={selRow==="ptr.position"}
+                            onValue={(v) => onChange({pointer: {...stream.pointer, position: v}})}
+                            onExpr={(t) => onChange({pointer: {...stream.pointer, position: t, positionEnv: null}})} />
+                  {positionConflicts.length ? (
+                    <div className="pge-prow" style={{paddingTop:0}}>
+                      <span className="k" />
+                      <span />
+                      <span className="v mono" style={{fontSize:9, color:"var(--err)", lineHeight:1.4}}
+                            title="PGE #312: pointer.position e' la legge di moto intera; accanto a speed_ratio o start il motore si ferma (InvalidFieldValueError)">
+                        {positionConflicts.map((k) => "pointer." + k).join(", ")} accanto a position: errore del motore{" "}
+                        <button className="pge-link" onClick={() => {
+                          const np = { ...stream.pointer };
+                          delete np.start;
+                          np.speedRatio = null; np.speedRatioEnv = null;
+                          onChange({ pointer: np });
+                        }}>togli</button>
+                      </span>
+                      <span />
+                    </div>
+                  ) : null}
+                  <div className="pge-prow hint" style={{paddingTop:0}}>
+                    <span className="k" />
+                    <span />
+                    <span className="v mono" style={{fontSize:9, color:"var(--fg-4)", lineHeight:1.4}}>
+                      0–1 della finestra attiva · fuori rientra a capo · al posto di start e speed_ratio
+                    </span>
+                    <span />
+                  </div>
+                </>
+              ) : (
+                <>
               <ParamRow name="speed_ratio"
                         mode={getMode("speedRatio")} onMode={(m) => toggleMode("speedRatio", m)}
                         value={stream.pointer.speedRatio != null ? stream.pointer.speedRatio : "—"} unit="×"
@@ -1317,6 +1446,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                         value={stream.pointer.start != null ? stream.pointer.start : 0} unit={loopUnitSuffix}
                         onSelect={() => setSelRow("ptr.start")} selected={selRow==="ptr.start"}
                         onValue={(v) => onChange({pointer: {...stream.pointer, start: v}})} />
+                </>
+              )}
               {loopWindowShown ? (
                 <>
                   <ParamRow name="loop_start"
@@ -1550,8 +1681,19 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                     exists: stream.pointer.loopDur != null || stream.pointer.loopDurEnv != null || stream.pointer.loopEnd != null || stream.pointer.loopEndEnv != null, def: loopSeedWhole },
                   { key: "offsetRange", label: "offset_range", desc: "per-grain pointer deviation ∈ [-1,1] — with a loop active stays inside [loop_start, loop_end)",
                     exists: stream.pointer.offsetRange != null || stream.pointer.offsetRangeEnv != null, def: 0.01 },
+                  { key: "position", label: "position", desc: "read position 0–1 of the active window, wraps around — replaces start and speed_ratio (PGE #312)",
+                    exists: positionWritten, def: 0 },
                 ]}
                 onAdd={(o) => {
+                  // position prende il posto della legge di moto: start e
+                  // speed_ratio accanto a lei sono un errore del motore.
+                  if (o.key === "position") {
+                    const np = { ...stream.pointer, position: o.def, positionEnv: null,
+                                 speedRatio: null, speedRatioEnv: null };
+                    delete np.start;
+                    onChange({ pointer: np });
+                    return;
+                  }
                   const np = { ...stream.pointer, [o.key]: o.def };
                   // Loop fields only render together — if the user introduces
                   // loop_end/loop_dur without loop_start, seed it to 0 so the
@@ -1574,7 +1716,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                         envValue={stream.grain.durationEnv}
                         onEditEnv={focusEnv("grainDur")}
                         onSelect={() => setSelRow("grain.dur")} selected={selRow==="grain.dur"}
-                        onValue={(v) => onChange({grain: {...stream.grain, duration: v}})} />
+                        onValue={(v) => onChange({grain: {...stream.grain, duration: v}})}
+                        onExpr={(t) => onChange({grain: {...stream.grain, duration: t, durationEnv: null}})} />
               {(stream.grain.durationRange != null || stream.grain.durationRangeEnv != null) ? (
                 <ParamRow name="duration_range"
                           mode={getMode("durationRange")} onMode={(m) => toggleMode("durationRange", m)}
@@ -1942,7 +2085,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                             onEditEnv={focusEnv("pitch")}
                             onSelect={() => setSelRow("pitch.value")} selected={selRow==="pitch.value"}
                             steps={pitchSteps}
-                            onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})} />
+                            onValue={(v) => onChange({pitch: {...pi, value: window.PGEEnv.pitchUnitIsInteger(pu) ? Math.round(v) : v}})}
+                            onExpr={(t) => onChange({pitch: {...pi, value: t, valueEnv: null}})} />
                   <ParamRow name="range"
                             mode={getMode("pitchRange")} onMode={(m) => toggleMode("pitchRange", m)}
                             value={pi.range != null ? pi.range : 0}
@@ -1974,7 +2118,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                         envValue={stream.volumeEnv}
                         onEditEnv={focusEnv("volume")}
                         onSelect={() => setSelRow("vol")} selected={selRow==="vol"}
-                        onValue={(v) => onChange({volume: v})} />
+                        onValue={(v) => onChange({volume: v})}
+                        onExpr={(t) => onChange({volume: t, volumeEnv: null})} />
               <ParamRow name="volume_range"
                         mode={getMode("volumeRange")} onMode={(m) => toggleMode("volumeRange", m)}
                         value={stream.volumeRange != null ? stream.volumeRange : 0} unit={stream.volumeRangeEnv ? "" : "dB"}
@@ -1990,7 +2135,8 @@ function Inspector({ stream, onChange, onClose, onRename, ownFile, onOwnFile, ta
                         envValue={stream.panEnv}
                         onEditEnv={focusEnv("pan")}
                         onSelect={() => setSelRow("pan")} selected={selRow==="pan"}
-                        onValue={(v) => onChange({pan: v})} />
+                        onValue={(v) => onChange({pan: v})}
+                        onExpr={(t) => onChange({pan: t, panEnv: null})} />
               <ParamRow name="pan_range"
                         mode={getMode("panRange")} onMode={(m) => toggleMode("panRange", m)}
                         value={stream.panRange != null ? stream.panRange : 0} unit={stream.panRangeEnv ? "" : "°"}

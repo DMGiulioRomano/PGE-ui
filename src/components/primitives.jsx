@@ -233,7 +233,39 @@ function Section({ title, badge, children, defaultOpen = true, right }) {
 }
 
 /* ---------- Parameter Row ---------- */
-function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, right, steps }) {
+/* ---------- ExprField: il testo di un'espressione (PGE-ui #215) ----------
+   Il terzo tipo di valore di un parametro e' una stringa fra parentesi che il
+   motore valuta a ogni grano. Si modifica come testo: Invio o l'uscita dal
+   campo la scrivono, Esc la lascia com'era. Nessun clamp — un'espressione
+   non ha un valore da confrontare coi bound finche' non gira; li applica il
+   motore, grano per grano. Un testo che non e' piu' fra parentesi esterne lo
+   si scrive lo stesso: e' l'errore che il motore dice, e cancellarlo in
+   silenzio sarebbe peggio. */
+function ExprField({ value, onChange, width = 140 }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => { setDraft(String(value)); }, [value]);
+  const commit = () => {
+    const t = draft.trim();
+    if (t && t !== value && onChange) onChange(t);
+    else setDraft(String(value));
+  };
+  return (
+    <input className="pge-expr mono" value={draft} spellCheck={false}
+      title="espressione del motore, valutata a ogni grano (mappe di maps:, t)"
+      style={{ width, font: "inherit", fontSize: 11, background: "var(--bg-2)",
+               color: "var(--fg-1)", border: "1px solid var(--line-2)",
+               borderRadius: 3, padding: "1px 4px" }}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") { e.preventDefault(); commit(); e.target.blur(); }
+        if (e.key === "Escape") { setDraft(String(value)); e.target.blur(); }
+      }} />);
+}
+
+function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected, onEditEnv, onSelect, accent, envValue, onValue, onExpr, right, steps }) {
   // Build polyline points from envValue, whatever its graphy.
   let pts = "0,12 25,9 50,4 75,7 100,11";
   let loopCount = 0;
@@ -286,20 +318,50 @@ function ParamRow({ name, mode = "scalar", onMode, value, unit, range, selected,
      la riga stessa a dirlo: `value` non numerica = nessun campo, `envValue`
      assente = nessuna curva. Cosi' il click che il PR esiste per fermare —
      quello che passerebbe sopra un valore gia' scritto — resta fermo. */
+  /* Il terzo tipo di valore (PGE-ui #215): un'espressione vive nel campo
+     scalare, come stringa fra parentesi, e per la guardia qui sotto «gia'
+     scritta» vale anche per lei. Senza, il click sul bottone `scalar` acceso
+     passava — `typeof value` non e' "number" — e il ramo scalare di
+     toggleMode la sostituiva col default: l'espressione persa per un click
+     che non chiedeva niente. */
   const handleMode = (m) => {
-    const written = m === "env" ? envValue != null : typeof value === "number";
+    const written = m === "env" ? envValue != null : typeof value === "number" || !!(window.PGEExpr && window.PGEExpr.isExpression(value));
     if (m === mode && written) return;
     if (onMode) onMode(m);
+  };
+  /* Dove la riga sa scrivere un'espressione (`onExpr`, i campi di
+     EXPRESSION_FIELDS) il Seg ha un terzo bottone, acceso quando il valore e'
+     un'espressione. Sopra handleMode e non dentro: la guardia resta quella,
+     con la sua condizione, e qui si aggiungono solo i due click che lei non
+     conosce — `expr`, che semina il testo dal numero mostrato, e `scalar`
+     da un'espressione, che e' un cambio vero. */
+  const isExpr = !!(window.PGEExpr && window.PGEExpr.isExpression(value))
+    && !(mode === "env" && envValue != null);
+  const exprShown = isExpr ? "expr" : mode;
+  const handleExprMode = (m) => {
+    if (m === "expr") {
+      if (isExpr) return;
+      const seedNum = envValue != null && window.PGEEnv
+        ? window.PGEEnv.firstBreakpointY(envValue, 0) : value;
+      onExpr(window.PGEExpr.seedExpression(seedNum, 0));
+      return;
+    }
+    if (isExpr && m === "scalar") { if (onMode) onMode(m); return; }
+    handleMode(m);
   };
   return (
     <div className={"pge-prow" + (selected ? " selected" : "")} onClick={onSelect}>
       <span className="k">{name}</span>
       {onMode ?
-      <Seg size="xs" value={mode} onChange={handleMode} options={[{ label: "scalar", value: "scalar" }, { label: "env", value: "env" }]} /> :
+      (onExpr ?
+        <Seg size="xs" value={exprShown} onChange={handleExprMode} options={[{ label: "scalar", value: "scalar" }, { label: "env", value: "env" }, { label: "expr", value: "expr" }]} /> :
+        <Seg size="xs" value={mode} onChange={handleMode} options={[{ label: "scalar", value: "scalar" }, { label: "env", value: "env" }]} />) :
       <span />}
       {mode === "scalar" || !envValue ?
       <span className="v">
-          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} steps={steps} /> : <span style={{ color: "var(--fg-3)" }}>{value}</span>}
+          {typeof value === "number" ? <NumberField value={value} unit={unit} width={70} accent={accent} onChange={onValue} steps={steps} />
+            : isExpr && onExpr ? <ExprField value={value} onChange={onExpr} />
+            : <span style={{ color: "var(--fg-3)" }} title={isExpr ? "espressione del motore, valutata a ogni grano" : undefined}>{value}</span>}
           {range ? <span className="range">±{typeof range === "number" ? (range / 2) : range}</span> : null}
         </span> :
 
@@ -386,4 +448,4 @@ function SplitPane({ initial = 240, min = 120, max = 800, dir = "horiz", side = 
 }
 
 window.PGE = window.PGE || {};
-Object.assign(window.PGE, { Icon, Button, Seg, Switch, NumberField, Tag, Section, ParamRow, SplitPane });
+Object.assign(window.PGE, { Icon, Button, Seg, Switch, NumberField, Tag, Section, ParamRow, ExprField, SplitPane });
